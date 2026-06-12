@@ -1,0 +1,17 @@
+# ThrillhouseBot — JVM Dockerfile (PR validation only)
+# Used by docker-pr CI job to validate the build without native compilation.
+# Production uses Dockerfile.multistage with GraalVM native.
+
+# Digest pins eclipse-temurin:25-jre
+FROM eclipse-temurin@sha256:5cf92df78f6dba978777d5cffa3c856e583f86814fde82a6c3534ccdfd794f2f
+WORKDIR /work/
+COPY target/quarkus-app/lib/ /work/lib/
+COPY target/quarkus-app/app/ /work/app/
+COPY target/quarkus-app/quarkus/ /work/quarkus/
+COPY target/quarkus-app/quarkus-run.jar /work/
+
+EXPOSE 8080
+USER 1001
+# Compact object headers (JEP 519): HotSpot-only; the native image already
+# uses smaller headers by design, so this applies to JVM mode alone
+CMD ["java", "-XX:+UseCompactObjectHeaders", "-jar", "/work/quarkus-run.jar"]

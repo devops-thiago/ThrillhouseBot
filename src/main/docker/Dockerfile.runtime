@@ -1,0 +1,15 @@
+# Default runtime image: native binary on UBI9-micro.
+# Expects target/<TARGETARCH>/*-runner from a buildx multi-arch build.
+# Hardened variant: Dockerfile.runtime-distroless. Local dev: Dockerfile.multistage.
+
+FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:242ca7ff99bef00bec6edbdbeee8407c481c12f2b96c9e17f271ae6f99131db5
+
+ARG TARGETARCH
+WORKDIR /work/
+COPY target/${TARGETARCH}/*-runner /work/application
+
+RUN chmod 555 /work/application && chown 1001:root /work /work/application
+
+EXPOSE 8080
+USER 1001
+CMD ["./application", "-Dquarkus.http.host=0.0.0.0"]

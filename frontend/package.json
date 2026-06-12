@@ -1,0 +1,35 @@
+{
+  "name": "thrillhousebot-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:mock": "NEXT_PUBLIC_MOCK_API=true next dev",
+    "build": "next build",
+    "export": "next build && cp -r out/* ../src/main/resources/META-INF/resources/dashboard/",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "next": "^16.2.7",
+    "react": "^19.2.7",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.7"
+  },
+  "overrides": {
+    "postcss": "^8.5.10",
+    "sharp": "-"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^25.9.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^27.0.1",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  }
+}

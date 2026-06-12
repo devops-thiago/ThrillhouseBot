@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Install ThrillhouseBot GitHub App</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; line-height: 1.5; }
+    code, pre { background: #f4f4f4; border-radius: 4px; }
+    code { padding: 0.1rem 0.35rem; }
+    pre { padding: 0.75rem 1rem; overflow-x: auto; }
+    button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .error { color: #b00020; }
+    .preview { background: #f9f9f9; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+    .preview dt { font-weight: 600; margin-top: 0.5rem; }
+    .preview dd { margin-left: 0; color: #555; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Install ThrillhouseBot</h1>
+
+  <p>
+    This creates the GitHub App and gives you the credentials the bot needs to
+    run (App ID, private key, webhook secret, OAuth client ID/secret). Do this
+    first — the bot can't start, let alone serve its own installer, until these
+    values are in your <code>.env</code>.
+  </p>
+
+  <h2>Create the app</h2>
+  <ol>
+    <li>Edit <code>manifest.json</code> and replace every <code>&lt;your-host&gt;</code> with your public hostname (no trailing slash).</li>
+    <li>Serve this repo root locally:
+      <pre>java -m jdk.httpserver -p 8081</pre>
+    </li>
+    <li>Open <a href="http://localhost:8081/install.html">http://localhost:8081/install.html</a> and click the button below.</li>
+  </ol>
+
+  <h2>Already have the bot running?</h2>
+  <p>
+    Then skip the local server: open <code>http://&lt;your-host&gt;:8080/install.html</code>
+    instead. That page auto-detects the host and builds the manifest for you. It's
+    handy for adding the app to another account or re-registering — not for the
+    first install, since the bot needs to be running already.
+  </p>
+
+  <form id="manifest-form" action="https://github.com/settings/apps/new" method="post">
+    <input type="hidden" name="manifest" id="manifest" />
+    <input type="hidden" name="state" value="thrillhousebot-setup" />
+    <p>
+      <button type="submit" id="submit-btn" disabled>Create ThrillhouseBot GitHub App</button>
+    </p>
+  </form>
+  <p id="status" class="error"></p>
+
+  <script>
+    const status = document.getElementById("status");
+    const submitBtn = document.getElementById("submit-btn");
+    const manifestInput = document.getElementById("manifest");
+
+    fetch("manifest.json")
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load manifest.json");
+        return response.json();
+      })
+      .then((manifest) => {
+        const serialized = JSON.stringify(manifest);
+        if (serialized.includes("<your-host>")) {
+          status.textContent =
+            "Replace <your-host> in manifest.json before creating the app.";
+          return;
+        }
+        manifestInput.value = serialized;
+        submitBtn.disabled = false;
+        status.textContent = "";
+      })
+      .catch(() => {
+        status.textContent =
+          "Could not load manifest.json. Serve this folder with a local HTTP server (see instructions above).";
+      });
+  </script>
+</body>
+</html>
+

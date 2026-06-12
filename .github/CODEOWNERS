@@ -1,0 +1,3 @@
+# Protect CI/CD workflows — require owner review for any changes
+/.github/workflows/ @devops-thiago
+/.github/CODEOWNERS @devops-thiago

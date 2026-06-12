@@ -1,0 +1,41 @@
+# ThrillhouseBot — one-command deployment (bot + PostgreSQL)
+#
+#   cp .env.example .env   # fill in GitHub App + AI provider credentials
+#   docker compose up -d
+#
+# The bot listens on :8080 — point your GitHub App webhook at
+# https://<your-host>/api/webhook (see README "GitHub App Setup").
+services:
+  thrillhousebot:
+    image: ghcr.io/devops-thiago/thrillhousebot:latest
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:8080}
+      DATASOURCE_DB_KIND: postgresql
+      DATABASE_URL: ${DATABASE_URL:-jdbc:postgresql://db:5432/thrillhouse}
+      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-thrillhouse}
+      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-thrillhouse}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: thrillhouse
+      POSTGRES_USER: ${POSTGRES_USER:-thrillhouse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-thrillhouse}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thrillhouse}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  pgdata:

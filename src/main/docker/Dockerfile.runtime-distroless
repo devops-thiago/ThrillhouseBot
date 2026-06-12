@@ -1,0 +1,17 @@
+# Hardened distroless runtime image, published as :*-distroless.
+# Expects target/<TARGETARCH>/*-runner from a buildx multi-arch build.
+# distroless has no shell (perms via COPY --chmod, runs as nonroot) and no libz,
+# which the native binary needs, so libz is copied from a pinned debian stage.
+
+FROM debian:12-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf87857c4b8188404716 AS libsource
+
+FROM gcr.io/distroless/base-debian12@sha256:e7e678c88c59e70e105a46549bb3fbfb3d732ee3b4afd3a19fdab2e15afaa6b3
+
+ARG TARGETARCH
+WORKDIR /work
+COPY --from=libsource /usr/lib/*-linux-gnu/libz.so.1 /usr/lib/
+COPY --chmod=0555 target/${TARGETARCH}/*-runner /work/application
+
+EXPOSE 8080
+USER nonroot
+ENTRYPOINT ["/work/application", "-Dquarkus.http.host=0.0.0.0"]

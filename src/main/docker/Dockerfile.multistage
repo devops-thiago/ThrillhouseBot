@@ -1,0 +1,32 @@
+# ThrillhouseBot — Multi-Stage Docker Build
+#
+# Build order:
+#   1. Build frontend:  cd frontend && npm run build
+#   2. Copy frontend:   cp -r frontend/out/* src/main/resources/META-INF/resources/dashboard/ (already done in Phase 6)
+#   3. Build native:    docker build -f src/main/docker/Dockerfile.multistage -t thrillhousebot .
+#
+# The frontend static files are embedded in the native binary via src/main/resources/META-INF.
+
+## Stage 1: Build native executable with Mandrel
+# Digest pins ubi9-quarkus-mandrel-builder-image:jdk-25
+FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image@sha256:096586cdc3e62db2a749216410db3f56b20b00aedfcb13e354472160edb08c7c AS build
+COPY --chown=quarkus:quarkus --chmod=0755 mvnw /code/mvnw
+COPY --chown=quarkus:quarkus --chmod=0755 .mvn /code/.mvn
+COPY --chown=quarkus:quarkus --chmod=0644 pom.xml /code/
+USER quarkus
+WORKDIR /code
+RUN ./mvnw -B dependency:go-offline
+COPY src /code/src
+RUN ./mvnw package -Pnative -DskipTests
+
+## Stage 2: Minimal runtime image (includes embedded frontend from Stage 1)
+FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:242ca7ff99bef00bec6edbdbeee8407c481c12f2b96c9e17f271ae6f99131db5
+WORKDIR /work/
+COPY --from=build /code/target/*-runner /work/application
+RUN chmod 775 /work /work/application \
+  && chown -R 1001 /work \
+  && chmod -R "g+rwX" /work \
+  && chown -R 1001:root /work
+EXPOSE 8080
+USER 1001
+CMD ["./application", "-Dquarkus.http.host=0.0.0.0"]

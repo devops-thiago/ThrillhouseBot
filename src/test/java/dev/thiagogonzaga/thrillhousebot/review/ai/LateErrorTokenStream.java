@@ -1,0 +1,95 @@
+/*
+ * Copyright 2026 Thiago Gonzaga
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dev.thiagogonzaga.thrillhousebot.review.ai;
+
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.service.TokenStream;
+import dev.langchain4j.service.tool.ToolExecution;
+import dev.thiagogonzaga.thrillhousebot.TestDelays;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+
+/** TokenStream that stays silent past the client timeout, then fails on a background thread. */
+final class LateErrorTokenStream implements TokenStream {
+
+  private final long errorDelayMs;
+  private final CountDownLatch errorDelivered = new CountDownLatch(1);
+  private Consumer<Throwable> errorHandler;
+
+  LateErrorTokenStream(long errorDelayMs) {
+    this.errorDelayMs = errorDelayMs;
+  }
+
+  @Override
+  public TokenStream onPartialResponse(Consumer<String> handler) {
+    return this;
+  }
+
+  @Override
+  public TokenStream onRetrieved(Consumer<List<Content>> handler) {
+    return this;
+  }
+
+  @Override
+  public TokenStream onToolExecuted(Consumer<ToolExecution> handler) {
+    return this;
+  }
+
+  @Override
+  public TokenStream onCompleteResponse(Consumer<ChatResponse> handler) {
+    return this;
+  }
+
+  @Override
+  public TokenStream onError(Consumer<Throwable> handler) {
+    this.errorHandler = handler;
+    return this;
+  }
+
+  @Override
+  public TokenStream ignoreErrors() {
+    return this;
+  }
+
+  @Override
+  public void start() {
+    var emitter =
+        new Thread(
+            () -> {
+              if (!TestDelays.simulateLatency(errorDelayMs)) {
+                return;
+              }
+              try {
+                if (errorHandler != null) {
+                  errorHandler.accept(new RuntimeException("late failure"));
+                }
+              } finally {
+                errorDelivered.countDown();
+              }
+            },
+            "late-error-token-stream");
+    emitter.setDaemon(true);
+    emitter.start();
+  }
+
+  /** Blocks until the late error has been handed to the error handler. */
+  boolean awaitErrorDelivered(long timeout, TimeUnit unit) throws InterruptedException {
+    return errorDelivered.await(timeout, unit);
+  }
+}
