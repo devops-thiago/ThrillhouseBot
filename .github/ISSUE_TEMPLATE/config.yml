@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Security Vulnerability
+    url: https://github.com/devops-thiago/ThrillhouseBot/security/advisories/new
+    about: Please report security vulnerabilities privately using GitHub's advisory system.
+  - name: 💬 Questions & Discussions
+    url: https://github.com/devops-thiago/ThrillhouseBot/discussions
+    about: Use GitHub Discussions for questions and general conversation.

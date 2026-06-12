@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclusions for known false positives in this Quarkus/CDI application.
+
+  EI_EXPOSE_REP2 in constructors: storing CDI-injected collaborators (REST clients,
+  @ApplicationScoped beans, ObjectMapper) is standard dependency injection. Callers do
+  not pass these references; the container does. Defensive copying would break injection.
+  See: https://spotbugs.readthedocs.io/en/stable/bugDescriptions.html#ei-expose-rep2
+-->
+<FindBugsFilter
+    xmlns="https://github.com/spotbugs/filter/3.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://github.com/spotbugs/filter/3.0.0 https://raw.githubusercontent.com/spotbugs/spotbugs/4.8.6/spotbugs/etc/findbugsfilter.xsd">
+
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+    <Method name="&lt;init&gt;"/>
+    <Class name="~dev\.thiagogonzaga\.thrillhousebot\..*"/>
+  </Match>
+
+</FindBugsFilter>

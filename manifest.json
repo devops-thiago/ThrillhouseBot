@@ -1,0 +1,25 @@
+{
+  "name": "ThrillhouseBot",
+  "url": "https://<your-host>",
+  "description": "AI-powered GitHub PR reviewer",
+  "hook_attributes": {
+    "url": "https://<your-host>/api/webhook",
+    "active": true
+  },
+  "redirect_url": "https://<your-host>",
+  "callback_urls": [
+    "https://<your-host>/api/auth/callback"
+  ],
+  "public": false,
+  "default_events": [
+    "pull_request",
+    "issue_comment"
+  ],
+  "default_permissions": {
+    "checks": "write",
+    "pull_requests": "write",
+    "contents": "read",
+    "issues": "write"
+  },
+  "request_oauth_on_install": false
+}

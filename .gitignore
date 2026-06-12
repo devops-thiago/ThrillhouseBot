@@ -1,0 +1,50 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+*.credentials
+**/application-secret*.yml
+**/application-secret*.properties
+
+# Secret scanning baseline
+.secrets.baseline
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Quarkus
+.classpath
+.project
+.settings/
+
+# Frontend
+frontend/node_modules/
+frontend/out/
+frontend/.next/
+
+# Generated frontend static export (built during CI/Docker image creation)
+src/main/resources/META-INF/resources/dashboard/
+
+# Local debug artifacts
+.playwright-mcp/
+out*.txt
+
+# Local-only
+rewrite.yml

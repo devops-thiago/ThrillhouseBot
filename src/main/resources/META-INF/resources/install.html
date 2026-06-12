@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Install ThrillhouseBot GitHub App</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; line-height: 1.5; }
+    code, pre { background: #f4f4f4; border-radius: 4px; }
+    code { padding: 0.1rem 0.35rem; }
+    pre { padding: 0.75rem 1rem; overflow-x: auto; }
+    button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .error { color: #b00020; }
+    .preview { background: #f9f9f9; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+    .preview dt { font-weight: 600; margin-top: 0.5rem; }
+    .preview dd { margin-left: 0; color: #555; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Install ThrillhouseBot</h1>
+  <p>
+    This page builds the GitHub App manifest from your bot's URL.
+    Make sure you're accessing this page through the <strong>public URL</strong>
+    where GitHub can reach your bot (not localhost unless using Smee.io).
+  </p>
+
+  <div class="preview">
+    <p><strong>Detected host:</strong> <code id="detected-host"></code></p>
+    <dl>
+      <dt>Webhook URL</dt>
+      <dd><code id="preview-webhook"></code></dd>
+      <dt>Callback URL</dt>
+      <dd><code id="preview-callback"></code></dd>
+    </dl>
+    <p style="font-size:0.9rem;color:#888;">If these look wrong, navigate to this page using the correct hostname.</p>
+  </div>
+
+  <form id="manifest-form" action="https://github.com/settings/apps/new" method="post">
+    <input type="hidden" name="manifest" id="manifest" />
+    <input type="hidden" name="state" value="thrillhousebot-setup" />
+    <p>
+      <button type="submit" id="submit-btn">Create ThrillhouseBot GitHub App</button>
+    </p>
+  </form>
+  <p id="status" class="error"></p>
+
+  <script>
+    const origin = window.location.origin;
+    const manifest = {
+      name: "ThrillhouseBot",
+      url: origin,
+      description: "AI-powered GitHub PR reviewer",
+      hook_attributes: {
+        url: origin + "/api/webhook",
+        active: true
+      },
+      redirect_url: origin,
+      callback_urls: [
+        origin + "/api/auth/callback"
+      ],
+      public: false,
+      default_events: [
+        "pull_request",
+        "issue_comment"
+      ],
+      default_permissions: {
+        checks: "write",
+        pull_requests: "write",
+        contents: "read",
+        issues: "write"
+      },
+      request_oauth_on_install: false
+    };
+
+    document.getElementById("detected-host").textContent = origin;
+    document.getElementById("preview-webhook").textContent = origin + "/api/webhook";
+    document.getElementById("preview-callback").textContent = origin + "/api/auth/callback";
+    document.getElementById("manifest").value = JSON.stringify(manifest);
+  </script>
+</body>
+</html>
+
