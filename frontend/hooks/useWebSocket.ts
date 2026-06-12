@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { MOCK_MODE, mockSessionEvents } from "@/lib/mock-data";
 
 export interface SessionEvent {
   type:
@@ -99,6 +100,11 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
+    if (MOCK_MODE) {
+      setEvents(mockSessionEvents());
+      setConnected(true);
+      return;
+    }
     mountedRef.current = true;
     connect();
     return () => {

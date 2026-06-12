@@ -1,39 +1,106 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from "recharts";
+import { useState } from "react";
+import { Bar, Pie } from "react-chartjs-2";
+import { DataLoadState } from "@/components/DataLoadState";
+import { useDashboardFetch } from "@/hooks/useDashboardFetch";
 import { api, CostData } from "@/lib/api";
-
-const COLORS = [
-  "#58a6ff",
-  "#3fb950",
-  "#d2991d",
-  "#f85149",
-  "#bc8cff",
-  "#ff9bce",
-];
+import type { TooltipItem } from "chart.js";
+import {
+  CHART_COLORS,
+  THEME,
+  chartAxisColor,
+  chartGridColor,
+  chartTooltipStyle,
+} from "@/lib/charts";
 
 export default function CostsPage() {
-  const [data, setData] = useState<CostData | null>(null);
   const [period, setPeriod] = useState("month");
+  const { data, loading, error, retry } = useDashboardFetch(
+    () => api().costs(period),
+    [period],
+  );
 
-  useEffect(() => {
-    api().costs(period).then(setData).catch(console.error);
-  }, [period]);
+  return (
+    <DataLoadState loading={loading} error={error} onRetry={retry}>
+      {data && <CostsContent data={data} period={period} setPeriod={setPeriod} />}
+    </DataLoadState>
+  );
+}
 
-  if (!data) return <p>Loading...</p>;
+function CostsContent({
+  data,
+  period,
+  setPeriod,
+}: {
+  data: CostData;
+  period: string;
+  setPeriod: (period: string) => void;
+}) {
+  const barData = {
+    labels: data.byModel.map((m) => m.model),
+    datasets: [
+      {
+        label: "Cost",
+        data: data.byModel.map((m) => m.cost),
+        backgroundColor: THEME.accent,
+        borderRadius: 4,
+      },
+    ],
+  };
+
+  const pieData = {
+    labels: data.byModel.map((m) => m.model),
+    datasets: [
+      {
+        data: data.byModel.map((m) => m.cost),
+        backgroundColor: data.byModel.map(
+          (_, i) => CHART_COLORS[i % CHART_COLORS.length],
+        ),
+      },
+    ],
+  };
+
+  const axisOptions = {
+    ticks: { color: chartAxisColor },
+    grid: { color: chartGridColor },
+  };
+
+  const barOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        ...chartTooltipStyle,
+        callbacks: {
+          label: (ctx: TooltipItem<"bar">) =>
+            `Cost: $${Number(ctx.parsed.y ?? 0).toFixed(6)}`,
+        },
+      },
+    },
+    scales: {
+      x: axisOptions,
+      y: {
+        ...axisOptions,
+        ticks: {
+          color: chartAxisColor,
+          callback: (value: string | number) => `$${value}`,
+        },
+      },
+    },
+  };
+
+  const pieOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: { color: chartAxisColor },
+      },
+      tooltip: chartTooltipStyle,
+    },
+  };
 
   return (
     <div>
@@ -73,63 +140,16 @@ export default function CostsPage() {
         </ChartCard>
       </div>
 
-      {/* Bar chart — cost by model */}
       <ChartCard title="Cost by Model">
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={data.byModel}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis
-              dataKey="model"
-              stroke="var(--text-muted)"
-              tick={{ fontSize: 12 }}
-            />
-            <YAxis
-              stroke="var(--text-muted)"
-              tick={{ fontSize: 12 }}
-              tickFormatter={(v) => `$${v}`}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-              }}
-              formatter={(value) => [`$${Number(value).toFixed(6)}`, "Cost"]}
-            />
-            <Bar dataKey="cost" fill="var(--accent)" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <div style={styles.chartFrame}>
+          <Bar data={barData} options={barOptions} />
+        </div>
       </ChartCard>
 
-      {/* Pie chart — model distribution */}
       <ChartCard title="Model Distribution">
-        <ResponsiveContainer width="100%" height={300}>
-          <PieChart>
-            <Pie
-              data={data.byModel}
-              dataKey="cost"
-              nameKey="model"
-              cx="50%"
-              cy="50%"
-              outerRadius={100}
-              label={({ name, value }) =>
-                `${name} ($${Number(value).toFixed(4)})`
-              }
-            >
-              {data.byModel.map((_, i) => (
-                <Cell key={i} fill={COLORS[i % COLORS.length]} />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={{
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-              }}
-            />
-            <Legend />
-          </PieChart>
-        </ResponsiveContainer>
+        <div style={styles.chartFrame}>
+          <Pie data={pieData} options={pieOptions} />
+        </div>
       </ChartCard>
     </div>
   );
@@ -163,6 +183,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     padding: "1.5rem",
     marginBottom: "1rem",
+  },
+  chartFrame: {
+    height: 300,
   },
   select: {
     padding: "0.4rem 0.8rem",

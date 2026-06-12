@@ -8,6 +8,8 @@ export default function SessionsPage() {
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -31,16 +33,26 @@ export default function SessionsPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
+    setError(null);
     api()
       .sessions(page)
       .then((data) => {
+        if (cancelled) return;
         setSessions(data.sessions);
         setTotal(data.total);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
-  }, [page]);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load sessions');
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [page, reloadKey]);
 
   useEffect(() => {
     if (selectedId == null) {
@@ -75,7 +87,22 @@ export default function SessionsPage() {
 
       {loading && <p>Loading...</p>}
 
-      {!loading && (
+      {!loading && error && (
+        <div style={styles.loadErrorBox}>
+          <span style={{ color: 'var(--red)' }}>
+            Could not load sessions: {error}
+          </span>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            style={styles.retryBtn}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && (
         <>
           <div style={styles.chartCard}>
             <table style={styles.table}>
@@ -444,6 +471,25 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     border: '1px solid var(--red)',
     background: 'rgba(248,81,73,0.08)',
+  },
+  loadErrorBox: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '1rem',
+    flexWrap: 'wrap',
+    padding: '1rem 1.25rem',
+    borderRadius: 8,
+    border: '1px solid var(--red)',
+    background: 'rgba(248,81,73,0.08)',
+  },
+  retryBtn: {
+    padding: '0.5rem 1rem',
+    background: 'var(--accent)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
   },
   findingsList: { display: 'flex', flexDirection: 'column', gap: '0.75rem' },
   findingCard: {

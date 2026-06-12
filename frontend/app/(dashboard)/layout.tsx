@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import SiteFooter from "@/components/SiteFooter";
+import "@/lib/charts";
 
 // Paths are relative to basePath (/dashboard) — do not include /dashboard here
 const NAV = [
@@ -40,6 +41,16 @@ export default function DashboardLayout({
             Log out
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // Don't mount protected routes (which fire API calls) until auth is confirmed.
+  // While loading, or before the redirect-to-login effect runs, render a placeholder.
+  if (loading || !user) {
+    return (
+      <div style={styles.deniedPage}>
+        <p style={{ color: "var(--text-muted)" }}>Loading...</p>
       </div>
     );
   }

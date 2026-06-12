@@ -1,3 +1,5 @@
+import { createMockApi } from './mock-data';
+
 export interface SessionSummary {
   totalReviews: number;
   completedReviews: number;
@@ -62,7 +64,7 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
-export function api() {
+function realApi() {
   return {
     summary: () => fetchJson<SessionSummary>('/api/dashboard/summary'),
     costs: (period = 'month') => fetchJson<CostData>(`/api/dashboard/costs?period=${period}`),
@@ -73,4 +75,11 @@ export function api() {
       ),
     session: (id: number) => fetchJson<SessionDetail>(`/api/dashboard/sessions/${id}`),
   };
+}
+
+export function api() {
+  if (process.env.NEXT_PUBLIC_MOCK_API === 'true') {
+    return createMockApi();
+  }
+  return realApi();
 }

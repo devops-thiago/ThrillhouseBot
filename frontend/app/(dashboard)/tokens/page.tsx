@@ -1,33 +1,88 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from "recharts";
+import { useState } from "react";
+import { Bar } from "react-chartjs-2";
+import { DataLoadState } from "@/components/DataLoadState";
+import { useDashboardFetch } from "@/hooks/useDashboardFetch";
 import { api, TokenData } from "@/lib/api";
+import type { TooltipItem } from "chart.js";
+import {
+  THEME,
+  chartAxisColor,
+  chartGridColor,
+  chartTooltipStyle,
+} from "@/lib/charts";
 
 export default function TokensPage() {
-  const [data, setData] = useState<TokenData | null>(null);
   const [period, setPeriod] = useState("month");
+  const { data, loading, error, retry } = useDashboardFetch(
+    () => api().tokens(period),
+    [period],
+  );
 
-  useEffect(() => {
-    api().tokens(period).then(setData).catch(console.error);
-  }, [period]);
+  return (
+    <DataLoadState loading={loading} error={error} onRetry={retry}>
+      {data && <TokensContent data={data} period={period} setPeriod={setPeriod} />}
+    </DataLoadState>
+  );
+}
 
-  if (!data) return <p>Loading...</p>;
+function TokensContent({
+  data,
+  period,
+  setPeriod,
+}: {
+  data: TokenData;
+  period: string;
+  setPeriod: (period: string) => void;
+}) {
+  const chartData = {
+    labels: data.byModel.map((m) => m.model),
+    datasets: [
+      {
+        label: "Input Tokens",
+        data: data.byModel.map((m) => m.inputTokens),
+        backgroundColor: THEME.accent,
+        borderRadius: 4,
+      },
+      {
+        label: "Output Tokens",
+        data: data.byModel.map((m) => m.outputTokens),
+        backgroundColor: THEME.green,
+        borderRadius: 4,
+      },
+    ],
+  };
 
-  const chartData = data.byModel.map((m) => ({
-    model: m.model,
-    input: m.inputTokens,
-    output: m.outputTokens,
-  }));
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: { color: chartAxisColor },
+      },
+      tooltip: {
+        ...chartTooltipStyle,
+        callbacks: {
+          label: (ctx: TooltipItem<"bar">) =>
+            `${ctx.dataset.label}: ${Number(ctx.parsed.y ?? 0).toLocaleString()}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        ticks: { color: chartAxisColor },
+        grid: { color: chartGridColor },
+      },
+      y: {
+        ticks: {
+          color: chartAxisColor,
+          callback: (value: string | number) => Number(value).toLocaleString(),
+        },
+        grid: { color: chartGridColor },
+      },
+    },
+  };
 
   return (
     <div>
@@ -60,50 +115,15 @@ export default function TokensPage() {
         </div>
       </div>
 
-      {/* Stacked bar — input vs output by model */}
       <div style={styles.chartCard}>
         <h3 style={{ marginBottom: "1rem" }}>
           Tokens by Model (Input vs Output)
         </h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis
-              dataKey="model"
-              stroke="var(--text-muted)"
-              tick={{ fontSize: 12 }}
-            />
-            <YAxis
-              stroke="var(--text-muted)"
-              tick={{ fontSize: 12 }}
-              tickFormatter={(v) => v.toLocaleString()}
-            />
-            <Tooltip
-              contentStyle={{
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-              }}
-              formatter={(v) => Number(v).toLocaleString()}
-            />
-            <Legend />
-            <Bar
-              dataKey="input"
-              name="Input Tokens"
-              fill="var(--accent)"
-              radius={[4, 4, 0, 0]}
-            />
-            <Bar
-              dataKey="output"
-              name="Output Tokens"
-              fill="var(--green)"
-              radius={[4, 4, 0, 0]}
-            />
-          </BarChart>
-        </ResponsiveContainer>
+        <div style={styles.chartFrame}>
+          <Bar data={chartData} options={chartOptions} />
+        </div>
       </div>
 
-      {/* Model table */}
       <div style={styles.chartCard}>
         <h3 style={{ marginBottom: "1rem" }}>Model Breakdown</h3>
         <table style={styles.table}>
@@ -146,6 +166,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     padding: "1.5rem",
     marginBottom: "1rem",
+  },
+  chartFrame: {
+    height: 300,
   },
   cardLabel: {
     fontSize: "0.8rem",

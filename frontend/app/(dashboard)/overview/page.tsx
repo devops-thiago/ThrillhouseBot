@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { api, SessionSummary } from '@/lib/api';
 import { useWebSocket, SessionEvent } from '@/hooks/useWebSocket';
+import { useDashboardFetch } from '@/hooks/useDashboardFetch';
 
 interface LiveReviewState {
   sessionId: number;
@@ -19,25 +20,29 @@ interface LiveReviewState {
 }
 
 export default function OverviewPage() {
-  const [summary, setSummary] = useState<SessionSummary | null>(null);
   const { events, connected } = useWebSocket();
 
-  useEffect(() => {
-    api().summary().then(setSummary).catch(console.error);
-  }, []);
+  const lifecycleCount = useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          e.type === 'review.started' ||
+          e.type === 'review.completed' ||
+          e.type === 'review.failed',
+      ).length,
+    [events],
+  );
 
-  useEffect(() => {
-    const latest = events[0];
-    if (
-      !latest ||
-      (latest.type !== 'review.started' &&
-        latest.type !== 'review.completed' &&
-        latest.type !== 'review.failed')
-    ) {
-      return;
-    }
-    api().summary().then(setSummary).catch(console.error);
-  }, [events]);
+  // Refetches on mount and whenever a review lifecycle event arrives.
+  const {
+    data: summary,
+    error: summaryError,
+    retry: retrySummary,
+  } = useDashboardFetch<SessionSummary>(
+    () => api().summary(),
+    [lifecycleCount],
+    { keepStaleWhileLoading: true },
+  );
 
   const liveReviews = useMemo(() => buildLiveReviews(events), [events]);
 
@@ -54,13 +59,36 @@ export default function OverviewPage() {
     <div>
       <h1 style={{ marginBottom: '1.5rem' }}>Dashboard Overview</h1>
 
-      <div style={styles.grid}>
-        <Card label="Total Reviews (30d)" value={summary?.totalReviews ?? '—'} />
-        <Card label="Completed" value={summary?.completedReviews ?? '—'} color="var(--green)" />
-        <Card label="Failed" value={summary?.failedReviews ?? '—'} color="var(--red)" />
-        <Card label="Total Cost" value={summary ? `$${summary.totalCost.toFixed(4)}` : '—'} color="var(--yellow)" />
-        <Card label="Top Model" value={summary?.topModel ?? '—'} />
-      </div>
+      {summaryError && !summary ? (
+        <div style={styles.errorBox}>
+          <span style={{ color: 'var(--red)' }}>
+            Could not load summary metrics: {summaryError}
+          </span>
+          <button type="button" onClick={retrySummary} style={styles.retryBtn}>
+            Retry
+          </button>
+        </div>
+      ) : (
+        <>
+          {summaryError && (
+            <div style={styles.staleBanner}>
+              <span style={{ color: 'var(--yellow)' }}>
+                Could not refresh summary metrics: {summaryError}
+              </span>
+              <button type="button" onClick={retrySummary} style={styles.retryBtn}>
+                Retry
+              </button>
+            </div>
+          )}
+          <div style={styles.grid}>
+            <Card label="Total Reviews (30d)" value={summary?.totalReviews ?? '—'} />
+            <Card label="Completed" value={summary?.completedReviews ?? '—'} color="var(--green)" />
+            <Card label="Failed" value={summary?.failedReviews ?? '—'} color="var(--red)" />
+            <Card label="Total Cost" value={summary ? `$${summary.totalCost.toFixed(4)}` : '—'} color="var(--yellow)" />
+            <Card label="Top Model" value={summary?.topModel ?? '—'} />
+          </div>
+        </>
+      )}
 
       <h2 style={{ marginTop: '2rem', marginBottom: '1rem' }}>
         Live Model Output {connected ? '🟢' : '🔴'}
@@ -353,6 +381,37 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid var(--border)',
     borderRadius: 8,
     padding: '1.25rem',
+  },
+  errorBox: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '1rem',
+    flexWrap: 'wrap',
+    padding: '1.25rem',
+    background: 'var(--bg-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+  },
+  staleBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '1rem',
+    flexWrap: 'wrap',
+    padding: '0.75rem 1rem',
+    marginBottom: '1rem',
+    background: 'var(--bg-secondary)',
+    border: '1px solid var(--yellow)',
+    borderRadius: 8,
+  },
+  retryBtn: {
+    padding: '0.5rem 1rem',
+    background: 'var(--accent)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
   },
   cardLabel: {
     fontSize: '0.8rem',

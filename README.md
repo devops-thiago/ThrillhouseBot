@@ -307,7 +307,7 @@ smee -u https://smee.io/YOUR_CHANNEL -t http://localhost:8080/api/webhook
 
 ```bash
 cd frontend
-npm install --ignore-scripts
+npm install
 npm run build
 cp -r out/* ../src/main/resources/META-INF/resources/dashboard/
 ```

@@ -19,7 +19,7 @@ Prerequisites: **Java 25+**, **Node.js 20+** (dashboard only), **Docker** (nativ
 Follow the [README Quick Start](README.md#quick-start) for cloning, credentials, dev mode, and webhook forwarding — it is the single source of truth for setup commands. Contributor-specific extras:
 
 ```bash
-cd frontend && npm install --ignore-scripts && npm run dev   # dashboard with hot reload
+cd frontend && npm install && npm run dev   # dashboard with hot reload
 ```
 
 ## Before you open a PR
@@ -31,7 +31,9 @@ Run the Java verification locally before opening a PR:
 ./mvnw verify               # tests + JaCoCo coverage gate + SpotBugs
 ```
 
-If you changed the dashboard, also run `cd frontend && npm ci --ignore-scripts && npm run build`.
+If you changed the dashboard, also run `cd frontend && npm ci && npm run test && npm run build`.
+
+To exercise the UI without a backend, run `cd frontend && npm run dev:mock`.
 CI additionally runs SonarCloud, Trivy, and a Docker build check on pull requests.
 
 The bar, enforced by CI:
