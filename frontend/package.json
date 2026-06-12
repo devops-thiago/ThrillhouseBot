@@ -30,6 +30,6 @@
     "@types/react-dom": "^19.2.3",
     "jsdom": "^27.0.1",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.8"
   }
 }
