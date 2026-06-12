@@ -30,7 +30,7 @@ import org.slf4j.LoggerFactory;
  * completes.
  */
 @ApplicationScoped
-public class ReviewDispatcher {
+public final class ReviewDispatcher {
 
   private static final Logger log = LoggerFactory.getLogger(ReviewDispatcher.class);
 
@@ -51,28 +51,18 @@ public class ReviewDispatcher {
 
     while (true) {
       var state = states.computeIfAbsent(key, ignored -> new PerPrState());
-      var startWorker = false;
-      synchronized (state.lock) {
-        // A finishing worker can retire the state between the map lookup above and this
-        // lock; reviving a retired state would let two workers run for the same PR, so
-        // drop the dead mapping and retry with a fresh state.
-        if (state.retired) {
-          states.remove(key, state);
-          continue;
-        }
-        if (state.running) {
-          state.coalesced++;
-          logCoalesced(req, state.coalesced);
-        } else {
-          logQueued(req);
-          state.running = true;
-          state.queuedAtMs = System.currentTimeMillis();
-          startWorker = true;
-        }
-        state.latestRequest = req;
+      var result = state.onDispatch(req);
+      if (result.removeAndRetry()) {
+        states.remove(key, state);
+        continue;
+      }
+      if (result.coalescedCount() > 0) {
+        logCoalesced(req, result.coalescedCount());
+      } else if (result.startWorker()) {
+        logQueued(req);
       }
 
-      if (startWorker) {
+      if (result.startWorker()) {
         try {
           reviewExecutor.execute(() -> runSerialized(key, state));
         } catch (RejectedExecutionException e) {
@@ -111,33 +101,23 @@ public class ReviewDispatcher {
 
   private void drainReviews(PrKey key, PerPrState state) {
     while (true) {
-      ReviewOrchestrator.ReviewRequest req;
-      int coalesced;
-      long queueWaitMs;
-      synchronized (state.lock) {
-        req = state.latestRequest;
-        state.latestRequest = null;
-        coalesced = state.coalesced;
-        state.coalesced = 0;
-        queueWaitMs = System.currentTimeMillis() - state.queuedAtMs;
-        state.queuedAtMs = System.currentTimeMillis();
-      }
-
-      logReviewStart(req, coalesced, queueWaitMs);
+      var batch = state.takeNextReview();
+      logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
 
       try {
-        orchestrator.review(req);
+        orchestrator.review(batch.request());
       } catch (RuntimeException e) {
-        log.error("Review failed for {}/{} #{}", req.owner(), req.repo(), req.prNumber(), e);
+        log.error(
+            "Review failed for {}/{} #{}",
+            batch.request().owner(),
+            batch.request().repo(),
+            batch.request().prNumber(),
+            e);
       }
 
-      synchronized (state.lock) {
-        if (state.latestRequest == null) {
-          state.retired = true;
-          state.running = false;
-          states.remove(key, state);
-          return;
-        }
+      if (state.tryRetireIfIdle()) {
+        states.remove(key, state);
+        return;
       }
     }
   }
@@ -192,11 +172,8 @@ public class ReviewDispatcher {
 
   /** Marks the state dead so a racing dispatch never revives it, then unmaps it. */
   private void retire(PrKey key, PerPrState state) {
-    synchronized (state.lock) {
-      state.retired = true;
-      state.running = false;
-      states.remove(key, state);
-    }
+    state.markRetired();
+    states.remove(key, state);
   }
 
   /** Seeds a per-PR state for tests that simulate dispatch races, without exposing the map. */
@@ -219,11 +196,63 @@ public class ReviewDispatcher {
   record PrKey(String owner, String repo, int prNumber) {}
 
   static final class PerPrState {
-    final Object lock = new Object();
+    private final Object lock = new Object();
     ReviewOrchestrator.ReviewRequest latestRequest;
     boolean running = false;
     boolean retired = false;
     int coalesced = 0;
     long queuedAtMs;
+
+    record DispatchResult(boolean removeAndRetry, boolean startWorker, int coalescedCount) {}
+
+    record ReviewBatch(ReviewOrchestrator.ReviewRequest request, int coalesced, long queueWaitMs) {}
+
+    DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req) {
+      synchronized (lock) {
+        // A finishing worker can retire the state between the map lookup above and this
+        // lock; reviving a retired state would let two workers run for the same PR, so
+        // drop the dead mapping and retry with a fresh state.
+        if (retired) {
+          return new DispatchResult(true, false, 0);
+        }
+        latestRequest = req;
+        if (running) {
+          coalesced++;
+          return new DispatchResult(false, false, coalesced);
+        }
+        running = true;
+        queuedAtMs = System.currentTimeMillis();
+        return new DispatchResult(false, true, 0);
+      }
+    }
+
+    ReviewBatch takeNextReview() {
+      synchronized (lock) {
+        var req = latestRequest;
+        latestRequest = null;
+        var batch = new ReviewBatch(req, coalesced, System.currentTimeMillis() - queuedAtMs);
+        coalesced = 0;
+        queuedAtMs = System.currentTimeMillis();
+        return batch;
+      }
+    }
+
+    boolean tryRetireIfIdle() {
+      synchronized (lock) {
+        if (latestRequest != null) {
+          return false;
+        }
+        retired = true;
+        running = false;
+        return true;
+      }
+    }
+
+    void markRetired() {
+      synchronized (lock) {
+        retired = true;
+        running = false;
+      }
+    }
   }
 }
