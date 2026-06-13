@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -28,6 +29,13 @@ public class TriggerDetector {
               ".*(?:^|\\s)/review(?:\\s|$).*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL),
           Pattern.compile(
               ".*@thrillhousebot\\s+review\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL));
+
+  /**
+   * GitHub {@code author_association} values that grant write access to the repository and are
+   * therefore allowed to spend the operator's API budget on a manual review.
+   */
+  private static final Set<String> AUTHORIZED_ASSOCIATIONS =
+      Set.of("OWNER", "MEMBER", "COLLABORATOR");
 
   /**
    * Checks whether a comment body contains a review trigger keyword. Triggers: "/review" or
@@ -45,5 +53,17 @@ public class TriggerDetector {
     if (authorLogin == null) return false;
     return ("thrillhousebot[bot]".equalsIgnoreCase(authorLogin)
         || "thrillhouse-bot[bot]".equalsIgnoreCase(authorLogin));
+  }
+
+  /**
+   * Checks whether a commenter is authorized to manually trigger a review based on their GitHub
+   * {@code author_association}. Only owners, organization members, and collaborators (users with
+   * write access) may run a manual review; everyone else — {@code CONTRIBUTOR}, {@code
+   * FIRST_TIME_CONTRIBUTOR}, {@code NONE}, etc. — is rejected so that arbitrary users on public
+   * repositories cannot spend the operator's API budget.
+   */
+  public boolean isAuthorizedToTrigger(String authorAssociation) {
+    if (authorAssociation == null) return false;
+    return AUTHORIZED_ASSOCIATIONS.contains(authorAssociation.trim().toUpperCase(Locale.ROOT));
   }
 }
