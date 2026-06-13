@@ -325,8 +325,13 @@ public class ReviewDiffFormatter {
   private static boolean isInsideCodeFence(String[] lines, int lineCount) {
     var insideFence = false;
     for (var i = 0; i < lineCount; i++) {
-      if (lines[i].trim().startsWith("```")) {
-        insideFence = !insideFence;
+      var line = lines[i].trim();
+      if (line.startsWith("```")) {
+        if (!insideFence) {
+          insideFence = true;
+        } else if (line.substring(3).trim().isEmpty()) {
+          insideFence = false;
+        }
       }
     }
     return insideFence;

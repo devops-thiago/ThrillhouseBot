@@ -205,6 +205,15 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
+    void shouldNotTreatFencedPatchContentAsClosingFence() {
+      var section = "### docs.md\n```diff\n+```js\n+console.log('hi')\n```\n\n";
+
+      var result = ReviewDiffFormatter.truncateSection(section, 5);
+
+      assertEquals("### docs.md\n```diff\n+```js\n```\n(patch truncated — 5 lines omitted)\n", result);
+    }
+
+    @Test
     void shouldCountLinesForNullEmptyAndNewlineOnlyText() {
       assertEquals(0, ReviewDiffFormatter.lineCount(null));
       assertEquals(0, ReviewDiffFormatter.lineCount(""));
