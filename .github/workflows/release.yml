@@ -122,6 +122,7 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: sarif
+          limit-severities-for-sarif: true
           output: trivy-release.sarif
           trivyignores: .trivyignore
       - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
@@ -138,6 +139,7 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: sarif
+          limit-severities-for-sarif: true
           output: trivy-release-distroless.sarif
           trivyignores: .trivyignore
       - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
