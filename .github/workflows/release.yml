@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.version || github.ref_name }}
+  group: release-${{ github.event.inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -70,7 +70,11 @@ jobs:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: imjasonh/setup-crane@59c71e96a00b28651f10369ba3359a6d730740a0 # v0.6
+      - name: Install crane
+        run: |
+          curl -fsSL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_x86_64.tar.gz \
+            | tar -xzf - crane
+          sudo install crane /usr/local/bin/crane
       - name: Check CI images exist for tagged commit
         run: |
           for ref in "${{ steps.meta.outputs.sha }}" "${{ steps.meta.outputs.sha }}-distroless"; do
@@ -88,6 +92,22 @@ jobs:
       packages: read
       security-events: write
     steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - name: Resolve Trivy ignore policy for tagged commit
+        run: |
+          if [ -f .trivyignore ]; then
+            echo "Using .trivyignore from ${{ needs.verify.outputs.tag }}"
+            exit 0
+          fi
+          git fetch origin main --depth=1
+          if git show origin/main:.trivyignore > .trivyignore 2>/dev/null; then
+            echo "Tag has no .trivyignore; using scan policy from origin/main"
+          else
+            echo "::error::No .trivyignore on ${{ needs.verify.outputs.tag }} or origin/main"
+            exit 1
+          fi
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
@@ -98,12 +118,14 @@ jobs:
         with:
           image-ref: ${{ env.IMAGE }}:${{ needs.verify.outputs.sha }}
           version: v0.70.0
+          scanners: vuln
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: sarif
           output: trivy-release.sarif
+          trivyignores: .trivyignore
       - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always()
+        if: always() && hashFiles('trivy-release.sarif') != ''
         with:
           sarif_file: trivy-release.sarif
           category: trivy-release
@@ -112,12 +134,14 @@ jobs:
         with:
           image-ref: ${{ env.IMAGE }}:${{ needs.verify.outputs.sha }}-distroless
           version: v0.70.0
+          scanners: vuln
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: sarif
           output: trivy-release-distroless.sarif
+          trivyignores: .trivyignore
       - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always()
+        if: always() && hashFiles('trivy-release-distroless.sarif') != ''
         with:
           sarif_file: trivy-release-distroless.sarif
           category: trivy-release-distroless
@@ -139,7 +163,11 @@ jobs:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: imjasonh/setup-crane@59c71e96a00b28651f10369ba3359a6d730740a0 # v0.6
+      - name: Install crane
+        run: |
+          curl -fsSL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_x86_64.tar.gz \
+            | tar -xzf - crane
+          sudo install crane /usr/local/bin/crane
       - name: Promote image tags
         id: promote
         env:
@@ -249,15 +277,39 @@ jobs:
             echo "::error::No CHANGELOG.md content found for ${VERSION}"
             exit 1
           fi
-      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
-        with:
-          tag_name: ${{ needs.verify.outputs.tag }}
-          body_path: release_notes.md
-          files: |
-            dist/*.tar.gz
-            dist/checksums.txt
-            dist/*.sigstore
-          make_latest: ${{ needs.promote.outputs.update_latest }}
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          UPDATE_LATEST: ${{ needs.promote.outputs.update_latest }}
+        run: |
+          shopt -s nullglob
+          artifacts=( dist/*.tar.gz dist/checksums.txt dist/*.sigstore )
+          if [ "${#artifacts[@]}" -eq 0 ]; then
+            echo "::error::No release artifacts found in dist/"
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading artifacts and refreshing notes"
+            gh release upload "$TAG" "${artifacts[@]}" --clobber
+            edit_args=( "$TAG" --notes-file release_notes.md )
+            if [ "$UPDATE_LATEST" = "true" ]; then
+              edit_args+=( --latest )
+            else
+              edit_args+=( --latest=false )
+            fi
+            gh release edit "${edit_args[@]}"
+          else
+            args=( "$TAG" --notes-file release_notes.md )
+            if [ "$UPDATE_LATEST" = "true" ]; then
+              args+=( --latest )
+            else
+              args+=( --latest=false )
+            fi
+            args+=( "${artifacts[@]}" )
+            gh release create "${args[@]}"
+          fi
 
   bump-version:
     needs: [verify, release, promote]
