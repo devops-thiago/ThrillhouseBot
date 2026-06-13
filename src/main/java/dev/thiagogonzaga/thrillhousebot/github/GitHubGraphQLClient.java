@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
@@ -38,6 +39,7 @@ public interface GitHubGraphQLClient {
   @Consumes(MediaType.APPLICATION_JSON)
   JsonNode execute(@HeaderParam("Authorization") String auth, GraphQLRequest request);
 
+  @RegisterForReflection
   record GraphQLRequest(String query, Map<String, Object> variables) {
     public GraphQLRequest {
       variables = Map.copyOf(variables != null ? variables : Map.of());
