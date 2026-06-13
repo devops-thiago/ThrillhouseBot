@@ -72,6 +72,6 @@ final class AuthResourceTestFixtures {
 
   static void wirePermissiveAccess(DashboardAccessChecker accessChecker) {
     when(accessChecker.hasAccess(anyString())).thenReturn(true);
-    when(accessChecker.isAccessControlEnabled()).thenReturn(false);
+    when(accessChecker.isAccessControlEnabled()).thenReturn(true);
   }
 }

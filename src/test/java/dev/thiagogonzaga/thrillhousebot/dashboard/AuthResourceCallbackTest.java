@@ -65,6 +65,24 @@ class AuthResourceCallbackTest {
   }
 
   @Test
+  void callbackShouldReturn503WhenOwnerNotConfigured() throws Exception {
+    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(false);
+    when(fixtureContext.httpClient.send(any(HttpRequest.class), any())).thenReturn(httpResponse);
+    when(httpResponse.statusCode()).thenReturn(200);
+    when(httpResponse.body())
+        .thenReturn("{\"access_token\":\"gho_test123\"}")
+        .thenReturn("{\"login\":\"someuser\",\"avatar_url\":\"https://a.co\",\"name\":\"Some\"}");
+
+    var response = resource.callback("valid-code", "test-state", "test-state");
+
+    assertEquals(503, response.getStatus());
+    assertTrue(
+        ((Map<?, ?>) response.getEntity()).get("error").toString().contains("account-owner"));
+    // Fail closed: no session is created when access control cannot be enforced.
+    verify(fixtureContext.accessChecker, never()).hasAccess(any());
+  }
+
+  @Test
   void callbackShouldExchangeCodeAndSetOpaqueSessionCookie() throws Exception {
     when(fixtureContext.httpClient.send(any(HttpRequest.class), any())).thenReturn(httpResponse);
     when(httpResponse.statusCode()).thenReturn(200);
@@ -357,6 +375,20 @@ class AuthResourceCallbackTest {
     assertEquals(200, response.getStatus());
     var entity = (Map<?, ?>) response.getEntity();
     assertEquals("testuser", entity.get("login"));
+  }
+
+  @Test
+  void meShouldReturn503WhenOwnerNotConfigured() {
+    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(false);
+    var sessionId =
+        fixtureContext.sessionStore.createSession("testuser", "gho_secret", "https://a.co", "Test");
+
+    var response = resource.me(sessionId);
+
+    assertEquals(503, response.getStatus());
+    assertTrue(
+        ((Map<?, ?>) response.getEntity()).get("error").toString().contains("account-owner"));
+    verify(fixtureContext.accessChecker, never()).hasAccess(any());
   }
 
   @Test
