@@ -303,6 +303,26 @@ public class ReviewDiffFormatter {
       return "(patch truncated)\n";
     }
 
+    int fenceStart = diffFenceStart(lines);
+    return fenceStart < 0
+        ? truncatePlain(lines, maxLines)
+        : truncateFenced(lines, fenceStart, maxLines);
+  }
+
+  /** Index of the opening ```` ```diff ```` fence, or -1 when the section has no fenced patch. */
+  private static int diffFenceStart(String[] lines) {
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith("```")) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Raw line-count truncation for sections without a fenced patch (skipped or patch-less files).
+   */
+  private static String truncatePlain(String[] lines, int maxLines) {
     var sb = new StringBuilder();
     var contentLines = maxLines - 1;
     for (var i = 0; i < contentLines; i++) {
@@ -311,6 +331,82 @@ public class ReviewDiffFormatter {
     sb.append("(patch truncated — ")
         .append(lines.length - contentLines)
         .append(" lines omitted)\n");
+    return sb.toString();
+  }
+
+  /**
+   * Truncates a section whose patch is wrapped in a ```` ```diff ```` fence. Prefers to cut at a
+   * hunk boundary so no partial hunk is shown, and always re-closes the fence so the surrounding
+   * prompt never carries an open code block. The result stays within {@code maxLines}.
+   *
+   * <p>Assumes the section was produced by {@link #formatFileSection}: a single {@code
+   * \n}-delimited ```` ```diff ```` block whose body is a GitHub unified-diff patch (lines prefixed
+   * with a space, {@code +}, {@code -}, or {@code @@}), so the only bare {@code ```} line is the
+   * closing fence.
+   */
+  private static String truncateFenced(String[] lines, int fenceStart, int maxLines) {
+    int patchStart = fenceStart + 1;
+    int fenceEnd = closingFence(lines, patchStart);
+    int patchCount = Math.max(0, fenceEnd - patchStart);
+
+    // Reserve lines for the prefix (header + opening fence), the notice, and the closing fence.
+    int patchBudget = maxLines - patchStart - 2;
+    if (patchBudget < 1) {
+      return truncateWithoutFence(lines, fenceStart, patchCount, maxLines);
+    }
+
+    int keep =
+        alignToHunkBoundary(lines, patchStart, patchCount, Math.min(patchBudget, patchCount));
+
+    var sb = new StringBuilder();
+    for (var i = 0; i < patchStart; i++) {
+      sb.append(lines[i]).append('\n');
+    }
+    for (var i = 0; i < keep; i++) {
+      sb.append(lines[patchStart + i]).append('\n');
+    }
+    sb.append("(patch truncated — ").append(patchCount - keep).append(" lines omitted)\n");
+    sb.append("```\n");
+    return sb.toString();
+  }
+
+  /**
+   * Index of the closing ```` ``` ```` fence at or after {@code from}, or end-of-array if absent.
+   */
+  private static int closingFence(String[] lines, int from) {
+    for (var i = from; i < lines.length; i++) {
+      if (lines[i].equals("```")) {
+        return i;
+      }
+    }
+    return lines.length;
+  }
+
+  /**
+   * Pulls the cut point back to the start of the hunk it lands in so a partial trailing hunk is
+   * dropped rather than shown half-formed. Falls back to the raw cut when even the first hunk
+   * overflows the budget — a partial hunk inside a closed fence still beats an empty one.
+   */
+  private static int alignToHunkBoundary(String[] lines, int patchStart, int patchCount, int keep) {
+    if (keep >= patchCount) {
+      return keep;
+    }
+    int aligned = keep;
+    while (aligned > 0 && !lines[patchStart + aligned].startsWith("@@")) {
+      aligned--;
+    }
+    return aligned > 0 ? aligned : keep;
+  }
+
+  /** Degrades a fenced section to header + notice (no fence) when the budget is too small. */
+  private static String truncateWithoutFence(
+      String[] lines, int fenceStart, int patchCount, int maxLines) {
+    var sb = new StringBuilder();
+    int headerLines = Math.min(fenceStart, maxLines - 1);
+    for (var i = 0; i < headerLines; i++) {
+      sb.append(lines[i]).append('\n');
+    }
+    sb.append("(patch truncated — ").append(patchCount).append(" lines omitted)\n");
     return sb.toString();
   }
 
