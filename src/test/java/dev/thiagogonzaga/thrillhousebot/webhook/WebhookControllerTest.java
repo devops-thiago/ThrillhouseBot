@@ -212,6 +212,7 @@ class WebhookControllerTest {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.isAuthorizedToTrigger("OWNER")).thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
@@ -224,6 +225,24 @@ class WebhookControllerTest {
         .dispatch(
             new ReviewOrchestrator.ReviewRequest(
                 "owner", "repo", 77, "", "(manual review)", "", "", "main", 12345L, true));
+  }
+
+  @Test
+  void shouldIgnoreUnauthorizedManualReviewTrigger() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
+    when(triggerDetector.isBotComment("stranger")).thenReturn(false);
+    when(triggerDetector.isAuthorizedToTrigger("NONE")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/review", "NONE")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, body);
+    assertEquals(200, response.getStatus());
+
+    // A non-collaborator must not be able to spend the operator's API budget.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
   @Test
@@ -452,6 +471,16 @@ class WebhookControllerTest {
 
   private String buildIssueCommentPayload(
       String action, int issueNumber, String fullName, String userLogin, String commentBody) {
+    return buildIssueCommentPayload(action, issueNumber, fullName, userLogin, commentBody, "OWNER");
+  }
+
+  private String buildIssueCommentPayload(
+      String action,
+      int issueNumber,
+      String fullName,
+      String userLogin,
+      String commentBody,
+      String authorAssociation) {
     return ("{"
         + "\"action\":\""
         + action
@@ -472,6 +501,9 @@ class WebhookControllerTest {
         + "\"id\":1,"
         + "\"body\":\""
         + commentBody
+        + "\","
+        + "\"author_association\":\""
+        + authorAssociation
         + "\","
         + "\"user\":{\"login\":\""
         + userLogin

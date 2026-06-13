@@ -76,7 +76,11 @@ public record WebhookPayload(
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
-  public record Comment(long id, String body, User user) {}
+  public record Comment(
+      long id,
+      String body,
+      User user,
+      @JsonProperty("author_association") String authorAssociation) {}
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
