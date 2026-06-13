@@ -49,6 +49,7 @@ public record ReviewResult(
     return findings.size();
   }
 
+  @RegisterForReflection
   public record PreviousFindingStatus(
       int id,
       String status, // resolved, unresolved, justified

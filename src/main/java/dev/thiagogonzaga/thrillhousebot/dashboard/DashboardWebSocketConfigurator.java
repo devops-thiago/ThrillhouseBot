@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.websocket.HandshakeResponse;
 import jakarta.websocket.server.HandshakeRequest;
 import jakarta.websocket.server.ServerEndpointConfig;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 /** Copies the HTTP Cookie header into WebSocket session user properties during the handshake. */
+@RegisterForReflection
 public class DashboardWebSocketConfigurator extends ServerEndpointConfig.Configurator {
 
   static final String COOKIE_USER_PROPERTY = "Cookie";

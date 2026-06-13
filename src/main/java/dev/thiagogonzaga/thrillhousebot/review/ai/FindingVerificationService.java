@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
 import io.quarkus.logging.Log;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
@@ -135,6 +136,7 @@ public class FindingVerificationService {
   }
 
   /** The shape each candidate is presented in; ids are 1-based positions in the findings list. */
+  @RegisterForReflection
   record Candidate(
       int id,
       String risk,
