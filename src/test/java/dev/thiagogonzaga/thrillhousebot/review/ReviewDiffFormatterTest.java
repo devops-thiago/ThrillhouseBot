@@ -186,6 +186,15 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
+    void shouldTruncateFencelessSectionWithEmDashNoticeWhenBudgetAboveOne() {
+      // Sections without a ```diff fence (ignored / patch-less files) keep the original raw-line
+      // behavior: keep the first maxLines-1 lines, then an em-dash notice with the omitted count.
+      assertEquals(
+          "a\nb\n(patch truncated — 4 lines omitted)\n",
+          ReviewDiffFormatter.truncateSection("a\nb\nc\nd\ne\n", 3));
+    }
+
+    @Test
     void shouldCountLinesForNullEmptyAndNewlineOnlyText() {
       assertEquals(0, ReviewDiffFormatter.lineCount(null));
       assertEquals(0, ReviewDiffFormatter.lineCount(""));
@@ -270,6 +279,103 @@ class ReviewDiffFormatterTest {
       assertTrue(result.contains("(diff truncated at 10 lines — 2 files omitted)"));
       assertFalse(result.contains("```diff\nalpha"));
       assertFalse(result.contains("tail"));
+    }
+  }
+
+  @Nested
+  class FenceClosing {
+
+    private static final String TWO_HUNK_SECTION =
+        "### big.java (modified, +6 -0)\n"
+            + "```diff\n"
+            + "@@ -1,3 +1,6 @@\n"
+            + " a\n"
+            + "+b\n"
+            + "+c\n"
+            + "@@ -10,2 +13,4 @@\n"
+            + " d\n"
+            + "+e\n"
+            + "```\n\n";
+
+    private static long fenceCount(String text) {
+      return text.lines().filter(line -> line.startsWith("```")).count();
+    }
+
+    @Test
+    void shouldReCloseFenceWhenTruncatingMidHunk() {
+      // Budget 7: the first hunk (4 lines) does not fit, so the cut lands mid-hunk — the fence must
+      // still be closed rather than left open.
+      var truncated = ReviewDiffFormatter.truncateSection(TWO_HUNK_SECTION, 7);
+
+      assertEquals(2, fenceCount(truncated), "opening fence must be balanced by a closing fence");
+      assertTrue(truncated.endsWith("```\n"), "section must end with the closing fence");
+      assertTrue(truncated.contains("patch truncated"));
+      assertTrue(ReviewDiffFormatter.lineCount(truncated) <= 7, "must not exceed the line budget");
+    }
+
+    @Test
+    void shouldCutAtHunkBoundaryWhenWholeHunkFits() {
+      // Budget 8: the first hunk fits but the second does not, so the partial second hunk is
+      // dropped
+      // entirely at the @@ boundary.
+      var truncated = ReviewDiffFormatter.truncateSection(TWO_HUNK_SECTION, 8);
+
+      assertTrue(truncated.contains("@@ -1,3 +1,6 @@"), "first whole hunk is kept");
+      assertTrue(truncated.contains("+c"), "first hunk content is kept in full");
+      assertFalse(
+          truncated.contains("@@ -10,2 +13,4 @@"), "partial second hunk dropped at boundary");
+      assertFalse(truncated.contains("+e"), "no content leaks from the dropped hunk");
+      assertEquals(2, fenceCount(truncated), "fence must be re-closed");
+      assertTrue(truncated.endsWith("```\n"));
+      assertTrue(ReviewDiffFormatter.lineCount(truncated) <= 8);
+    }
+
+    @Test
+    void shouldCloseFenceForPatchWithNoHunkHeaders() {
+      // No @@ headers, so alignToHunkBoundary finds no boundary and falls back to a raw cut — the
+      // fence must still be re-closed (a partial patch inside a closed fence beats an open one).
+      var section = "### r.java (modified, +5 -0)\n```diff\n+l1\n+l2\n+l3\n+l4\n+l5\n```\n\n";
+      var truncated = ReviewDiffFormatter.truncateSection(section, 6);
+
+      assertEquals(2, fenceCount(truncated), "fence must be re-closed even with no @@ headers");
+      assertTrue(truncated.endsWith("```\n"));
+      assertTrue(truncated.contains("+l1"));
+      assertTrue(truncated.contains("+l2"));
+      assertFalse(truncated.contains("+l3"));
+      assertTrue(truncated.contains("patch truncated"));
+      assertEquals(6, ReviewDiffFormatter.lineCount(truncated));
+    }
+
+    @Test
+    void shouldNotOpenAFenceItCannotCloseWhenBudgetTooSmall() {
+      // Budget 3 cannot fit header + fence + notice + closing fence, so no fence is emitted at all.
+      var truncated = ReviewDiffFormatter.truncateSection(TWO_HUNK_SECTION, 3);
+
+      assertEquals(0, fenceCount(truncated), "must not emit an unbalanced fence");
+      assertTrue(truncated.contains("patch truncated"));
+      assertTrue(ReviewDiffFormatter.lineCount(truncated) <= 3);
+    }
+
+    @Test
+    void shouldKeepPromptFencesBalancedWhenLastFileIsTruncated() {
+      var formatter = new ReviewDiffFormatter(List.of(), 12);
+      var files =
+          List.of(
+              file(
+                  "big.java",
+                  "modified",
+                  6,
+                  0,
+                  "@@ -1,3 +1,6 @@\n a\n+b\n+c\n@@ -20,2 +24,5 @@\n d\n+e\n+f\n+g"),
+              file("small.java", "modified", 1, 0, "+x"));
+
+      var result = formatter.buildDiffString(files);
+
+      long fences = fenceCount(result);
+      assertTrue(fences >= 2, "the included file's fence must be present");
+      assertEquals(0, fences % 2, "every ```diff fence in the prompt must be closed");
+      assertTrue(result.contains("patch truncated"));
+      assertTrue(result.contains("(diff truncated at 12 lines — 1 files omitted)"));
     }
   }
 
