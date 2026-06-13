@@ -33,6 +33,7 @@ import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Vertx;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +49,7 @@ public class OtelObservabilityListener implements ChatModelListener {
   private final ThrillhouseConfig config;
   private final ReviewSessionUpdater sessionUpdater;
   private final Vertx vertx;
+  private final String providerName;
   private final LongHistogram tokenHistogram;
   private final DoubleHistogram durationHistogram;
   private final DoubleCounter costCounter;
@@ -57,10 +59,12 @@ public class OtelObservabilityListener implements ChatModelListener {
       OpenTelemetry otel,
       ThrillhouseConfig config,
       ReviewSessionUpdater sessionUpdater,
-      Vertx vertx) {
+      Vertx vertx,
+      @ConfigProperty(name = "quarkus.langchain4j.openai.base-url") String aiBaseUrl) {
     this.config = config;
     this.sessionUpdater = sessionUpdater;
     this.vertx = vertx;
+    this.providerName = resolveProviderName(config, aiBaseUrl);
     var meter = otel.getMeter("thrillhousebot");
 
     this.tokenHistogram =
@@ -84,6 +88,19 @@ public class OtelObservabilityListener implements ChatModelListener {
             .setUnit("USD")
             .ofDoubles()
             .build();
+  }
+
+  /**
+   * Resolves the {@code gen_ai.provider.name} label once at startup: an explicit configured name
+   * wins; otherwise it is derived from the AI base URL.
+   */
+  private static String resolveProviderName(ThrillhouseConfig config, String aiBaseUrl) {
+    return config
+        .ai()
+        .providerName()
+        .map(String::trim)
+        .filter(name -> !name.isEmpty())
+        .orElseGet(() -> AiProviderResolver.fromBaseUrl(aiBaseUrl));
   }
 
   @Override
@@ -121,7 +138,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     var attrs =
         Attributes.of(
             stringKey("gen_ai.provider.name"),
-            "deepseek",
+            providerName,
             stringKey("gen_ai.request.model"),
             model,
             stringKey("gen_ai.response.model"),
@@ -137,6 +154,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     costCounter.add(cost, attrs);
 
     Span span = Span.current();
+    span.setAttribute("gen_ai.provider.name", providerName);
     span.setAttribute("gen_ai.usage.input_tokens", usage.inputTokenCount());
     span.setAttribute("gen_ai.usage.output_tokens", usage.outputTokenCount());
     span.setAttribute("gen_ai.usage.cost", cost);

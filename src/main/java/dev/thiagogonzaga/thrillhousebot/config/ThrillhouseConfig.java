@@ -123,6 +123,13 @@ public interface ThrillhouseConfig {
   }
 
   interface AiPricingConfig {
+    /**
+     * Explicit provider label for telemetry ({@code gen_ai.provider.name}). When unset, the
+     * provider is derived from the configured AI base URL.
+     */
+    @WithName("provider-name")
+    Optional<String> providerName();
+
     Map<String, ModelPricing> pricing();
 
     interface ModelPricing {
