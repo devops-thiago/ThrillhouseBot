@@ -48,6 +48,7 @@ public class OtelObservabilityListener implements ChatModelListener {
   private final ThrillhouseConfig config;
   private final ReviewSessionUpdater sessionUpdater;
   private final Vertx vertx;
+  private final String providerName;
   private final LongHistogram tokenHistogram;
   private final DoubleHistogram durationHistogram;
   private final DoubleCounter costCounter;
@@ -61,6 +62,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     this.config = config;
     this.sessionUpdater = sessionUpdater;
     this.vertx = vertx;
+    this.providerName = resolveProviderName(config);
     var meter = otel.getMeter("thrillhousebot");
 
     this.tokenHistogram =
@@ -84,6 +86,18 @@ public class OtelObservabilityListener implements ChatModelListener {
             .setUnit("USD")
             .ofDoubles()
             .build();
+  }
+
+  /**
+   * Resolves the {@code gen_ai.provider.name} label once at startup: an explicit configured name
+   * wins; otherwise it is derived from the configured AI base URL.
+   */
+  private static String resolveProviderName(ThrillhouseConfig config) {
+    var ai = config.ai();
+    return ai.providerName()
+        .map(String::trim)
+        .filter(name -> !name.isEmpty())
+        .orElseGet(() -> AiProviderResolver.fromBaseUrl(ai.baseUrl()));
   }
 
   @Override
@@ -121,7 +135,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     var attrs =
         Attributes.of(
             stringKey("gen_ai.provider.name"),
-            "deepseek",
+            providerName,
             stringKey("gen_ai.request.model"),
             model,
             stringKey("gen_ai.response.model"),
@@ -137,6 +151,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     costCounter.add(cost, attrs);
 
     Span span = Span.current();
+    span.setAttribute("gen_ai.provider.name", providerName);
     span.setAttribute("gen_ai.usage.input_tokens", usage.inputTokenCount());
     span.setAttribute("gen_ai.usage.output_tokens", usage.outputTokenCount());
     span.setAttribute("gen_ai.usage.cost", cost);
@@ -180,6 +195,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     }
 
     Span span = Span.current();
+    span.setAttribute("gen_ai.provider.name", providerName);
     span.setAttribute("error", true);
     var error = ctx.error();
     span.setAttribute("error.type", error != null ? error.getClass().getSimpleName() : "Unknown");

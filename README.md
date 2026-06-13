@@ -150,6 +150,7 @@ variables are the ones you will change per provider:
 | `AI_API_KEY` | API key for the AI provider | _(required)_ |
 | `AI_BASE_URL` | OpenAI-compatible base URL | `https://api.deepseek.com/v1` |
 | `AI_MODEL` | Chat model name | `deepseek-chat` |
+| `AI_PROVIDER` | Provider label for telemetry (`gen_ai.provider.name`); derived from `AI_BASE_URL` when unset | _(derived)_ |
 | `AI_TIMEOUT` | Per-request timeout | `300s` |
 | `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
@@ -220,6 +221,11 @@ All telemetry is exported via OTLP:
 | `gen_ai.client.token.usage` | Histogram: input/output tokens |
 | `gen_ai.client.operation.duration` | Histogram: latency in seconds |
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |
+
+Spans and metrics are tagged with `gen_ai.provider.name`, derived from `AI_BASE_URL`
+(e.g. `deepseek`, `openai`, `groq`, `openrouter`). Loopback and unrecognized endpoints
+report `unknown`; set `AI_PROVIDER` to label them (e.g. a local `ollama` or `vllm` server,
+a proxy, or a self-hosted gateway).
 
 ## Responsible use and security
 
