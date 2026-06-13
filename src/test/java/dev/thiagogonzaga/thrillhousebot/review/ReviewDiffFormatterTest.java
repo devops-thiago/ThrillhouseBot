@@ -186,6 +186,34 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
+    void shouldCloseDiffFenceWhenTruncatingInsidePatch() {
+      var section = "### a.java\n```diff\n@@\n+one\n+two\n```\n\n";
+
+      var result = ReviewDiffFormatter.truncateSection(section, 5);
+
+      assertEquals("### a.java\n```diff\n@@\n```\n(patch truncated — 5 lines omitted)\n", result);
+    }
+
+    @Test
+    void shouldKeepTruncatedFenceWithinLineBudget() {
+      var section = "```diff\n+one\n+two\n```\n";
+
+      var result = ReviewDiffFormatter.truncateSection(section, 2);
+
+      assertEquals("(patch truncated — 5 lines omitted)\n", result);
+      assertEquals(1, ReviewDiffFormatter.lineCount(result));
+    }
+
+    @Test
+    void shouldNotTreatFencedPatchContentAsClosingFence() {
+      var section = "### docs.md\n```diff\n+```js\n+console.log('hi')\n```\n\n";
+
+      var result = ReviewDiffFormatter.truncateSection(section, 5);
+
+      assertEquals("### docs.md\n```diff\n+```js\n```\n(patch truncated — 5 lines omitted)\n", result);
+    }
+
+    @Test
     void shouldCountLinesForNullEmptyAndNewlineOnlyText() {
       assertEquals(0, ReviewDiffFormatter.lineCount(null));
       assertEquals(0, ReviewDiffFormatter.lineCount(""));

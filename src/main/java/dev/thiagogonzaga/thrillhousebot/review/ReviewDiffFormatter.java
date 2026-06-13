@@ -303,15 +303,38 @@ public class ReviewDiffFormatter {
       return "(patch truncated)\n";
     }
 
-    var sb = new StringBuilder();
     var contentLines = maxLines - 1;
+    if (isInsideCodeFence(lines, contentLines)) {
+      contentLines = Math.max(0, maxLines - 2);
+    }
+
+    var closesFence = isInsideCodeFence(lines, contentLines);
+    var sb = new StringBuilder();
     for (var i = 0; i < contentLines; i++) {
       sb.append(lines[i]).append('\n');
+    }
+    if (closesFence) {
+      sb.append("```\n");
     }
     sb.append("(patch truncated — ")
         .append(lines.length - contentLines)
         .append(" lines omitted)\n");
     return sb.toString();
+  }
+
+  private static boolean isInsideCodeFence(String[] lines, int lineCount) {
+    var insideFence = false;
+    for (var i = 0; i < lineCount; i++) {
+      var line = lines[i].trim();
+      if (line.startsWith("```")) {
+        if (!insideFence) {
+          insideFence = true;
+        } else if (line.substring(3).trim().isEmpty()) {
+          insideFence = false;
+        }
+      }
+    }
+    return insideFence;
   }
 
   static int lineCount(String text) {
