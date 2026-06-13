@@ -29,6 +29,8 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig.ModelPricing;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionUpdater;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.metrics.DoubleCounter;
 import io.opentelemetry.api.metrics.DoubleCounterBuilder;
 import io.opentelemetry.api.metrics.DoubleHistogram;
@@ -41,6 +43,7 @@ import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,6 +61,7 @@ class OtelObservabilityListenerTest {
   private DoubleCounter costCounter;
   private ThrillhouseConfig config;
   private AiPricingConfig aiConfig;
+  private Vertx vertx;
 
   @BeforeEach
   void setUp() {
@@ -91,9 +95,10 @@ class OtelObservabilityListenerTest {
     aiConfig = mock(AiPricingConfig.class);
     when(config.ai()).thenReturn(aiConfig);
     when(aiConfig.pricing()).thenReturn(Map.of());
+    when(aiConfig.providerName()).thenReturn(Optional.empty());
 
     sessionUpdater = mock(ReviewSessionUpdater.class);
-    Vertx vertx = mock(Vertx.class);
+    vertx = mock(Vertx.class);
     when(vertx.<Void>executeBlocking(any(Callable.class)))
         .thenAnswer(
             invocation -> {
@@ -104,7 +109,9 @@ class OtelObservabilityListenerTest {
               when(future.onFailure(any())).thenReturn(future);
               return future;
             });
-    listener = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
+    listener =
+        new OtelObservabilityListener(
+            otel, config, sessionUpdater, vertx, "https://api.deepseek.com/v1");
   }
 
   @AfterEach
@@ -196,7 +203,8 @@ class OtelObservabilityListenerTest {
             });
 
     var failingListener =
-        new OtelObservabilityListener(localOtel, config, failingUpdater, failingVertx);
+        new OtelObservabilityListener(
+            localOtel, config, failingUpdater, failingVertx, "https://api.deepseek.com/v1");
     var attrs = requestAttributes(failingListener, 16L, 1);
 
     assertDoesNotThrow(() -> failingListener.onResponse(responseContext(attrs)));
@@ -216,6 +224,34 @@ class OtelObservabilityListenerTest {
     verify(tokenHistogram, atLeastOnce()).record(anyLong(), any());
     verify(durationHistogram).record(anyDouble(), any());
     verify(costCounter).add(anyDouble(), any());
+  }
+
+  @Test
+  void onResponseShouldTagMetricsWithProviderDerivedFromBaseUrl() {
+    var ctx = responseContext(requestAttributes(99L, 1));
+
+    listener.onResponse(ctx);
+
+    assertEquals("deepseek", recordedProviderName());
+  }
+
+  @Test
+  void onResponseShouldPreferExplicitlyConfiguredProviderName() {
+    when(aiConfig.providerName()).thenReturn(Optional.of("  my-gateway  "));
+    var overridden =
+        new OtelObservabilityListener(
+            otel, config, sessionUpdater, vertx, "https://api.openai.com/v1");
+
+    overridden.onResponse(responseContext(requestAttributes(overridden, 1L, 1)));
+
+    assertEquals("my-gateway", recordedProviderName());
+  }
+
+  /** Captures the {@code gen_ai.provider.name} label attached to the recorded duration metric. */
+  private String recordedProviderName() {
+    var attrCaptor = ArgumentCaptor.forClass(Attributes.class);
+    verify(durationHistogram).record(anyDouble(), attrCaptor.capture());
+    return attrCaptor.getValue().get(AttributeKey.stringKey("gen_ai.provider.name"));
   }
 
   @Test
