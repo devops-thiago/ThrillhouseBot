@@ -151,6 +151,16 @@ public class WebhookController {
     }
 
     if (triggerDetector.isReviewTrigger(payload.comment().body())) {
+      // Manual triggers spend the operator's API budget, so restrict them to users with write
+      // access (owner/member/collaborator). Otherwise anyone could repeatedly trigger paid reviews.
+      if (!triggerDetector.isAuthorizedToTrigger(payload.comment().authorAssociation())) {
+        log.info(
+            "Ignoring unauthorized manual review trigger from @{} (association: {}) on PR #{}",
+            payload.comment().user().login(),
+            payload.comment().authorAssociation(),
+            payload.issue().number());
+        return;
+      }
       var repo = payload.repository();
       if (repo == null || payload.installation() == null) {
         log.debug("Ignoring review trigger with missing repository or installation");
