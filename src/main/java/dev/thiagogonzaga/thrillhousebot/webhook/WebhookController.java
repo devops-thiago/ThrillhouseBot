@@ -38,6 +38,7 @@ public class WebhookController {
   private final WebhookVerifier verifier;
   private final TriggerDetector triggerDetector;
   private final ReviewDispatcher reviewDispatcher;
+  private final WebhookDeduplicator deduplicator;
   private final ObjectMapper mapper;
 
   @Inject
@@ -46,11 +47,13 @@ public class WebhookController {
       WebhookVerifier verifier,
       TriggerDetector triggerDetector,
       ReviewDispatcher reviewDispatcher,
+      WebhookDeduplicator deduplicator,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
     this.triggerDetector = triggerDetector;
     this.reviewDispatcher = reviewDispatcher;
+    this.deduplicator = deduplicator;
     this.mapper = mapper;
   }
 
@@ -59,6 +62,7 @@ public class WebhookController {
       @HeaderParam("X-Hub-Signature-256") String signature,
       @HeaderParam("X-GitHub-Event") String eventType,
       @HeaderParam("X-GitHub-Hook-Installation-Target-Type") String targetType,
+      @HeaderParam("X-GitHub-Delivery") String deliveryId,
       byte[] body) {
     if (!verifier.verify(signature, body, config.github().webhookSecret())) {
       return Response.status(Response.Status.UNAUTHORIZED)
@@ -76,7 +80,15 @@ public class WebhookController {
           .build();
     }
 
-    log.info("Received {} event (action: {})", eventType, payload.action());
+    log.info(
+        "Received {} event (action: {}, delivery: {})", eventType, payload.action(), deliveryId);
+
+    // GitHub redelivers webhooks (manual redelivery, automatic retries) with the same delivery id;
+    // drop repeats so we do not start a duplicate review and incur duplicate AI cost.
+    if (deduplicator.isDuplicate(deliveryId)) {
+      log.info("Ignoring redelivered {} event (delivery: {})", eventType, deliveryId);
+      return Response.ok("{\"status\":\"ignored\"}").build();
+    }
 
     routeEvent(eventType, payload);
 
