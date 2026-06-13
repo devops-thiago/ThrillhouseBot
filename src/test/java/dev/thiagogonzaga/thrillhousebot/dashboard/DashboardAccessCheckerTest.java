@@ -57,10 +57,11 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void shouldAllowAnyUserWhenOwnerCannotBeResolved() {
+  void shouldDenyEveryUserWhenOwnerCannotBeResolved() {
     when(installationClient.getApp(anyString(), anyString()))
         .thenThrow(new RuntimeException("GitHub App unavailable"));
-    assertTrue(checker.hasAccess("random-user"));
+    // Fail closed: an unresolvable owner must lock the dashboard, not open it to everyone.
+    assertFalse(checker.hasAccess("random-user"));
     assertFalse(checker.isAccessControlEnabled());
   }
 
@@ -222,7 +223,7 @@ class DashboardAccessCheckerTest {
     when(installationClient.getApp(anyString(), anyString()))
         .thenReturn(new GitHubInstallationClient.AppInfo(null));
     assertFalse(checker.isAccessControlEnabled());
-    assertTrue(checker.hasAccess("anyone"));
+    assertFalse(checker.hasAccess("anyone"));
   }
 
   @Test
@@ -232,7 +233,7 @@ class DashboardAccessCheckerTest {
             new GitHubInstallationClient.AppInfo(
                 new GitHubInstallationClient.AppInfo.Owner("", "User")));
     assertFalse(checker.isAccessControlEnabled());
-    assertTrue(checker.hasAccess("anyone"));
+    assertFalse(checker.hasAccess("anyone"));
   }
 
   @Test

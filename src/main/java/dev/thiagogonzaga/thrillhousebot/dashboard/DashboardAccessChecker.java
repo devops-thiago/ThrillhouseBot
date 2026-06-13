@@ -95,7 +95,13 @@ public class DashboardAccessChecker {
 
     Optional<String> owner = accountOwner();
     if (owner.isEmpty()) {
-      return true;
+      // Fail closed: with no account owner configured or resolvable, we cannot tell who is allowed,
+      // so deny everyone rather than exposing the dashboard to any authenticated GitHub user.
+      log.warn(
+          "Dashboard access denied for GitHub user {}: account owner is not configured and could "
+              + "not be resolved; set thrillhousebot.dashboard.github.account-owner",
+          githubLogin);
+      return false;
     }
 
     var normalizedLogin = githubLogin.toLowerCase(Locale.ROOT);
