@@ -45,6 +45,8 @@ public interface ThrillhouseConfig {
 
   GitHubConfig github();
 
+  WebhookConfig webhook();
+
   ReviewConfig review();
 
   DashboardConfig dashboard();
@@ -60,6 +62,17 @@ public interface ThrillhouseConfig {
 
     @WithName("webhook-secret")
     String webhookSecret();
+  }
+
+  interface WebhookConfig {
+    /**
+     * How long a processed {@code X-GitHub-Delivery} id is remembered so GitHub redeliveries
+     * (manual redelivery or automatic retries) within this window are dropped instead of triggering
+     * a duplicate review. State is in-memory per replica.
+     */
+    @WithDefault("24h")
+    @WithName("dedup-ttl")
+    Duration dedupTtl();
   }
 
   interface ReviewConfig {
