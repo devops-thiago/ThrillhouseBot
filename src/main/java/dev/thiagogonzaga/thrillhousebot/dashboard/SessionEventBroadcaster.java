@@ -29,11 +29,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @ApplicationScoped
-public class SessionEventBroadcaster {
+public final class SessionEventBroadcaster {
 
   private static final Logger log = LoggerFactory.getLogger(SessionEventBroadcaster.class);
   private static final String KEY_STATUS = "status";
@@ -123,13 +124,7 @@ public class SessionEventBroadcaster {
       state.latestStreamJson = null;
     }
 
-    Deque<String> buffer = state.buffer;
-    synchronized (buffer) {
-      buffer.addLast(json);
-      while (buffer.size() > MAX_BUFFERED_EVENTS_PER_SESSION) {
-        buffer.removeFirst();
-      }
-    }
+    state.appendBufferedEvent(json, MAX_BUFFERED_EVENTS_PER_SESSION);
 
     if (isTerminalReviewEvent(event.type())) {
       sessionStateById.remove(event.sessionId());
@@ -153,12 +148,7 @@ public class SessionEventBroadcaster {
         continue;
       }
 
-      Deque<String> buffer = state.buffer;
-      synchronized (buffer) {
-        for (String json : buffer) {
-          sendText(wsSession, json);
-        }
-      }
+      state.forEachBuffered(json -> sendText(wsSession, json));
 
       if (state.latestStreamJson != null) {
         sendText(wsSession, state.latestStreamJson);
@@ -209,10 +199,7 @@ public class SessionEventBroadcaster {
     state.latestEventType = latestEventType;
     state.lastActivityAt = lastActivityAt;
     state.latestStreamJson = latestStreamJson;
-    Deque<String> buffer = state.buffer;
-    synchronized (buffer) {
-      buffer.addAll(bufferedEventJson);
-    }
+    state.loadBufferedEvents(bufferedEventJson);
     sessionStateById.put(sessionId, state);
   }
 
@@ -222,14 +209,36 @@ public class SessionEventBroadcaster {
   }
 
   /** Per-session replay state tracked while a review is in progress. */
-  static final class SessionState {
-    final Deque<String> buffer = new ArrayDeque<>();
+  private static final class SessionState {
+    private final Object bufferLock = new Object();
+    private final Deque<String> buffer = new ArrayDeque<>();
     String latestEventType;
     Instant lastActivityAt;
     String latestStreamJson;
 
     SessionState(Instant createdAt) {
       this.lastActivityAt = createdAt;
+    }
+
+    void appendBufferedEvent(String json, int maxSize) {
+      synchronized (bufferLock) {
+        buffer.addLast(json);
+        while (buffer.size() > maxSize) {
+          buffer.removeFirst();
+        }
+      }
+    }
+
+    void forEachBuffered(Consumer<String> consumer) {
+      synchronized (bufferLock) {
+        buffer.forEach(consumer);
+      }
+    }
+
+    void loadBufferedEvents(List<String> events) {
+      synchronized (bufferLock) {
+        buffer.addAll(events);
+      }
     }
   }
 

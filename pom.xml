@@ -14,17 +14,14 @@
         <compiler-plugin.version>3.15.0</compiler-plugin.version>
         <maven.compiler.release>25</maven.compiler.release>
         <java.version>25</java.version>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding
-        >UTF-8</project.reporting.outputEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.group-id
-        >io.quarkus.platform</quarkus.platform.group-id>
+        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.36.2</quarkus.platform.version>
-        <quarkus-langchain4j.version>1.10.0</quarkus-langchain4j.version>
+        <quarkus-langchain4j.version>1.11.0</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
+        <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
@@ -75,7 +72,7 @@
             <dependency>
                 <groupId>io.opentelemetry</groupId>
                 <artifactId>opentelemetry-bom-alpha</artifactId>
-                <version>${opentelemetry.version}-alpha</version>
+                <version>${opentelemetry.alpha.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -168,7 +165,7 @@
         <!-- Test -->
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5</artifactId>
+            <artifactId>quarkus-junit</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -189,7 +186,7 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-mockito</artifactId>
+            <artifactId>quarkus-junit-mockito</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -249,7 +246,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <argLine>-XX:+UseCompactObjectHeaders</argLine>
+                    <argLine>@{argLine} -XX:+UseCompactObjectHeaders</argLine>
                     <systemPropertyVariables>
                         <native.image.path
                         >${project.build.directory}/${project.build.finalName}-runner</native.image.path>
@@ -289,7 +286,7 @@
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
-                <version>4.9.8.3</version>
+                <version>4.10.2.0</version>
                 <configuration>
                     <effort>Max</effort>
                     <threshold>Low</threshold>
