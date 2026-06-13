@@ -113,6 +113,96 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void shouldFindInstallationBeyondFirstPage() {
+    // A full first page of non-matching installations forces pagination; the owner's installation
+    // only appears on page 2.
+    var firstPage = new java.util.ArrayList<GitHubInstallationClient.Installation>();
+    for (var i = 0; i < 100; i++) {
+      firstPage.add(
+          new GitHubInstallationClient.Installation(
+              i, new GitHubInstallationClient.Installation.Account("other-" + i, "User")));
+    }
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(firstPage);
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
+        .thenReturn(
+            List.of(
+                new GitHubInstallationClient.Installation(
+                    99L, new GitHubInstallationClient.Installation.Account("myowner", "User"))));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                1,
+                List.of(
+                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                        "demo",
+                        new GitHubInstallationClient.InstallationRepositoriesResponse.Repository
+                            .Owner("myowner")))));
+
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab"));
+    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
+  void shouldAllowCollaboratorOnRepoBeyondFirstPage() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            List.of(
+                new GitHubInstallationClient.Installation(
+                    99L, new GitHubInstallationClient.Installation.Account("myowner", "User"))));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+
+    // A full first page of owner repos the user does not collaborate on...
+    var firstPage =
+        new java.util.ArrayList<
+            GitHubInstallationClient.InstallationRepositoriesResponse.Repository>();
+    for (var i = 0; i < 100; i++) {
+      firstPage.add(
+          new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+              "repo-" + i,
+              new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
+                  "myowner")));
+    }
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(new GitHubInstallationClient.InstallationRepositoriesResponse(101, firstPage));
+    // ...and the one shared repo only on page 2.
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(2)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                101,
+                List.of(
+                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                        "special-repo",
+                        new GitHubInstallationClient.InstallationRepositoriesResponse.Repository
+                            .Owner("myowner")))));
+
+    Response notCollaborator = mock(Response.class);
+    when(notCollaborator.getStatus()).thenReturn(404);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), eq("collab")))
+        .thenReturn(notCollaborator);
+    Response collaborator = mock(Response.class);
+    when(collaborator.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("special-repo"), eq("collab")))
+        .thenReturn(collaborator);
+
+    assertTrue(checker.hasAccess("collab"));
+    verify(installationClient)
+        .listInstallationRepositories(eq("Bearer inst-token"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
   void shouldDenyNullLogin() {
     assertFalse(checker.hasAccess(null));
   }
@@ -183,7 +273,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void shouldHandleNullRepositoriesResponse() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100)))
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubInstallationClient.Installation(
@@ -197,7 +287,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void shouldSkipInstallationWithNoMatchingAccount() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100)))
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubInstallationClient.Installation(
@@ -237,7 +327,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void shouldReturnSnapshotFromCacheOnRepoFetchFailure() {
-    when(installationClient.listInstallations(anyString(), anyString(), eq(100)))
+    when(installationClient.listInstallations(anyString(), anyString(), eq(100), eq(1)))
         .thenThrow(new RuntimeException("API error"));
 
     assertFalse(checker.hasAccess("collab"));
@@ -275,7 +365,8 @@ class DashboardAccessCheckerTest {
     assertFalse(checker.hasAccess("outsider"));
     assertFalse(checker.hasAccess("another-outsider"));
 
-    verify(installationClient, times(1)).listInstallations(eq("Bearer jwt"), anyString(), eq(100));
+    verify(installationClient, times(1))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
   @Test
@@ -291,11 +382,12 @@ class DashboardAccessCheckerTest {
     assertTrue(checker.hasAccess("collab-one"));
     assertTrue(checker.hasAccess("collab-two"));
 
-    verify(installationClient, times(1)).listInstallations(eq("Bearer jwt"), anyString(), eq(100));
+    verify(installationClient, times(1))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
   private void stubInstalledRepo(String owner, String repo) {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100)))
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubInstallationClient.Installation(

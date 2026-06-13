@@ -43,6 +43,14 @@ public class DashboardAccessChecker {
   private static final Duration ACCESS_CACHE_TTL = Duration.ofMinutes(5);
   private static final Duration OWNER_CACHE_TTL = Duration.ofHours(1);
   static final int ACCESS_CACHE_SWEEP_THRESHOLD = 1_000;
+  private static final int PER_PAGE = 100;
+
+  /**
+   * Safety cap on paginated GitHub calls so a misbehaving API that keeps returning full pages can
+   * never spin forever. At 100 entries per page this covers up to 10,000 installations/repos, well
+   * beyond any realistic account.
+   */
+  private static final int MAX_PAGES = 100;
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -200,25 +208,10 @@ public class DashboardAccessChecker {
     String installationAuth = null;
     try {
       var jwt = "Bearer " + authClient.generateAppJwt();
-      Optional<GitHubInstallationClient.Installation> matchingInstallation =
-          installationClient.listInstallations(jwt, ACCEPT, 100).stream()
-              .filter(
-                  i -> i.account() != null && accountOwner.equalsIgnoreCase(i.account().login()))
-              .findFirst();
+      var matchingInstallation = findInstallation(jwt, accountOwner);
       if (matchingInstallation.isPresent()) {
         installationAuth = authClient.getAuthHeader(matchingInstallation.get().id());
-        var response =
-            installationClient.listInstallationRepositories(installationAuth, ACCEPT, 100, 1);
-        if (response.repositories() != null) {
-          for (GitHubInstallationClient.InstallationRepositoriesResponse.Repository repo :
-              response.repositories()) {
-            if (repo.owner() != null
-                && accountOwner.equalsIgnoreCase(repo.owner().login())
-                && repo.name() != null) {
-              repos.add(new RepoRef(repo.owner().login(), repo.name()));
-            }
-          }
-        }
+        collectInstalledRepos(installationAuth, accountOwner, repos);
       }
     } catch (RuntimeException e) {
       log.warn("Failed to list installed repositories for {}: {}", accountOwner, e.getMessage());
@@ -229,6 +222,59 @@ public class DashboardAccessChecker {
     cachedSnapshot.set(updated);
     log.info("Loaded {} installed repos for dashboard access control", repos.size());
     return updated;
+  }
+
+  /**
+   * Pages through the app's installations until the one matching {@code accountOwner} is found.
+   * Stops early on the matching installation or the first short page so we never fetch more than
+   * necessary.
+   */
+  private Optional<GitHubInstallationClient.Installation> findInstallation(
+      String jwt, String accountOwner) {
+    for (var page = 1; page <= MAX_PAGES; page++) {
+      var installations = installationClient.listInstallations(jwt, ACCEPT, PER_PAGE, page);
+      if (installations == null || installations.isEmpty()) {
+        return Optional.empty();
+      }
+      var match =
+          installations.stream()
+              .filter(
+                  i -> i.account() != null && accountOwner.equalsIgnoreCase(i.account().login()))
+              .findFirst();
+      if (match.isPresent()) {
+        return match;
+      }
+      if (installations.size() < PER_PAGE) {
+        return Optional.empty();
+      }
+    }
+    log.warn(
+        "Reached max installation pages ({}) without resolving owner {}", MAX_PAGES, accountOwner);
+    return Optional.empty();
+  }
+
+  /** Pages through every repository the installation can access, collecting owner-owned repos. */
+  private void collectInstalledRepos(
+      String installationAuth, String accountOwner, List<RepoRef> repos) {
+    for (var page = 1; page <= MAX_PAGES; page++) {
+      var response =
+          installationClient.listInstallationRepositories(installationAuth, ACCEPT, PER_PAGE, page);
+      var pageRepos = response.repositories();
+      if (pageRepos == null || pageRepos.isEmpty()) {
+        return;
+      }
+      for (GitHubInstallationClient.InstallationRepositoriesResponse.Repository repo : pageRepos) {
+        if (repo.owner() != null
+            && accountOwner.equalsIgnoreCase(repo.owner().login())
+            && repo.name() != null) {
+          repos.add(new RepoRef(repo.owner().login(), repo.name()));
+        }
+      }
+      if (pageRepos.size() < PER_PAGE) {
+        return;
+      }
+    }
+    log.warn("Reached max repository pages ({}) for owner {}", MAX_PAGES, accountOwner);
   }
 
   private Optional<String> accountOwner() {

@@ -37,7 +37,8 @@ public interface GitHubInstallationClient {
   List<Installation> listInstallations(
       @HeaderParam("Authorization") String authorization,
       @HeaderParam("Accept") String accept,
-      @QueryParam("per_page") @DefaultValue("100") int perPage);
+      @QueryParam("per_page") @DefaultValue("100") int perPage,
+      @QueryParam("page") @DefaultValue("1") int page);
 
   @GET
   @Path("/installation/repositories")
