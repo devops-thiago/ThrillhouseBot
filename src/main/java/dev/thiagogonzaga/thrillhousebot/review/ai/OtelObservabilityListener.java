@@ -33,7 +33,6 @@ import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Vertx;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,12 +58,11 @@ public class OtelObservabilityListener implements ChatModelListener {
       OpenTelemetry otel,
       ThrillhouseConfig config,
       ReviewSessionUpdater sessionUpdater,
-      Vertx vertx,
-      @ConfigProperty(name = "quarkus.langchain4j.openai.base-url") String aiBaseUrl) {
+      Vertx vertx) {
     this.config = config;
     this.sessionUpdater = sessionUpdater;
     this.vertx = vertx;
-    this.providerName = resolveProviderName(config, aiBaseUrl);
+    this.providerName = resolveProviderName(config);
     var meter = otel.getMeter("thrillhousebot");
 
     this.tokenHistogram =
@@ -92,15 +90,14 @@ public class OtelObservabilityListener implements ChatModelListener {
 
   /**
    * Resolves the {@code gen_ai.provider.name} label once at startup: an explicit configured name
-   * wins; otherwise it is derived from the AI base URL.
+   * wins; otherwise it is derived from the configured AI base URL.
    */
-  private static String resolveProviderName(ThrillhouseConfig config, String aiBaseUrl) {
-    return config
-        .ai()
-        .providerName()
+  private static String resolveProviderName(ThrillhouseConfig config) {
+    var ai = config.ai();
+    return ai.providerName()
         .map(String::trim)
         .filter(name -> !name.isEmpty())
-        .orElseGet(() -> AiProviderResolver.fromBaseUrl(aiBaseUrl));
+        .orElseGet(() -> AiProviderResolver.fromBaseUrl(ai.baseUrl()));
   }
 
   @Override
@@ -198,6 +195,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     }
 
     Span span = Span.current();
+    span.setAttribute("gen_ai.provider.name", providerName);
     span.setAttribute("error", true);
     var error = ctx.error();
     span.setAttribute("error.type", error != null ? error.getClass().getSimpleName() : "Unknown");

@@ -95,6 +95,7 @@ class OtelObservabilityListenerTest {
     aiConfig = mock(AiPricingConfig.class);
     when(config.ai()).thenReturn(aiConfig);
     when(aiConfig.pricing()).thenReturn(Map.of());
+    when(aiConfig.baseUrl()).thenReturn("https://api.deepseek.com/v1");
     when(aiConfig.providerName()).thenReturn(Optional.empty());
 
     sessionUpdater = mock(ReviewSessionUpdater.class);
@@ -109,9 +110,7 @@ class OtelObservabilityListenerTest {
               when(future.onFailure(any())).thenReturn(future);
               return future;
             });
-    listener =
-        new OtelObservabilityListener(
-            otel, config, sessionUpdater, vertx, "https://api.deepseek.com/v1");
+    listener = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
   }
 
   @AfterEach
@@ -203,8 +202,7 @@ class OtelObservabilityListenerTest {
             });
 
     var failingListener =
-        new OtelObservabilityListener(
-            localOtel, config, failingUpdater, failingVertx, "https://api.deepseek.com/v1");
+        new OtelObservabilityListener(localOtel, config, failingUpdater, failingVertx);
     var attrs = requestAttributes(failingListener, 16L, 1);
 
     assertDoesNotThrow(() -> failingListener.onResponse(responseContext(attrs)));
@@ -238,9 +236,7 @@ class OtelObservabilityListenerTest {
   @Test
   void onResponseShouldPreferExplicitlyConfiguredProviderName() {
     when(aiConfig.providerName()).thenReturn(Optional.of("  my-gateway  "));
-    var overridden =
-        new OtelObservabilityListener(
-            otel, config, sessionUpdater, vertx, "https://api.openai.com/v1");
+    var overridden = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
 
     overridden.onResponse(responseContext(requestAttributes(overridden, 1L, 1)));
 
