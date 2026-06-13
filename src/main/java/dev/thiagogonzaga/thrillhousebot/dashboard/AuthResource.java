@@ -73,6 +73,9 @@ public class AuthResource {
   private static final String MSG_AUTH_FAILED_GITHUB = "Failed to authenticate with GitHub";
   private static final String MSG_ACCESS_DENIED =
       "Access denied — you must be a collaborator on an installed repository";
+  private static final String MSG_OWNER_NOT_CONFIGURED =
+      "Dashboard access control is not configured: the GitHub App owner could not be resolved. "
+          + "Set thrillhousebot.dashboard.github.account-owner to enable access.";
 
   private final ThrillhouseConfig config;
   private final DashboardAccessChecker accessChecker;
@@ -235,11 +238,9 @@ public class AuthResource {
             .build();
       }
 
-      if (!accessChecker.hasAccess(login)) {
-        return Response.status(Response.Status.FORBIDDEN)
-            .entity(Map.of(KEY_ERROR, MSG_ACCESS_DENIED))
-            .cookie(clearedStateCookie)
-            .build();
+      var denial = accessDenial(login);
+      if (denial != null) {
+        return denial.cookie(clearedStateCookie).build();
       }
 
       String avatarUrl = userData.get("avatar_url") instanceof String url ? url : null;
@@ -292,15 +293,36 @@ public class AuthResource {
     }
 
     var user = session.get();
-    if (!accessChecker.hasAccess(user.login())) {
-      return Response.status(Response.Status.FORBIDDEN)
-          .entity(Map.of(KEY_ERROR, MSG_ACCESS_DENIED))
-          .build();
+    var denial = accessDenial(user.login());
+    if (denial != null) {
+      return denial.build();
     }
 
     return Response.ok(
             Map.of(KEY_LOGIN, user.login(), "avatarUrl", user.avatarUrl(), "name", user.name()))
         .build();
+  }
+
+  /**
+   * Decides whether {@code login} may reach the dashboard. Returns {@code null} when access is
+   * granted, or a builder for the denial response otherwise. Fails closed: a misconfigured/unknown
+   * owner yields a 503 with a clear "owner not configured" message rather than silently granting
+   * access, while a known owner with a non-collaborator login yields a 403.
+   */
+  private Response.ResponseBuilder accessDenial(String login) {
+    if (!accessChecker.isAccessControlEnabled()) {
+      log.error(
+          "Dashboard access blocked for {}: account owner is not configured and could not be "
+              + "resolved; set thrillhousebot.dashboard.github.account-owner",
+          login);
+      return Response.status(Response.Status.SERVICE_UNAVAILABLE)
+          .entity(Map.of(KEY_ERROR, MSG_OWNER_NOT_CONFIGURED));
+    }
+    if (!accessChecker.hasAccess(login)) {
+      return Response.status(Response.Status.FORBIDDEN)
+          .entity(Map.of(KEY_ERROR, MSG_ACCESS_DENIED));
+    }
+    return null;
   }
 
   @POST
