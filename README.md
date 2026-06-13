@@ -223,8 +223,9 @@ All telemetry is exported via OTLP:
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |
 
 Spans and metrics are tagged with `gen_ai.provider.name`, derived from `AI_BASE_URL`
-(e.g. `deepseek`, `openai`, `groq`, `openrouter`, `ollama` for a local server). Set
-`AI_PROVIDER` to override the label for proxies or self-hosted gateways.
+(e.g. `deepseek`, `openai`, `groq`, `openrouter`). Loopback and unrecognized endpoints
+report `unknown`; set `AI_PROVIDER` to label them (e.g. a local `ollama` or `vllm` server,
+a proxy, or a self-hosted gateway).
 
 ## Responsible use and security
 
