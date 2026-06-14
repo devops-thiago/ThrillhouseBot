@@ -79,6 +79,14 @@ public interface GitHubCheckRunClient {
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record RequiredStatusChecks(List<String> contexts, List<Check> checks) {
+    public List<String> contexts() {
+      return contexts == null ? List.of() : List.copyOf(contexts);
+    }
+
+    public List<Check> checks() {
+      return checks == null ? List.of() : List.copyOf(checks);
+    }
+
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Check(String context, @JsonProperty("app_id") Long appId) {}
   }
@@ -87,6 +95,10 @@ public interface GitHubCheckRunClient {
   record CheckRunsResponse(
       @JsonProperty("total_count") int totalCount,
       @JsonProperty("check_runs") List<CheckRun> checkRuns) {
+    public List<CheckRun> checkRuns() {
+      return checkRuns == null ? List.of() : List.copyOf(checkRuns);
+    }
+
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record CheckRun(long id, String name, String status, String conclusion, App app) {
       @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -97,6 +109,10 @@ public interface GitHubCheckRunClient {
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record CombinedStatus(
       String state, @JsonProperty("total_count") int totalCount, List<StatusDetail> statuses) {
+    public List<StatusDetail> statuses() {
+      return statuses == null ? List.of() : List.copyOf(statuses);
+    }
+
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record StatusDetail(long id, String state, String context, String description) {}
   }

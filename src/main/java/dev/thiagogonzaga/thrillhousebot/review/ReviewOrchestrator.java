@@ -1028,7 +1028,7 @@ public class ReviewOrchestrator {
             ciStatus = "pending";
           } else if (run.conclusion() == null
               || !List.of("success", "skipped", "neutral")
-                  .contains(run.conclusion().toLowerCase())) {
+                  .contains(run.conclusion().toLowerCase(java.util.Locale.ROOT))) {
             ciStatus = "failing";
           }
 
@@ -1095,15 +1095,18 @@ public class ReviewOrchestrator {
   private boolean isThrillhouseBotCheck(
       String name, GitHubCheckRunClient.CheckRunsResponse.CheckRun.App app) {
     if (name != null) {
-      if (name.equalsIgnoreCase(CHECK_NAME) || name.toLowerCase().contains("thrillhousebot")) {
+      if (name.equalsIgnoreCase(CHECK_NAME)
+          || name.toLowerCase(java.util.Locale.ROOT).contains("thrillhousebot")) {
         return true;
       }
     }
     if (app != null) {
-      if (app.slug() != null && app.slug().toLowerCase().contains("thrillhousebot")) {
+      if (app.slug() != null
+          && app.slug().toLowerCase(java.util.Locale.ROOT).contains("thrillhousebot")) {
         return true;
       }
-      if (app.name() != null && app.name().toLowerCase().contains("thrillhousebot")) {
+      if (app.name() != null
+          && app.name().toLowerCase(java.util.Locale.ROOT).contains("thrillhousebot")) {
         return true;
       }
     }
