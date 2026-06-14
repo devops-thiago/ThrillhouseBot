@@ -108,6 +108,13 @@ public interface ThrillhouseConfig {
     @WithDefault("**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**")
     @WithName("ignored-files")
     List<String> ignoredFiles();
+
+    /**
+     * GitHub logins permitted to manually trigger reviews regardless of repository permission. When
+     * empty, only users with write access to the repository may trigger a manual review.
+     */
+    @WithName("manual-trigger-allowed-logins")
+    Optional<List<String>> manualTriggerAllowedLogins();
   }
 
   interface DashboardConfig {

@@ -59,29 +59,4 @@ class TriggerDetectorTest {
     assertFalse(detector.isBotComment("thrillhousebot"));
     assertFalse(detector.isBotComment(""));
   }
-
-  @Test
-  void shouldAuthorizeWriteAccessAssociations() {
-    assertTrue(detector.isAuthorizedToTrigger("OWNER"));
-    assertTrue(detector.isAuthorizedToTrigger("MEMBER"));
-    assertTrue(detector.isAuthorizedToTrigger("COLLABORATOR"));
-  }
-
-  @Test
-  void shouldAuthorizeRegardlessOfCaseAndWhitespace() {
-    assertTrue(detector.isAuthorizedToTrigger("owner"));
-    assertTrue(detector.isAuthorizedToTrigger("Collaborator"));
-    assertTrue(detector.isAuthorizedToTrigger("  MEMBER  "));
-  }
-
-  @Test
-  void shouldRejectNonWriteAssociations() {
-    assertFalse(detector.isAuthorizedToTrigger("CONTRIBUTOR"));
-    assertFalse(detector.isAuthorizedToTrigger("FIRST_TIME_CONTRIBUTOR"));
-    assertFalse(detector.isAuthorizedToTrigger("FIRST_TIMER"));
-    assertFalse(detector.isAuthorizedToTrigger("MANNEQUIN"));
-    assertFalse(detector.isAuthorizedToTrigger("NONE"));
-    assertFalse(detector.isAuthorizedToTrigger(""));
-    assertFalse(detector.isAuthorizedToTrigger(null));
-  }
 }

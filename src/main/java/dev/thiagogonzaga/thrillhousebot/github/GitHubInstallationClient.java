@@ -58,9 +58,21 @@ public interface GitHubInstallationClient {
       @PathParam("repo") String repo,
       @PathParam("username") String username);
 
+  @GET
+  @Path("/repos/{owner}/{repo}/collaborators/{username}/permission")
+  @Produces(MediaType.APPLICATION_JSON)
+  CollaboratorPermission collaboratorPermission(
+      @HeaderParam("Authorization") String authorization,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("username") String username);
+
   record Installation(long id, Account account) {
     public record Account(String login, String type) {}
   }
+
+  record CollaboratorPermission(String permission, @JsonProperty("role_name") String roleName) {}
 
   record AppInfo(Owner owner) {
     public record Owner(String login, String type) {}

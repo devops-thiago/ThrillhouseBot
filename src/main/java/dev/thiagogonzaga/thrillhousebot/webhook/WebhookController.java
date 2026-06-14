@@ -39,6 +39,7 @@ public class WebhookController {
   private final TriggerDetector triggerDetector;
   private final ReviewDispatcher reviewDispatcher;
   private final WebhookDeduplicator deduplicator;
+  private final ManualReviewAuthorizer manualReviewAuthorizer;
   private final ObjectMapper mapper;
 
   @Inject
@@ -48,12 +49,14 @@ public class WebhookController {
       TriggerDetector triggerDetector,
       ReviewDispatcher reviewDispatcher,
       WebhookDeduplicator deduplicator,
+      ManualReviewAuthorizer manualReviewAuthorizer,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
     this.triggerDetector = triggerDetector;
     this.reviewDispatcher = reviewDispatcher;
     this.deduplicator = deduplicator;
+    this.manualReviewAuthorizer = manualReviewAuthorizer;
     this.mapper = mapper;
   }
 
@@ -145,6 +148,13 @@ public class WebhookController {
   }
 
   private void handleIssueComment(WebhookPayload payload) {
+    // Only a freshly created comment is a trigger; editing or deleting one must not re-run a
+    // review.
+    if (!"created".equals(payload.action())) {
+      log.debug("Ignoring issue_comment action: {}", payload.action());
+      return;
+    }
+
     // Only act on PR comments, not issue comments
     if (payload.issue() == null || payload.issue().pullRequest() == null) {
       log.debug("Ignoring comment on issue (not PR)");
@@ -163,29 +173,29 @@ public class WebhookController {
     }
 
     if (triggerDetector.isReviewTrigger(payload.comment().body())) {
-      // Manual triggers spend the operator's API budget, so restrict them to users with write
-      // access (owner/member/collaborator). Otherwise anyone could repeatedly trigger paid reviews.
-      if (!triggerDetector.isAuthorizedToTrigger(payload.comment().authorAssociation())) {
-        log.info(
-            "Ignoring unauthorized manual review trigger from @{} (association: {}) on PR #{}",
-            payload.comment().user().login(),
-            payload.comment().authorAssociation(),
-            payload.issue().number());
-        return;
-      }
       var repo = payload.repository();
       if (repo == null || payload.installation() == null) {
         log.debug("Ignoring review trigger with missing repository or installation");
         return;
       }
-      log.info(
-          "Manual review triggered by @{} on PR #{}",
-          payload.comment().user().login(),
-          payload.issue().number());
+      var owner = repo.owner().login();
+      var login = payload.comment().user().login();
+      var installationId = payload.installation().id();
+      // Manual triggers spend the operator's API budget, so restrict them to users who actually
+      // hold write access to the repository (or are explicitly allowlisted).
+      if (!manualReviewAuthorizer.isAuthorized(
+          owner, repo.name(), installationId, login, payload.comment().authorAssociation())) {
+        log.info(
+            "Ignoring unauthorized manual review trigger from @{} on PR #{}",
+            login,
+            payload.issue().number());
+        return;
+      }
+      log.info("Manual review triggered by @{} on PR #{}", login, payload.issue().number());
       // On issue_comment the issue number equals the PR number
       reviewDispatcher.dispatch(
           new ReviewOrchestrator.ReviewRequest(
-              repo.owner().login(),
+              owner,
               repo.name(),
               payload.issue().number(),
               "",
@@ -193,7 +203,7 @@ public class WebhookController {
               "",
               "",
               repo.defaultBranch(),
-              payload.installation().id(),
+              installationId,
               true));
     }
   }
