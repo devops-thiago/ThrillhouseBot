@@ -74,13 +74,14 @@ public class DashboardAccessChecker {
   private record OwnerCache(String owner, Instant cachedAt) {}
 
   private final AtomicReference<RepoSnapshot> cachedSnapshot =
-      new AtomicReference<>(new RepoSnapshot(List.of(), null, Instant.EPOCH));
+      new AtomicReference<>(new RepoSnapshot(null, List.of(), null, Instant.EPOCH));
   private final AtomicReference<OwnerCache> ownerCache =
       new AtomicReference<>(new OwnerCache(null, Instant.EPOCH));
 
   static record AccessCacheEntry(boolean allowed, Instant cachedAt) {}
 
-  private record RepoSnapshot(List<RepoRef> repos, String installationAuth, Instant cachedAt) {}
+  private record RepoSnapshot(
+      String owner, List<RepoRef> repos, String installationAuth, Instant cachedAt) {}
 
   private record RepoRef(String owner, String name) {}
 
@@ -220,7 +221,8 @@ public class DashboardAccessChecker {
   private RepoSnapshot installedRepos(String accountOwner) {
     var snapshot = cachedSnapshot.get();
     if (snapshot.cachedAt().isAfter(clock.get().minus(REPO_CACHE_TTL))
-        && snapshot.installationAuth() != null) {
+        && snapshot.installationAuth() != null
+        && accountOwner.equalsIgnoreCase(snapshot.owner())) {
       return snapshot;
     }
 
@@ -238,7 +240,7 @@ public class DashboardAccessChecker {
       return cachedSnapshot.get();
     }
 
-    var updated = new RepoSnapshot(List.copyOf(repos), installationAuth, clock.get());
+    var updated = new RepoSnapshot(accountOwner, List.copyOf(repos), installationAuth, clock.get());
     cachedSnapshot.set(updated);
     log.info("Loaded {} installed repos for dashboard access control", repos.size());
     return updated;

@@ -514,6 +514,42 @@ class DashboardAccessCheckerTest {
         .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
+  @Test
+  void shouldInvalidateRepoSnapshotCacheWhenOwnerChanges() {
+    // First access check caches a RepoSnapshot for "myowner"
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab-user"));
+    verify(installationClient, times(1))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
+
+    // Switch the resolved owner to "newowner" (within repo cache TTL)
+    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("newowner"));
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("newowner", 200L)));
+    when(authClient.getAuthHeader(200L)).thenReturn("Bearer new-inst-token");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer new-inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                1, ownerRepos("newowner", "new-repo")));
+
+    // Advance past access cache TTL (5 min) but within repo cache TTL (10 min)
+    // so the per-login result expires and evaluateAccess re-enters installedRepos().
+    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
+
+    // The snapshot must NOT be reused — repos must be re-fetched for "newowner"
+    assertTrue(checker.hasAccess("collab-user"));
+    verify(installationClient, times(2))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
+  }
+
   private void stubInstalledRepo(String owner, String repo) {
     when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(List.of(installationFor(owner, 99L)));
