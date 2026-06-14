@@ -3128,7 +3128,9 @@ class ReviewOrchestratorTest {
   class DtoCoverage {
     @Test
     void shouldCoverCiCheckMethods() {
-      var nullChecksResult = new ReviewResult(List.of(), 0, 0, 0, 0, RiskLevel.LOW, ReviewState.APPROVE, true, "", List.of(), null);
+      var nullChecksResult =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, RiskLevel.LOW, ReviewState.APPROVE, true, "", List.of(), null);
       assertTrue(nullChecksResult.offendingCiChecks().isEmpty());
       var failing = new ReviewResult.CiCheck("build", "check-run", "failing", "failure");
       var pending = new ReviewResult.CiCheck("lint", "status", "pending", "pending");
