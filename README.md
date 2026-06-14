@@ -255,7 +255,7 @@ Early v0.1.0 release:
   Multiple replicas are unsupported.
 - **Dashboard access** — GitHub OAuth required. Only the app account owner and
   collaborators on installed repos can use the dashboard; no admin UI or guest mode.
-  If the app owner cannot be resolved from GitHub, access control is off until
+  If the app owner cannot be resolved from GitHub, the dashboard fails closed (denies all access) until
   `thrillhousebot.dashboard.github.account-owner` is set.
 - **Production database** — container and native production builds use PostgreSQL
   (`%prod`). H2 is for local `quarkus:dev` only.
