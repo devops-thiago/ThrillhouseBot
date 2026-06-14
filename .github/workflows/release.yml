@@ -95,6 +95,15 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.verify.outputs.tag }}
+      # The trivy-scan composite action is referenced locally below. Local
+      # actions resolve from the checked-out tree, but the tag above can predate
+      # the action (e.g. re-releasing an old tag via workflow_dispatch). Check it
+      # out from the workflow's own ref into a side path so it always resolves.
+      - name: Check out reusable actions from the workflow ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          path: .actions-ref
+          sparse-checkout: .github/actions
       - name: Resolve Trivy ignore policy for tagged commit
         run: |
           if [ -f .trivyignore ]; then
@@ -114,38 +123,20 @@ jobs:
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Scan default image (gate on CRITICAL/HIGH)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: ./.actions-ref/.github/actions/trivy-scan
         with:
           image-ref: ${{ env.IMAGE }}:${{ needs.verify.outputs.sha }}
-          version: v0.70.0
           scanners: vuln
-          severity: CRITICAL,HIGH
           exit-code: "1"
-          format: sarif
-          limit-severities-for-sarif: true
-          output: trivy-release.sarif
           trivyignores: .trivyignore
-      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always() && hashFiles('trivy-release.sarif') != ''
-        with:
-          sarif_file: trivy-release.sarif
           category: trivy-release
       - name: Scan distroless image (gate on CRITICAL/HIGH)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        uses: ./.actions-ref/.github/actions/trivy-scan
         with:
           image-ref: ${{ env.IMAGE }}:${{ needs.verify.outputs.sha }}-distroless
-          version: v0.70.0
           scanners: vuln
-          severity: CRITICAL,HIGH
           exit-code: "1"
-          format: sarif
-          limit-severities-for-sarif: true
-          output: trivy-release-distroless.sarif
           trivyignores: .trivyignore
-      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always() && hashFiles('trivy-release-distroless.sarif') != ''
-        with:
-          sarif_file: trivy-release-distroless.sarif
           category: trivy-release-distroless
 
   promote:
