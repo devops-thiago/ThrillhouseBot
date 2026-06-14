@@ -159,6 +159,16 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void shouldReturnCachedDenial() {
+    // A fresh denied cache entry is served from cache without re-evaluating access.
+    checker.seedAccessCache("outsider", false, now.get());
+
+    assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("outsider"));
+    assertFalse(checker.hasAccess("outsider"));
+    verify(installationClient, never()).listInstallations(anyString(), anyString(), anyInt());
+  }
+
+  @Test
   void shouldWarnOnUnexpectedCollaboratorCheckStatus() {
     stubInstalledRepo("myowner", "demo");
     when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
