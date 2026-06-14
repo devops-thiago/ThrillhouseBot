@@ -59,6 +59,7 @@ class AiProviderResolverTest {
   @CsvSource({
     "https://api.example.com/v1, example",
     "https://llm.acme.io, acme",
+    "https://example.io, example",
     "https://gateway.internal.corp/v1, internal",
     // Multi-label public suffixes resolve to the registrable name, not the suffix component.
     "https://api.example.co.uk, example",
@@ -73,6 +74,7 @@ class AiProviderResolverTest {
   @CsvSource({
     // Hosts with underscores: URI.getHost() returns null, but the host is recovered from authority.
     "http://ai_gateway:8080/v1, ai_gateway",
+    "http://ai_host/v1, ai_host",
     "http://user:pass@ai_host:9000/v1, ai_host",
     // Single-label host has no registrable suffix; the host itself is the label.
     "http://myserver/v1, myserver",
@@ -112,6 +114,12 @@ class AiProviderResolverTest {
   @NullAndEmptySource
   @ValueSource(strings = {"   ", "not a url"})
   void returnsUnknownForBlankOrUnparseableInput(String baseUrl) {
+    assertEquals(AiProviderResolver.UNKNOWN_PROVIDER, AiProviderResolver.fromBaseUrl(baseUrl));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"http://", "http://:8080/v1"})
+  void returnsUnknownForHostlessUrls(String baseUrl) {
     assertEquals(AiProviderResolver.UNKNOWN_PROVIDER, AiProviderResolver.fromBaseUrl(baseUrl));
   }
 }

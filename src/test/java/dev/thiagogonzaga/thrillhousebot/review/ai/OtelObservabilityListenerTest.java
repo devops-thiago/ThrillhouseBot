@@ -243,6 +243,17 @@ class OtelObservabilityListenerTest {
     assertEquals("my-gateway", recordedProviderName());
   }
 
+  @Test
+  void onResponseShouldDeriveProviderWhenConfiguredNameIsBlank() {
+    when(aiConfig.providerName()).thenReturn(Optional.of("   "));
+    var blankOverride = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
+
+    blankOverride.onResponse(responseContext(requestAttributes(blankOverride, 1L, 1)));
+
+    // Blank override is ignored; the label is derived from the base URL instead.
+    assertEquals("deepseek", recordedProviderName());
+  }
+
   /** Captures the {@code gen_ai.provider.name} label attached to the recorded duration metric. */
   private String recordedProviderName() {
     var attrCaptor = ArgumentCaptor.forClass(Attributes.class);

@@ -121,7 +121,7 @@ final class AiProviderResolver {
     URI uri;
     try {
       uri = URI.create(value);
-    } catch (IllegalArgumentException e) {
+    } catch (IllegalArgumentException _) {
       return null;
     }
     var host = uri.getHost();
@@ -134,17 +134,12 @@ final class AiProviderResolver {
   }
 
   private static String hostFromAuthority(String authority) {
-    if (authority == null || authority.isBlank()) {
+    if (authority == null) {
       return null;
     }
     var hostPort = authority.substring(authority.lastIndexOf('@') + 1);
-    if (hostPort.startsWith("[")) {
-      var close = hostPort.indexOf(']');
-      return close > 0 ? hostPort.substring(0, close + 1) : null;
-    }
     var colon = hostPort.indexOf(':');
-    var host = colon >= 0 ? hostPort.substring(0, colon) : hostPort;
-    return host.isBlank() ? null : host;
+    return colon >= 0 ? hostPort.substring(0, colon) : hostPort;
   }
 
   private static boolean isLocalhost(String host) {

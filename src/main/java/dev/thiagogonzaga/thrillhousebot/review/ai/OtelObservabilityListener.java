@@ -45,6 +45,8 @@ public class OtelObservabilityListener implements ChatModelListener {
   static final String ATTR_SESSION_ID = "reviewSessionId";
   static final String ATTR_STREAM_ATTEMPT = "streamAttempt";
 
+  private static final String GEN_AI_PROVIDER_NAME = "gen_ai.provider.name";
+
   private final ThrillhouseConfig config;
   private final ReviewSessionUpdater sessionUpdater;
   private final Vertx vertx;
@@ -134,7 +136,7 @@ public class OtelObservabilityListener implements ChatModelListener {
 
     var attrs =
         Attributes.of(
-            stringKey("gen_ai.provider.name"),
+            stringKey(GEN_AI_PROVIDER_NAME),
             providerName,
             stringKey("gen_ai.request.model"),
             model,
@@ -151,7 +153,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     costCounter.add(cost, attrs);
 
     Span span = Span.current();
-    span.setAttribute("gen_ai.provider.name", providerName);
+    span.setAttribute(GEN_AI_PROVIDER_NAME, providerName);
     span.setAttribute("gen_ai.usage.input_tokens", usage.inputTokenCount());
     span.setAttribute("gen_ai.usage.output_tokens", usage.outputTokenCount());
     span.setAttribute("gen_ai.usage.cost", cost);
@@ -195,7 +197,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     }
 
     Span span = Span.current();
-    span.setAttribute("gen_ai.provider.name", providerName);
+    span.setAttribute(GEN_AI_PROVIDER_NAME, providerName);
     span.setAttribute("error", true);
     var error = ctx.error();
     span.setAttribute("error.type", error != null ? error.getClass().getSimpleName() : "Unknown");
