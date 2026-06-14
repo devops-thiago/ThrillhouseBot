@@ -3109,7 +3109,17 @@ class ReviewOrchestratorTest {
               new ReviewResult.CiCheck("lint", "status", "pending", null));
       var result =
           new ReviewResult(
-              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), offending);
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
+              offending);
 
       orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
@@ -3121,6 +3131,7 @@ class ReviewOrchestratorTest {
       assertTrue(body.contains("some checks are still pending or failed:"));
       assertTrue(body.contains("- Check **build** is failed"));
       assertTrue(body.contains("- Check **lint** is pending"));
+      assertTrue(body.contains("Additionally, 1 previous finding"));
     }
   }
 
