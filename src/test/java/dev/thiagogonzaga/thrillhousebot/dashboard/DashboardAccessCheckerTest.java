@@ -62,12 +62,12 @@ class DashboardAccessCheckerTest {
         .thenThrow(new RuntimeException("GitHub App unavailable"));
     // Fail closed: an unresolvable owner must lock the dashboard, not open it to everyone.
     assertFalse(checker.hasAccess("random-user"));
-    assertFalse(checker.isAccessControlEnabled());
+    assertEquals(
+        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("random-user"));
   }
 
   @Test
   void shouldResolveOwnerFromGitHubApp() {
-    assertTrue(checker.isAccessControlEnabled());
     assertTrue(checker.hasAccess("myowner"));
     verify(installationClient).getApp(eq("Bearer jwt"), anyString());
   }
@@ -222,7 +222,8 @@ class DashboardAccessCheckerTest {
   void shouldReturnEmptyOwnerWhenAppHasNullOwner() {
     when(installationClient.getApp(anyString(), anyString()))
         .thenReturn(new GitHubInstallationClient.AppInfo(null));
-    assertFalse(checker.isAccessControlEnabled());
+    assertEquals(
+        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("anyone"));
     assertFalse(checker.hasAccess("anyone"));
   }
 
@@ -232,7 +233,8 @@ class DashboardAccessCheckerTest {
         .thenReturn(
             new GitHubInstallationClient.AppInfo(
                 new GitHubInstallationClient.AppInfo.Owner("", "User")));
-    assertFalse(checker.isAccessControlEnabled());
+    assertEquals(
+        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("anyone"));
     assertFalse(checker.hasAccess("anyone"));
   }
 
@@ -248,7 +250,6 @@ class DashboardAccessCheckerTest {
   void shouldReturnConfiguredAccountOwnerWithoutCallingGitHubApp() {
     when(dashboardConfig.accountOwner()).thenReturn(Optional.of("configured-owner"));
 
-    assertTrue(checker.isAccessControlEnabled());
     assertTrue(checker.hasAccess("configured-owner"));
 
     verify(installationClient, never()).getApp(anyString(), anyString());
@@ -258,7 +259,6 @@ class DashboardAccessCheckerTest {
   void shouldIgnoreBlankConfiguredAccountOwner() {
     when(dashboardConfig.accountOwner()).thenReturn(Optional.of("   "));
 
-    assertTrue(checker.isAccessControlEnabled());
     assertTrue(checker.hasAccess("myowner"));
     verify(installationClient).getApp(eq("Bearer jwt"), anyString());
   }
@@ -354,5 +354,61 @@ class DashboardAccessCheckerTest {
     assertTrue(checker.hasAccess("myowner"));
 
     verify(installationClient, times(2)).getApp(eq("Bearer jwt"), anyString());
+  }
+
+  @Test
+  void shouldNotReResolveOwnerWithinNegativeCacheTtl() {
+    when(installationClient.getApp(anyString(), anyString()))
+        .thenThrow(new RuntimeException("GitHub App unavailable"));
+
+    // A failed resolution is cached briefly so repeated requests do not hammer the App endpoint.
+    assertFalse(checker.hasAccess("random-user"));
+    assertFalse(checker.hasAccess("another-user"));
+    assertEquals(
+        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("third-user"));
+
+    verify(installationClient, times(1)).getApp(eq("Bearer jwt"), anyString());
+  }
+
+  @Test
+  void shouldRecoverAfterNegativeCacheTtlExpires() {
+    when(installationClient.getApp(anyString(), anyString()))
+        .thenThrow(new RuntimeException("GitHub App unavailable"));
+    assertFalse(checker.hasAccess("myowner"));
+
+    // Once the negative cache lapses and the App becomes resolvable again, access is restored.
+    now.set(now.get().plus(java.time.Duration.ofMinutes(2)));
+    reset(installationClient);
+    when(installationClient.getApp(eq("Bearer jwt"), anyString()))
+        .thenReturn(
+            new GitHubInstallationClient.AppInfo(
+                new GitHubInstallationClient.AppInfo.Owner("myowner", "User")));
+
+    assertEquals(DashboardAccessChecker.AccessDecision.ALLOWED, checker.checkAccess("myowner"));
+  }
+
+  @Test
+  void checkAccessShouldDistinguishAllowedDeniedAndNotConfigured() {
+    assertEquals(DashboardAccessChecker.AccessDecision.ALLOWED, checker.checkAccess("myowner"));
+
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    Response notCollaborator = mock(Response.class);
+    when(notCollaborator.getStatus()).thenReturn(404);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("outsider")))
+        .thenReturn(notCollaborator);
+    assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("outsider"));
+
+    assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("  "));
+  }
+
+  @Test
+  void checkAccessShouldReturnNotConfiguredWhenOwnerUnresolvable() {
+    when(installationClient.getApp(anyString(), anyString()))
+        .thenThrow(new RuntimeException("GitHub App unavailable"));
+
+    assertEquals(
+        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("anyone"));
   }
 }

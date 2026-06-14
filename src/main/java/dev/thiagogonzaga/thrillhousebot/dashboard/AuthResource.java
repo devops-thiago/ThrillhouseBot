@@ -31,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -238,9 +239,9 @@ public class AuthResource {
             .build();
       }
 
-      var denial = accessDenial(login);
-      if (denial != null) {
-        return denial.cookie(clearedStateCookie).build();
+      var denial = denialResponse(accessChecker.checkAccess(login));
+      if (denial.isPresent()) {
+        return denial.get().cookie(clearedStateCookie).build();
       }
 
       String avatarUrl = userData.get("avatar_url") instanceof String url ? url : null;
@@ -293,9 +294,9 @@ public class AuthResource {
     }
 
     var user = session.get();
-    var denial = accessDenial(user.login());
-    if (denial != null) {
-      return denial.build();
+    var denial = denialResponse(accessChecker.checkAccess(user.login()));
+    if (denial.isPresent()) {
+      return denial.get().build();
     }
 
     return Response.ok(
@@ -304,25 +305,24 @@ public class AuthResource {
   }
 
   /**
-   * Decides whether {@code login} may reach the dashboard. Returns {@code null} when access is
-   * granted, or a builder for the denial response otherwise. Fails closed: a misconfigured/unknown
-   * owner yields a 503 with a clear "owner not configured" message rather than silently granting
-   * access, while a known owner with a non-collaborator login yields a 403.
+   * Maps an access decision to a denial response, or empty when access is granted. Fails closed: a
+   * misconfigured/unresolvable owner yields a 503 with a clear "owner not configured" message
+   * rather than silently granting access, while a known owner with a non-collaborator login yields
+   * a 403.
    */
-  private Response.ResponseBuilder accessDenial(String login) {
-    if (!accessChecker.isAccessControlEnabled()) {
-      log.error(
-          "Dashboard access blocked for {}: account owner is not configured and could not be "
-              + "resolved; set thrillhousebot.dashboard.github.account-owner",
-          login);
-      return Response.status(Response.Status.SERVICE_UNAVAILABLE)
-          .entity(Map.of(KEY_ERROR, MSG_OWNER_NOT_CONFIGURED));
-    }
-    if (!accessChecker.hasAccess(login)) {
-      return Response.status(Response.Status.FORBIDDEN)
-          .entity(Map.of(KEY_ERROR, MSG_ACCESS_DENIED));
-    }
-    return null;
+  private Optional<Response.ResponseBuilder> denialResponse(
+      DashboardAccessChecker.AccessDecision decision) {
+    return switch (decision) {
+      case ALLOWED -> Optional.empty();
+      case NOT_CONFIGURED ->
+          Optional.of(
+              Response.status(Response.Status.SERVICE_UNAVAILABLE)
+                  .entity(Map.of(KEY_ERROR, MSG_OWNER_NOT_CONFIGURED)));
+      case DENIED ->
+          Optional.of(
+              Response.status(Response.Status.FORBIDDEN)
+                  .entity(Map.of(KEY_ERROR, MSG_ACCESS_DENIED)));
+    };
   }
 
   @POST

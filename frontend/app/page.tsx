@@ -5,7 +5,7 @@ import GithubCorner from "@/components/GithubCorner";
 import SiteFooter from "@/components/SiteFooter";
 
 export default function LoginPage() {
-  const { user, loading, accessDenied, login, logout } = useAuth();
+  const { user, loading, accessDenied, notConfigured, login, logout } = useAuth();
 
   if (loading)
     return (
@@ -13,6 +13,28 @@ export default function LoginPage() {
         <p>Loading...</p>
       </div>
     );
+  if (notConfigured) {
+    return (
+      <div style={styles.page}>
+        <GithubCorner />
+        <div style={styles.center}>
+          <div style={styles.card}>
+            <h1 style={styles.title}>Dashboard not configured</h1>
+            <p style={styles.subtitle}>
+              Dashboard access control is not configured: the GitHub App owner
+              could not be resolved. An administrator must set{" "}
+              <code>thrillhousebot.dashboard.github.account-owner</code> before
+              anyone can sign in.
+            </p>
+            <button type="button" onClick={logout} style={styles.logoutBtn}>
+              Log out
+            </button>
+          </div>
+        </div>
+        <SiteFooter />
+      </div>
+    );
+  }
   if (accessDenied) {
     return (
       <div style={styles.page}>

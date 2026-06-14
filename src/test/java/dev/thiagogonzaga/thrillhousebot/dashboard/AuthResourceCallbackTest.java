@@ -52,8 +52,8 @@ class AuthResourceCallbackTest {
 
   @Test
   void callbackShouldRejectUserWithoutRepoAccess() throws Exception {
-    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(true);
-    when(fixtureContext.accessChecker.hasAccess("outsider")).thenReturn(false);
+    when(fixtureContext.accessChecker.checkAccess("outsider"))
+        .thenReturn(DashboardAccessChecker.AccessDecision.DENIED);
     when(fixtureContext.httpClient.send(any(HttpRequest.class), any())).thenReturn(httpResponse);
     when(httpResponse.statusCode()).thenReturn(200);
     when(httpResponse.body())
@@ -66,7 +66,8 @@ class AuthResourceCallbackTest {
 
   @Test
   void callbackShouldReturn503WhenOwnerNotConfigured() throws Exception {
-    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(false);
+    when(fixtureContext.accessChecker.checkAccess("someuser"))
+        .thenReturn(DashboardAccessChecker.AccessDecision.NOT_CONFIGURED);
     when(fixtureContext.httpClient.send(any(HttpRequest.class), any())).thenReturn(httpResponse);
     when(httpResponse.statusCode()).thenReturn(200);
     when(httpResponse.body())
@@ -78,8 +79,8 @@ class AuthResourceCallbackTest {
     assertEquals(503, response.getStatus());
     assertTrue(
         ((Map<?, ?>) response.getEntity()).get("error").toString().contains("account-owner"));
-    // Fail closed: no session is created when access control cannot be enforced.
-    verify(fixtureContext.accessChecker, never()).hasAccess(any());
+    // Fail closed: no session cookie is issued when access control cannot be enforced.
+    assertFalse(response.getCookies().containsKey("thrillhouse_session"));
   }
 
   @Test
@@ -366,8 +367,8 @@ class AuthResourceCallbackTest {
 
   @Test
   void meShouldReturnUserWhenAccessControlEnabledAndAllowed() {
-    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(true);
-    when(fixtureContext.accessChecker.hasAccess("testuser")).thenReturn(true);
+    when(fixtureContext.accessChecker.checkAccess("testuser"))
+        .thenReturn(DashboardAccessChecker.AccessDecision.ALLOWED);
     var sessionId =
         fixtureContext.sessionStore.createSession("testuser", "gho_secret", "https://a.co", "Test");
 
@@ -379,7 +380,8 @@ class AuthResourceCallbackTest {
 
   @Test
   void meShouldReturn503WhenOwnerNotConfigured() {
-    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(false);
+    when(fixtureContext.accessChecker.checkAccess("testuser"))
+        .thenReturn(DashboardAccessChecker.AccessDecision.NOT_CONFIGURED);
     var sessionId =
         fixtureContext.sessionStore.createSession("testuser", "gho_secret", "https://a.co", "Test");
 
@@ -388,13 +390,12 @@ class AuthResourceCallbackTest {
     assertEquals(503, response.getStatus());
     assertTrue(
         ((Map<?, ?>) response.getEntity()).get("error").toString().contains("account-owner"));
-    verify(fixtureContext.accessChecker, never()).hasAccess(any());
   }
 
   @Test
   void meShouldReturn403WhenAccessControlEnabledAndAccessDenied() {
-    when(fixtureContext.accessChecker.isAccessControlEnabled()).thenReturn(true);
-    when(fixtureContext.accessChecker.hasAccess("outsider")).thenReturn(false);
+    when(fixtureContext.accessChecker.checkAccess("outsider"))
+        .thenReturn(DashboardAccessChecker.AccessDecision.DENIED);
     var sessionId =
         fixtureContext.sessionStore.createSession("outsider", "gho_secret", "https://a.co", "Out");
 

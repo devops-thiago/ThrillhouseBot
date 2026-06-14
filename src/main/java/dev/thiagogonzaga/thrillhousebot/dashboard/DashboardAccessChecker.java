@@ -42,7 +42,18 @@ public class DashboardAccessChecker {
   private static final Duration REPO_CACHE_TTL = Duration.ofMinutes(10);
   private static final Duration ACCESS_CACHE_TTL = Duration.ofMinutes(5);
   private static final Duration OWNER_CACHE_TTL = Duration.ofHours(1);
+  private static final Duration OWNER_NEGATIVE_CACHE_TTL = Duration.ofMinutes(1);
   static final int ACCESS_CACHE_SWEEP_THRESHOLD = 1_000;
+
+  /** Outcome of an access check, letting callers distinguish denial from a misconfigured owner. */
+  public enum AccessDecision {
+    /** The login may use the dashboard. */
+    ALLOWED,
+    /** Access control is active but this login is neither the owner nor a collaborator. */
+    DENIED,
+    /** No account owner is configured or resolvable, so access control cannot be enforced. */
+    NOT_CONFIGURED
+  }
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -84,31 +95,31 @@ public class DashboardAccessChecker {
     this.clock = clock;
   }
 
-  public boolean isAccessControlEnabled() {
-    return accountOwner().isPresent();
+  public boolean hasAccess(String githubLogin) {
+    return checkAccess(githubLogin) == AccessDecision.ALLOWED;
   }
 
-  public boolean hasAccess(String githubLogin) {
+  /**
+   * Resolves whether {@code githubLogin} may use the dashboard. Fails closed: when no account owner
+   * can be determined the result is {@link AccessDecision#NOT_CONFIGURED} (deny), never an implicit
+   * grant. The underlying misconfiguration is logged once per resolution attempt in {@link
+   * #accountOwner()}, so this method does not log per call.
+   */
+  public AccessDecision checkAccess(String githubLogin) {
     if (githubLogin == null || githubLogin.isBlank()) {
-      return false;
+      return AccessDecision.DENIED;
     }
 
     Optional<String> owner = accountOwner();
     if (owner.isEmpty()) {
-      // Fail closed: with no account owner configured or resolvable, we cannot tell who is allowed,
-      // so deny everyone rather than exposing the dashboard to any authenticated GitHub user.
-      log.warn(
-          "Dashboard access denied for GitHub user {}: account owner is not configured and could "
-              + "not be resolved; set thrillhousebot.dashboard.github.account-owner",
-          githubLogin);
-      return false;
+      return AccessDecision.NOT_CONFIGURED;
     }
 
     var normalizedLogin = githubLogin.toLowerCase(Locale.ROOT);
     var cached = accessCache.get(normalizedLogin);
     if (cached != null) {
       if (cached.cachedAt().isAfter(clock.get().minus(ACCESS_CACHE_TTL))) {
-        return cached.allowed();
+        return cached.allowed() ? AccessDecision.ALLOWED : AccessDecision.DENIED;
       }
       accessCache.remove(normalizedLogin, cached);
     }
@@ -119,7 +130,7 @@ public class DashboardAccessChecker {
     if (!allowed) {
       log.warn("Dashboard access denied for GitHub user {}", githubLogin);
     }
-    return allowed;
+    return allowed ? AccessDecision.ALLOWED : AccessDecision.DENIED;
   }
 
   /**
@@ -244,23 +255,34 @@ public class DashboardAccessChecker {
     }
 
     var cached = ownerCache.get();
-    if (cached.owner() != null && cached.cachedAt().isAfter(clock.get().minus(OWNER_CACHE_TTL))) {
-      return Optional.of(cached.owner());
+    var ttl = cached.owner() != null ? OWNER_CACHE_TTL : OWNER_NEGATIVE_CACHE_TTL;
+    if (cached.cachedAt().isAfter(clock.get().minus(ttl))) {
+      return Optional.ofNullable(cached.owner());
     }
 
+    String resolved = null;
     try {
       var jwt = "Bearer " + authClient.generateAppJwt();
       var app = installationClient.getApp(jwt, ACCEPT);
       if (app.owner() != null && app.owner().login() != null && !app.owner().login().isBlank()) {
-        var owner = app.owner().login();
-        ownerCache.set(new OwnerCache(owner, clock.get()));
-        log.info("Resolved dashboard account owner from GitHub App: {}", owner);
-        return Optional.of(owner);
+        resolved = app.owner().login();
+        log.info("Resolved dashboard account owner from GitHub App: {}", resolved);
+      } else {
+        log.warn(
+            "GitHub App returned no owner login; dashboard access stays denied until "
+                + "thrillhousebot.dashboard.github.account-owner is set");
       }
     } catch (RuntimeException e) {
-      log.warn("Failed to resolve GitHub App owner: {}", e.getMessage());
+      log.warn(
+          "Failed to resolve dashboard account owner from GitHub App ({}); access stays denied "
+              + "until thrillhousebot.dashboard.github.account-owner is set",
+          e.getMessage());
     }
 
-    return Optional.empty();
+    // Cache both success and failure: the negative result is short-lived (OWNER_NEGATIVE_CACHE_TTL)
+    // so a misconfigured deployment stops hammering the GitHub App endpoint every request, while
+    // still recovering promptly once the owner becomes resolvable.
+    ownerCache.set(new OwnerCache(resolved, clock.get()));
+    return Optional.ofNullable(resolved);
   }
 }
