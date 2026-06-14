@@ -287,16 +287,19 @@ class ReviewDiffFormatterTest {
   class FenceClosing {
 
     private static final String TWO_HUNK_SECTION =
-        "### big.java (modified, +6 -0)\n"
-            + "```diff\n"
-            + "@@ -1,3 +1,6 @@\n"
-            + " a\n"
-            + "+b\n"
-            + "+c\n"
-            + "@@ -10,2 +13,4 @@\n"
-            + " d\n"
-            + "+e\n"
-            + "```\n\n";
+        """
+        ### big.java (modified, +6 -0)
+        ```diff
+        @@ -1,3 +1,6 @@
+         a
+        +b
+        +c
+        @@ -10,2 +13,4 @@
+         d
+        +e
+        ```
+
+        """;
 
     private static long fenceCount(String text) {
       return text.lines().filter(line -> line.startsWith("```")).count();

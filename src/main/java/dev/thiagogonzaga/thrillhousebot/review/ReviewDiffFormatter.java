@@ -330,10 +330,13 @@ public class ReviewDiffFormatter {
     for (var i = 0; i < contentLines; i++) {
       sb.append(lines[i]).append('\n');
     }
-    sb.append("(patch truncated — ")
-        .append(lineCount(section) - contentLines)
-        .append(" lines omitted)\n");
+    sb.append(patchTruncatedNotice(lineCount(section) - contentLines));
     return sb.toString();
+  }
+
+  /** The shared "(patch truncated — N lines omitted)" notice appended by every truncation path. */
+  private static String patchTruncatedNotice(int omittedLines) {
+    return "(patch truncated — " + omittedLines + " lines omitted)\n";
   }
 
   /**
@@ -367,7 +370,7 @@ public class ReviewDiffFormatter {
     for (var i = 0; i < keep; i++) {
       sb.append(lines[patchStart + i]).append('\n');
     }
-    sb.append("(patch truncated — ").append(patchCount - keep).append(" lines omitted)\n");
+    sb.append(patchTruncatedNotice(patchCount - keep));
     sb.append("```\n");
     return sb.toString();
   }
@@ -408,7 +411,7 @@ public class ReviewDiffFormatter {
     for (var i = 0; i < headerLines; i++) {
       sb.append(lines[i]).append('\n');
     }
-    sb.append("(patch truncated — ").append(patchCount).append(" lines omitted)\n");
+    sb.append(patchTruncatedNotice(patchCount));
     return sb.toString();
   }
 
