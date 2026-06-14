@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [0.1.1] — unreleased
 
+### Changed
+
+- **CI**: consolidated the seven duplicated Trivy scan + SARIF-upload steps across `ci.yml`, `release.yml`, and `security-scan.yml` into a single `.github/actions/trivy-scan` composite action, centralizing the pinned action SHA, Trivy version, `format: sarif`, and the `limit-severities-for-sarif` flag. The CI filesystem scan now applies `limit-severities-for-sarif` like every other scan (closes the gap tracked in #76).
+
 ## [0.1.0] — 2026-06-12
 
 ### Added

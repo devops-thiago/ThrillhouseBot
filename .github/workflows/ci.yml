@@ -196,20 +196,14 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - uses: ./.github/actions/trivy-scan
         with:
           scan-type: fs
-          version: v0.70.0
           scanners: vuln
           severity: CRITICAL
           exit-code: "1"
-          format: sarif
-          output: trivy-fs.sarif
-      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always() && github.event_name == 'push'
-        with:
-          sarif_file: trivy-fs.sarif
           category: trivy-fs
+          upload: ${{ github.event_name == 'push' }}
 
   trivy-image:
     needs: [docker]
@@ -226,33 +220,13 @@ jobs:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - uses: ./.github/actions/trivy-scan
         with:
           image-ref: ghcr.io/devops-thiago/thrillhousebot:${{ github.sha }}
-          version: v0.70.0
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-          format: sarif
-          limit-severities-for-sarif: true
-          output: trivy-image.sarif
-      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always()
-        with:
-          sarif_file: trivy-image.sarif
           category: trivy-image
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - uses: ./.github/actions/trivy-scan
         with:
           image-ref: ghcr.io/devops-thiago/thrillhousebot:${{ github.sha }}-distroless
-          version: v0.70.0
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-          format: sarif
-          limit-severities-for-sarif: true
-          output: trivy-image-distroless.sarif
-      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v3.28.0
-        if: always()
-        with:
-          sarif_file: trivy-image-distroless.sarif
           category: trivy-image-distroless
 
   docker-pr:
