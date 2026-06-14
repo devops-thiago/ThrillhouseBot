@@ -187,10 +187,11 @@ class ReviewDiffFormatterTest {
 
     @Test
     void shouldTruncateFencelessSectionWithEmDashNoticeWhenBudgetAboveOne() {
-      // Sections without a ```diff fence (ignored / patch-less files) keep the original raw-line
-      // behavior: keep the first maxLines-1 lines, then an em-dash notice with the omitted count.
+      // Sections without a ```diff fence (ignored / patch-less files): keep the first maxLines-1
+      // lines, then an em-dash notice. The omitted count is the real lines dropped (c, d, e = 3),
+      // not the split-array length, which would over-count the trailing empty element.
       assertEquals(
-          "a\nb\n(patch truncated — 4 lines omitted)\n",
+          "a\nb\n(patch truncated — 3 lines omitted)\n",
           ReviewDiffFormatter.truncateSection("a\nb\nc\nd\ne\n", 3));
     }
 
@@ -376,6 +377,33 @@ class ReviewDiffFormatterTest {
       assertEquals(0, fences % 2, "every ```diff fence in the prompt must be closed");
       assertTrue(result.contains("patch truncated"));
       assertTrue(result.contains("(diff truncated at 12 lines — 1 files omitted)"));
+    }
+
+    @Test
+    void shouldCloseFenceWhenSectionHasNoClosingFence() {
+      // Defensive: a fenced section missing its closing ``` (closingFence falls through to
+      // end-of-input) is still truncated with a freshly appended closing fence.
+      var section = "### a.java (modified, +5 -0)\n```diff\n@@ -1,5 +1,5 @@\n+a\n+b\n+c\n+d\n+e";
+      var truncated = ReviewDiffFormatter.truncateSection(section, 5);
+
+      assertEquals(2, fenceCount(truncated), "fence must be re-closed even when input had none");
+      assertTrue(truncated.endsWith("```\n"));
+      assertTrue(truncated.contains("patch truncated"));
+      assertTrue(ReviewDiffFormatter.lineCount(truncated) <= 5);
+    }
+
+    @Test
+    void shouldKeepWholePatchAndReCloseFenceWhenOnlyTrailingBlanksOverflow() {
+      // Budget equals the section's real line count: the entire patch body fits and only the
+      // trailing blank lines overflow, so the body is kept intact and the fence is still re-closed.
+      var section = "### a.java (modified, +2 -0)\n```diff\n@@ -1,1 +1,2 @@\n+x\n```\n\n";
+      var truncated = ReviewDiffFormatter.truncateSection(section, 6);
+
+      assertTrue(truncated.contains("@@ -1,1 +1,2 @@"), "hunk header kept");
+      assertTrue(truncated.contains("+x"), "patch body kept intact");
+      assertEquals(2, fenceCount(truncated), "fence re-closed");
+      assertTrue(truncated.endsWith("```\n"));
+      assertTrue(ReviewDiffFormatter.lineCount(truncated) <= 6);
     }
   }
 

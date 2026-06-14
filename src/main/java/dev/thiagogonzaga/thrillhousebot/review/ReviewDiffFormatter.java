@@ -305,7 +305,7 @@ public class ReviewDiffFormatter {
 
     int fenceStart = diffFenceStart(lines);
     return fenceStart < 0
-        ? truncatePlain(lines, maxLines)
+        ? truncatePlain(section, lines, maxLines)
         : truncateFenced(lines, fenceStart, maxLines);
   }
 
@@ -321,15 +321,17 @@ public class ReviewDiffFormatter {
 
   /**
    * Raw line-count truncation for sections without a fenced patch (skipped or patch-less files).
+   * The omitted count is measured with {@link #lineCount} so it ignores the trailing empty elements
+   * {@code split("\n", -1)} produces for a section's {@code \n}-terminated tail.
    */
-  private static String truncatePlain(String[] lines, int maxLines) {
+  private static String truncatePlain(String section, String[] lines, int maxLines) {
     var sb = new StringBuilder();
     var contentLines = maxLines - 1;
     for (var i = 0; i < contentLines; i++) {
       sb.append(lines[i]).append('\n');
     }
     sb.append("(patch truncated — ")
-        .append(lines.length - contentLines)
+        .append(lineCount(section) - contentLines)
         .append(" lines omitted)\n");
     return sb.toString();
   }
