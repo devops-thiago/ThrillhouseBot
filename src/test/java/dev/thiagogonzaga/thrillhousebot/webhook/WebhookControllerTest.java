@@ -269,6 +269,46 @@ class WebhookControllerTest {
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
+  @Test
+  void shouldIgnorePullRequestWithNullAction() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        "{"
+            + "\"action\":null,"
+            + "\"pull_request\":{\"number\":1,\"title\":\"t\",\"head\":{\"sha\":\"s\"},\"base\":{\"sha\":\"b\"}},"
+            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"installation\":{\"id\":1}"
+            + "}";
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldIgnoreOpenedPullRequestWithMissingFields() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        "{"
+            + "\"action\":\"opened\","
+            + "\"pull_request\":null,"
+            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"installation\":{\"id\":1}"
+            + "}";
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
   // ── issue_comment routing tests ────────────────────────────────────────
 
   @Test
@@ -464,6 +504,52 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldForgetDeliveryIdWhenDispatchIsRejected() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    // A saturated executor makes dispatch return false (it does not throw — the dispatcher
+    // swallows RejectedExecutionException), which is the real #89 scenario.
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(false);
+
+    var body =
+        buildPullRequestPayload("opened", 1, "a/b", "sha", "main").getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-abc", body);
+
+    // The rejected dispatch must roll back the dedup slot so manual redelivery can retry (#89).
+    verify(deduplicator).forget("delivery-abc");
+  }
+
+  @Test
+  void shouldForgetDeliveryIdWhenDispatchThrows() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    doThrow(new RuntimeException("unexpected failure"))
+        .when(reviewDispatcher)
+        .dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+
+    var body =
+        buildPullRequestPayload("opened", 1, "a/b", "sha", "main").getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-throw", body);
+
+    // An unexpected RuntimeException must also roll back the dedup slot for the same reason.
+    verify(deduplicator).forget("delivery-throw");
+  }
+
+  @Test
+  void shouldNotForgetDeliveryIdWhenDispatchSucceeds() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("opened", 1, "a/b", "sha", "main").getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-ok", body);
+
+    // A successful dispatch keeps the dedup slot so redeliveries stay suppressed.
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
   void shouldIgnoreIssueCommentWhenIssueMissing() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 
@@ -497,6 +583,50 @@ class WebhookControllerTest {
             + "\"comment\":{\"id\":1,\"body\":\"/review\",\"user\":{\"login\":\"user\",\"id\":1}},"
             + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":{\"id\":12345}"
+            + "}";
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "issue_comment", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldIgnoreIssueCommentWithMissingAuthor() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        "{"
+            + "\"action\":\"created\","
+            + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
+            + "\"comment\":{\"id\":1,\"body\":\"/review\",\"user\":null},"
+            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"installation\":{\"id\":1}"
+            + "}";
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "issue_comment", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldIgnoreReviewTriggerWithMissingRepository() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
+    when(triggerDetector.isBotComment("user")).thenReturn(false);
+
+    var body =
+        "{"
+            + "\"action\":\"created\","
+            + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
+            + "\"comment\":{\"id\":1,\"body\":\"/review\",\"user\":{\"login\":\"user\",\"id\":1}},"
+            + "\"repository\":null,"
+            + "\"installation\":{\"id\":1}"
             + "}";
 
     var response =

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.after;
@@ -276,6 +277,22 @@ class ReviewDispatcherTest {
       }
       Thread.onSpinWait();
     }
+  }
+
+  @Test
+  void shouldReturnFalseWhenExecutorRejectsTask() {
+    ExecutorService executor = mock(ExecutorService.class);
+    doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
+    dispatcher = new ReviewDispatcher(executor, orchestrator);
+
+    // A rejected task means no review will run, so callers can roll back dedup state. (#89)
+    assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
+  }
+
+  @Test
+  void shouldReturnTrueWhenReviewIsQueued() {
+    assertTrue(dispatcher.dispatch(reviewRequest("owner", "repo", 11, "sha1")));
+    verify(orchestrator, timeout(2000)).review(reviewRequest("owner", "repo", 11, "sha1"));
   }
 
   @Test
