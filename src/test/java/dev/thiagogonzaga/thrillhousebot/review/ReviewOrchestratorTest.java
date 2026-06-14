@@ -2546,8 +2546,8 @@ class ReviewOrchestratorTest {
                 new GitHubPullRequestClient.PullRequestDetails(
                     "add new API",
                     "Adds a new API endpoint",
-                    new GitHubPullRequestClient.Ref("headsha1234"),
-                    new GitHubPullRequestClient.Ref("basesha5678")));
+                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
+                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
@@ -2603,8 +2603,8 @@ class ReviewOrchestratorTest {
                 new GitHubPullRequestClient.PullRequestDetails(
                     "add new API",
                     "Adds a new API endpoint",
-                    new GitHubPullRequestClient.Ref("headsha1234"),
-                    new GitHubPullRequestClient.Ref("basesha5678")));
+                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
+                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
