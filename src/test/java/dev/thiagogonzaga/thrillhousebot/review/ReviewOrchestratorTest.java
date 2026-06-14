@@ -2828,4 +2828,141 @@ class ReviewOrchestratorTest {
       assertEquals("", stack);
     }
   }
+
+  @Nested
+  class EvaluateCiChecks {
+
+    @Test
+    void shouldIgnoreThrillhouseBotChecks() {
+      // Setup check runs
+      var app =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
+              1L, "thrillhousebot", "ThrillhouseBot");
+      var tbRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "ThrillhouseBot Review", "completed", "success", app);
+      var otherRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "build", "completed", "success", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(tbRun, otherRun)));
+
+      // Setup statuses
+      var tbStatus =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(
+              1L, "success", "thrillhousebot-status", "desc");
+      var otherStatus =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "success", "lint", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          .thenReturn(
+              new GitHubCheckRunClient.CombinedStatus(
+                  "success", 2, List.of(tbStatus, otherStatus)));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(2, result.size());
+      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.stream().anyMatch(c -> "lint".equals(c.name())));
+      assertFalse(result.stream().anyMatch(c -> c.name().contains("thrillhousebot")));
+    }
+
+    @Test
+    void shouldFilterByRequiredContextsWhenProvided() {
+      var run1 =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "completed", "success", null);
+      var run2 =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "test", "completed", "success", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(run1, run2)));
+
+      var status1 =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "success", "lint", "desc");
+      var status2 =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "success", "deploy", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          .thenReturn(
+              new GitHubCheckRunClient.CombinedStatus("success", 2, List.of(status1, status2)));
+
+      var result =
+          orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build", "lint"));
+
+      assertEquals(2, result.size());
+      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.stream().anyMatch(c -> "lint".equals(c.name())));
+      assertFalse(result.stream().anyMatch(c -> "test".equals(c.name())));
+      assertFalse(result.stream().anyMatch(c -> "deploy".equals(c.name())));
+    }
+
+    @Test
+    void shouldMarkMissingRequiredChecksAsPending() {
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result =
+          orchestrator.evaluateCiChecks(
+              "auth", "owner", "repo", "sha", List.of("build", "thrillhousebot"));
+
+      // thrillhousebot is ignored, so only "build" is missing
+      assertEquals(1, result.size());
+      var check = result.get(0);
+      assertEquals("build", check.name());
+      assertEquals("missing", check.type());
+      assertEquals("pending", check.status());
+    }
+
+    @Test
+    void shouldEvaluateStatusesAndConclusionsCorrectly() {
+      // 1. Pending check run
+      var runPending =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "in_progress", null, null);
+      // 2. Failed check run
+      var runFailed =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "test", "completed", "failure", null);
+      // 3. Skipped check run (success)
+      var runSkipped =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              3L, "docs", "completed", "skipped", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  3, List.of(runPending, runFailed, runSkipped)));
+
+      // 4. Pending status
+      var statusPending =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "pending", "lint", "desc");
+      // 5. Error status
+      var statusError =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "error", "security", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          .thenReturn(
+              new GitHubCheckRunClient.CombinedStatus(
+                  "pending", 2, List.of(statusPending, statusError)));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(5, result.size());
+
+      var build = result.stream().filter(c -> "build".equals(c.name())).findFirst().orElseThrow();
+      assertEquals("pending", build.status());
+
+      var test = result.stream().filter(c -> "test".equals(c.name())).findFirst().orElseThrow();
+      assertEquals("failing", test.status());
+
+      var docs = result.stream().filter(c -> "docs".equals(c.name())).findFirst().orElseThrow();
+      assertEquals("success", docs.status());
+
+      var lint = result.stream().filter(c -> "lint".equals(c.name())).findFirst().orElseThrow();
+      assertEquals("pending", lint.status());
+
+      var security =
+          result.stream().filter(c -> "security".equals(c.name())).findFirst().orElseThrow();
+      assertEquals("failing", security.status());
+    }
+  }
 }

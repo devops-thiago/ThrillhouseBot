@@ -87,7 +87,33 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
-      sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
+      if (result.offendingCiChecks().isEmpty()) {
+        sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
+      } else {
+        sb.append(
+            "No new issues found in this PR, but the review cannot be approved until the required checks are passing.\n\n");
+      }
+    }
+
+    if (result.offendingCiChecks() != null && !result.offendingCiChecks().isEmpty()) {
+      sb.append("### ⚠️ Required CI Checks Status\n");
+      sb.append("Some required checks are still pending or have failed:\n\n");
+      sb.append("| Check | Type | Status | Detail |\n");
+      sb.append("|-------|------|--------|--------|\n");
+      for (var check : result.offendingCiChecks()) {
+        String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
+        String detail = check.conclusion() != null ? check.conclusion() : "-";
+        sb.append("| **")
+            .append(check.name())
+            .append("** | ")
+            .append(check.type())
+            .append(" | ")
+            .append(statusEmoji)
+            .append(" | ")
+            .append(detail)
+            .append(" |\n");
+      }
+      sb.append("\n");
     }
 
     sb.append("---\n");

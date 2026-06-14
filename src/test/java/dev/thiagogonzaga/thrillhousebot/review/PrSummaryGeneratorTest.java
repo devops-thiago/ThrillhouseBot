@@ -221,4 +221,26 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("M1"));
     assertFalse(summary.contains("L1")); // 6th should be excluded
   }
+
+  @Test
+  void shouldShowRequiredCiChecksStatusWhenNotEmpty() {
+    var checks =
+        List.of(
+            new ReviewResult.CiCheck("build", "check-run", "failing", "failure"),
+            new ReviewResult.CiCheck("test", "status", "pending", "pending"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(
+        summary.contains("No new issues found in this PR, but the review cannot be approved"));
+    assertTrue(summary.contains("Required CI Checks Status"));
+    assertTrue(summary.contains("❌ Failed"));
+    assertTrue(summary.contains("⏳ Pending"));
+    assertTrue(summary.contains("**build**"));
+    assertTrue(summary.contains("**test**"));
+  }
 }

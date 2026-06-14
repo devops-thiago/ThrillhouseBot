@@ -251,11 +251,34 @@ public class ReviewOrchestrator {
               aiResponse, priorAiResponseJsons, inlineComments, BOT_LOGIN);
       persistAiResponse(session, aiResponse);
 
+      // Fetch required status checks and evaluate CI checks on the head SHA
+      List<String> requiredContexts = null;
+      try {
+        var prDetails =
+            prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+        if (prDetails != null && prDetails.base() != null && prDetails.base().ref() != null) {
+          var targetBranch = prDetails.base().ref();
+          var protection =
+              checkRunClient.getRequiredStatusChecks(
+                  auth, ACCEPT, req.owner(), req.repo(), targetBranch);
+          if (protection != null) {
+            requiredContexts = protection.contexts();
+          }
+        }
+      } catch (Exception e) {
+        Log.warnf(
+            e, "Could not fetch required status checks for branch, falling back to all checks");
+      }
+
+      List<ReviewResult.CiCheck> offendingCiChecks =
+          evaluateCiChecks(auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
+
       DiffStats diffStats = DiffStats.fromFiles(diffFormatter.reviewableFiles(files));
       var unresolvedPrevious =
           followUpAnalyzer.unresolvedFindings(
               previousAiResponseJson, aiResponse.previousFindingsStatus());
-      var result = buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious);
+      var result =
+          buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, offendingCiChecks);
 
       // Finalize check run before posting PR review — avoid approving then failing later
       String conclusion = conclusionForResult(result);
@@ -691,7 +714,8 @@ public class ReviewOrchestrator {
       ReviewResponse aiResponse,
       boolean isFirstReview,
       DiffStats diffStats,
-      List<Finding> unresolvedPrevious) {
+      List<Finding> unresolvedPrevious,
+      List<ReviewResult.CiCheck> offendingCiChecks) {
     var findings = new ArrayList<Finding>();
     var critical = 0;
     var high = 0;
@@ -727,6 +751,11 @@ public class ReviewOrchestrator {
       state = ReviewState.COMMENT;
     }
 
+    // Gating approval verdict on CI status:
+    if (state == ReviewState.APPROVE && !offendingCiChecks.isEmpty()) {
+      state = ReviewState.COMMENT;
+    }
+
     // The summary is generated for clean reviews too: a zero-findings result still reports the
     // change overview and carries the celebration line inside the same comment
     var summaryMarkdown =
@@ -745,7 +774,8 @@ public class ReviewOrchestrator {
                 state,
                 isFirstReview,
                 "",
-                previousStatuses));
+                previousStatuses,
+                offendingCiChecks));
 
     return new ReviewResult(
         findings,
@@ -757,7 +787,16 @@ public class ReviewOrchestrator {
         state,
         isFirstReview,
         summaryMarkdown,
-        previousStatuses);
+        previousStatuses,
+        offendingCiChecks);
+  }
+
+  ReviewResult buildResult(
+      ReviewResponse aiResponse,
+      boolean isFirstReview,
+      DiffStats diffStats,
+      List<Finding> unresolvedPrevious) {
+    return buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, List.of());
   }
 
   void postReview(
@@ -780,11 +819,29 @@ public class ReviewOrchestrator {
         createReviewWithFallback(auth, owner, repo, prNumber, req);
         return;
       }
-      // No new findings, but previous ones are still unresolved — never claim a clean review
+      // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
+      // never claim a clean review
+      String body;
+      if (!result.offendingCiChecks().isEmpty()) {
+        var sb = new StringBuilder();
+        sb.append(
+            "ThrillhouseBot found no issues in this PR, but some checks are still pending or failed:\n");
+        for (var check : result.offendingCiChecks()) {
+          String status = check.isFailing() ? "failed" : "pending";
+          sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
+        }
+        long unresolved = unresolvedPreviousCount(result);
+        if (unresolved > 0) {
+          sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
+        }
+        body = sb.toString();
+      } else {
+        body = unresolvedPreviousMessage(unresolvedPreviousCount(result));
+      }
       var req =
           new GitHubReviewClient.CreateReviewRequest(
               commitSha,
-              unresolvedPreviousMessage(unresolvedPreviousCount(result)),
+              body,
               result.reviewState() == ReviewState.REQUEST_CHANGES ? "REQUEST_CHANGES" : "COMMENT",
               List.of());
       createReviewWithFallback(auth, owner, repo, prNumber, req);
@@ -945,5 +1002,111 @@ public class ReviewOrchestrator {
               req.commitId(), req.body(), req.event(), List.of());
       reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, fallback);
     }
+  }
+
+  List<ReviewResult.CiCheck> evaluateCiChecks(
+      String auth, String owner, String repo, String commitSha, List<String> requiredContexts) {
+    List<ReviewResult.CiCheck> checks = new ArrayList<>();
+
+    // 1. Get Check Runs
+    try {
+      var checkRunsResponse = checkRunClient.getCheckRuns(auth, ACCEPT, owner, repo, commitSha);
+      if (checkRunsResponse != null && checkRunsResponse.checkRuns() != null) {
+        for (var run : checkRunsResponse.checkRuns()) {
+          // Ignore ThrillhouseBot's own check runs
+          if (isThrillhouseBotCheck(run.name(), run.app())) {
+            continue;
+          }
+
+          // If requiredContexts is provided, check if this run is in it
+          if (requiredContexts != null && !requiredContexts.contains(run.name())) {
+            continue;
+          }
+
+          String ciStatus = "success";
+          if (!"completed".equalsIgnoreCase(run.status())) {
+            ciStatus = "pending";
+          } else if (run.conclusion() == null
+              || !List.of("success", "skipped", "neutral")
+                  .contains(run.conclusion().toLowerCase())) {
+            ciStatus = "failing";
+          }
+
+          checks.add(new ReviewResult.CiCheck(run.name(), "check-run", ciStatus, run.conclusion()));
+        }
+      }
+    } catch (Exception e) {
+      Log.warnf(e, "Failed to fetch check runs for commit %s", commitSha);
+    }
+
+    // 2. Get Combined Statuses
+    try {
+      var combinedStatus = checkRunClient.getCombinedStatus(auth, ACCEPT, owner, repo, commitSha);
+      if (combinedStatus != null && combinedStatus.statuses() != null) {
+        for (var status : combinedStatus.statuses()) {
+          if (isThrillhouseBotCheck(status.context(), null)) {
+            continue;
+          }
+
+          if (requiredContexts != null && !requiredContexts.contains(status.context())) {
+            continue;
+          }
+
+          String ciStatus = "success";
+          if ("pending".equalsIgnoreCase(status.state())) {
+            ciStatus = "pending";
+          } else if ("failure".equalsIgnoreCase(status.state())
+              || "error".equalsIgnoreCase(status.state())) {
+            ciStatus = "failing";
+          }
+
+          checks.add(
+              new ReviewResult.CiCheck(status.context(), "status", ciStatus, status.state()));
+        }
+      }
+    } catch (Exception e) {
+      Log.warnf(e, "Failed to fetch combined status for commit %s", commitSha);
+    }
+
+    // 3. If requiredContexts is provided, check if any required contexts are missing entirely
+    if (requiredContexts != null) {
+      for (String required : requiredContexts) {
+        // ThrillhouseBot itself must never be added as missing/pending
+        if (isThrillhouseBotCheck(required, null)) {
+          continue;
+        }
+        boolean found = false;
+        for (var check : checks) {
+          if (required.equals(check.name())) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          // A required check that hasn't reported anything is implicitly pending
+          checks.add(new ReviewResult.CiCheck(required, "missing", "pending", null));
+        }
+      }
+    }
+
+    return checks;
+  }
+
+  private boolean isThrillhouseBotCheck(
+      String name, GitHubCheckRunClient.CheckRunsResponse.CheckRun.App app) {
+    if (name != null) {
+      if (name.equalsIgnoreCase(CHECK_NAME) || name.toLowerCase().contains("thrillhousebot")) {
+        return true;
+      }
+    }
+    if (app != null) {
+      if (app.slug() != null && app.slug().toLowerCase().contains("thrillhousebot")) {
+        return true;
+      }
+      if (app.name() != null && app.name().toLowerCase().contains("thrillhousebot")) {
+        return true;
+      }
+    }
+    return false;
   }
 }
