@@ -294,7 +294,7 @@ class WebhookControllerTest {
         buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/review", "NONE")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, body);
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // A non-collaborator must not be able to spend the operator's API budget.
