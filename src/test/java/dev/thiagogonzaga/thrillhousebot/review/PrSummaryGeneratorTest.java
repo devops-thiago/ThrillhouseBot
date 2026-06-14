@@ -226,7 +226,7 @@ class PrSummaryGeneratorTest {
   void shouldShowRequiredCiChecksStatusWhenNotEmpty() {
     var checks =
         List.of(
-            new ReviewResult.CiCheck("build", "check-run", "failing", "failure"),
+            new ReviewResult.CiCheck("build", "check-run", "failing", null),
             new ReviewResult.CiCheck("test", "status", "pending", "pending"));
     var result =
         new ReviewResult(
@@ -242,5 +242,22 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("⏳ Pending"));
     assertTrue(summary.contains("**build**"));
     assertTrue(summary.contains("**test**"));
+  }
+
+  @Test
+  void shouldShowRequiredCiChecksStatusWhenFindingsExist() {
+    var findings = List.of(new Finding(RiskLevel.LOW, "src/A.java", 1, "Nit", "d", null, null));
+    var checks = List.of(new ReviewResult.CiCheck("lint", "status", "failing", "failure"));
+    var result =
+        new ReviewResult(
+            findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(summary.contains("Key Findings"));
+    assertTrue(summary.contains("Required CI Checks Status"));
+    assertTrue(summary.contains("❌ Failed"));
+    assertTrue(summary.contains("**lint**"));
   }
 }

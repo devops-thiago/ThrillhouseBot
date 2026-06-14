@@ -810,6 +810,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -979,6 +984,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -1036,6 +1046,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -1100,6 +1115,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -1170,6 +1190,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -1374,6 +1399,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -2511,7 +2541,7 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
 
         when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
+        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
             .thenReturn(
                 new GitHubPullRequestClient.PullRequestDetails(
                     "add new API",
@@ -2524,6 +2554,11 @@ class ReviewOrchestratorTest {
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -2545,6 +2580,53 @@ class ReviewOrchestratorTest {
             .createCheckRun(
                 anyString(), anyString(), eq("owner"), eq("repo"), checkRunCaptor.capture());
         assertEquals("headsha1234", checkRunCaptor.getValue().headSha());
+      }
+    }
+
+    @Test
+    void reviewShouldCatchExceptionWhenFetchingStatusChecks() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(7);
+        when(session.getPrTitle()).thenReturn("(manual review)");
+        when(session.getCommitSha()).thenReturn("");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "add new API",
+                    "Adds a new API endpoint",
+                    new GitHubPullRequestClient.Ref("headsha1234"),
+                    new GitHubPullRequestClient.Ref("basesha5678")));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenThrow(new RuntimeException("failed"));
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner", "repo", 7, "", "(manual review)", "", "", "main", 123L, true));
       }
     }
   }
@@ -2841,11 +2923,27 @@ class ReviewOrchestratorTest {
       var tbRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "ThrillhouseBot Review", "completed", "success", app);
+      var appSlugRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              10L,
+              "Some Checks",
+              "completed",
+              "success",
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(2L, "thrillhousebot", null));
+      var appNameRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              11L,
+              "Other Checks",
+              "completed",
+              "success",
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(3L, null, "ThrillhouseBot"));
       var otherRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               2L, "build", "completed", "success", null);
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(tbRun, otherRun)));
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  4, List.of(tbRun, appSlugRun, appNameRun, otherRun)));
 
       // Setup statuses
       var tbStatus =
@@ -2963,6 +3061,117 @@ class ReviewOrchestratorTest {
       var security =
           result.stream().filter(c -> "security".equals(c.name())).findFirst().orElseThrow();
       assertEquals("failing", security.status());
+    }
+
+    @Test
+    void shouldHandleNullChecksAndStatusesGracefully() {
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, null));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("pending", 0, null));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+      assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void shouldHandleExceptionsGracefully() {
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+          .thenThrow(new RuntimeException("failed"));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          .thenThrow(new RuntimeException("failed"));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+      assertTrue(result.isEmpty());
+    }
+  }
+
+  @Nested
+  class CiChecksGating {
+
+    @Test
+    void shouldDowngradeApproveToCommentWhenOffendingCiChecksExist() {
+      var aiResponse = new ReviewResponse(List.of(), List.of(), null);
+      var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
+
+      var result =
+          orchestrator.buildResult(
+              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of(), offending);
+
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+    }
+
+    @Test
+    void shouldFormatPostReviewBodyWithOffendingCiChecks() {
+      var offending =
+          List.of(
+              new ReviewResult.CiCheck("build", "check-run", "failing", "failure"),
+              new ReviewResult.CiCheck("lint", "status", "pending", null));
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), offending);
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+
+      var body = captor.getValue().body();
+      assertTrue(body.contains("some checks are still pending or failed:"));
+      assertTrue(body.contains("- Check **build** is failed"));
+      assertTrue(body.contains("- Check **lint** is pending"));
+    }
+  }
+
+  @Nested
+  class DtoCoverage {
+    @Test
+    void shouldCoverCiCheckMethods() {
+      var nullChecksResult = new ReviewResult(List.of(), 0, 0, 0, 0, RiskLevel.LOW, ReviewState.APPROVE, true, "", List.of(), null);
+      assertTrue(nullChecksResult.offendingCiChecks().isEmpty());
+      var failing = new ReviewResult.CiCheck("build", "check-run", "failing", "failure");
+      var pending = new ReviewResult.CiCheck("lint", "status", "pending", "pending");
+
+      assertTrue(failing.isFailing());
+      assertFalse(failing.isPending());
+
+      assertTrue(pending.isPending());
+      assertFalse(pending.isFailing());
+    }
+
+    @Test
+    void shouldCoverGitHubCheckRunClientDTOs() {
+      var reqChecksNull = new GitHubCheckRunClient.RequiredStatusChecks(null, null);
+      assertTrue(reqChecksNull.contexts().isEmpty());
+      assertTrue(reqChecksNull.checks().isEmpty());
+
+      var reqChecksVal =
+          new GitHubCheckRunClient.RequiredStatusChecks(
+              List.of("ctx"),
+              List.of(new GitHubCheckRunClient.RequiredStatusChecks.Check("ctx", 1L)));
+      assertFalse(reqChecksVal.contexts().isEmpty());
+      assertFalse(reqChecksVal.checks().isEmpty());
+
+      var checkRunsNull = new GitHubCheckRunClient.CheckRunsResponse(0, null);
+      assertTrue(checkRunsNull.checkRuns().isEmpty());
+
+      var checkRunsVal =
+          new GitHubCheckRunClient.CheckRunsResponse(
+              1,
+              List.of(
+                  new GitHubCheckRunClient.CheckRunsResponse.CheckRun(1L, "n", "s", "c", null)));
+      assertFalse(checkRunsVal.checkRuns().isEmpty());
+
+      var statusNull = new GitHubCheckRunClient.CombinedStatus("pending", 0, null);
+      assertTrue(statusNull.statuses().isEmpty());
+
+      var statusVal =
+          new GitHubCheckRunClient.CombinedStatus(
+              "pending",
+              1,
+              List.of(new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "s", "c", "d")));
+      assertFalse(statusVal.statuses().isEmpty());
     }
   }
 }

@@ -95,7 +95,7 @@ public class PrSummaryGenerator {
       }
     }
 
-    if (result.offendingCiChecks() != null && !result.offendingCiChecks().isEmpty()) {
+    if (!result.offendingCiChecks().isEmpty()) {
       sb.append("### ⚠️ Required CI Checks Status\n");
       sb.append("Some required checks are still pending or have failed:\n\n");
       sb.append("| Check | Type | Status | Detail |\n");
