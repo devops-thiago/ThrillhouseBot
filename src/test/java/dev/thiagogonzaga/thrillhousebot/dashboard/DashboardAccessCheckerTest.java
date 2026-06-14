@@ -114,6 +114,212 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void shouldFindInstallationBeyondFirstPage() {
+    // A full first page of non-matching installations forces pagination; the owner's installation
+    // only appears on page 2.
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(otherInstallations(0, 100));
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                1, ownerRepos("myowner", "demo")));
+
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab"));
+    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
+  void shouldFindInstallationOnThirdPageWithoutArbitraryCap() {
+    // Two full pages of non-matching installations precede the owner's; pagination must keep going
+    // with no fixed page ceiling.
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(otherInstallations(0, 100));
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
+        .thenReturn(otherInstallations(100, 100));
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(3)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                1, ownerRepos("myowner", "demo")));
+
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab"));
+    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(3));
+  }
+
+  @Test
+  void shouldAllowCollaboratorOnRepoBeyondFirstPage() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+
+    // A full first page of owner repos the user does not collaborate on...
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                101, ownerRepos("myowner", repoNames(0, 100))));
+    // ...and the one shared repo only on page 2.
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(2)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                101, ownerRepos("myowner", "special-repo")));
+
+    Response notCollaborator = mock(Response.class);
+    when(notCollaborator.getStatus()).thenReturn(404);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), eq("collab")))
+        .thenReturn(notCollaborator);
+    Response collaborator = mock(Response.class);
+    when(collaborator.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("special-repo"), eq("collab")))
+        .thenReturn(collaborator);
+
+    assertTrue(checker.hasAccess("collab"));
+    verify(installationClient)
+        .listInstallationRepositories(eq("Bearer inst-token"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
+  void shouldPageReposBeyondUnderReportedTotalCount() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+
+    // total_count claims a single page, but page 1 is full and a 101st repo exists on page 2.
+    // Pagination must follow the actual rows (a full page means keep going), never the count.
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                100, ownerRepos("myowner", repoNames(0, 100))));
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(2)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                100, ownerRepos("myowner", "late-repo")));
+
+    Response notCollaborator = mock(Response.class);
+    when(notCollaborator.getStatus()).thenReturn(404);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), eq("collab")))
+        .thenReturn(notCollaborator);
+    Response collaborator = mock(Response.class);
+    when(collaborator.getStatus()).thenReturn(204);
+    // The only repo the user collaborates on is the one total_count failed to account for.
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("late-repo"), eq("collab")))
+        .thenReturn(collaborator);
+
+    assertTrue(checker.hasAccess("collab"));
+    verify(installationClient)
+        .listInstallationRepositories(eq("Bearer inst-token"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
+  void shouldDenyWhenPaginationExceedsSafetyCeiling() {
+    // A misbehaving endpoint that always returns a full, non-matching page would loop forever; the
+    // MAX_PAGES ceiling makes the walk fail closed (throw -> caught -> denied) instead of hanging.
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), anyInt()))
+        .thenReturn(otherInstallations(0, 100));
+
+    assertFalse(checker.hasAccess("collab"));
+  }
+
+  @Test
+  void shouldSkipInstallationWithNullAccountWhilePaging() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            List.of(
+                new GitHubInstallationClient.Installation(1L, null),
+                installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                1, ownerRepos("myowner", "demo")));
+
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab"));
+  }
+
+  @Test
+  void shouldDenyWhenInstallationListingIsNull() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(null);
+
+    assertFalse(checker.hasAccess("collab"));
+  }
+
+  @Test
+  void shouldOnlyConsiderOwnerReposWithCompleteMetadata() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+
+    // A mix the filter must reject: missing name, missing owner, foreign owner — plus one keeper.
+    var mixed =
+        List.of(
+            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                null,
+                new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
+                    "myowner")),
+            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                "orphan", null),
+            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                "foreign",
+                new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
+                    "other-owner")),
+            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                "demo",
+                new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
+                    "myowner")));
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(new GitHubInstallationClient.InstallationRepositoriesResponse(4, mixed));
+
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab"));
+    // Only the fully specified owner repo is collaborator-checked; the rejected entries are not.
+    verify(installationClient)
+        .checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab"));
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), eq("other-owner"), anyString(), anyString());
+  }
+
+  @Test
   void shouldDenyNullLogin() {
     assertFalse(checker.hasAccess(null));
   }
@@ -165,7 +371,8 @@ class DashboardAccessCheckerTest {
 
     assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("outsider"));
     assertFalse(checker.hasAccess("outsider"));
-    verify(installationClient, never()).listInstallations(anyString(), anyString(), anyInt());
+    verify(installationClient, never())
+        .listInstallations(anyString(), anyString(), anyInt(), anyInt());
   }
 
   @Test
@@ -194,7 +401,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void shouldHandleNullRepositoriesResponse() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100)))
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubInstallationClient.Installation(
@@ -208,7 +415,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void shouldSkipInstallationWithNoMatchingAccount() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100)))
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubInstallationClient.Installation(
@@ -250,7 +457,7 @@ class DashboardAccessCheckerTest {
 
   @Test
   void shouldReturnSnapshotFromCacheOnRepoFetchFailure() {
-    when(installationClient.listInstallations(anyString(), anyString(), eq(100)))
+    when(installationClient.listInstallations(anyString(), anyString(), eq(100), eq(1)))
         .thenThrow(new RuntimeException("API error"));
 
     assertFalse(checker.hasAccess("collab"));
@@ -286,7 +493,8 @@ class DashboardAccessCheckerTest {
     assertFalse(checker.hasAccess("outsider"));
     assertFalse(checker.hasAccess("another-outsider"));
 
-    verify(installationClient, times(1)).listInstallations(eq("Bearer jwt"), anyString(), eq(100));
+    verify(installationClient, times(1))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
   @Test
@@ -302,25 +510,55 @@ class DashboardAccessCheckerTest {
     assertTrue(checker.hasAccess("collab-one"));
     assertTrue(checker.hasAccess("collab-two"));
 
-    verify(installationClient, times(1)).listInstallations(eq("Bearer jwt"), anyString(), eq(100));
+    verify(installationClient, times(1))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
   private void stubInstalledRepo(String owner, String repo) {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100)))
-        .thenReturn(
-            List.of(
-                new GitHubInstallationClient.Installation(
-                    99L, new GitHubInstallationClient.Installation.Account(owner, "User"))));
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor(owner, 99L)));
     when(installationClient.listInstallationRepositories(
             eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
         .thenReturn(
             new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1,
-                List.of(
-                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                        repo,
-                        new GitHubInstallationClient.InstallationRepositoriesResponse.Repository
-                            .Owner(owner)))));
+                1, ownerRepos(owner, repo)));
+  }
+
+  private static GitHubInstallationClient.Installation installationFor(String login, long id) {
+    return new GitHubInstallationClient.Installation(
+        id, new GitHubInstallationClient.Installation.Account(login, "User"));
+  }
+
+  private static List<GitHubInstallationClient.Installation> otherInstallations(
+      int start, int count) {
+    var installations = new java.util.ArrayList<GitHubInstallationClient.Installation>();
+    for (var i = start; i < start + count; i++) {
+      installations.add(installationFor("other-" + i, i));
+    }
+    return installations;
+  }
+
+  private static List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository>
+      ownerRepos(String owner, String... names) {
+    var repos =
+        new java.util.ArrayList<
+            GitHubInstallationClient.InstallationRepositoriesResponse.Repository>();
+    for (var name : names) {
+      repos.add(
+          new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+              name,
+              new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
+                  owner)));
+    }
+    return repos;
+  }
+
+  private static String[] repoNames(int start, int count) {
+    var names = new String[count];
+    for (var i = 0; i < count; i++) {
+      names[i] = "repo-" + (start + i);
+    }
+    return names;
   }
 
   @Test

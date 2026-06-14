@@ -28,6 +28,8 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntFunction;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
@@ -44,6 +46,15 @@ public class DashboardAccessChecker {
   private static final Duration OWNER_CACHE_TTL = Duration.ofHours(1);
   private static final Duration OWNER_NEGATIVE_CACHE_TTL = Duration.ofMinutes(1);
   static final int ACCESS_CACHE_SWEEP_THRESHOLD = 1_000;
+  private static final int PER_PAGE = 100;
+
+  /**
+   * Loud safety valve for the page walk. Pagination terminates on GitHub's short final page, so
+   * this ceiling is only reached if an endpoint misbehaves and never returns one. It sits far above
+   * any real account (100,000 entries); reaching it throws so the walk fails closed and is logged,
+   * rather than spinning a request thread forever or silently dropping data.
+   */
+  private static final int MAX_PAGES = 1_000;
 
   /** Outcome of an access check, letting callers distinguish denial from a misconfigured owner. */
   public enum AccessDecision {
@@ -217,25 +228,10 @@ public class DashboardAccessChecker {
     String installationAuth = null;
     try {
       var jwt = "Bearer " + authClient.generateAppJwt();
-      Optional<GitHubInstallationClient.Installation> matchingInstallation =
-          installationClient.listInstallations(jwt, ACCEPT, 100).stream()
-              .filter(
-                  i -> i.account() != null && accountOwner.equalsIgnoreCase(i.account().login()))
-              .findFirst();
+      var matchingInstallation = findInstallation(jwt, accountOwner);
       if (matchingInstallation.isPresent()) {
         installationAuth = authClient.getAuthHeader(matchingInstallation.get().id());
-        var response =
-            installationClient.listInstallationRepositories(installationAuth, ACCEPT, 100, 1);
-        if (response.repositories() != null) {
-          for (GitHubInstallationClient.InstallationRepositoriesResponse.Repository repo :
-              response.repositories()) {
-            if (repo.owner() != null
-                && accountOwner.equalsIgnoreCase(repo.owner().login())
-                && repo.name() != null) {
-              repos.add(new RepoRef(repo.owner().login(), repo.name()));
-            }
-          }
-        }
+        collectInstalledRepos(installationAuth, accountOwner, repos);
       }
     } catch (RuntimeException e) {
       log.warn("Failed to list installed repositories for {}: {}", accountOwner, e.getMessage());
@@ -246,6 +242,81 @@ public class DashboardAccessChecker {
     cachedSnapshot.set(updated);
     log.info("Loaded {} installed repos for dashboard access control", repos.size());
     return updated;
+  }
+
+  /**
+   * Pages through the app's installations until the one matching {@code accountOwner} is found,
+   * stopping as soon as it matches or the listing ends.
+   */
+  private Optional<GitHubInstallationClient.Installation> findInstallation(
+      String jwt, String accountOwner) {
+    var match = new AtomicReference<GitHubInstallationClient.Installation>();
+    paginate(
+        page -> installationClient.listInstallations(jwt, ACCEPT, PER_PAGE, page),
+        installations -> {
+          var found =
+              installations.stream()
+                  .filter(
+                      i ->
+                          i.account() != null && accountOwner.equalsIgnoreCase(i.account().login()))
+                  .findFirst();
+          found.ifPresent(match::set);
+          return found.isPresent();
+        });
+    return Optional.ofNullable(match.get());
+  }
+
+  /** Collects every repository owned by {@code accountOwner} that the installation can access. */
+  private void collectInstalledRepos(
+      String installationAuth, String accountOwner, List<RepoRef> repos) {
+    paginate(
+        page ->
+            installationClient
+                .listInstallationRepositories(installationAuth, ACCEPT, PER_PAGE, page)
+                .repositories(),
+        pageRepos -> {
+          collectOwnerRepos(pageRepos, accountOwner, repos);
+          return false;
+        });
+  }
+
+  /**
+   * Walks 1-based pages from {@code fetchPage}, handing each non-empty page to {@code consumePage}.
+   * The walk ends when a page is shorter than {@code PER_PAGE} (GitHub's marker for the final
+   * page), when a page is empty or null, or when {@code consumePage} returns {@code true} to stop
+   * early. Termination follows the rows actually returned rather than any separately reported
+   * total, so it can never under-fetch. {@code MAX_PAGES} guards against an endpoint that never
+   * serves a short page; exceeding it throws rather than looping forever or returning a partial
+   * result.
+   */
+  private <T> void paginate(IntFunction<List<T>> fetchPage, Predicate<List<T>> consumePage) {
+    for (var page = 1; page <= MAX_PAGES; page++) {
+      var items = fetchPage.apply(page);
+      if (items == null || items.isEmpty()) {
+        return;
+      }
+      if (consumePage.test(items)) {
+        return;
+      }
+      if (items.size() < PER_PAGE) {
+        return;
+      }
+    }
+    throw new IllegalStateException(
+        "GitHub pagination exceeded " + MAX_PAGES + " pages; aborting to avoid an unbounded fetch");
+  }
+
+  private void collectOwnerRepos(
+      List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository> pageRepos,
+      String accountOwner,
+      List<RepoRef> repos) {
+    for (var repo : pageRepos) {
+      if (repo.owner() != null
+          && accountOwner.equalsIgnoreCase(repo.owner().login())
+          && repo.name() != null) {
+        repos.add(new RepoRef(repo.owner().login(), repo.name()));
+      }
+    }
   }
 
   private Optional<String> accountOwner() {
