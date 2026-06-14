@@ -155,6 +155,8 @@ variables are the ones you will change per provider:
 | `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
+| `WEBHOOK_DEDUP_TTL` | Webhook deduplication time-to-live for GitHub redeliveries | `24h` |
+| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth credentials for dashboard login | _(required for dashboard)_ |
 | `DASHBOARD_URL` | Public dashboard URL (OAuth callback base) | `http://localhost:8080` |
 | `DATASOURCE_DB_KIND` | `h2` or `postgresql` | `h2` (dev), `postgresql` (`%prod`) |
