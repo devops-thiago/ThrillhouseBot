@@ -78,6 +78,16 @@ public class WebhookDeduplicator {
   }
 
   /**
+   * Removes the dedup record for {@code deliveryId}, allowing a future delivery with the same id to
+   * be processed. Called when dispatch fails so that manual redelivery can retry.
+   */
+  public void forget(String deliveryId) {
+    if (deliveryId != null) {
+      seen.remove(deliveryId);
+    }
+  }
+
+  /**
    * {@link #isDuplicate} refreshes an existing key's deadline but never shrinks the map, so ids
    * that are never redelivered would accumulate forever. Sweep expired entries once the map is
    * large enough that the scan is worthwhile; live entries are never removed, so a still-remembered

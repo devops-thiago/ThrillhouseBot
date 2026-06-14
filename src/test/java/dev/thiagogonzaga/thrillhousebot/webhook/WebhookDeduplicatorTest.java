@@ -223,6 +223,46 @@ class WebhookDeduplicatorTest {
     return firstSightings.get();
   }
 
+  @Test
+  void forgetAllowsReprocessing() {
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+
+    assertFalse(dedup.isDuplicate("delivery-1"));
+    assertTrue(dedup.isDuplicate("delivery-1"));
+
+    dedup.forget("delivery-1");
+
+    // After forgetting, the same id is treated as first-seen again.
+    assertFalse(dedup.isDuplicate("delivery-1"));
+    assertTrue(dedup.isDuplicate("delivery-1"));
+  }
+
+  @Test
+  void forgetWithNullIdIsNoOp() {
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    assertFalse(dedup.isDuplicate("recorded"));
+
+    // A null id must neither throw nor disturb existing records.
+    dedup.forget(null);
+
+    assertTrue(dedup.isDuplicate("recorded"));
+    assertEquals(1, dedup.seen.size());
+  }
+
+  @Test
+  void forgetWithUnknownIdIsNoOp() {
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+
+    // Record one id, then forget a different, never-seen id.
+    assertFalse(dedup.isDuplicate("recorded"));
+
+    dedup.forget("never-seen");
+
+    // Forgetting an unknown id must not disturb the recorded one — it stays a duplicate.
+    assertTrue(dedup.isDuplicate("recorded"));
+    assertEquals(1, dedup.seen.size());
+  }
+
   /** A {@link LongSupplier} clock whose epoch-millis value can be advanced by tests. */
   private static final class MutableClock implements LongSupplier {
     private final AtomicLong millis;

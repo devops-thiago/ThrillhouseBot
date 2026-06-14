@@ -93,44 +93,66 @@ public class WebhookController {
       return Response.ok("{\"status\":\"ignored\"}").build();
     }
 
-    routeEvent(eventType, payload);
+    routeEvent(eventType, payload, deliveryId);
 
     // GitHub expects 200 within 10 seconds; we acknowledge immediately
     return Response.ok("{\"status\":\"ok\"}").build();
   }
 
-  private void routeEvent(String eventType, WebhookPayload payload) {
+  private void routeEvent(String eventType, WebhookPayload payload, String deliveryId) {
     try {
-      switch (eventType) {
-        case "pull_request" -> handlePullRequest(payload);
-        case "issue_comment" -> handleIssueComment(payload);
-        case "installation", "installation_repositories" ->
-            log.info(
-                "App installation event (action: {}), installation id: {}",
-                payload.action(),
-                payload.installation() != null ? payload.installation().id() : "unknown");
-        case "ping" -> log.info("Webhook ping received");
-        default -> log.debug("Unhandled event type: {}", eventType);
+      boolean handled =
+          switch (eventType) {
+            case "pull_request" -> handlePullRequest(payload);
+            case "issue_comment" -> handleIssueComment(payload);
+            case "installation", "installation_repositories" -> {
+              log.info(
+                  "App installation event (action: {}), installation id: {}",
+                  payload.action(),
+                  payload.installation() != null ? payload.installation().id() : "unknown");
+              yield true;
+            }
+            case "ping" -> {
+              log.info("Webhook ping received");
+              yield true;
+            }
+            default -> {
+              log.debug("Unhandled event type: {}", eventType);
+              yield true;
+            }
+          };
+      if (!handled) {
+        // The executor rejected the review (e.g. it is saturated), so nothing ran. Roll back the
+        // dedup slot so a manual redelivery of this id can retry. (#89)
+        deduplicator.forget(deliveryId);
       }
     } catch (RuntimeException e) {
+      // An unexpected failure means the review was never handed off either, so roll back the dedup
+      // slot for the same reason before acknowledging.
+      deduplicator.forget(deliveryId);
       log.error("Error processing webhook event", e);
     }
   }
 
-  private void handlePullRequest(WebhookPayload payload) {
+  /**
+   * @return {@code false} only when a review was attempted but the dispatcher rejected it (so the
+   *     dedup slot should be rolled back); {@code true} when the event was handled or legitimately
+   *     ignored.
+   */
+  private boolean handlePullRequest(WebhookPayload payload) {
     var action = payload.action();
-    if (action == null) return;
+    if (action == null) return true;
 
-    switch (action) {
+    return switch (action) {
       case "opened", "reopened", "synchronize" -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
         if (pr == null || repo == null || payload.installation() == null) {
           log.debug("Ignoring pull_request with missing pull_request, repository, or installation");
-          return;
+          yield true;
         }
         log.info("Dispatching review for PR #{} in {}", pr.number(), repo.fullName());
-        reviewDispatcher.dispatch(
+        yield reviewDispatcher.dispatch(
             new ReviewOrchestrator.ReviewRequest(
                 repo.owner().login(),
                 repo.name(),
@@ -143,40 +165,48 @@ public class WebhookController {
                 payload.installation().id(),
                 false));
       }
-      default -> log.debug("Ignoring pull_request action: {}", action);
-    }
+      default -> {
+        log.debug("Ignoring pull_request action: {}", action);
+        yield true;
+      }
+    };
   }
 
-  private void handleIssueComment(WebhookPayload payload) {
+  /**
+   * @return {@code false} only when a review was attempted but the dispatcher rejected it (so the
+   *     dedup slot should be rolled back); {@code true} when the event was handled or legitimately
+   *     ignored.
+   */
+  private boolean handleIssueComment(WebhookPayload payload) {
     // Only a freshly created comment is a trigger; editing or deleting one must not re-run a
     // review.
     if (!"created".equals(payload.action())) {
       log.debug("Ignoring issue_comment action: {}", payload.action());
-      return;
+      return true;
     }
 
     // Only act on PR comments, not issue comments
     if (payload.issue() == null || payload.issue().pullRequest() == null) {
       log.debug("Ignoring comment on issue (not PR)");
-      return;
+      return true;
     }
 
     if (payload.comment() == null || payload.comment().user() == null) {
       log.debug("Ignoring comment with missing author info");
-      return;
+      return true;
     }
 
     // Prevent infinite loops — skip bot's own comments
     if (triggerDetector.isBotComment(payload.comment().user().login())) {
       log.debug("Ignoring own comment");
-      return;
+      return true;
     }
 
     if (triggerDetector.isReviewTrigger(payload.comment().body())) {
       var repo = payload.repository();
       if (repo == null || payload.installation() == null) {
         log.debug("Ignoring review trigger with missing repository or installation");
-        return;
+        return true;
       }
       var owner = repo.owner().login();
       var login = payload.comment().user().login();
@@ -189,11 +219,11 @@ public class WebhookController {
             "Ignoring unauthorized manual review trigger from @{} on PR #{}",
             login,
             payload.issue().number());
-        return;
+        return true;
       }
       log.info("Manual review triggered by @{} on PR #{}", login, payload.issue().number());
       // On issue_comment the issue number equals the PR number
-      reviewDispatcher.dispatch(
+      return reviewDispatcher.dispatch(
           new ReviewOrchestrator.ReviewRequest(
               owner,
               repo.name(),
@@ -206,5 +236,6 @@ public class WebhookController {
               installationId,
               true));
     }
+    return true;
   }
 }

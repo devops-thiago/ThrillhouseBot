@@ -46,7 +46,14 @@ public final class ReviewDispatcher {
     this.orchestrator = orchestrator;
   }
 
-  public void dispatch(ReviewOrchestrator.ReviewRequest req) {
+  /**
+   * Queues a review for the request's PR, coalescing rapid same-PR events into the in-flight run.
+   *
+   * @return {@code true} if the review was queued or coalesced into a running worker; {@code false}
+   *     if the executor rejected the task (e.g. it is saturated or shutting down) so no review will
+   *     run. Callers use this to roll back webhook dedup state so a redelivery can retry.
+   */
+  public boolean dispatch(ReviewOrchestrator.ReviewRequest req) {
     var key = new PrKey(req.owner(), req.repo(), req.prNumber());
 
     while (true) {
@@ -73,9 +80,10 @@ public final class ReviewDispatcher {
               req.prNumber(),
               e);
           retire(key, state);
+          return false;
         }
       }
-      return;
+      return true;
     }
   }
 
