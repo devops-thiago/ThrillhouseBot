@@ -18,12 +18,16 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -274,5 +278,254 @@ class FindingQuoteValidatorTest {
 
     assertEquals(0, result.findings().size());
     assertNull(result.summary());
+  }
+
+  @Test
+  void ambiguousQuoteCapsConfidenceAndDropsSuggestion() {
+    var diff =
+        """
+        ### src/Test.java (modified, +2 -2)
+        ```diff
+        @@ -10,6 +10,6 @@
+         public void testOne() {
+        -    assertEquals(1, val);
+        +    assertEquals(2, val);
+         }
+         public void testTwo() {
+        -    assertEquals(1, val);
+        +    assertEquals(2, val);
+         }
+        ```
+        """;
+    // The two occurrences sit at right-side lines 11 and 14, so their 3-line tolerance windows
+    // ([8,14] and [11,17]) overlap. The finding at line 12 falls inside both, uniquely selecting
+    // neither — so the outcome depends on correct right-side line tracking, not mere distance.
+    var finding =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            "src/Test.java",
+            12,
+            "Title",
+            "Description",
+            "assertEquals(1, val);",
+            "assertEquals(2, val);");
+    var response = response(finding);
+
+    var result = validator.validate(response, diff);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+  }
+
+  private static final String DUPLICATE_QUOTE_DIFF =
+      """
+      ### src/Test.java (modified, +2 -2)
+      ```diff
+      @@ -10,3 +10,3 @@
+       public void testOne() {
+      -    assertEquals(1, val);
+      +    assertEquals(2, val);
+       }
+      @@ -20,3 +20,3 @@
+       public void testTwo() {
+      -    assertEquals(1, val);
+      +    assertEquals(2, val);
+       }
+      ```
+      """;
+
+  // Same duplicate quote, but each hunk header carries git's trailing function-context suffix.
+  private static final String DUPLICATE_QUOTE_DIFF_TRAILING_HEADER =
+      """
+      ### src/Test.java (modified, +2 -2)
+      ```diff
+      @@ -10,3 +10,3 @@ public void testOne() {
+       public void testOne() {
+      -    assertEquals(1, val);
+      +    assertEquals(2, val);
+       }
+      @@ -20,3 +20,3 @@ public void testTwo() {
+       public void testTwo() {
+      -    assertEquals(1, val);
+      +    assertEquals(2, val);
+       }
+      ```
+      """;
+
+  static Stream<Arguments> uniquelySelectedDuplicateQuotes() {
+    return Stream.of(
+        // line 21 uniquely selects testTwo — the upper occurrence's tolerance window
+        arguments(DUPLICATE_QUOTE_DIFF, 21),
+        // line 11 selects the earlier testOne — exercises the lower-bound edge of the window
+        arguments(DUPLICATE_QUOTE_DIFF, 11),
+        // trailing context after @@ must still parse the +start, so line 21 selects testTwo
+        arguments(DUPLICATE_QUOTE_DIFF_TRAILING_HEADER, 21));
+  }
+
+  /**
+   * When a quote appears in multiple locations but the finding's line uniquely selects one (within
+   * the 3-line tolerance), the finding is kept intact regardless of the hunk-header form.
+   */
+  @ParameterizedTest
+  @MethodSource("uniquelySelectedDuplicateQuotes")
+  void uniqueQuoteAmongDuplicatesIsKept(String diff, int line) {
+    var finding =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            "src/Test.java",
+            line,
+            "Title",
+            "Description",
+            "assertEquals(1, val);",
+            "assertEquals(2, val);");
+
+    var result = validator.validate(response(finding), diff);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertEquals("assertEquals(1, val);", kept.suggestionOld());
+    assertEquals("high", kept.confidence());
+  }
+
+  @Test
+  void quoteWithInterleavedAdditionsIsKept() {
+    var diff =
+        """
+        ### src/Test.java (modified, +1 -0)
+        ```diff
+        @@ -10,4 +10,5 @@
+         public void run() {
+             stepOne();
+        +    insertedStep();
+             stepTwo();
+         }
+        ```
+        """;
+    // The quote has "stepOne();" and "stepTwo();" which are separated by "+    insertedStep();" in
+    // the diff.
+    // Since "+    insertedStep();" is an addition, it should be ignored when matching
+    // suggestionOld.
+    var quote = "stepOne();\nstepTwo();";
+    var finding =
+        new ReviewResponse.Finding(
+            "critical", "high", "src/Test.java", 11, "Title", "Description", quote, "replacement");
+    var response = response(finding);
+
+    var result = validator.validate(response, diff);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertEquals(quote, kept.suggestionOld());
+    assertEquals("high", kept.confidence());
+  }
+
+  @Test
+  void ambiguousAcrossFilesWhenFindingFileUnresolved() {
+    var diff =
+        """
+        ### src/A.java (modified, +1 -1)
+        ```diff
+        @@ -10,3 +10,3 @@
+         public void a() {
+        -    doThing();
+        +    doThingElse();
+         }
+        ```
+        ### src/B.java (modified, +1 -1)
+        ```diff
+        @@ -10,3 +10,3 @@
+         public void b() {
+        -    doThing();
+        +    doThingElse();
+         }
+        ```
+        """;
+    // The finding's file matches no section, so scoping falls back to the whole-diff union where
+    // "doThing();" appears in both files at right-side line 11 (each file restarts its own
+    // numbering). Line 11 sits in both tolerance windows, so neither is uniquely selected.
+    var finding =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            "src/Unknown.java",
+            11,
+            "Title",
+            "Description",
+            "doThing();",
+            "doThingElse();");
+    var response = response(finding);
+
+    var result = validator.validate(response, diff);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertEquals("low", kept.confidence());
+  }
+
+  @Test
+  void unparseableHunkHeaderIsIgnored() {
+    var diff =
+        """
+        ### src/Test.java (modified, +1 -1)
+        ```diff
+        @@ this is not a valid hunk header @@
+         public void run() {
+        -    doThing();
+        +    doThingElse();
+         }
+        ```
+        """;
+    // A line that starts with @@ but carries no parseable +start leaves right-side numbering at its
+    // default; the single quoted occurrence has no duplicate to disambiguate and is kept.
+    var finding =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            "src/Test.java",
+            1,
+            "Title",
+            "Description",
+            "doThing();",
+            "doThingElse();");
+    var response = response(finding);
+
+    var result = validator.validate(response, diff);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("doThing();", result.findings().get(0).suggestionOld());
+  }
+
+  @Test
+  void blankFileFallsBackToTheWholeDiff() {
+    var response = response(findingOn("   ", "int onlyInB = 2;"));
+
+    assertSame(response, validator.validate(response, MULTI_FILE_DIFF));
+  }
+
+  @Test
+  void noNewlineIndicatorIsNotQuotableContent() {
+    var diff =
+        """
+        ### src/Test.java (modified, +1 -1)
+        ```diff
+        @@ -1,1 +1,1 @@
+        -oldValue
+        +newValue
+        \\ No newline at end of file
+        ```
+        """;
+    // The "\\ No newline at end of file" indicator is diff plumbing; a finding quoting it must not
+    // validate against the diff.
+    var response = response(findingOn("src/Test.java", "\\ No newline at end of file"));
+
+    var result = validator.validate(response, diff);
+
+    assertEquals(0, result.findings().size());
   }
 }

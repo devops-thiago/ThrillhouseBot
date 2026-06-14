@@ -27,8 +27,8 @@ import java.util.regex.Pattern;
  */
 public final class DiffLineResolver {
 
-  private static final Pattern HUNK_HEADER =
-      Pattern.compile("@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@");
+  // Shared with FindingQuoteValidator, which tracks the same right-side line numbers.
+  static final Pattern HUNK_HEADER = Pattern.compile("@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@");
 
   private final Map<String, TreeSet<Integer>> rightSideLinesByFile;
 
