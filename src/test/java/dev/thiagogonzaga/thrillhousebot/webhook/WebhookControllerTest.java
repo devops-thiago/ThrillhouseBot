@@ -41,7 +41,12 @@ class WebhookControllerTest {
 
   @Mock private ReviewDispatcher reviewDispatcher;
 
+  @Mock private WebhookDeduplicator deduplicator;
+
   private final ObjectMapper mapper = new ObjectMapper();
+
+  /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
+  private static final String DELIVERY = "00000000-0000-0000-0000-000000000001";
 
   private WebhookController controller;
 
@@ -50,7 +55,9 @@ class WebhookControllerTest {
     MockitoAnnotations.openMocks(this);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.webhookSecret()).thenReturn("test-secret");
-    controller = new WebhookController(config, verifier, triggerDetector, reviewDispatcher, mapper);
+    controller =
+        new WebhookController(
+            config, verifier, triggerDetector, reviewDispatcher, deduplicator, mapper);
   }
 
   // ── handleWebhook tests ────────────────────────────────────────────────
@@ -63,7 +70,7 @@ class WebhookControllerTest {
         buildPullRequestPayload("opened", 42, "owner/repo", "abc123", "main")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
 
     assertEquals(200, response.getStatus());
   }
@@ -74,7 +81,7 @@ class WebhookControllerTest {
 
     var body = "{}".getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=invalid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=invalid", "pull_request", null, DELIVERY, body);
 
     assertEquals(401, response.getStatus());
     var entity = (String) response.getEntity();
@@ -87,11 +94,60 @@ class WebhookControllerTest {
 
     var body = "not-valid-json".getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
 
     assertEquals(400, response.getStatus());
     var entity = (String) response.getEntity();
     assertTrue(entity.contains("Invalid payload"));
+  }
+
+  // ── delivery dedup tests ───────────────────────────────────────────────
+
+  @Test
+  void shouldDropRedeliveredWebhookWithoutDispatching() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("opened", 7, "owner/repo", "sha7", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    assertEquals(200, response.getStatus());
+    assertTrue(((String) response.getEntity()).contains("ignored"));
+    // A redelivery must not start a second review.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldProcessFirstDeliveryAndPassIdToDeduplicator() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("opened", 8, "owner/repo", "sha8", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-xyz", body);
+
+    assertEquals(200, response.getStatus());
+    verify(deduplicator).isDuplicate("delivery-xyz");
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldNotConsultDeduplicatorWhenSignatureInvalid() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(false);
+
+    var body = "{}".getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=bad", "pull_request", null, "any-id", body);
+
+    assertEquals(401, response.getStatus());
+    // Dedup happens only after the signature is verified, so forged ids cannot poison the cache.
+    verifyNoInteractions(deduplicator);
   }
 
   // ── pull_request routing tests ─────────────────────────────────────────
@@ -104,7 +160,7 @@ class WebhookControllerTest {
         buildPullRequestPayload("opened", 99, "owner/myrepo", "headsha123", "default")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher)
@@ -130,7 +186,7 @@ class WebhookControllerTest {
         buildPullRequestPayload("synchronize", 55, "org/app", "newsha", "develop")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher)
@@ -156,7 +212,7 @@ class WebhookControllerTest {
         buildPullRequestPayload("reopened", 10, "a/b", "sha10", "main")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher)
@@ -182,7 +238,7 @@ class WebhookControllerTest {
         buildPullRequestPayload("opened", 12, "a/b", "sha12", "main", false)
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher)
@@ -198,7 +254,7 @@ class WebhookControllerTest {
     var body =
         buildPullRequestPayload("closed", 1, "x/y", "sha", "main").getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // Orchestrator should NOT be called for "closed" action
@@ -218,7 +274,7 @@ class WebhookControllerTest {
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, body);
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher)
@@ -238,7 +294,7 @@ class WebhookControllerTest {
         buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/review", "NONE")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, body);
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // A non-collaborator must not be able to spend the operator's API budget.
@@ -255,7 +311,7 @@ class WebhookControllerTest {
         buildIssueCommentPayload("created", 1, "a/b", "octocat", "Nice PR!")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, body);
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // Orchestrator should NOT be called when trigger not detected
@@ -272,7 +328,7 @@ class WebhookControllerTest {
         buildIssueCommentPayload("created", 1, "a/b", "thrillhousebot[bot]", "/review")
             .getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, body);
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // Orchestrator should NOT be called for bot comments
@@ -287,7 +343,7 @@ class WebhookControllerTest {
 
     var body = buildInstallationPayload("created", 12345L).getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "installation", null, body);
+    var response = controller.handleWebhook("sha256=valid", "installation", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
@@ -300,7 +356,7 @@ class WebhookControllerTest {
     var body = buildInstallationPayload("added", 42L).getBytes(StandardCharsets.UTF_8);
 
     var response =
-        controller.handleWebhook("sha256=valid", "installation_repositories", null, body);
+        controller.handleWebhook("sha256=valid", "installation_repositories", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
@@ -313,7 +369,7 @@ class WebhookControllerTest {
     // Payload with action but no installation field
     var body = "{\"action\":\"created\"}".getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "installation", null, body);
+    var response = controller.handleWebhook("sha256=valid", "installation", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
@@ -325,7 +381,7 @@ class WebhookControllerTest {
 
     var body = "{}".getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "ping", null, body);
+    var response = controller.handleWebhook("sha256=valid", "ping", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
@@ -340,7 +396,7 @@ class WebhookControllerTest {
     var body =
         buildPullRequestPayload("opened", 1, "a/b", "sha", "main").getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "push", null, body);
+    var response = controller.handleWebhook("sha256=valid", "push", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // Orchestrator should NOT be called for unknown event types
@@ -357,7 +413,7 @@ class WebhookControllerTest {
     var body =
         buildPullRequestPayload("opened", 1, "a/b", "sha", "main").getBytes(StandardCharsets.UTF_8);
 
-    var response = controller.handleWebhook("sha256=valid", "pull_request", null, body);
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
     // The async routeEvent should have caught the RuntimeException and logged it
@@ -379,7 +435,7 @@ class WebhookControllerTest {
 
     var response =
         controller.handleWebhook(
-            "sha256=valid", "issue_comment", null, body.getBytes(StandardCharsets.UTF_8));
+            "sha256=valid", "issue_comment", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
@@ -402,7 +458,7 @@ class WebhookControllerTest {
 
     var response =
         controller.handleWebhook(
-            "sha256=valid", "issue_comment", null, body.getBytes(StandardCharsets.UTF_8));
+            "sha256=valid", "issue_comment", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
