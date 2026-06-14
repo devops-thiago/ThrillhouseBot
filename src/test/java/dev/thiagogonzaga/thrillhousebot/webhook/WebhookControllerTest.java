@@ -43,6 +43,8 @@ class WebhookControllerTest {
 
   @Mock private WebhookDeduplicator deduplicator;
 
+  @Mock private ManualReviewAuthorizer manualReviewAuthorizer;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
@@ -57,7 +59,13 @@ class WebhookControllerTest {
     when(githubConfig.webhookSecret()).thenReturn("test-secret");
     controller =
         new WebhookController(
-            config, verifier, triggerDetector, reviewDispatcher, deduplicator, mapper);
+            config,
+            verifier,
+            triggerDetector,
+            reviewDispatcher,
+            deduplicator,
+            manualReviewAuthorizer,
+            mapper);
   }
 
   // ── handleWebhook tests ────────────────────────────────────────────────
@@ -268,7 +276,8 @@ class WebhookControllerTest {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-    when(triggerDetector.isAuthorizedToTrigger("OWNER")).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
@@ -288,7 +297,9 @@ class WebhookControllerTest {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
     when(triggerDetector.isBotComment("stranger")).thenReturn(false);
-    when(triggerDetector.isAuthorizedToTrigger("NONE")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized(
+            anyString(), anyString(), anyLong(), anyString(), any()))
+        .thenReturn(false);
 
     var body =
         buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/review", "NONE")
@@ -297,8 +308,40 @@ class WebhookControllerTest {
     var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
-    // A non-collaborator must not be able to spend the operator's API budget.
+    // A user without write access must not be able to spend the operator's API budget.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldIgnoreEditedIssueComment() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload("edited", 88, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // Editing a comment must not re-dispatch a review, and authorization is never consulted.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verifyNoInteractions(manualReviewAuthorizer);
+  }
+
+  @Test
+  void shouldIgnoreDeletedIssueComment() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload("deleted", 88, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // Deleting a comment must not re-dispatch a review.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verifyNoInteractions(manualReviewAuthorizer);
   }
 
   @Test
