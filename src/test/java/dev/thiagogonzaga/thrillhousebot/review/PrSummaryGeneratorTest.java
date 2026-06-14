@@ -260,4 +260,33 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("❌ Failed"));
     assertTrue(summary.contains("**lint**"));
   }
+
+  @Test
+  void shouldEscapePipesInCiCheckTableCells() {
+    // A check name containing '|' must be escaped so it cannot break the Markdown table layout.
+    var checks =
+        List.of(new ReviewResult.CiCheck("build | strict", "check-run", "failing", "failure"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    assertTrue(summary.contains("build \\| strict"));
+    assertFalse(summary.contains("build | strict"));
+  }
+
+  @Test
+  void shouldRenderDashForNullCheckNameInCiTable() {
+    var checks = List.of(new ReviewResult.CiCheck(null, "missing", "pending", null));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    // A null name/conclusion renders as "-" rather than throwing.
+    assertTrue(summary.contains("Required CI Checks Status"));
+    assertTrue(summary.contains("⏳ Pending"));
+  }
 }

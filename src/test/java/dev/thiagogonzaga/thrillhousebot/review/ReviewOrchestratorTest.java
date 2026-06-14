@@ -780,6 +780,21 @@ class ReviewOrchestratorTest {
 
       assertEquals("ThrillhouseBot Review ✅", title);
     }
+
+    @Test
+    void shouldNotCelebrateWhenCiChecksAreOffendingDespiteNoFindings() {
+      // No findings and nothing unresolved, but a required check is failing: the bot's own check
+      // run must not show the green ✅ title nor the zero-issues celebration summary.
+      var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), offending);
+
+      assertFalse(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
+      String summary = ReviewOrchestrator.checkSummaryForResult(result);
+      assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+      assertTrue(summary.contains("required CI check(s) are still pending or failing"));
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -2627,6 +2642,13 @@ class ReviewOrchestratorTest {
         orchestrator.review(
             new ReviewOrchestrator.ReviewRequest(
                 "owner", "repo", 7, "", "(manual review)", "", "", "main", 123L, true));
+
+        // The thrown getRequiredStatusChecks must be swallowed: the review still finalizes its
+        // check run and posts a review rather than failing the whole run.
+        verify(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       }
     }
   }
@@ -2916,31 +2938,32 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldIgnoreThrillhouseBotChecks() {
-      // Setup check runs
+      // All checks below are failing; only the genuinely-non-bot ones must surface as offending,
+      // proving the ThrillhouseBot checks are dropped by bot-detection rather than by being green.
       var app =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
               1L, "thrillhousebot", "ThrillhouseBot");
       var tbRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "ThrillhouseBot Review", "completed", "success", app);
+              1L, "ThrillhouseBot Review", "completed", "failure", app);
       var appSlugRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               10L,
               "Some Checks",
               "completed",
-              "success",
+              "failure",
               new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(2L, "thrillhousebot", null));
       var appNameRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               11L,
               "Other Checks",
               "completed",
-              "success",
+              "failure",
               new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(3L, null, "ThrillhouseBot"));
       var otherRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "build", "completed", "success", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+              2L, "build", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CheckRunsResponse(
                   4, List.of(tbRun, appSlugRun, appNameRun, otherRun)));
@@ -2948,13 +2971,13 @@ class ReviewOrchestratorTest {
       // Setup statuses
       var tbStatus =
           new GitHubCheckRunClient.CombinedStatus.StatusDetail(
-              1L, "success", "thrillhousebot-status", "desc");
+              1L, "failure", "thrillhousebot-status", "desc");
       var otherStatus =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "success", "lint", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "failure", "lint", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CombinedStatus(
-                  "success", 2, List.of(tbStatus, otherStatus)));
+                  "failure", 2, List.of(tbStatus, otherStatus)));
 
       var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
@@ -2965,23 +2988,48 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldFilterByRequiredContextsWhenProvided() {
-      var run1 =
+    void shouldExcludePassingChecksFromOffendingList() {
+      // Every check is green — the offending list must come back empty so APPROVE is not gated.
+      var passRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "completed", "success", null);
+      var skippedRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "docs", "completed", "skipped", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(passRun, skippedRun)));
+      var passStatus =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "success", "lint", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 1, List.of(passStatus)));
+
+      // requiredContexts lists checks that are all green and already reported — none is missing.
+      var result =
+          orchestrator.evaluateCiChecks(
+              "auth", "owner", "repo", "sha", List.of("build", "docs", "lint"));
+
+      assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void shouldFilterByRequiredContextsWhenProvided() {
+      // All four checks are failing; only the two in requiredContexts must surface as offending.
+      var run1 =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "completed", "failure", null);
       var run2 =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "test", "completed", "success", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+              2L, "test", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(run1, run2)));
 
       var status1 =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "success", "lint", "desc");
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "failure", "lint", "desc");
       var status2 =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "success", "deploy", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "failure", "deploy", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
-              new GitHubCheckRunClient.CombinedStatus("success", 2, List.of(status1, status2)));
+              new GitHubCheckRunClient.CombinedStatus("failure", 2, List.of(status1, status2)));
 
       var result =
           orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build", "lint"));
@@ -2995,9 +3043,9 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldMarkMissingRequiredChecksAsPending() {
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
 
       var result =
@@ -3026,7 +3074,7 @@ class ReviewOrchestratorTest {
       var runSkipped =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               3L, "docs", "completed", "skipped", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CheckRunsResponse(
                   3, List.of(runPending, runFailed, runSkipped)));
@@ -3037,14 +3085,15 @@ class ReviewOrchestratorTest {
       // 5. Error status
       var statusError =
           new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "error", "security", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CombinedStatus(
                   "pending", 2, List.of(statusPending, statusError)));
 
       var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(5, result.size());
+      // docs (skipped → passing) is excluded; only the four offending checks remain.
+      assertEquals(4, result.size());
 
       var build = result.stream().filter(c -> "build".equals(c.name())).findFirst().orElseThrow();
       assertEquals("pending", build.status());
@@ -3052,8 +3101,7 @@ class ReviewOrchestratorTest {
       var test = result.stream().filter(c -> "test".equals(c.name())).findFirst().orElseThrow();
       assertEquals("failing", test.status());
 
-      var docs = result.stream().filter(c -> "docs".equals(c.name())).findFirst().orElseThrow();
-      assertEquals("success", docs.status());
+      assertFalse(result.stream().anyMatch(c -> "docs".equals(c.name())));
 
       var lint = result.stream().filter(c -> "lint".equals(c.name())).findFirst().orElseThrow();
       assertEquals("pending", lint.status());
@@ -3064,10 +3112,170 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldPageThroughCheckRunsUntilAShortPageIsReturned() {
+      // A full first page (100 rows) must trigger a second fetch; the short second page stops it.
+      var fullPage = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
+      for (int i = 0; i < 100; i++) {
+        fullPage.add(
+            new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                i, "check-" + i, "completed", "failure", null));
+      }
+      var lastPage =
+          List.of(
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                  100L, "check-100", "completed", "failure", null));
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(101, fullPage))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(101, lastPage));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      // Both pages were consumed: 100 + 1 failing check runs.
+      assertEquals(101, result.size());
+      verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(1));
+      verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(2));
+    }
+
+    @Test
+    void shouldPageThroughCombinedStatusUntilAShortPageIsReturned() {
+      var fullStatusPage =
+          new java.util.ArrayList<GitHubCheckRunClient.CombinedStatus.StatusDetail>();
+      for (int i = 0; i < 100; i++) {
+        fullStatusPage.add(
+            new GitHubCheckRunClient.CombinedStatus.StatusDetail(i, "failure", "ctx-" + i, "d"));
+      }
+      var lastStatusPage =
+          List.of(
+              new GitHubCheckRunClient.CombinedStatus.StatusDetail(
+                  100L, "failure", "ctx-100", "d"));
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 101, fullStatusPage))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 101, lastStatusPage));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(101, result.size());
+      verify(checkRunClient).getCombinedStatus(any(), any(), any(), any(), any(), eq(100), eq(2));
+    }
+
+    @Test
+    void shouldStopPagingAtTheMaxPagesGuard() {
+      // Every page is full (CI_PER_PAGE rows) so the short-page break never fires; the loop must
+      // terminate at the CI_MAX_PAGES guard rather than run forever.
+      var fullRuns = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
+      var fullStatuses =
+          new java.util.ArrayList<GitHubCheckRunClient.CombinedStatus.StatusDetail>();
+      for (int i = 0; i < ReviewOrchestrator.CI_PER_PAGE; i++) {
+        fullRuns.add(
+            new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                i, "run-" + i, "completed", "failure", null));
+        fullStatuses.add(
+            new GitHubCheckRunClient.CombinedStatus.StatusDetail(i, "failure", "status-" + i, "d"));
+      }
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(ReviewOrchestrator.CI_PER_PAGE, fullRuns));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CombinedStatus(
+                  "failure", ReviewOrchestrator.CI_PER_PAGE, fullStatuses));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      // Deduped to the distinct names across the repeated pages.
+      assertEquals(2 * ReviewOrchestrator.CI_PER_PAGE, result.size());
+      verify(checkRunClient, times(ReviewOrchestrator.CI_MAX_PAGES))
+          .getCheckRuns(
+              any(), any(), any(), any(), any(), eq(ReviewOrchestrator.CI_PER_PAGE), anyInt());
+      verify(checkRunClient, times(ReviewOrchestrator.CI_MAX_PAGES))
+          .getCombinedStatus(
+              any(), any(), any(), any(), any(), eq(ReviewOrchestrator.CI_PER_PAGE), anyInt());
+    }
+
+    @Test
+    void shouldBreakWhenCheckRunsAndStatusResponsesAreNull() {
+      // Unmocked endpoints return null; the page loops must break immediately without error.
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+      assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void shouldTreatCompletedRunWithNullConclusionAsFailing() {
+      var run =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(1L, "build", "completed", null, null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(1, List.of(run)));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(1, result.size());
+      assertEquals("failing", result.get(0).status());
+    }
+
+    @Test
+    void shouldDeduplicateContextReportedAsBothCheckRunAndStatus() {
+      // The same failing context reported twice via check runs and once via status → listed once.
+      var run =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "completed", "failure", null);
+      var dupRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "build", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(run, dupRun)));
+      var status =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "failure", "build", "d");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 1, List.of(status)));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(1, result.size());
+      assertEquals("build", result.get(0).name());
+      assertEquals("check-run", result.get(0).type());
+    }
+
+    @Test
+    void shouldKeepNonBotChecksWhoseAppAndNameDoNotMatch() {
+      // Apps present but not ThrillhouseBot (one with a name, one without), plus a null-named run.
+      var appWithName =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
+              9L, "github-actions", "GitHub Actions");
+      var appNoName = new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(8L, "circleci", null);
+      var named =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "completed", "failure", appWithName);
+      var namelessApp =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              3L, "deploy", "completed", "failure", appNoName);
+      var nullNamed =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, null, "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  3, List.of(named, namelessApp, nullNamed)));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(3, result.size());
+      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.stream().anyMatch(c -> "deploy".equals(c.name())));
+    }
+
+    @Test
     void shouldHandleNullChecksAndStatusesGracefully() {
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, null));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CombinedStatus("pending", 0, null));
 
       var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
@@ -3076,13 +3284,244 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldHandleExceptionsGracefully() {
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenThrow(new RuntimeException("failed"));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any()))
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenThrow(new RuntimeException("failed"));
 
       var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
       assertTrue(result.isEmpty());
+    }
+  }
+
+  @Nested
+  class CiGatingThroughReview {
+
+    private void stubCommonReviewMocks(GitHubCheckRunClient.CheckRunsResponse checkRuns) {
+      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Test PR",
+                  "",
+                  new GitHubPullRequestClient.Ref("abcdefgh", "feature"),
+                  new GitHubPullRequestClient.Ref("base1234567", "main")));
+      when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+      doNothing()
+          .when(checkRunClient)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of());
+      when(checkRunClient.getRequiredStatusChecks(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(checkRuns);
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+      when(prClient.compareCommits(
+              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of());
+      when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    }
+
+    private ReviewOrchestrator.ReviewRequest request() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 42, "abcdefgh", "Test PR", "", "base1234567", "main", 123L, false);
+    }
+
+    @Test
+    void reviewShouldApproveWhenRequiredChecksPass() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        // The single required check ("build") has already succeeded — APPROVE must stand.
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+
+        orchestrator.review(request());
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+      }
+    }
+
+    @Test
+    void reviewShouldDowngradeToCommentWhenRequiredCheckFails() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        // The required check ("build") is failing — a would-be APPROVE must become COMMENT.
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "failure", null))));
+
+        orchestrator.review(request());
+
+        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        verify(reviewClient)
+            .createReview(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+        var req = captor.getValue();
+        assertEquals("COMMENT", req.event());
+        assertTrue(req.body().contains("**build**"));
+        assertTrue(req.body().contains("failed"));
+      }
+    }
+
+    @Test
+    void reviewShouldFallBackWhenBaseRefMissing() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+        // Base ref is null: required-status-checks must not be fetched and gating falls back to
+        // all checks (which are green here), so the review still approves.
+        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "Test PR",
+                    "",
+                    new GitHubPullRequestClient.Ref("abcdefgh", "feature"),
+                    new GitHubPullRequestClient.Ref("base1234567", null)));
+
+        orchestrator.review(request());
+
+        verify(checkRunClient, never())
+            .getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+      }
+    }
+
+    @Test
+    void reviewShouldHandleNullProtectionResponse() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+        // Branch protection lookup returns null (e.g. unprotected branch) — gating falls back to
+        // all checks; all green here, so the review approves.
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(null);
+
+        orchestrator.review(request());
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+      }
+    }
+
+    @Test
+    void reviewShouldFallBackWhenBaseIsNull() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+        // The PR has no base ref object at all — required checks are not fetched.
+        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "Test PR", "", new GitHubPullRequestClient.Ref("abcdefgh", "feature"), null));
+
+        orchestrator.review(request());
+
+        verify(checkRunClient, never())
+            .getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+      }
     }
   }
 
@@ -3131,7 +3570,9 @@ class ReviewOrchestratorTest {
       assertTrue(body.contains("some checks are still pending or failed:"));
       assertTrue(body.contains("- Check **build** is failed"));
       assertTrue(body.contains("- Check **lint** is pending"));
-      assertTrue(body.contains("Additionally, 1 previous finding"));
+      assertTrue(
+          body.contains(
+              "Additionally, No new issues in this revision, but 1 previous finding(s) remain unresolved"));
     }
   }
 

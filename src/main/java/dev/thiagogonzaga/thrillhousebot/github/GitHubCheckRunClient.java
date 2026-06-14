@@ -65,7 +65,9 @@ public interface GitHubCheckRunClient {
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
-      @PathParam("ref") String ref);
+      @PathParam("ref") String ref,
+      @QueryParam("per_page") @DefaultValue("100") int perPage,
+      @QueryParam("page") @DefaultValue("1") int page);
 
   @GET
   @Path("/repos/{owner}/{repo}/commits/{ref}/status")
@@ -75,7 +77,9 @@ public interface GitHubCheckRunClient {
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
-      @PathParam("ref") String ref);
+      @PathParam("ref") String ref,
+      @QueryParam("per_page") @DefaultValue("100") int perPage,
+      @QueryParam("page") @DefaultValue("1") int page);
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record RequiredStatusChecks(List<String> contexts, List<Check> checks) {

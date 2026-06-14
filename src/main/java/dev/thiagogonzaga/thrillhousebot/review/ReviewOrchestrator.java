@@ -34,8 +34,14 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.IntFunction;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 @ApplicationScoped
@@ -52,6 +58,22 @@ public class ReviewOrchestrator {
 
   // Check run conclusion constants
   private static final String CONCLUSION_FAILURE = "failure";
+
+  // CI check evaluation constants
+  private static final String CI_SUCCESS = "success";
+  private static final String CI_PENDING = "pending";
+  private static final String CI_FAILING = "failing";
+
+  // Lowercased token identifying ThrillhouseBot's own checks/apps among CI results.
+  private static final String THRILLHOUSEBOT_TOKEN = "thrillhousebot";
+
+  // Check-run conclusions that count as a passing check (everything else is a failure)
+  private static final Set<String> PASSING_CONCLUSIONS = Set.of(CI_SUCCESS, "skipped", "neutral");
+
+  // CI status pagination: GitHub serves at most 100 rows per page; the loop stops on a short page.
+  // Package-private so the pagination guard can be exercised in tests without 5000 mock rows.
+  static final int CI_PER_PAGE = 100;
+  static final int CI_MAX_PAGES = 50;
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -251,25 +273,9 @@ public class ReviewOrchestrator {
               aiResponse, priorAiResponseJsons, inlineComments, BOT_LOGIN);
       persistAiResponse(session, aiResponse);
 
-      // Fetch required status checks and evaluate CI checks on the head SHA
-      List<String> requiredContexts = null;
-      try {
-        var prDetails =
-            prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
-        if (prDetails != null && prDetails.base() != null && prDetails.base().ref() != null) {
-          var targetBranch = prDetails.base().ref();
-          var protection =
-              checkRunClient.getRequiredStatusChecks(
-                  auth, ACCEPT, req.owner(), req.repo(), targetBranch);
-          if (protection != null) {
-            requiredContexts = protection.contexts();
-          }
-        }
-      } catch (Exception e) {
-        Log.warnf(
-            e, "Could not fetch required status checks for branch, falling back to all checks");
-      }
-
+      // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
+      // "could not determine required checks" — evaluateCiChecks then gates on all checks (null).
+      List<String> requiredContexts = resolveRequiredContexts(auth, req).orElse(null);
       List<ReviewResult.CiCheck> offendingCiChecks =
           evaluateCiChecks(auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
@@ -662,27 +668,35 @@ public class ReviewOrchestrator {
   }
 
   static String checkTitleForResult(ReviewResult result) {
-    if (!result.hasIssues() && unresolvedPreviousCount(result) == 0) {
+    if (!result.hasIssues()
+        && unresolvedPreviousCount(result) == 0
+        && result.offendingCiChecks().isEmpty()) {
       return CHECK_NAME + " ✅";
     }
     return CHECK_NAME;
   }
 
   static String checkSummaryForResult(ReviewResult result) {
-    if (!result.hasIssues()) {
-      var unresolved = unresolvedPreviousCount(result);
-      if (unresolved == 0) {
-        return ZERO_ISSUES_MESSAGE;
-      }
-      return unresolvedPreviousMessage(unresolved);
+    if (result.hasIssues()) {
+      return String.format(
+          "%d findings: %d critical, %d high, %d medium, %d low",
+          result.totalFindings(),
+          result.criticalCount(),
+          result.highCount(),
+          result.mediumCount(),
+          result.lowCount());
     }
-    return String.format(
-        "%d findings: %d critical, %d high, %d medium, %d low",
-        result.totalFindings(),
-        result.criticalCount(),
-        result.highCount(),
-        result.mediumCount(),
-        result.lowCount());
+    // No new findings — surface CI gating first, since it also holds approval back.
+    if (!result.offendingCiChecks().isEmpty()) {
+      return String.format(
+          "No new issues found, but %d required CI check(s) are still pending or failing.",
+          result.offendingCiChecks().size());
+    }
+    var unresolved = unresolvedPreviousCount(result);
+    if (unresolved == 0) {
+      return ZERO_ISSUES_MESSAGE;
+    }
+    return unresolvedPreviousMessage(unresolved);
   }
 
   static long unresolvedPreviousCount(ReviewResult result) {
@@ -810,51 +824,11 @@ public class ReviewOrchestrator {
     dismissPendingBotReviews(auth, owner, repo, prNumber);
 
     if (!result.hasIssues()) {
-      if (result.reviewState() == ReviewState.APPROVE) {
-        // On a first review the celebration is part of the summary comment, so the approval
-        // itself carries no body; follow-ups post no summary and keep the message here
-        var req =
-            new GitHubReviewClient.CreateReviewRequest(
-                commitSha, result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE, "APPROVE", List.of());
-        createReviewWithFallback(auth, owner, repo, prNumber, req);
-        return;
-      }
-      // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
-      // never claim a clean review
-      String body;
-      if (!result.offendingCiChecks().isEmpty()) {
-        var sb = new StringBuilder();
-        sb.append(
-            "ThrillhouseBot found no issues in this PR, but some checks are still pending or failed:\n");
-        for (var check : result.offendingCiChecks()) {
-          String status = check.isFailing() ? "failed" : "pending";
-          sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
-        }
-        long unresolved = unresolvedPreviousCount(result);
-        if (unresolved > 0) {
-          sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
-        }
-        body = sb.toString();
-      } else {
-        body = unresolvedPreviousMessage(unresolvedPreviousCount(result));
-      }
-      var req =
-          new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              body,
-              result.reviewState() == ReviewState.REQUEST_CHANGES ? "REQUEST_CHANGES" : "COMMENT",
-              List.of());
-      createReviewWithFallback(auth, owner, repo, prNumber, req);
+      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
       return;
     }
 
-    var patchesByFile = new HashMap<String, String>();
-    for (var file : diffFormatter.reviewableFiles(files)) {
-      if (file.patch() != null && !file.patch().isBlank()) {
-        patchesByFile.put(file.filename(), file.patch());
-      }
-    }
-    var lineResolver = new DiffLineResolver(patchesByFile);
+    var lineResolver = new DiffLineResolver(patchesByFile(files));
     var posted = postInlineComments(auth, owner, repo, prNumber, commitSha, result, lineResolver);
 
     if (result.reviewState() == ReviewState.REQUEST_CHANGES && posted > 0) {
@@ -873,6 +847,62 @@ public class ReviewOrchestrator {
           "No inline comments posted for %s/%s #%d — findings are in the PR summary comment only",
           owner, repo, prNumber);
     }
+  }
+
+  /**
+   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why.
+   */
+  private void postNoIssuesReview(
+      String auth, String owner, String repo, int prNumber, String commitSha, ReviewResult result) {
+    if (result.reviewState() == ReviewState.APPROVE) {
+      // On a first review the celebration is part of the summary comment, so the approval itself
+      // carries no body; follow-ups post no summary and keep the message here.
+      var req =
+          new GitHubReviewClient.CreateReviewRequest(
+              commitSha, result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE, "APPROVE", List.of());
+      createReviewWithFallback(auth, owner, repo, prNumber, req);
+      return;
+    }
+    // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
+    // never claim a clean review.
+    var req =
+        new GitHubReviewClient.CreateReviewRequest(
+            commitSha,
+            noIssuesBody(result),
+            result.reviewState() == ReviewState.REQUEST_CHANGES ? "REQUEST_CHANGES" : "COMMENT",
+            List.of());
+    createReviewWithFallback(auth, owner, repo, prNumber, req);
+  }
+
+  /**
+   * Body for a no-new-findings COMMENT review: failing/pending CI checks and/or unresolved items.
+   */
+  private String noIssuesBody(ReviewResult result) {
+    long unresolved = unresolvedPreviousCount(result);
+    if (result.offendingCiChecks().isEmpty()) {
+      return unresolvedPreviousMessage(unresolved);
+    }
+    var sb = new StringBuilder();
+    sb.append(
+        "ThrillhouseBot found no issues in this PR, but some checks are still pending or failed:\n");
+    for (var check : result.offendingCiChecks()) {
+      String status = check.isFailing() ? "failed" : CI_PENDING;
+      sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
+    }
+    if (unresolved > 0) {
+      sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
+    }
+    return sb.toString();
+  }
+
+  private Map<String, String> patchesByFile(List<GitHubPullRequestClient.FileDiff> files) {
+    var patchesByFile = new HashMap<String, String>();
+    for (var file : diffFormatter.reviewableFiles(files)) {
+      if (file.patch() != null && !file.patch().isBlank()) {
+        patchesByFile.put(file.filename(), file.patch());
+      }
+    }
+    return patchesByFile;
   }
 
   /**
@@ -1004,112 +1034,171 @@ public class ReviewOrchestrator {
     }
   }
 
+  /**
+   * Resolves the required status-check contexts for the PR's target branch, returning {@code null}
+   * (gate on all checks) when the branch is unprotected or the lookup fails.
+   */
+  private Optional<List<String>> resolveRequiredContexts(String auth, ReviewRequest req) {
+    try {
+      var prDetails =
+          prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      if (prDetails == null || prDetails.base() == null || prDetails.base().ref() == null) {
+        return Optional.empty();
+      }
+      var protection =
+          checkRunClient.getRequiredStatusChecks(
+              auth, ACCEPT, req.owner(), req.repo(), prDetails.base().ref());
+      return protection == null ? Optional.empty() : Optional.of(protection.contexts());
+    } catch (Exception e) {
+      Log.warnf(e, "Could not fetch required status checks for branch, falling back to all checks");
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Returns only the <em>offending</em> CI checks on {@code commitSha} — those that are pending,
+   * failing, or (when required) missing entirely. Passing checks are deliberately excluded so the
+   * caller can gate APPROVE on a non-empty result; a successful required check is recorded in
+   * {@code seen} so it is not later mistaken for a missing one.
+   */
   List<ReviewResult.CiCheck> evaluateCiChecks(
       String auth, String owner, String repo, String commitSha, List<String> requiredContexts) {
-    List<ReviewResult.CiCheck> checks = new ArrayList<>();
+    var offending = new ArrayList<ReviewResult.CiCheck>();
+    // Required contexts that reported in any state, so the missing-check pass does not re-flag a
+    // green check as pending.
+    var seen = new HashSet<String>();
+    // Contexts already recorded as offending, so a check reported through BOTH the Check Runs API
+    // and the Commit Status API is not listed twice.
+    var offendingNames = new HashSet<String>();
 
-    // 1. Get Check Runs
     try {
-      var checkRunsResponse = checkRunClient.getCheckRuns(auth, ACCEPT, owner, repo, commitSha);
-      if (checkRunsResponse != null && checkRunsResponse.checkRuns() != null) {
-        for (var run : checkRunsResponse.checkRuns()) {
-          // Ignore ThrillhouseBot's own check runs
-          if (isThrillhouseBotCheck(run.name(), run.app())) {
-            continue;
-          }
-
-          // If requiredContexts is provided, check if this run is in it
-          if (requiredContexts != null && !requiredContexts.contains(run.name())) {
-            continue;
-          }
-
-          String ciStatus = "success";
-          if (!"completed".equalsIgnoreCase(run.status())) {
-            ciStatus = "pending";
-          } else if (run.conclusion() == null
-              || !List.of("success", "skipped", "neutral")
-                  .contains(run.conclusion().toLowerCase(java.util.Locale.ROOT))) {
-            ciStatus = "failing";
-          }
-
-          checks.add(new ReviewResult.CiCheck(run.name(), "check-run", ciStatus, run.conclusion()));
-        }
-      }
+      collectPaged(
+          page -> {
+            var resp =
+                checkRunClient.getCheckRuns(
+                    auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
+            return resp == null ? null : resp.checkRuns();
+          },
+          run -> addOffendingCheckRun(run, requiredContexts, seen, offendingNames, offending));
     } catch (Exception e) {
       Log.warnf(e, "Failed to fetch check runs for commit %s", commitSha);
     }
 
-    // 2. Get Combined Statuses
     try {
-      var combinedStatus = checkRunClient.getCombinedStatus(auth, ACCEPT, owner, repo, commitSha);
-      if (combinedStatus != null && combinedStatus.statuses() != null) {
-        for (var status : combinedStatus.statuses()) {
-          if (isThrillhouseBotCheck(status.context(), null)) {
-            continue;
-          }
-
-          if (requiredContexts != null && !requiredContexts.contains(status.context())) {
-            continue;
-          }
-
-          String ciStatus = "success";
-          if ("pending".equalsIgnoreCase(status.state())) {
-            ciStatus = "pending";
-          } else if ("failure".equalsIgnoreCase(status.state())
-              || "error".equalsIgnoreCase(status.state())) {
-            ciStatus = "failing";
-          }
-
-          checks.add(
-              new ReviewResult.CiCheck(status.context(), "status", ciStatus, status.state()));
-        }
-      }
+      collectPaged(
+          page -> {
+            var resp =
+                checkRunClient.getCombinedStatus(
+                    auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
+            return resp == null ? null : resp.statuses();
+          },
+          status -> addOffendingStatus(status, requiredContexts, seen, offendingNames, offending));
     } catch (Exception e) {
       Log.warnf(e, "Failed to fetch combined status for commit %s", commitSha);
     }
 
-    // 3. If requiredContexts is provided, check if any required contexts are missing entirely
-    if (requiredContexts != null) {
-      for (String required : requiredContexts) {
-        // ThrillhouseBot itself must never be added as missing/pending
-        if (isThrillhouseBotCheck(required, null)) {
-          continue;
-        }
-        boolean found = false;
-        for (var check : checks) {
-          if (required.equals(check.name())) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          // A required check that hasn't reported anything is implicitly pending
-          checks.add(new ReviewResult.CiCheck(required, "missing", "pending", null));
-        }
+    addMissingRequiredChecks(requiredContexts, seen, offending);
+    return offending;
+  }
+
+  /**
+   * Pages through a GitHub list endpoint, applying {@code consume} to every row. Stops on an empty
+   * or short page (GitHub's last-page marker) or once {@link #CI_MAX_PAGES} is reached.
+   */
+  private static <T> void collectPaged(IntFunction<List<T>> fetchPage, Consumer<T> consume) {
+    List<T> page = null;
+    for (int p = 1; p <= CI_MAX_PAGES && (page == null || page.size() == CI_PER_PAGE); p++) {
+      page = fetchPage.apply(p);
+      if (page == null) {
+        page = List.of();
+      }
+      page.forEach(consume);
+    }
+  }
+
+  private void addOffendingCheckRun(
+      GitHubCheckRunClient.CheckRunsResponse.CheckRun run,
+      List<String> requiredContexts,
+      Set<String> seen,
+      Set<String> offendingNames,
+      List<ReviewResult.CiCheck> offending) {
+    if (isThrillhouseBotCheck(run.name(), run.app())
+        || isNotRequired(run.name(), requiredContexts)) {
+      return;
+    }
+    seen.add(run.name());
+    String ciStatus = classifyCheckRun(run.status(), run.conclusion());
+    if (!CI_SUCCESS.equals(ciStatus) && offendingNames.add(run.name())) {
+      offending.add(new ReviewResult.CiCheck(run.name(), "check-run", ciStatus, run.conclusion()));
+    }
+  }
+
+  private void addOffendingStatus(
+      GitHubCheckRunClient.CombinedStatus.StatusDetail status,
+      List<String> requiredContexts,
+      Set<String> seen,
+      Set<String> offendingNames,
+      List<ReviewResult.CiCheck> offending) {
+    if (isThrillhouseBotCheck(status.context(), null)
+        || isNotRequired(status.context(), requiredContexts)) {
+      return;
+    }
+    seen.add(status.context());
+    String ciStatus = classifyStatus(status.state());
+    if (!CI_SUCCESS.equals(ciStatus) && offendingNames.add(status.context())) {
+      offending.add(new ReviewResult.CiCheck(status.context(), "status", ciStatus, status.state()));
+    }
+  }
+
+  /** Required contexts that never reported are implicitly pending. */
+  private void addMissingRequiredChecks(
+      List<String> requiredContexts, Set<String> seen, List<ReviewResult.CiCheck> offending) {
+    if (requiredContexts == null) {
+      return;
+    }
+    for (String required : requiredContexts) {
+      // seen.add is false when the context already reported (or is a duplicate entry) — skip those.
+      if (!isThrillhouseBotCheck(required, null) && seen.add(required)) {
+        offending.add(new ReviewResult.CiCheck(required, "missing", CI_PENDING, null));
       }
     }
+  }
 
-    return checks;
+  private static boolean isNotRequired(String name, List<String> requiredContexts) {
+    return requiredContexts != null && !requiredContexts.contains(name);
+  }
+
+  /** Maps a check-run status/conclusion pair to one of success/pending/failing. */
+  private static String classifyCheckRun(String status, String conclusion) {
+    if (!CHECK_STATUS_COMPLETED.equalsIgnoreCase(status)) {
+      return CI_PENDING;
+    }
+    if (conclusion == null || !PASSING_CONCLUSIONS.contains(conclusion.toLowerCase(Locale.ROOT))) {
+      return CI_FAILING;
+    }
+    return CI_SUCCESS;
+  }
+
+  /** Maps a commit-status state to one of success/pending/failing. */
+  private static String classifyStatus(String state) {
+    if (CI_PENDING.equalsIgnoreCase(state)) {
+      return CI_PENDING;
+    }
+    if (CONCLUSION_FAILURE.equalsIgnoreCase(state) || "error".equalsIgnoreCase(state)) {
+      return CI_FAILING;
+    }
+    return CI_SUCCESS;
   }
 
   private boolean isThrillhouseBotCheck(
       String name, GitHubCheckRunClient.CheckRunsResponse.CheckRun.App app) {
-    if (name != null) {
-      if (name.equalsIgnoreCase(CHECK_NAME)
-          || name.toLowerCase(java.util.Locale.ROOT).contains("thrillhousebot")) {
-        return true;
-      }
+    if (name != null && (name.equalsIgnoreCase(CHECK_NAME) || containsBotToken(name))) {
+      return true;
     }
-    if (app != null) {
-      if (app.slug() != null
-          && app.slug().toLowerCase(java.util.Locale.ROOT).contains("thrillhousebot")) {
-        return true;
-      }
-      if (app.name() != null
-          && app.name().toLowerCase(java.util.Locale.ROOT).contains("thrillhousebot")) {
-        return true;
-      }
-    }
-    return false;
+    return app != null && (containsBotToken(app.slug()) || containsBotToken(app.name()));
+  }
+
+  private static boolean containsBotToken(String value) {
+    return value != null && value.toLowerCase(Locale.ROOT).contains(THRILLHOUSEBOT_TOKEN);
   }
 }
