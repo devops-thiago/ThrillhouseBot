@@ -237,7 +237,14 @@ public class DashboardAccessChecker {
       }
     } catch (RuntimeException e) {
       log.warn("Failed to list installed repositories for {}: {}", accountOwner, e.getMessage());
-      return cachedSnapshot.get();
+      // Fail closed on owner mismatch: the cached snapshot may belong to a previous owner, so
+      // returning it here would re-introduce the cross-owner reuse this cache is keyed to prevent.
+      // Only fall back to it when it was resolved for the same owner (graceful degradation during a
+      // transient GitHub outage); otherwise deny by returning an empty snapshot for this owner.
+      var previous = cachedSnapshot.get();
+      return accountOwner.equalsIgnoreCase(previous.owner())
+          ? previous
+          : new RepoSnapshot(accountOwner, List.of(), null, Instant.EPOCH);
     }
 
     var updated = new RepoSnapshot(accountOwner, List.copyOf(repos), installationAuth, clock.get());

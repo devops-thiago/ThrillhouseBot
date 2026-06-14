@@ -550,6 +550,89 @@ class DashboardAccessCheckerTest {
         .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
+  @Test
+  void shouldFailClosedWhenRefetchForNewOwnerFails() {
+    // First access check caches a usable RepoSnapshot for "myowner" (auth + repos present).
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab-user"));
+
+    // Owner changes to "newowner", but resolving its installation token fails transiently.
+    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("newowner"));
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("newowner", 200L)));
+    when(authClient.getAuthHeader(200L)).thenThrow(new RuntimeException("GitHub unavailable"));
+
+    // Advance past access cache TTL so the per-login result expires and access is re-evaluated.
+    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
+
+    // The error fallback must NOT serve "myowner"'s cached repos/token for "newowner": a
+    // collaborator of the previous owner must be denied, not authorized against the wrong repos.
+    assertFalse(checker.hasAccess("collab-user"));
+    // "myowner"'s repos are checked only during the first evaluation, never again via the fallback.
+    verify(installationClient, times(1))
+        .checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), anyString(), eq("collab-user"));
+  }
+
+  @Test
+  void shouldReuseCachedSnapshotForSameOwnerWhenRefreshFails() {
+    // First check caches a usable snapshot for "myowner"; the refresh token fails on the next call.
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L))
+        .thenReturn("Bearer inst-token")
+        .thenThrow(new RuntimeException("GitHub unavailable"));
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(collab);
+
+    assertTrue(checker.hasAccess("collab-user"));
+
+    // Advance past both the access cache (5 min) and the repo cache (10 min) so the snapshot is
+    // re-fetched; the re-fetch then fails transiently while the owner is unchanged.
+    now.set(now.get().plus(java.time.Duration.ofMinutes(11)));
+
+    // Graceful degradation: the cached snapshot belongs to the same owner, so it is reused rather
+    // than locking everyone out during a transient GitHub outage.
+    assertTrue(checker.hasAccess("collab-user"));
+  }
+
+  @Test
+  void shouldNotCacheMissingInstallationAndRetryWhenItAppears() {
+    // No matching installation exists yet, so the first lookup resolves no repos.
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of());
+
+    assertFalse(checker.hasAccess("collab-user"));
+    verify(installationClient, times(1))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
+
+    // The installation now appears for "myowner" with the collaborator's repo.
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    Response collab = mock(Response.class);
+    when(collab.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(collab);
+
+    // Advance past access cache TTL (5 min) but within repo cache TTL (10 min): the prior negative
+    // (null-auth) snapshot must not be reused — the installation lookup must be retried.
+    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
+
+    assertTrue(checker.hasAccess("collab-user"));
+    verify(installationClient, times(2))
+        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
+  }
+
   private void stubInstalledRepo(String owner, String repo) {
     when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(List.of(installationFor(owner, 99L)));
