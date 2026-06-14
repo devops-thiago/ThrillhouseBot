@@ -62,6 +62,13 @@ LangChain4j's OpenAI-compatible client, so a new provider is configuration: poin
 [README provider table](README.md#provider-support) lists the ones that are known
 to work.
 
+## Releasing
+
+Maintainers cut releases by tagging `vX.Y.Z`; the pipeline promotes images,
+publishes the GitHub release, and opens the next `-SNAPSHOT` bump PR. See
+[docs/RELEASING.md](docs/RELEASING.md) for the full flow and the one-time setup
+that keeps the bump PR fully automated.
+
 ## Reporting security issues
 
 Please **do not** open a public issue — see [SECURITY.md](SECURITY.md).

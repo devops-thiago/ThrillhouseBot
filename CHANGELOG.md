@@ -8,6 +8,15 @@ All notable changes to ThrillhouseBot.
 
 - **CI**: consolidated the seven duplicated Trivy scan + SARIF-upload steps across `ci.yml`, `release.yml`, and `security-scan.yml` into a single `.github/actions/trivy-scan` composite action, centralizing the pinned action SHA, Trivy version, `format: sarif`, and the `limit-severities-for-sarif` flag. The CI filesystem scan now applies `limit-severities-for-sarif` like every other scan (closes the gap tracked in #76).
 
+### Fixed
+
+- **Release bump automation**: the `bump-version` job no longer masks the
+  `createPullRequest` permission error. With the repo's "Allow GitHub Actions to
+  create and approve pull requests" setting enabled it opens the bump PR using
+  the default token; otherwise it pushes the branch and opens a tracking issue
+  instead of silently failing. The push is idempotent on release re-runs. New
+  release docs in [docs/RELEASING.md](docs/RELEASING.md).
+
 ## [0.1.0] — 2026-06-12
 
 ### Added

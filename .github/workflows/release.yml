@@ -311,7 +311,12 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
     steps:
+      # Opening the bump PR relies on the repo setting Settings → Actions → General →
+      # "Allow GitHub Actions to create and approve pull requests" so the default
+      # GITHUB_TOKEN may open it. If that setting is off, the branch is still pushed and a
+      # tracking issue is opened instead — the bump is never lost. See docs/RELEASING.md.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
@@ -342,9 +347,12 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
-      - run: ./mvnw -q versions:set -DnewVersion=${{ steps.next.outputs.version }} -DgenerateBackupPoms=false
+      - name: Apply next snapshot version to pom.xml
         if: steps.next.outputs.skip != 'true'
-      - name: Open bump PR
+        env:
+          NEXT: ${{ steps.next.outputs.version }}
+        run: ./mvnw -q versions:set -DnewVersion="$NEXT" -DgenerateBackupPoms=false
+      - name: Open or update bump PR
         if: steps.next.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -358,10 +366,63 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="chore/bump-${NEXT}"
+          TITLE="chore: bump version to ${NEXT}"
+          BODY="Moves \`main\` to \`${NEXT}\` after ${TAG}."
           git checkout -b "$BRANCH"
-          git commit -am "chore: bump version to ${NEXT} after ${TAG}"
-          git push -f origin "$BRANCH"
-          gh pr create --base main --head "$BRANCH" \
-            --title "chore: bump version to ${NEXT}" \
-            --body "Moves main to ${NEXT} after ${TAG}." \
-            || echo "PR already exists"
+          git commit -am "${TITLE} after ${TAG}"
+          # Avoid churning an already-open bump PR (and re-triggering its CI) on release
+          # re-runs: only force-push when the remote branch doesn't already carry this bump.
+          if git fetch origin "$BRANCH" 2>/dev/null && git diff --quiet FETCH_HEAD HEAD; then
+            echo "origin/${BRANCH} already carries this bump; not force-pushing"
+          else
+            git push -f origin "$BRANCH"
+          fi
+
+          # Try to open the PR. This needs the repo setting "Allow GitHub Actions to
+          # create and approve pull requests" (Settings → Actions → General); without it
+          # the default GITHUB_TOKEN cannot open PRs. Distinguish the three outcomes
+          # instead of masking failures:
+          #   - success or an existing PR -> done
+          #   - Actions-not-permitted     -> open a tracking issue (never lose the bump)
+          #   - anything else             -> fail loudly
+          if gh pr create --base main --head "$BRANCH" \
+              --title "$TITLE" --body "$BODY" 2>pr_err.log; then
+            echo "Opened bump PR for ${BRANCH}"
+            exit 0
+          fi
+          cat pr_err.log
+
+          if grep -qi "already exists" pr_err.log; then
+            echo "Bump PR for ${BRANCH} already exists; nothing to do"
+            exit 0
+          fi
+
+          if ! grep -qi "not permitted to create or approve pull requests" pr_err.log; then
+            echo "::error::Failed to open bump PR for an unexpected reason (see log above)"
+            exit 1
+          fi
+
+          echo "::warning::GitHub Actions is not permitted to open PRs; opening a tracking issue instead. Enable Settings → Actions → General → \"Allow GitHub Actions to create and approve pull requests\" to let releases open the bump PR automatically. See docs/RELEASING.md."
+          ISSUE_TITLE="Release follow-up: open bump PR for ${NEXT}"
+          EXISTING=$(gh issue list --state open --limit 100 --json number,title \
+            -q ".[] | select(.title == \"${ISSUE_TITLE}\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Tracking issue #${EXISTING} for ${NEXT} already open; nothing to do"
+            exit 0
+          fi
+          gh issue create --title "$ISSUE_TITLE" --body "$(cat <<EOF
+          The release of \`${TAG}\` succeeded, but the automated version-bump PR could
+          not be opened because GitHub Actions is not permitted to create pull requests.
+
+          Branch \`${BRANCH}\` has been pushed with the bump to \`${NEXT}\`. Open the PR
+          to finish moving \`main\` to the next snapshot:
+
+          \`\`\`bash
+          gh pr create --base main --head ${BRANCH} --title "${TITLE}" --body "${BODY}"
+          \`\`\`
+
+          To open this PR automatically on future releases, enable the repo setting
+          **Settings → Actions → General → "Allow GitHub Actions to create and approve
+          pull requests"**. See [docs/RELEASING.md](docs/RELEASING.md).
+          EOF
+          )"
