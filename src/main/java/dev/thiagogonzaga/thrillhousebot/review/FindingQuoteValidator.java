@@ -25,6 +25,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Deterministic guard against findings that quote code which is not in the diff. The model
@@ -37,11 +38,34 @@ import java.util.Set;
  * <p>The check is conservative: a finding is dropped only when none of its quoted lines exist in
  * the diff (pure phantom). When the quote is partially wrong, the unreliable suggestion block is
  * removed and confidence is capped at "low" so the finding can still surface but cannot block.
+ *
+ * <p>The same demotion applies when a finding's {@code suggestion_old} genuinely matches the diff
+ * but its free-text {@code description} cites a chained call expression as existing source that
+ * appears nowhere in scope — the fabricated mechanism is treated like a partial quote. Only
+ * distinctive {@code receiver.member(...)} chains are checked, so bare method names that simply
+ * fall outside the diff window are never penalized.
  */
 @ApplicationScoped
 public class FindingQuoteValidator {
 
   private static final String LOW_CONFIDENCE = "low";
+
+  /** Shared tail of every log line that strips a suggestion and caps confidence. */
+  private static final String DEMOTION_SUFFIX = " dropping its suggestion and capping confidence";
+
+  /**
+   * A chained call expression: a receiver followed by one or more {@code .member} segments, with
+   * optional argument lists. Single names like {@code installedRepos()} are deliberately excluded —
+   * they are too common to flag against the diff's narrow window. A match is only treated as a code
+   * citation when it actually contains a call ({@code '('}). Quantifiers are possessive: each class
+   * never overlaps the token that follows it, so no backtracking is ever needed and large inputs
+   * cannot trigger catastrophic backtracking.
+   */
+  private static final Pattern CHAINED_CALL =
+      Pattern.compile(
+          "[A-Za-z_$][A-Za-z0-9_$]*+(?:\\([^()]*+\\))?+(?:\\.[A-Za-z_$][A-Za-z0-9_$]*+(?:\\([^()]*+\\))?+)++");
+
+  private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
   public record DiffLine(String normalizedText, int rightLineNum, char marker) {}
 
@@ -60,20 +84,37 @@ public class FindingQuoteValidator {
         match = checkAmbiguity(quoted, finding.line(), index.diffLinesFor(finding.file()));
       }
       switch (match) {
-        case FULL, NO_QUOTE -> kept.add(finding);
+        case FULL, NO_QUOTE -> {
+          if (descriptionCitesAbsentCode(finding, index)) {
+            Log.infof(
+                "Finding '%s' (%s:%d) cites code in its description that appears nowhere in the diff —"
+                    + DEMOTION_SUFFIX,
+                finding.title(),
+                finding.file(),
+                finding.line());
+            kept.add(withoutSuggestion(finding));
+            changed = true;
+          } else {
+            kept.add(finding);
+          }
+        }
         case PARTIAL -> {
           Log.infof(
               "Finding '%s' (%s:%d) quotes code only partially present in the diff —"
-                  + " dropping its suggestion and capping confidence",
-              finding.title(), finding.file(), finding.line());
+                  + DEMOTION_SUFFIX,
+              finding.title(),
+              finding.file(),
+              finding.line());
           kept.add(withoutSuggestion(finding));
           changed = true;
         }
         case AMBIGUOUS -> {
           Log.infof(
               "Finding '%s' (%s:%d) quotes code that appears in multiple locations, but the finding's line is ambiguous —"
-                  + " dropping its suggestion and capping confidence",
-              finding.title(), finding.file(), finding.line());
+                  + DEMOTION_SUFFIX,
+              finding.title(),
+              finding.file(),
+              finding.line());
           kept.add(withoutSuggestion(finding));
           changed = true;
         }
@@ -107,6 +148,76 @@ public class FindingQuoteValidator {
      * Quote is fully present in multiple locations, but finding line doesn't uniquely select one.
      */
     AMBIGUOUS
+  }
+
+  /**
+   * Whether the finding's description presents, as existing source, a chained call expression that
+   * cannot be found anywhere in the diff scoped to its file. This catches the failure mode where a
+   * genuine {@code suggestion_old} quote passes the gate but the supporting prose invents the
+   * mechanism (e.g. {@code dashboardConfig.accountOwner().orElse(null)} for a method parameter that
+   * is never derived that way). The match is whitespace-insensitive so reformatting can't hide a
+   * real citation — meaning the check only fires when the expression is genuinely absent.
+   */
+  private static boolean descriptionCitesAbsentCode(
+      ReviewResponse.Finding finding, DiffIndex index) {
+    List<String> cited = citedCallExpressions(finding.description());
+    if (cited.isEmpty()) {
+      return false;
+    }
+    List<String> compactedScope = compactedLines(index.diffLinesFor(finding.file()));
+    for (String expression : cited) {
+      if (!appearsIn(expression, compactedScope)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The chained call expressions a description presents as code, e.g. {@code a.b().c(null)}. */
+  private static List<String> citedCallExpressions(String description) {
+    if (description == null || description.isBlank()) {
+      return List.of();
+    }
+    var expressions = new ArrayList<String>();
+    var matcher = CHAINED_CALL.matcher(description);
+    while (matcher.find()) {
+      String expression = matcher.group();
+      // Require an actual call: a dotted field chain (e.g. config.value) or a bare name is not
+      // distinctive enough to flag against the diff's narrow window.
+      if (expression.indexOf('(') >= 0) {
+        expressions.add(expression);
+      }
+    }
+    return expressions;
+  }
+
+  /**
+   * The scoped diff lines with all whitespace removed, compacted once for reuse across citations.
+   */
+  private static List<String> compactedLines(List<DiffLine> scope) {
+    var compacted = new ArrayList<String>(scope.size());
+    for (DiffLine line : scope) {
+      compacted.add(compact(line.normalizedText()));
+    }
+    return compacted;
+  }
+
+  /**
+   * Whether {@code expression} occurs, ignoring whitespace, within any already-compacted diff line.
+   * The expression is always a non-empty call chain (see {@link #citedCallExpressions}).
+   */
+  private static boolean appearsIn(String expression, List<String> compactedScope) {
+    String needle = compact(expression);
+    for (String line : compactedScope) {
+      if (line.contains(needle)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String compact(String text) {
+    return WHITESPACE.matcher(text).replaceAll("");
   }
 
   static QuoteMatch matchQuote(List<String> quoted, Set<String> diffLines) {

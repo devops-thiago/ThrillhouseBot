@@ -508,6 +508,116 @@ class FindingQuoteValidatorTest {
     assertSame(response, validator.validate(response, MULTI_FILE_DIFF));
   }
 
+  private static final String DESCRIPTION_DIFF =
+      """
+      ### DashboardAccessChecker.java (modified, +1 -1)
+      ```diff
+      @@ -220,3 +220,3 @@
+       public List<RepoRef> installedRepos(String accountOwner) {
+      -    return repos.stream().filter(r -> r.owner().equals(accountOwner)).toList();
+      +    return repos.stream().filter(r -> r.owner().equalsIgnoreCase(accountOwner)).toList();
+       }
+      ```
+      """;
+
+  private static final String MATCHED_OLD =
+      "return repos.stream().filter(r -> r.owner().equals(accountOwner)).toList();";
+
+  private static ReviewResponse.Finding describedFinding(String suggestionOld, String description) {
+    return new ReviewResponse.Finding(
+        "medium",
+        "high",
+        "DashboardAccessChecker.java",
+        221,
+        "Potential NullPointerException when accountOwner is null",
+        description,
+        suggestionOld,
+        "fixed");
+  }
+
+  /**
+   * The PR #101 dogfood case: {@code suggestion_old} quotes the real changed line (a FULL match)
+   * but the description's supporting mechanism is a chained call that exists nowhere. The finding
+   * is kept but demoted — suggestion stripped, confidence capped — exactly like a partial quote.
+   */
+  @Test
+  void demotesFindingWhenDescriptionCitesPhantomChainedCall() {
+    var finding =
+        describedFinding(
+            MATCHED_OLD,
+            "accountOwner is obtained from `dashboardConfig.accountOwner().orElse(null)` in"
+                + " evaluateAccess(), so it can be null here.");
+    var response = response(finding);
+
+    var result = validator.validate(response, DESCRIPTION_DIFF);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+    assertEquals("medium", kept.risk());
+  }
+
+  /**
+   * A description that cites no absent chained call leaves the finding untouched: an absent (null
+   * or blank) description, a chained call genuinely in the diff, a bare method name, or a dotted
+   * field access without a call all pass through unchanged.
+   */
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(
+      strings = {
+        // blank: no citations to check
+        "   ",
+        // chained call genuinely present in the diff
+        "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
+        // bare method names are not distinctive enough to flag against the diff window
+        "accountOwner flows from installedRepos() and evaluateAccess(); it may be null.",
+        // a dotted field access without a call is ignored
+        "The configured `dashboardConfig.accountOwner` default is applied here."
+      })
+  void keepsFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
+    var response = response(describedFinding(MATCHED_OLD, description));
+
+    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
+  /** A phantom citation demotes even a finding that carries no suggestion_old of its own. */
+  @Test
+  void demotesQuotelessFindingWhenDescriptionCitesPhantomChainedCall() {
+    var finding =
+        describedFinding(
+            null,
+            "The value from `config.lookup().orElse(null)` is never null-checked before use.");
+    var response = response(finding);
+
+    var result = validator.validate(response, DESCRIPTION_DIFF);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  /**
+   * The NO_QUOTE keep-branch: a finding with no suggestion_old whose description cites no absent
+   * code (a present chained call, or none at all) passes through untouched — distinct from the
+   * FULL-arm keep tests, which all carry a matching suggestion_old.
+   */
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(
+      strings = {
+        // chained call genuinely present in the diff
+        "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
+        // no chained call at all
+        "accountOwner may be null at this point."
+      })
+  void keepsQuotelessFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
+    var response = response(describedFinding(null, description));
+
+    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
   @Test
   void noNewlineIndicatorIsNotQuotableContent() {
     var diff =
