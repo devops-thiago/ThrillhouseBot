@@ -54,11 +54,13 @@ public class FindingQuoteValidator {
    * A chained call expression: a receiver followed by one or more {@code .member} segments, with
    * optional argument lists. Single names like {@code installedRepos()} are deliberately excluded —
    * they are too common to flag against the diff's narrow window. A match is only treated as a code
-   * citation when it actually contains a call ({@code '('}).
+   * citation when it actually contains a call ({@code '('}). Quantifiers are possessive: each class
+   * never overlaps the token that follows it, so no backtracking is ever needed and large inputs
+   * cannot trigger catastrophic backtracking.
    */
   private static final Pattern CHAINED_CALL =
       Pattern.compile(
-          "[A-Za-z_$][A-Za-z0-9_$]*(?:\\([^()]*\\))?(?:\\.[A-Za-z_$][A-Za-z0-9_$]*(?:\\([^()]*\\))?)+");
+          "[A-Za-z_$][A-Za-z0-9_$]*+(?:\\([^()]*+\\))?+(?:\\.[A-Za-z_$][A-Za-z0-9_$]*+(?:\\([^()]*+\\))?+)++");
 
   private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
