@@ -36,6 +36,8 @@ import java.util.stream.Stream;
 @ApplicationScoped
 public class FollowUpAnalyzer {
 
+  private static final String STATUS_UNRESOLVED = "unresolved";
+
   private final ObjectMapper mapper;
 
   @Inject
@@ -431,7 +433,7 @@ public class FollowUpAnalyzer {
     }
     var unresolvedIds = new HashSet<Integer>();
     for (var status : statuses) {
-      if ("unresolved".equalsIgnoreCase(status.status())) {
+      if (STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
         unresolvedIds.add(status.id());
       }
     }
@@ -487,24 +489,33 @@ public class FollowUpAnalyzer {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var i = 0; i < previous.size(); i++) {
       var id = i + 1;
-      if (reportedIds.contains(id)) {
-        continue; // the model accounted for it (resolved/justified/unresolved) — not a silent drop
+      if (isUnreportedAndStillOpen(
+          previous.get(i), id, reportedIds, lineResolver, inlineComments, botLogin)) {
+        held.add(
+            new ReviewResult.PreviousFindingStatus(
+                id,
+                STATUS_UNRESOLVED,
+                "Flagged in an earlier round and still present; not addressed in this revision."));
       }
-      var finding = previous.get(i);
-      // isLineInDiff already rejects a null file, so no separate guard is needed here.
-      if (!lineResolver.isLineInDiff(finding.file(), finding.line(), DUPLICATE_LINE_TOLERANCE)) {
-        continue; // its code is no longer in this round's diff — cannot confirm it is still open
-      }
-      if (answeredRootComment(finding, inlineComments, botLogin) != null) {
-        continue; // a maintainer already engaged on the thread — defer to them, do not auto-hold
-      }
-      held.add(
-          new ReviewResult.PreviousFindingStatus(
-              id,
-              "unresolved",
-              "Flagged in an earlier round and still present; not addressed in this revision."));
     }
     return held;
+  }
+
+  /**
+   * A prior finding (1-based {@code id}) is a still-open silent drop when the model named it in no
+   * status entry, its flagged line is still in the current diff, and no maintainer has replied on
+   * its thread. {@link DiffLineResolver#isLineInDiff} already rejects a null file.
+   */
+  private static boolean isUnreportedAndStillOpen(
+      ReviewResponse.Finding finding,
+      int id,
+      Set<Integer> reportedIds,
+      DiffLineResolver lineResolver,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      String botLogin) {
+    return !reportedIds.contains(id)
+        && lineResolver.isLineInDiff(finding.file(), finding.line(), DUPLICATE_LINE_TOLERANCE)
+        && answeredRootComment(finding, inlineComments, botLogin) == null;
   }
 
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {
@@ -553,6 +564,6 @@ public class FollowUpAnalyzer {
 
   /** Checks if there are any unresolved findings that should be re-flagged. */
   public boolean hasUnresolved(List<ReviewResult.PreviousFindingStatus> statuses) {
-    return statuses.stream().anyMatch(s -> "unresolved".equalsIgnoreCase(s.status()));
+    return statuses.stream().anyMatch(s -> STATUS_UNRESOLVED.equalsIgnoreCase(s.status()));
   }
 }

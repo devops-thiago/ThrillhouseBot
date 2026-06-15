@@ -711,7 +711,7 @@ class FollowUpAnalyzerTest {
   void unreportedUnresolvedShouldSkipAnyFindingTheModelReported() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
-    // Both accounted for (resolved + justified) → nothing held.
+    // Both findings carry a status, one resolved and one justified, so nothing is held.
     assertTrue(
         analyzer
             .unreportedUnresolvedStatuses(
@@ -724,8 +724,8 @@ class FollowUpAnalyzerTest {
                 BOT)
             .isEmpty());
 
-    // id=1 reported (even as unresolved — the existing gate already holds it), id=2 omitted → only
-    // #2 is the silent drop the backstop must reconstruct. Pins the 1-based id mapping.
+    // Finding one is reported and the existing gate already holds it; finding two is omitted, so
+    // only finding two is the silent drop the backstop reconstructs. Pins the 1-based id mapping.
     var held =
         analyzer.unreportedUnresolvedStatuses(
             PREVIOUS_JSON,

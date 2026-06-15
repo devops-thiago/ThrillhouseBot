@@ -15,8 +15,10 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.OptionalInt;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
@@ -50,11 +52,11 @@ public final class DiffLineResolver {
     if (file == null || line <= 0) {
       return false;
     }
-    TreeSet<Integer> lines = rightSideLinesByFile.get(file);
+    NavigableSet<Integer> lines = rightSideLinesByFile.get(file);
     if (lines == null) {
       lines = lookupByPathVariant(file);
     }
-    if (lines == null || lines.isEmpty()) {
+    if (lines.isEmpty()) {
       return false;
     }
     Integer floor = lines.floor(line);
@@ -63,13 +65,13 @@ public final class DiffLineResolver {
         || (ceiling != null && ceiling - line <= tolerance);
   }
 
-  private TreeSet<Integer> lookupByPathVariant(String file) {
+  private NavigableSet<Integer> lookupByPathVariant(String file) {
     for (var entry : rightSideLinesByFile.entrySet()) {
       if (FilePaths.same(file, entry.getKey())) {
         return entry.getValue();
       }
     }
-    return null;
+    return Collections.emptyNavigableSet();
   }
 
   /** Returns the requested line or the nearest commentable line in the same file diff. */
