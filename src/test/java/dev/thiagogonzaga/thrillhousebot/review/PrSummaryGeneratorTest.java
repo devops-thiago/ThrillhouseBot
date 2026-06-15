@@ -221,4 +221,72 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("M1"));
     assertFalse(summary.contains("L1")); // 6th should be excluded
   }
+
+  @Test
+  void shouldShowRequiredCiChecksStatusWhenNotEmpty() {
+    var checks =
+        List.of(
+            new ReviewResult.CiCheck("build", "check-run", "failing", null),
+            new ReviewResult.CiCheck("test", "status", "pending", "pending"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(
+        summary.contains("No new issues found in this PR, but the review cannot be approved"));
+    assertTrue(summary.contains("Required CI Checks Status"));
+    assertTrue(summary.contains("❌ Failed"));
+    assertTrue(summary.contains("⏳ Pending"));
+    assertTrue(summary.contains("**build**"));
+    assertTrue(summary.contains("**test**"));
+  }
+
+  @Test
+  void shouldShowRequiredCiChecksStatusWhenFindingsExist() {
+    var findings = List.of(new Finding(RiskLevel.LOW, "src/A.java", 1, "Nit", "d", null, null));
+    var checks = List.of(new ReviewResult.CiCheck("lint", "status", "failing", "failure"));
+    var result =
+        new ReviewResult(
+            findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(summary.contains("Key Findings"));
+    assertTrue(summary.contains("Required CI Checks Status"));
+    assertTrue(summary.contains("❌ Failed"));
+    assertTrue(summary.contains("**lint**"));
+  }
+
+  @Test
+  void shouldEscapePipesInCiCheckTableCells() {
+    // A check name containing '|' must be escaped so it cannot break the Markdown table layout.
+    var checks =
+        List.of(new ReviewResult.CiCheck("build | strict", "check-run", "failing", "failure"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    assertTrue(summary.contains("build \\| strict"));
+    assertFalse(summary.contains("build | strict"));
+  }
+
+  @Test
+  void shouldRenderDashForNullCheckNameInCiTable() {
+    var checks = List.of(new ReviewResult.CiCheck(null, "missing", "pending", null));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+
+    var summary = generator.generate(1, 10, 2, null, result);
+
+    // A null name/conclusion renders as "-" rather than throwing.
+    assertTrue(summary.contains("Required CI Checks Status"));
+    assertTrue(summary.contains("⏳ Pending"));
+  }
 }

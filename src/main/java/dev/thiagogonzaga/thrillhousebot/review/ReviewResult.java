@@ -30,15 +30,42 @@ public record ReviewResult(
     ReviewState reviewState,
     boolean isFirstReview,
     String summaryMarkdown,
-    List<PreviousFindingStatus> previousStatuses) {
+    List<PreviousFindingStatus> previousStatuses,
+    List<CiCheck> offendingCiChecks) {
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
+    offendingCiChecks = offendingCiChecks == null ? List.of() : List.copyOf(offendingCiChecks);
     // Check-run conclusion derivation relies on a non-null state; fall back to the
     // canonical risk mapping rather than NPE on an inconsistent record
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
+  }
+
+  public ReviewResult(
+      List<Finding> findings,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      RiskLevel highestRisk,
+      ReviewState reviewState,
+      boolean isFirstReview,
+      String summaryMarkdown,
+      List<PreviousFindingStatus> previousStatuses) {
+    this(
+        findings,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        highestRisk,
+        reviewState,
+        isFirstReview,
+        summaryMarkdown,
+        previousStatuses,
+        List.of());
   }
 
   public boolean hasIssues() {
@@ -54,4 +81,15 @@ public record ReviewResult(
       int id,
       String status, // resolved, unresolved, justified
       String note) {}
+
+  @RegisterForReflection
+  public record CiCheck(String name, String type, String status, String conclusion) {
+    public boolean isPending() {
+      return "pending".equalsIgnoreCase(status);
+    }
+
+    public boolean isFailing() {
+      return "failing".equalsIgnoreCase(status);
+    }
+  }
 }

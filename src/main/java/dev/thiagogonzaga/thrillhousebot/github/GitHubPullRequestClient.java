@@ -67,7 +67,11 @@ public interface GitHubPullRequestClient {
 
   record PullRequestDetails(String title, String body, Ref head, Ref base) {}
 
-  record Ref(String sha) {}
+  record Ref(String sha, String ref) {
+    public Ref(String sha) {
+      this(sha, null);
+    }
+  }
 
   record FileDiff(
       String filename,

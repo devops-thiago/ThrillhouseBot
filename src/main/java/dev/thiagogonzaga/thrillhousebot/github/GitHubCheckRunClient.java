@@ -19,6 +19,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 @RegisterRestClient(configKey = "github-api")
@@ -45,6 +46,80 @@ public interface GitHubCheckRunClient {
       @PathParam("repo") String repo,
       @PathParam("checkRunId") long checkRunId,
       UpdateCheckRunRequest request);
+
+  @GET
+  @Path("/repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks")
+  @Produces(MediaType.APPLICATION_JSON)
+  RequiredStatusChecks getRequiredStatusChecks(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("branch") String branch);
+
+  @GET
+  @Path("/repos/{owner}/{repo}/commits/{ref}/check-runs")
+  @Produces(MediaType.APPLICATION_JSON)
+  CheckRunsResponse getCheckRuns(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("ref") String ref,
+      @QueryParam("per_page") @DefaultValue("100") int perPage,
+      @QueryParam("page") @DefaultValue("1") int page);
+
+  @GET
+  @Path("/repos/{owner}/{repo}/commits/{ref}/status")
+  @Produces(MediaType.APPLICATION_JSON)
+  CombinedStatus getCombinedStatus(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("ref") String ref,
+      @QueryParam("per_page") @DefaultValue("100") int perPage,
+      @QueryParam("page") @DefaultValue("1") int page);
+
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record RequiredStatusChecks(List<String> contexts, List<Check> checks) {
+    public List<String> contexts() {
+      return contexts == null ? List.of() : List.copyOf(contexts);
+    }
+
+    public List<Check> checks() {
+      return checks == null ? List.of() : List.copyOf(checks);
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Check(String context, @JsonProperty("app_id") Long appId) {}
+  }
+
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record CheckRunsResponse(
+      @JsonProperty("total_count") int totalCount,
+      @JsonProperty("check_runs") List<CheckRun> checkRuns) {
+    public List<CheckRun> checkRuns() {
+      return checkRuns == null ? List.of() : List.copyOf(checkRuns);
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record CheckRun(long id, String name, String status, String conclusion, App app) {
+      @JsonInclude(JsonInclude.Include.NON_NULL)
+      public record App(@JsonProperty("id") Long id, String slug, String name) {}
+    }
+  }
+
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record CombinedStatus(
+      String state, @JsonProperty("total_count") int totalCount, List<StatusDetail> statuses) {
+    public List<StatusDetail> statuses() {
+      return statuses == null ? List.of() : List.copyOf(statuses);
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record StatusDetail(long id, String state, String context, String description) {}
+  }
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record CreateCheckRunRequest(

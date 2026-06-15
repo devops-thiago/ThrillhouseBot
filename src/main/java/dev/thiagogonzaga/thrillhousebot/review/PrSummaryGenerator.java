@@ -52,21 +52,36 @@ public class PrSummaryGenerator {
     sb.append("| 🟡 Medium | ").append(result.mediumCount()).append(" |\n");
     sb.append("| 🔵 Low | ").append(result.lowCount()).append(" |\n\n");
 
-    if (result.previousStatuses() != null && !result.previousStatuses().isEmpty()) {
-      sb.append("### Previous Findings Status\n");
-      sb.append("| Status | Count |\n");
-      sb.append("|--------|-------|\n");
-      var resolved =
-          result.previousStatuses().stream().filter(s -> "resolved".equals(s.status())).count();
-      var unresolved =
-          result.previousStatuses().stream().filter(s -> "unresolved".equals(s.status())).count();
-      var justified =
-          result.previousStatuses().stream().filter(s -> "justified".equals(s.status())).count();
-      sb.append("| ✅ Resolved | ").append(resolved).append(" |\n");
-      sb.append("| ⚠️ Still present | ").append(unresolved).append(" |\n");
-      sb.append("| 💬 Justified | ").append(justified).append(" |\n\n");
-    }
+    appendPreviousFindings(sb, result);
+    appendFindingsOrCelebration(sb, result);
+    appendCiChecks(sb, result);
 
+    sb.append("---\n");
+    sb.append("*Automated review by ThrillhouseBot. Reply with `/review` to re-run.*\n");
+
+    return sb.toString();
+  }
+
+  private static void appendPreviousFindings(StringBuilder sb, ReviewResult result) {
+    // The record constructor guarantees a non-null status list.
+    if (result.previousStatuses().isEmpty()) {
+      return;
+    }
+    var resolved =
+        result.previousStatuses().stream().filter(s -> "resolved".equals(s.status())).count();
+    var unresolved =
+        result.previousStatuses().stream().filter(s -> "unresolved".equals(s.status())).count();
+    var justified =
+        result.previousStatuses().stream().filter(s -> "justified".equals(s.status())).count();
+    sb.append("### Previous Findings Status\n");
+    sb.append("| Status | Count |\n");
+    sb.append("|--------|-------|\n");
+    sb.append("| ✅ Resolved | ").append(resolved).append(" |\n");
+    sb.append("| ⚠️ Still present | ").append(unresolved).append(" |\n");
+    sb.append("| 💬 Justified | ").append(justified).append(" |\n\n");
+  }
+
+  private static void appendFindingsOrCelebration(StringBuilder sb, ReviewResult result) {
     if (result.hasIssues()) {
       sb.append("### Key Findings\n");
       List<Finding> topFindings =
@@ -87,13 +102,37 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
-      sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
+      if (result.offendingCiChecks().isEmpty()) {
+        sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
+      } else {
+        sb.append(
+            "No new issues found in this PR, but the review cannot be approved until the required checks are passing.\n\n");
+      }
     }
+  }
 
-    sb.append("---\n");
-    sb.append("*Automated review by ThrillhouseBot. Reply with `/review` to re-run.*\n");
-
-    return sb.toString();
+  private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
+    if (result.offendingCiChecks().isEmpty()) {
+      return;
+    }
+    sb.append("### ⚠️ Required CI Checks Status\n");
+    sb.append("Some required checks are still pending or have failed:\n\n");
+    sb.append("| Check | Type | Status | Detail |\n");
+    sb.append("|-------|------|--------|--------|\n");
+    for (var check : result.offendingCiChecks()) {
+      String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
+      String detail = check.conclusion() != null ? check.conclusion() : "-";
+      sb.append("| **")
+          .append(escapeTableCell(check.name()))
+          .append("** | ")
+          .append(escapeTableCell(check.type()))
+          .append(" | ")
+          .append(statusEmoji)
+          .append(" | ")
+          .append(escapeTableCell(detail))
+          .append(" |\n");
+    }
+    sb.append("\n");
   }
 
   /** A clean review celebrates only when nothing from earlier rounds is still unresolved. */
@@ -131,5 +170,13 @@ public class PrSummaryGenerator {
   /** Renders a signed line count, avoiding the awkward "+0"/"-0". */
   private static String signed(char sign, int count) {
     return count == 0 ? "0" : sign + Integer.toString(count);
+  }
+
+  /** Escapes a value for a single Markdown table cell so a literal '|' cannot break the layout. */
+  private static String escapeTableCell(String value) {
+    if (value == null) {
+      return "-";
+    }
+    return value.replace("\\", "\\\\").replace("|", "\\|");
   }
 }
