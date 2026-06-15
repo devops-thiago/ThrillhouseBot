@@ -618,6 +618,101 @@ class FindingQuoteValidatorTest {
     assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
   }
 
+  /**
+   * Mechanism (a), #121: a chain the description cites that is also the finding's own {@code
+   * suggestion_new} is the proposed fix — a hypothetical, absent from the diff by definition.
+   * Subtracting it (the deterministic form of #106's "existing code, not the suggested fix") leaves
+   * no absent existing-source citation, so a finding that describes its own fix is not demoted. The
+   * chain is genuinely absent from {@code DESCRIPTION_DIFF}, so only the subtraction keeps it.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The corrected expression is `%s`, which handles the null owner.",
+        "Guard the dereference; the fix is `%s` applied at the call site."
+      })
+  void keepsFindingWhenDescriptionRestatesItsSuggestionNew(String descriptionTemplate) {
+    var fix = "Optional.ofNullable(accountOwner).map(Owner::name).orElse(null)";
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "DashboardAccessChecker.java",
+            221,
+            "Potential NullPointerException when accountOwner is null",
+            descriptionTemplate.formatted(fix),
+            MATCHED_OLD,
+            fix);
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
+  /**
+   * Mechanism (b), #121: a description that cites a present core mechanism keeps its suggestion
+   * even when an incidental off-diff helper is cited <em>first</em> — the guard must not
+   * short-circuit to a demotion on the first absent chain.
+   */
+  @Test
+  void keepsFindingWhenCoreCitedChainIsPresentDespiteOffDiffHelper() {
+    var finding =
+        describedFinding(
+            MATCHED_OLD,
+            "The off-diff helper `logger.atDebug().log()` traces it, but"
+                + " `r.owner().equals(accountOwner)` is the case-sensitive filter that misses"
+                + " matches.");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
+  /**
+   * Mechanism (b), #121: when EVERY cited chain is absent the finding is still demoted — the
+   * all-absent semantics must not be inverted into "keep if any chain is absent".
+   */
+  @Test
+  void demotesFindingWhenEveryCitedChainIsAbsent() {
+    var finding =
+        describedFinding(
+            MATCHED_OLD,
+            "The mechanism `cfg.first().orElse(null)` and `cfg.second().get()` are both dereferenced"
+                + " unguarded.");
+    var response = response(finding);
+
+    var result = validator.validate(response, DESCRIPTION_DIFF);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+  }
+
+  /**
+   * Mechanism (a), #121: a finding with no {@code suggestion_new} to subtract still demotes when
+   * its only cited chain is a phantom. The null-suggestion path must be a no-op (nothing to
+   * subtract), not an accidental keep — covering the {@code suggestionNew == null} branch.
+   */
+  @Test
+  void demotesPhantomCitationWhenFindingHasNoSuggestionNew() {
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "DashboardAccessChecker.java",
+            221,
+            "Potential NullPointerException when accountOwner is null",
+            "It dereferences `dashboardConfig.accountOwner().orElse(null)` unguarded.",
+            MATCHED_OLD,
+            null);
+    var response = response(finding);
+
+    var result = validator.validate(response, DESCRIPTION_DIFF);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
   @Test
   void noNewlineIndicatorIsNotQuotableContent() {
     var diff =

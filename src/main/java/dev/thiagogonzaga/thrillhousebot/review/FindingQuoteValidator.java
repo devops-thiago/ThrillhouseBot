@@ -43,7 +43,11 @@ import java.util.regex.Pattern;
  * but its free-text {@code description} cites a chained call expression as existing source that
  * appears nowhere in scope — the fabricated mechanism is treated like a partial quote. Only
  * distinctive {@code receiver.member(...)} chains are checked, so bare method names that simply
- * fall outside the diff window are never penalized.
+ * fall outside the diff window are never penalized. Two further guards keep this from suppressing
+ * true positives: a chain that also appears in the finding's own {@code suggestion_new} is the
+ * proposed fix, not an existing-code citation, so it is excluded; and the demotion fires only when
+ * <em>every</em> remaining cited expression is absent — a finding grounded by even one
+ * verbatim-present chain keeps its suggestion and confidence.
  */
 @ApplicationScoped
 public class FindingQuoteValidator {
@@ -151,42 +155,62 @@ public class FindingQuoteValidator {
   }
 
   /**
-   * Whether the finding's description presents, as existing source, a chained call expression that
-   * cannot be found anywhere in the diff scoped to its file. This catches the failure mode where a
-   * genuine {@code suggestion_old} quote passes the gate but the supporting prose invents the
-   * mechanism (e.g. {@code dashboardConfig.accountOwner().orElse(null)} for a method parameter that
-   * is never derived that way). The match is whitespace-insensitive so reformatting can't hide a
-   * real citation — meaning the check only fires when the expression is genuinely absent.
+   * Whether the finding's description rests on a fabricated mechanism: it presents one or more
+   * chained call expressions as existing source and <em>none</em> of them can be found in the diff
+   * scoped to its file. This catches the failure mode where a genuine {@code suggestion_old} quote
+   * passes the gate but the supporting prose invents the mechanism (e.g. {@code
+   * dashboardConfig.accountOwner().orElse(null)} for a method parameter that is never derived that
+   * way). A chain that duplicates the finding's own {@code suggestion_new} is its proposed fix, not
+   * an existing-source citation, so it is excluded; and a single verbatim-present chain is enough
+   * to keep the finding — so restating the fix or naming an off-diff helper never demotes a
+   * grounded finding. The match is whitespace-insensitive so reformatting can't hide a real
+   * citation.
    */
   private static boolean descriptionCitesAbsentCode(
       ReviewResponse.Finding finding, DiffIndex index) {
-    List<String> cited = citedCallExpressions(finding.description());
+    List<String> cited =
+        citedExistingCodeExpressions(finding.description(), finding.suggestionNew());
     if (cited.isEmpty()) {
       return false;
     }
     List<String> compactedScope = compactedLines(index.diffLinesFor(finding.file()));
+    // Demote only when EVERY expression presented as existing source is absent from scope. A
+    // finding grounded by even one verbatim-present chain stays grounded even if it also names an
+    // off-diff helper — the guard targets a fabricated mechanism, not the first incidental chain
+    // that happens to fall outside the diff window (#121, mechanism b).
     for (String expression : cited) {
-      if (!appearsIn(expression, compactedScope)) {
-        return true;
+      if (appearsIn(expression, compactedScope)) {
+        return false;
       }
     }
-    return false;
+    return true;
   }
 
-  /** The chained call expressions a description presents as code, e.g. {@code a.b().c(null)}. */
-  private static List<String> citedCallExpressions(String description) {
+  /**
+   * The chained call expressions a description presents as <em>existing</em> source, e.g. {@code
+   * a.b().c(null)}. A chain that also appears (whitespace-insensitively) in the finding's own
+   * {@code suggestion_new} is excluded: it is the proposed fix, a hypothetical that is absent from
+   * the diff by definition, and demoting a finding for describing its own fix would violate #106's
+   * "existing code, not hypotheticals" scope (#121, mechanism a). A bare name or a dotted field
+   * chain without a call is never distinctive enough to flag against the diff's narrow window.
+   */
+  private static List<String> citedExistingCodeExpressions(
+      String description, String suggestionNew) {
     if (description == null || description.isBlank()) {
       return List.of();
     }
+    String compactedSuggestion = suggestionNew == null ? "" : compact(suggestionNew);
     var expressions = new ArrayList<String>();
     var matcher = CHAINED_CALL.matcher(description);
     while (matcher.find()) {
       String expression = matcher.group();
-      // Require an actual call: a dotted field chain (e.g. config.value) or a bare name is not
-      // distinctive enough to flag against the diff's narrow window.
-      if (expression.indexOf('(') >= 0) {
-        expressions.add(expression);
+      if (expression.indexOf('(') < 0) {
+        continue;
       }
+      if (!compactedSuggestion.isEmpty() && compactedSuggestion.contains(compact(expression))) {
+        continue;
+      }
+      expressions.add(expression);
     }
     return expressions;
   }
@@ -204,7 +228,7 @@ public class FindingQuoteValidator {
 
   /**
    * Whether {@code expression} occurs, ignoring whitespace, within any already-compacted diff line.
-   * The expression is always a non-empty call chain (see {@link #citedCallExpressions}).
+   * The expression is always a non-empty call chain (see {@link #citedExistingCodeExpressions}).
    */
   private static boolean appearsIn(String expression, List<String> compactedScope) {
     String needle = compact(expression);
