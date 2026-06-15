@@ -562,7 +562,10 @@ class FindingQuoteValidatorTest {
   /**
    * A description that cites no absent chained call leaves the finding untouched: an absent (null
    * or blank) description, a chained call genuinely in the diff, a bare method name, or a dotted
-   * field access without a call all pass through unchanged.
+   * field access without a call all pass through unchanged. This also covers #120 face (b): a full
+   * nested lambda chain present in the diff is one whole citation (its inner predicate is not
+   * surfaced separately), and malformed candidates — unbalanced parentheses or an unterminated
+   * string literal — consume no argument list and are never flagged.
    */
   @ParameterizedTest
   @NullSource
@@ -575,7 +578,17 @@ class FindingQuoteValidatorTest {
         // bare method names are not distinctive enough to flag against the diff window
         "accountOwner flows from installedRepos() and evaluateAccess(); it may be null.",
         // a dotted field access without a call is ignored
-        "The configured `dashboardConfig.accountOwner` default is applied here."
+        "The configured `dashboardConfig.accountOwner` default is applied here.",
+        // face (b): the full lambda chain present in the diff is one citation, kept whole
+        "The filter `repos.stream().filter(r -> r.owner().equals(accountOwner)).toList()` is"
+            + " case-sensitive, which misses matches.",
+        // unbalanced parentheses consume no argument list, so nothing distinctive is flagged
+        "The incomplete call `obj.process(arg` appears only in the prose.",
+        // an unterminated string literal swallows the remainder, so no call chain is consumed
+        "It mentions `obj.run(\"oops` without ever closing the quote.",
+        // a null-guard clause cites no call chain, so the present chain still matches and is kept
+        "Guard `owner == null || accountOwner == null` before"
+            + " `r.owner().equals(accountOwner)`, which is present."
       })
   void keepsFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
     var response = response(describedFinding(MATCHED_OLD, description));
@@ -616,6 +629,79 @@ class FindingQuoteValidatorTest {
     var response = response(describedFinding(null, description));
 
     assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
+  /**
+   * #120 face (a): a citation whose argument is itself a call or a lambda (nested parentheses) used
+   * to be either truncated to a paren-less fragment and dropped unchecked, or split so the chain's
+   * fabricated tail was never seen — in both cases the phantom escaped at full confidence. The
+   * whole chain is now extracted as one citation and, being absent from the diff, is demoted.
+   * Covers a nested-call argument, a lambda chain sharing a real prefix but ending in an invented
+   * tail, a receiver that is itself a call, and a string literal whose escaped quote must not end
+   * it early.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // nested-call argument: was truncated to the paren-less "config.lookup" and dropped
+        "accountOwner comes from `config.lookup(getKey()).orElse(null)`, so it may be null.",
+        // lambda chain sharing a real prefix; the old split missed the invented .orElseThrow tail
+        "It evaluates `repos.stream().filter(r -> r.owner().equals(accountOwner))"
+            + ".orElseThrow(IllegalStateException::new)` on every request.",
+        // the receiver itself takes arguments
+        "The value `getConfig().lookup(key).orElse(null)` is never null-checked before use.",
+        // an escaped quote inside the string-literal argument must not terminate the literal early,
+        // and the receiver name exercises underscore/digit identifier characters
+        "It validates with `pattern_2.match(\"a\\\"b\").orElseThrow()` before continuing.",
+        // a char-literal slash holds no real bracket, a leading dollar sign is a valid identifier
+        // start, and the sentence break exercises a dot that is not followed by an identifier
+        "Two call sites exist. The `path.split('/')` output (the $tmp local) is never checked."
+      })
+  void demotesFindingWhenDescriptionCitesAbsentNestedCallChain(String description) {
+    var result =
+        validator.validate(response(describedFinding(MATCHED_OLD, description)), DESCRIPTION_DIFF);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+    assertEquals("medium", kept.risk());
+  }
+
+  private static final String LITERAL_DIFF =
+      """
+      ### src/Router.java (modified, +1 -1)
+      ```diff
+      @@ -3,3 +3,3 @@
+       void route() {
+      -    handlers.put(label(")"), fallback).register();
+      +    handlers.put(label(")"), primary).register();
+       }
+      ```
+      """;
+
+  /**
+   * A parenthesis inside a string literal must not be counted as a bracket: the {@code ")"} literal
+   * argument is spanned whole, so a present chain that embeds it matches the diff and is kept. A
+   * naive depth counter would truncate the citation at the literal's parenthesis and wrongly
+   * demote.
+   */
+  @Test
+  void keepsFindingWhenDescriptionCitesPresentChainWithLiteralParenArgument() {
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "src/Router.java",
+            4,
+            "Title",
+            "It registers via `handlers.put(label(\")\"), fallback).register()` at startup.",
+            "handlers.put(label(\")\"), fallback).register();",
+            "fixed");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, LITERAL_DIFF));
   }
 
   @Test
