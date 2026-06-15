@@ -560,12 +560,16 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * A description that cites no absent chained call leaves the finding untouched — whether the
-   * cited call is genuinely in the diff, only a bare method name, or only a dotted field access.
+   * A description that cites no absent chained call leaves the finding untouched: an absent (null
+   * or blank) description, a chained call genuinely in the diff, a bare method name, or a dotted
+   * field access without a call all pass through unchanged.
    */
   @ParameterizedTest
+  @NullSource
   @ValueSource(
       strings = {
+        // blank: no citations to check
+        "   ",
         // chained call genuinely present in the diff
         "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
         // bare method names are not distinctive enough to flag against the diff window
@@ -573,17 +577,7 @@ class FindingQuoteValidatorTest {
         // a dotted field access without a call is ignored
         "The configured `dashboardConfig.accountOwner` default is applied here."
       })
-  void keepsFindingWhenDescriptionCitesNoAbsentChainedCall(String description) {
-    var response = response(describedFinding(MATCHED_OLD, description));
-
-    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
-  }
-
-  /** An absent description has no citations to check, so a matching quote passes through. */
-  @ParameterizedTest
-  @NullSource
-  @ValueSource(strings = {"   "})
-  void keepsFindingWithoutDescriptionAndMatchingQuote(String description) {
+  void keepsFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
     var response = response(describedFinding(MATCHED_OLD, description));
 
     assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
