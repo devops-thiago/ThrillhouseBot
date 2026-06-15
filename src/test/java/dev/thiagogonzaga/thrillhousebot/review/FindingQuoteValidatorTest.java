@@ -559,26 +559,22 @@ class FindingQuoteValidatorTest {
     assertEquals("medium", kept.risk());
   }
 
-  /** A description whose chained call is genuinely present in the diff keeps the finding intact. */
-  @Test
-  void keepsFindingWhenDescriptionCitesPresentChainedCall() {
-    var finding =
-        describedFinding(
-            MATCHED_OLD,
-            "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.");
-    var response = response(finding);
-
-    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
-  }
-
-  /** Bare method names cited in the description must not be flagged just for being off-diff. */
-  @Test
-  void keepsFindingWhenDescriptionCitesOnlyBareMethodNames() {
-    var finding =
-        describedFinding(
-            MATCHED_OLD,
-            "accountOwner flows from installedRepos() and evaluateAccess(); it may be null.");
-    var response = response(finding);
+  /**
+   * A description that cites no absent chained call leaves the finding untouched — whether the
+   * cited call is genuinely in the diff, only a bare method name, or only a dotted field access.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // chained call genuinely present in the diff
+        "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
+        // bare method names are not distinctive enough to flag against the diff window
+        "accountOwner flows from installedRepos() and evaluateAccess(); it may be null.",
+        // a dotted field access without a call is ignored
+        "The configured `dashboardConfig.accountOwner` default is applied here."
+      })
+  void keepsFindingWhenDescriptionCitesNoAbsentChainedCall(String description) {
+    var response = response(describedFinding(MATCHED_OLD, description));
 
     assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
   }
@@ -589,17 +585,6 @@ class FindingQuoteValidatorTest {
   @ValueSource(strings = {"   "})
   void keepsFindingWithoutDescriptionAndMatchingQuote(String description) {
     var response = response(describedFinding(MATCHED_OLD, description));
-
-    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
-  }
-
-  /** A dotted field access without a call is not distinctive enough to flag, so it is ignored. */
-  @Test
-  void keepsFindingWhenDescriptionCitesOnlyDottedFieldAccess() {
-    var finding =
-        describedFinding(
-            MATCHED_OLD, "The configured `dashboardConfig.accountOwner` default is applied here.");
-    var response = response(finding);
 
     assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
   }

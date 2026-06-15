@@ -50,6 +50,9 @@ public class FindingQuoteValidator {
 
   private static final String LOW_CONFIDENCE = "low";
 
+  /** Shared tail of every log line that strips a suggestion and caps confidence. */
+  private static final String DEMOTION_SUFFIX = " dropping its suggestion and capping confidence";
+
   /**
    * A chained call expression: a receiver followed by one or more {@code .member} segments, with
    * optional argument lists. Single names like {@code installedRepos()} are deliberately excluded —
@@ -85,8 +88,10 @@ public class FindingQuoteValidator {
           if (descriptionCitesAbsentCode(finding, index)) {
             Log.infof(
                 "Finding '%s' (%s:%d) cites code in its description that appears nowhere in the diff —"
-                    + " dropping its suggestion and capping confidence",
-                finding.title(), finding.file(), finding.line());
+                    + DEMOTION_SUFFIX,
+                finding.title(),
+                finding.file(),
+                finding.line());
             kept.add(withoutSuggestion(finding));
             changed = true;
           } else {
@@ -96,16 +101,20 @@ public class FindingQuoteValidator {
         case PARTIAL -> {
           Log.infof(
               "Finding '%s' (%s:%d) quotes code only partially present in the diff —"
-                  + " dropping its suggestion and capping confidence",
-              finding.title(), finding.file(), finding.line());
+                  + DEMOTION_SUFFIX,
+              finding.title(),
+              finding.file(),
+              finding.line());
           kept.add(withoutSuggestion(finding));
           changed = true;
         }
         case AMBIGUOUS -> {
           Log.infof(
               "Finding '%s' (%s:%d) quotes code that appears in multiple locations, but the finding's line is ambiguous —"
-                  + " dropping its suggestion and capping confidence",
-              finding.title(), finding.file(), finding.line());
+                  + DEMOTION_SUFFIX,
+              finding.title(),
+              finding.file(),
+              finding.line());
           kept.add(withoutSuggestion(finding));
           changed = true;
         }
