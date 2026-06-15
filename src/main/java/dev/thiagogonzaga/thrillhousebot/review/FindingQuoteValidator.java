@@ -164,9 +164,9 @@ public class FindingQuoteValidator {
     if (cited.isEmpty()) {
       return false;
     }
-    List<DiffLine> scope = index.diffLinesFor(finding.file());
+    List<String> compactedScope = compactedLines(index.diffLinesFor(finding.file()));
     for (String expression : cited) {
-      if (!appearsInDiff(expression, scope)) {
+      if (!appearsIn(expression, compactedScope)) {
         return true;
       }
     }
@@ -192,13 +192,24 @@ public class FindingQuoteValidator {
   }
 
   /**
-   * Whether {@code expression} occurs, ignoring whitespace, within any scoped diff line. The
-   * expression is always a non-empty call chain (see {@link #citedCallExpressions}).
+   * The scoped diff lines with all whitespace removed, compacted once for reuse across citations.
    */
-  private static boolean appearsInDiff(String expression, List<DiffLine> scope) {
-    String needle = compact(expression);
+  private static List<String> compactedLines(List<DiffLine> scope) {
+    var compacted = new ArrayList<String>(scope.size());
     for (DiffLine line : scope) {
-      if (compact(line.normalizedText()).contains(needle)) {
+      compacted.add(compact(line.normalizedText()));
+    }
+    return compacted;
+  }
+
+  /**
+   * Whether {@code expression} occurs, ignoring whitespace, within any already-compacted diff line.
+   * The expression is always a non-empty call chain (see {@link #citedCallExpressions}).
+   */
+  private static boolean appearsIn(String expression, List<String> compactedScope) {
+    String needle = compact(expression);
+    for (String line : compactedScope) {
+      if (line.contains(needle)) {
         return true;
       }
     }

@@ -598,6 +598,26 @@ class FindingQuoteValidatorTest {
     assertEquals("low", result.findings().get(0).confidence());
   }
 
+  /**
+   * The NO_QUOTE keep-branch: a finding with no suggestion_old whose description cites no absent
+   * code (a present chained call, or none at all) passes through untouched — distinct from the
+   * FULL-arm keep tests, which all carry a matching suggestion_old.
+   */
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(
+      strings = {
+        // chained call genuinely present in the diff
+        "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
+        // no chained call at all
+        "accountOwner may be null at this point."
+      })
+  void keepsQuotelessFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
+    var response = response(describedFinding(null, description));
+
+    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
   @Test
   void noNewlineIndicatorIsNotQuotableContent() {
     var diff =
