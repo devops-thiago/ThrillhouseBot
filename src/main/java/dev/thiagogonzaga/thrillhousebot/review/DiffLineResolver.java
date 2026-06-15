@@ -38,6 +38,40 @@ public final class DiffLineResolver {
         (file, patch) -> rightSideLinesByFile.put(file, parseRightSideLines(patch)));
   }
 
+  /**
+   * Whether {@code line} — or a line within {@code tolerance} of it — is an actual right-side line
+   * of the file's diff. Unlike {@link #resolveRightSideLine}, this never snaps to an arbitrarily
+   * distant line: it answers "is the flagged line genuinely still in this diff", which the approve
+   * backstop relies on to tell a still-open finding from one whose code has been changed away. The
+   * file is matched with {@link FilePaths#same}, so a model path variant still resolves to the
+   * diff's filename.
+   */
+  public boolean isLineInDiff(String file, int line, int tolerance) {
+    if (file == null || line <= 0) {
+      return false;
+    }
+    TreeSet<Integer> lines = rightSideLinesByFile.get(file);
+    if (lines == null) {
+      lines = lookupByPathVariant(file);
+    }
+    if (lines == null || lines.isEmpty()) {
+      return false;
+    }
+    Integer floor = lines.floor(line);
+    Integer ceiling = lines.ceiling(line);
+    return (floor != null && line - floor <= tolerance)
+        || (ceiling != null && ceiling - line <= tolerance);
+  }
+
+  private TreeSet<Integer> lookupByPathVariant(String file) {
+    for (var entry : rightSideLinesByFile.entrySet()) {
+      if (FilePaths.same(file, entry.getKey())) {
+        return entry.getValue();
+      }
+    }
+    return null;
+  }
+
   /** Returns the requested line or the nearest commentable line in the same file diff. */
   public OptionalInt resolveRightSideLine(String file, int requestedLine) {
     if (file == null || requestedLine <= 0) {

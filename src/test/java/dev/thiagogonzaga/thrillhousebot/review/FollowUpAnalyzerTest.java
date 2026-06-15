@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class FollowUpAnalyzerTest {
@@ -684,6 +685,103 @@ class FollowUpAnalyzerTest {
     assertTrue(analyzer.unresolvedFindings(PREVIOUS_JSON, List.of()).isEmpty());
     assertTrue(analyzer.unresolvedFindings(null, unresolvedStatus).isEmpty());
     assertTrue(analyzer.unresolvedFindings("not json", unresolvedStatus).isEmpty());
+  }
+
+  /** One-line patch whose only right-side line is {@code line}, for backstop presence tests. */
+  private static String patch(int line) {
+    return "@@ -" + line + ",1 +" + line + ",1 @@\n-old\n+new";
+  }
+
+  private static List<Integer> heldIds(List<ReviewResult.PreviousFindingStatus> held) {
+    return held.stream().map(ReviewResult.PreviousFindingStatus::id).toList();
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldSilentlyDroppedFindingsStillInDiff() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(List.of(1, 2), heldIds(held));
+    assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldSkipAnyFindingTheModelReported() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    // Both accounted for (resolved + justified) → nothing held.
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses(
+                PREVIOUS_JSON,
+                List.of(
+                    new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
+                    new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional")),
+                List.of(),
+                resolver,
+                BOT)
+            .isEmpty());
+
+    // id=1 reported (even as unresolved — the existing gate already holds it), id=2 omitted → only
+    // #2 is the silent drop the backstop must reconstruct. Pins the 1-based id mapping.
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            PREVIOUS_JSON,
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
+            List.of(),
+            resolver,
+            BOT);
+    assertEquals(List.of(2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldExcludeFindingsWithMaintainerReply() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    var comments =
+        List.of(
+            comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
+            comment(101L, 100L, "src/A.java", "intentional, leaving as is", "maintainer"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), comments, resolver, BOT);
+
+    // Finding #1's thread carries a maintainer reply → defer to the human; only #2 is held.
+    assertEquals(List.of(2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldExcludeFindingsNotInCurrentDiff() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+
+    // src/B.java is absent from this round's diff → finding #2's code is gone; only #1 is held.
+    var held =
+        analyzer.unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldReturnEmptyForMissingInputs() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    assertTrue(
+        analyzer.unreportedUnresolvedStatuses(null, List.of(), List.of(), resolver, BOT).isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses("not json", List.of(), List.of(), resolver, BOT)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), List.of(), null, BOT)
+            .isEmpty());
+    // Null statuses ⇒ the model reported nothing ⇒ every present finding is a silent drop.
+    assertEquals(
+        2,
+        analyzer
+            .unreportedUnresolvedStatuses(PREVIOUS_JSON, null, List.of(), resolver, BOT)
+            .size());
   }
 
   @Test

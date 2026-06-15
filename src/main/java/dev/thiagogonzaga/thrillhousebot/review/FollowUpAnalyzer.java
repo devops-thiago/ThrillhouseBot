@@ -444,6 +444,69 @@ public class FollowUpAnalyzer {
     return unresolved;
   }
 
+  /**
+   * Deterministic approve backstop for issue #118. Prior findings the model left OUT of
+   * previous_findings_status entirely — neither resolved, justified, nor even reported as
+   * unresolved — that are still present in the current diff and carry no maintainer reply, surfaced
+   * as synthetic {@code "unresolved"} statuses. Merging these into the result's previous-findings
+   * statuses makes the existing APPROVE → COMMENT gate hold over a silently dropped finding, and
+   * makes every downstream count and message truthful, without a separate code path.
+   *
+   * <p>The findings are reconstructed from the persisted previous response (keyed by repo+PR, so it
+   * survives a force-push/rebase), which means the backstop fires even when the model received the
+   * previous-findings context but ignored it — the exact PR #99 dogfood symptom.
+   *
+   * <p>Scoped to the newest prior round only ({@code previousAiResponseJson});
+   * previous_findings_status ids are 1-based positions over exactly that list, so iterating it
+   * keeps the id mapping aligned with {@link #unresolvedFindings} and rules the off-by-one out by
+   * construction. Findings the model <em>did</em> account for (any status id) are skipped, so this
+   * never double-counts the model-reported {@code unresolved} items the {@link #hasUnresolved} gate
+   * already holds.
+   *
+   * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
+   * so they can turn APPROVE into COMMENT, never into REQUEST_CHANGES. A maintainer reply on the
+   * thread clears the hold (the human is engaged; defer to them, matching {@link
+   * #dropRepliedDuplicates}), as does the model marking the finding resolved/justified.
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatuses(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      String botLogin) {
+    var previous = parsePreviousFindings(previousAiResponseJson);
+    if (previous.isEmpty() || lineResolver == null) {
+      return List.of();
+    }
+    var reportedIds = new HashSet<Integer>();
+    if (statuses != null) {
+      for (var status : statuses) {
+        reportedIds.add(status.id());
+      }
+    }
+    var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
+    for (var i = 0; i < previous.size(); i++) {
+      var id = i + 1;
+      if (reportedIds.contains(id)) {
+        continue; // the model accounted for it (resolved/justified/unresolved) — not a silent drop
+      }
+      var finding = previous.get(i);
+      // isLineInDiff already rejects a null file, so no separate guard is needed here.
+      if (!lineResolver.isLineInDiff(finding.file(), finding.line(), DUPLICATE_LINE_TOLERANCE)) {
+        continue; // its code is no longer in this round's diff — cannot confirm it is still open
+      }
+      if (answeredRootComment(finding, inlineComments, botLogin) != null) {
+        continue; // a maintainer already engaged on the thread — defer to them, do not auto-hold
+      }
+      held.add(
+          new ReviewResult.PreviousFindingStatus(
+              id,
+              "unresolved",
+              "Flagged in an earlier round and still present; not addressed in this revision."));
+    }
+    return held;
+  }
+
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {
     if (aiResponseJson == null || aiResponseJson.isBlank()) {
       return List.of();
