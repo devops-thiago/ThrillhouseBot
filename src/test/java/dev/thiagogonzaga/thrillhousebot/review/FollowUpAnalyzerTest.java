@@ -16,13 +16,18 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class FollowUpAnalyzerTest {
 
@@ -854,63 +859,133 @@ class FollowUpAnalyzerTest {
         "a maintainer reply on a null-title finding's marked thread must clear the hold");
   }
 
-  @Test
-  void unreportedUnresolvedShouldStillHoldNullTitleFindingWhenThreadHasNoReply() {
-    // #133(b): the marker plus the finding's description locate the null-title finding's thread,
-    // but
-    // with no human reply on it the hold stands. Pins that the marker path clears the hold only on
-    // an actual reply, not on the mere existence of the thread.
-    var json =
-        """
-        {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
-           "description": "frees then dereferences"}
-        ]}
-        """;
-    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
-    var comments =
-        List.of(
-            comment(
-                100L,
-                null,
-                "src/A.java",
-                "**HIGH — null**\n\nfrees then dereferences\n<!-- thrillhousebot:finding=1 -->",
-                BOT));
-
-    var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
-
-    assertEquals(List.of(1), heldIds(held));
+  static Stream<Arguments> stillPresentFindingHeldCases() {
+    return Stream.of(
+        // #133(b): a null-title finding's own thread exists (marker + description locate it) but
+        // has
+        // no human reply, so the hold stands — the marker path clears only on an actual reply, not
+        // on the mere existence of the thread.
+        arguments(
+            "null-title finding, own thread but no reply",
+            """
+            {"findings": [
+              {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
+               "description": "frees then dereferences"}
+            ]}
+            """,
+            List.of(
+                comment(
+                    100L,
+                    null,
+                    "src/A.java",
+                    "**HIGH — null**\n\nfrees then dereferences\n<!-- thrillhousebot:finding=1 -->",
+                    BOT))),
+        // #133 over-clear guard: the still-present null-title finding gives no title key; an
+        // EARLIER
+        // round reused marker index 1 for a DIFFERENT, answered finding. Matching the finding's own
+        // description (not the recurring marker) keeps the hold — the #118 silent
+        // approve-over-open.
+        arguments(
+            "null-title finding, earlier round reused its marker index",
+            """
+            {"findings": [
+              {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
+               "description": "frees then dereferences"}
+            ]}
+            """,
+            List.of(
+                comment(
+                    100L,
+                    null,
+                    "src/A.java",
+                    "**LOW — Naming nit**\n\nrename the local for clarity\n<!-- thrillhousebot:finding=1 -->",
+                    BOT),
+                comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"))),
+        // #133 over-clear guard: a thread-less finding (summary-only that round) is still present;
+        // an earlier round reused marker index 1 for a different answered finding. Requiring the
+        // marked comment to carry this finding's own title keeps the hold.
+        arguments(
+            "thread-less finding, earlier round reused its marker index",
+            """
+            {"findings": [
+              {"risk": "high", "file": "src/A.java", "line": 10, "title": "Use-after-free",
+               "description": "frees then dereferences"}
+            ]}
+            """,
+            List.of(
+                comment(
+                    100L,
+                    null,
+                    "src/A.java",
+                    "**LOW — Naming nit**\n<!-- thrillhousebot:finding=1 -->",
+                    BOT),
+                comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"))),
+        // #133 dogfood: a short title ("NPE") is a substring of an earlier answered finding's title
+        // ("NPE in handler"). Header-framing anchoring (" — NPE**" != " — NPE in handler**") plus
+        // the still-present marker=1 comment block the title-only fallback, so the hold stands.
+        arguments(
+            "short title is a substring of another finding's title",
+            """
+            {"findings": [
+              {"risk": "high", "file": "src/A.java", "line": 10, "title": "NPE",
+               "description": "dereferences a value that may be null"}
+            ]}
+            """,
+            List.of(
+                comment(
+                    100L,
+                    null,
+                    "src/A.java",
+                    "**HIGH — NPE in handler**\n\nguard the handler\n<!-- thrillhousebot:finding=1 -->",
+                    BOT),
+                comment(101L, 100L, "src/A.java", "intentional", "maintainer"))),
+        // #133 no-content-key path: a blank title and no description yield no content key, so the
+        // marker alone cannot safely identify the thread; the backstop holds the still-present
+        // finding (the safe direction) rather than risk binding to a marker-index collision.
+        arguments(
+            "blank title and no description",
+            """
+            {"findings": [
+              {"risk": "high", "file": "src/A.java", "line": 10, "title": "", "description": null}
+            ]}
+            """,
+            List.of(
+                comment(
+                    100L,
+                    null,
+                    "src/A.java",
+                    "**HIGH — flagged here**\n<!-- thrillhousebot:finding=1 -->",
+                    BOT))),
+        // #133 no-content-key path: both title and description blank → no content key, so the
+        // backstop holds the still-present finding (the safe direction).
+        arguments(
+            "blank title and blank description",
+            """
+            {"findings": [
+              {"risk": "high", "file": "src/A.java", "line": 10, "title": "", "description": ""}
+            ]}
+            """,
+            List.of(
+                comment(
+                    100L,
+                    null,
+                    "src/A.java",
+                    "**HIGH — flagged here**\n<!-- thrillhousebot:finding=1 -->",
+                    BOT))));
   }
 
-  @Test
-  void unreportedUnresolvedShouldHoldNullTitleFindingWhenEarlierRoundReusedItsMarkerIndex() {
-    // #133 over-clear guard for null-title findings: the newest round's finding #1 has title ==
-    // null
-    // and was summary-only that round (no thread of its own); its code is still present. An
-    // EARLIER,
-    // unrelated round posted a DIFFERENT finding at the same marker index 1 on the same file that a
-    // maintainer answered. The marker index recurs every round and a null title gives no title key,
-    // so without content correspondence the marker would bind to that earlier answered thread and
-    // clear a still-open finding — the #118 silent approve-over-open. Matching the finding's own
-    // description keeps the hold.
-    var json =
-        """
-        {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
-           "description": "frees then dereferences"}
-        ]}
-        """;
+  /**
+   * A prior finding whose code is still present in the current diff is held as unresolved across a
+   * variety of thread shapes — an own thread without a reply, marker-index reuse by an earlier
+   * answered finding, a short title that is a substring of another, and degenerate blank-title or
+   * no-description findings that yield no content key. Every case is the safe (downgrade-only)
+   * direction: hold rather than risk the #118 silent approve-over-open. (#133)
+   */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("stillPresentFindingHeldCases")
+  void unreportedUnresolvedShouldHoldStillPresentFinding(
+      String name, String json, List<GitHubReviewClient.PullRequestComment> comments) {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
-    var comments =
-        List.of(
-            comment(
-                100L,
-                null,
-                "src/A.java",
-                "**LOW — Naming nit**\n\nrename the local for clarity\n<!-- thrillhousebot:finding=1 -->",
-                BOT),
-            comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"));
 
     var held =
         analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
@@ -948,73 +1023,6 @@ class FollowUpAnalyzerTest {
                 "**MEDIUM — Missing null check**\n<!-- thrillhousebot:finding=2 -->",
                 BOT),
             comment(201L, 200L, "src/A.java", "intentional", "maintainer"));
-
-    var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
-
-    assertEquals(List.of(1), heldIds(held));
-  }
-
-  @Test
-  void unreportedUnresolvedShouldHoldThreadlessFindingDespiteEarlierRoundReusingItsMarkerIndex() {
-    // #133 over-clear guard: the newest prior round's finding #1 ("Use-after-free") was
-    // summary-only
-    // that round (its flagged line was outside the diff), so it has no thread of its own; its code
-    // is still present now. An EARLIER, unrelated round posted a DIFFERENT finding at the same
-    // marker index 1 on the same file ("Naming nit") that a maintainer answered. The marker index
-    // recurs every round, so a marker-only lookup would bind to that earlier answered thread and
-    // clear a still-open finding — re-introducing the #118 silent approve-over-open. Requiring the
-    // marked comment to carry this finding's own title keeps the hold.
-    var json =
-        """
-        {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": "Use-after-free",
-           "description": "frees then dereferences"}
-        ]}
-        """;
-    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
-    var comments =
-        List.of(
-            comment(
-                100L,
-                null,
-                "src/A.java",
-                "**LOW — Naming nit**\n<!-- thrillhousebot:finding=1 -->",
-                BOT),
-            comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"));
-
-    var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
-
-    assertEquals(List.of(1), heldIds(held));
-  }
-
-  @Test
-  void unreportedUnresolvedShouldNotClearWhenAShortTitleIsASubstringOfAnotherFinding() {
-    // #133 dogfood: finding #1's title is short ("NPE") and it is thread-less this round. An
-    // earlier
-    // round raised a DIFFERENT finding at the same marker index 1 on the same file whose title
-    // CONTAINS "NPE" ("NPE in handler") and was answered. A bare title-substring match would treat
-    // that unrelated answered thread as this finding's and over-clear; anchoring on the header
-    // framing " — NPE**" does not match " — NPE in handler**", and the marker=1 comment still
-    // present on the file blocks the title-only fallback, so the hold stands.
-    var json =
-        """
-        {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": "NPE",
-           "description": "dereferences a value that may be null"}
-        ]}
-        """;
-    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
-    var comments =
-        List.of(
-            comment(
-                100L,
-                null,
-                "src/A.java",
-                "**HIGH — NPE in handler**\n\nguard the handler\n<!-- thrillhousebot:finding=1 -->",
-                BOT),
-            comment(101L, 100L, "src/A.java", "intentional", "maintainer"));
 
     var held =
         analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
@@ -1071,60 +1079,6 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
-
-    assertEquals(List.of(1), heldIds(held));
-  }
-
-  @Test
-  void unreportedUnresolvedShouldHoldFindingWithBlankTitleAndNoDescription() {
-    // #133 no-content-key path: a degenerate finding with a blank title and no description yields
-    // no content key, so the marker alone cannot safely identify its thread; the backstop holds it
-    // (the safe direction) rather than risk binding to a different finding that reused the same
-    // marker index. A marked bot comment is present so the content-correspondence check runs.
-    var json =
-        """
-        {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": "", "description": null}
-        ]}
-        """;
-    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
-    var comments =
-        List.of(
-            comment(
-                100L,
-                null,
-                "src/A.java",
-                "**HIGH — flagged here**\n<!-- thrillhousebot:finding=1 -->",
-                BOT));
-
-    var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
-
-    assertEquals(List.of(1), heldIds(held));
-  }
-
-  @Test
-  void unreportedUnresolvedShouldHoldFindingWithBlankTitleAndBlankDescription() {
-    // #133 no-content-key path: both title and description are blank, so ownContentKey yields no
-    // key and the backstop holds the still-present finding (the safe direction).
-    var json =
-        """
-        {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": "", "description": ""}
-        ]}
-        """;
-    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
-    var comments =
-        List.of(
-            comment(
-                100L,
-                null,
-                "src/A.java",
-                "**HIGH — flagged here**\n<!-- thrillhousebot:finding=1 -->",
-                BOT));
-
-    var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }

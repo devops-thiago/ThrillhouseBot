@@ -2,12 +2,36 @@
 
 All notable changes to ThrillhouseBot.
 
-## [0.1.1] — unreleased
+## [0.1.1] — 2026-06-16
+
+### Added
+
+- **Webhook de-duplication**: redelivered webhook events are ignored within a configurable TTL (`WEBHOOK_DEDUP_TTL`), so GitHub redeliveries no longer trigger a second review of the same event (#20)
+- **CI-aware approval gating**: the bot no longer posts a green approval while a PR's required checks are red or still pending — it waits for CI before approving. Requires the new `actions: read` GitHub App permission (#95)
 
 ### Changed
 
-- **CI**: consolidated the seven duplicated Trivy scan + SARIF-upload steps across `ci.yml`, `release.yml`, and `security-scan.yml` into a single `.github/actions/trivy-scan` composite action, centralizing the pinned action SHA, Trivy version, `format: sarif`, and the `limit-severities-for-sarif` flag. The CI filesystem scan now applies `limit-severities-for-sarif` like every other scan (closes the gap tracked in #76).
-- **GitHub App Permissions**: Added `actions: read` permission to `manifest.json` (and documented in `README.md`). This is required to read GitHub Actions workflow runs and check suite statuses to evaluate CI status for PR approval gating (introduced in PR #95).
+- **CI**: consolidated the seven duplicated Trivy scan + SARIF-upload steps across `ci.yml`, `release.yml`, and `security-scan.yml` into a single `.github/actions/trivy-scan` composite action, centralizing the pinned action SHA, Trivy version, `format: sarif`, and the `limit-severities-for-sarif` flag. The filesystem and image scans now apply `limit-severities-for-sarif` like every other scan (#12, #76, #82)
+- **GitHub App permissions**: added `actions: read` to `manifest.json` (and documented in `README.md`), required to read workflow runs and check-suite status for CI-aware approval gating (#95)
+- **Observability**: traces and metrics report the actually-configured AI provider instead of a hardcoded `deepseek` (#19)
+
+### Fixed
+
+- **Follow-up review tracking**: previous-findings tracking now survives a force-push or rebase. Findings are matched by their persisted code anchor rather than a raw line number, so still-open findings are no longer silently dropped or re-raised under a drifted severity, and the approve backstop replays every prior round (not just the newest), judges presence by content, handles unrecognized statuses, resolves path variants, and clears holds on a maintainer reply even for thread-less or null-title findings (#118, #129, #130, #131, #132, #133, #140, #143)
+- **First-review summary**: a PR that was persisted but never reviewed still receives its first-run summary comment; first-review UX no longer keys off persistence state (#134)
+- **Finding quote validation**: fabricated code quoted in a finding's _description_ is now caught (not just `suggestion_old`); the chained-call citation matcher spans nested parentheses; and the matcher tolerates wrapped lines, Unicode whitespace, and intra-literal spacing — so fewer real findings are demoted and fewer phantom citations slip through (#98, #106, #120, #121, #122)
+- **Diff truncation**: oversized diffs are no longer cut mid-hunk in a way that dropped the closing code fence (#21)
+- **Webhook delivery**: a dispatch failure no longer burns the dedup slot, so a manual redelivery is processed instead of being silently dropped (#89)
+
+### Security
+
+- **Manual triggers**: manual `/review` triggers are restricted to authorized logins (`manual-trigger-allowed-logins`) (#70)
+- **Dashboard access control**: the dashboard fails closed when the GitHub App owner cannot be resolved; installation and repository access checks now paginate, so access is no longer mis-decided past the first page; and the repo-snapshot cache is no longer reused across a changed account owner (#17, #18, #91)
+
+### Documentation
+
+- Documented the new v0.1.1 configuration keys (`WEBHOOK_DEDUP_TTL`, `manual-trigger-allowed-logins`) (#94)
+- Corrected the dashboard access section of the `README.md`, which still described the removed fail-open behavior (#90)
 
 ## [0.1.0] — 2026-06-12
 

@@ -16,10 +16,15 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import java.util.Map;
 import java.util.OptionalInt;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class DiffLineResolverTest {
 
@@ -290,53 +295,56 @@ class DiffLineResolverTest {
     assertFalse(resolver.isFindingPresent("A.java", "validate(x);\npersist(x);"));
   }
 
-  @Test
-  void isFindingPresentShouldLeanTowardHoldingForARecurringSingleLineAnchor() {
-    // Accepted residual: a generic single-line anchor that recurs verbatim reads as present even
-    // when the flagged occurrence changed away. The stale prior-revision line cannot disambiguate
-    // it, so the downgrade-only backstop errs toward holding rather than risking the #118 drop.
-    var patch =
-        """
-        @@ -1,6 +1,6 @@
-         if (a) {
-        -  return null;
-        +  return value;
-         }
-         if (b) {
-           return null;
-         }
-        """;
-    var resolver = new DiffLineResolver(Map.of("A.java", patch));
-
-    assertTrue(resolver.isFindingPresent("A.java", "return null;"));
+  static Stream<Arguments> findingPresentByContentCases() {
+    return Stream.of(
+        // Accepted residual: a generic single-line anchor that recurs verbatim reads as present
+        // even when the flagged occurrence changed away. The stale prior-revision line cannot
+        // disambiguate it, so the downgrade-only backstop errs toward holding (the #118 drop is
+        // worse than a needless hold).
+        arguments(
+            "recurring single-line anchor leans toward holding",
+            """
+            @@ -1,6 +1,6 @@
+             if (a) {
+            -  return null;
+            +  return value;
+             }
+             if (b) {
+               return null;
+             }
+            """,
+            "return null;"),
+        // suggestion_old is quoted from the neutralized diff (<<DIFF_START>>), but the raw GitHub
+        // patch still carries the triple-bracket sentinel; the patch side must be neutralized too.
+        arguments(
+            "diff markers are neutralized before matching",
+            """
+            @@ -1,0 +1,1 @@
+            +String s = "<<<DIFF_START>>>";
+            """,
+            "String s = \"<<DIFF_START>>\";"),
+        // Blank lines in the anchor must not be required against the right-side text.
+        arguments(
+            "blank anchor lines are ignored",
+            """
+            @@ -1,2 +1,2 @@
+             alpha()
+            +beta()
+            """,
+            "alpha()\n\n   \nbeta()"));
   }
 
-  @Test
-  void isFindingPresentShouldNeutralizeDiffMarkersBeforeMatching() {
-    // suggestion_old is quoted from the neutralized diff (<<DIFF_START>>), but the raw GitHub patch
-    // still carries the triple-bracket sentinel; the patch side must be neutralized to match.
-    var patch =
-        """
-        @@ -1,0 +1,1 @@
-        +String s = "<<<DIFF_START>>>";
-        """;
+  /**
+   * A finding's anchor that survives on the diff's right side reads as present — whether the anchor
+   * is a recurring single line, carries neutralized diff markers, or contains blank lines — so the
+   * #118 approve backstop holds it.
+   */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("findingPresentByContentCases")
+  void isFindingPresentShouldMatchSurvivingAnchorContent(String name, String patch, String anchor) {
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
-    assertTrue(resolver.isFindingPresent("A.java", "String s = \"<<DIFF_START>>\";"));
-  }
-
-  @Test
-  void isFindingPresentShouldIgnoreBlankAnchorLines() {
-    var patch =
-        """
-        @@ -1,2 +1,2 @@
-         alpha()
-        +beta()
-        """;
-    var resolver = new DiffLineResolver(Map.of("A.java", patch));
-
-    // Blank lines in the anchor must not be required against the right-side text.
-    assertTrue(resolver.isFindingPresent("A.java", "alpha()\n\n   \nbeta()"));
+    assertTrue(resolver.isFindingPresent("A.java", anchor));
   }
 
   @Test
