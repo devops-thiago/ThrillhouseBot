@@ -36,6 +36,8 @@ import java.util.stream.Stream;
 @ApplicationScoped
 public class FollowUpAnalyzer {
 
+  private static final String STATUS_UNRESOLVED = "unresolved";
+
   private final ObjectMapper mapper;
 
   @Inject
@@ -431,7 +433,7 @@ public class FollowUpAnalyzer {
     }
     var unresolvedIds = new HashSet<Integer>();
     for (var status : statuses) {
-      if ("unresolved".equalsIgnoreCase(status.status())) {
+      if (STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
         unresolvedIds.add(status.id());
       }
     }
@@ -442,6 +444,78 @@ public class FollowUpAnalyzer {
       }
     }
     return unresolved;
+  }
+
+  /**
+   * Deterministic approve backstop for issue #118. Prior findings the model left OUT of
+   * previous_findings_status entirely — neither resolved, justified, nor even reported as
+   * unresolved — that are still present in the current diff and carry no maintainer reply, surfaced
+   * as synthetic {@code "unresolved"} statuses. Merging these into the result's previous-findings
+   * statuses makes the existing APPROVE → COMMENT gate hold over a silently dropped finding, and
+   * makes every downstream count and message truthful, without a separate code path.
+   *
+   * <p>The findings are reconstructed from the persisted previous response (keyed by repo+PR, so it
+   * survives a force-push/rebase), which means the backstop fires even when the model received the
+   * previous-findings context but ignored it — the exact PR #99 dogfood symptom.
+   *
+   * <p>Scoped to the newest prior round only ({@code previousAiResponseJson});
+   * previous_findings_status ids are 1-based positions over exactly that list, so iterating it
+   * keeps the id mapping aligned with {@link #unresolvedFindings} and rules the off-by-one out by
+   * construction. Findings the model <em>did</em> account for (any status id) are skipped, so this
+   * never double-counts the model-reported {@code unresolved} items the {@link #hasUnresolved} gate
+   * already holds.
+   *
+   * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
+   * so they can turn APPROVE into COMMENT, never into REQUEST_CHANGES. A maintainer reply on the
+   * thread clears the hold (the human is engaged; defer to them, matching {@link
+   * #dropRepliedDuplicates}), as does the model marking the finding resolved/justified.
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatuses(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      String botLogin) {
+    var previous = parsePreviousFindings(previousAiResponseJson);
+    if (previous.isEmpty() || lineResolver == null) {
+      return List.of();
+    }
+    var reportedIds = new HashSet<Integer>();
+    if (statuses != null) {
+      for (var status : statuses) {
+        reportedIds.add(status.id());
+      }
+    }
+    var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
+    for (var i = 0; i < previous.size(); i++) {
+      var id = i + 1;
+      if (isUnreportedAndStillOpen(
+          previous.get(i), id, reportedIds, lineResolver, inlineComments, botLogin)) {
+        held.add(
+            new ReviewResult.PreviousFindingStatus(
+                id,
+                STATUS_UNRESOLVED,
+                "Flagged in an earlier round and still present; not addressed in this revision."));
+      }
+    }
+    return held;
+  }
+
+  /**
+   * A prior finding (1-based {@code id}) is a still-open silent drop when the model named it in no
+   * status entry, its flagged line is still in the current diff, and no maintainer has replied on
+   * its thread. {@link DiffLineResolver#isLineInDiff} already rejects a null file.
+   */
+  private static boolean isUnreportedAndStillOpen(
+      ReviewResponse.Finding finding,
+      int id,
+      Set<Integer> reportedIds,
+      DiffLineResolver lineResolver,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      String botLogin) {
+    return !reportedIds.contains(id)
+        && lineResolver.isLineInDiff(finding.file(), finding.line(), DUPLICATE_LINE_TOLERANCE)
+        && answeredRootComment(finding, inlineComments, botLogin) == null;
   }
 
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {
@@ -490,6 +564,6 @@ public class FollowUpAnalyzer {
 
   /** Checks if there are any unresolved findings that should be re-flagged. */
   public boolean hasUnresolved(List<ReviewResult.PreviousFindingStatus> statuses) {
-    return statuses.stream().anyMatch(s -> "unresolved".equalsIgnoreCase(s.status()));
+    return statuses.stream().anyMatch(s -> STATUS_UNRESOLVED.equalsIgnoreCase(s.status()));
   }
 }

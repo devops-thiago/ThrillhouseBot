@@ -2800,6 +2800,181 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
+  class ApproveBackstop {
+
+    private final FollowUpAnalyzer realAnalyzer = new FollowUpAnalyzer(new ObjectMapper());
+
+    private void delegateStatusGate() {
+      when(followUpAnalyzer.toStatuses(any()))
+          .thenAnswer(invocation -> realAnalyzer.toStatuses(invocation.getArgument(0)));
+      when(followUpAnalyzer.hasUnresolved(any()))
+          .thenAnswer(invocation -> realAnalyzer.hasUnresolved(invocation.getArgument(0)));
+    }
+
+    private ReviewResult buildWithBackstop(List<ReviewResult.PreviousFindingStatus> backstop) {
+      return orchestrator.buildResult(
+          new ReviewResponse(List.of(), List.of(), null),
+          false,
+          new ReviewOrchestrator.DiffStats(0, 0, 0),
+          List.of(),
+          List.of(),
+          backstop);
+    }
+
+    @Test
+    void shouldDowngradeApproveToCommentWhenBackstopHoldsUnresolved() {
+      delegateStatusGate();
+
+      var result =
+          buildWithBackstop(
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
+
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+      assertFalse(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
+      // The message reflects the held finding — never the contradictory "0 previous finding(s)".
+      assertTrue(
+          ReviewOrchestrator.checkSummaryForResult(result)
+              .contains("1 previous finding(s) remain unresolved"));
+    }
+
+    @Test
+    void shouldApproveWhenBackstopHoldsNothing() {
+      delegateStatusGate();
+
+      var result = buildWithBackstop(List.of());
+
+      assertEquals(ReviewState.APPROVE, result.reviewState());
+      assertTrue(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
+      assertTrue(ReviewOrchestrator.checkSummaryForResult(result).contains("No issues found"));
+    }
+
+    @Test
+    void shouldNeverEscalateBackstopBeyondComment() {
+      delegateStatusGate();
+
+      // Even several silently dropped findings only neutralize approval — never REQUEST_CHANGES.
+      var result =
+          buildWithBackstop(
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", "a"),
+                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "b")));
+
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+    }
+
+    @Test
+    void shouldPostCommentReviewWhenBackstopHolds() {
+      delegateStatusGate();
+      var result =
+          buildWithBackstop(
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("remain unresolved"));
+    }
+
+    @Test
+    void shouldHoldApproveOverSilentlyDroppedPriorFindingThroughReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = followUpSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        delegateStatusGate();
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of(PRIOR_FINDING_JSON));
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+            .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
+        // The model silently drops the still-open prior finding: no new findings, empty status.
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        // The deterministic backstop reconstructs it as unresolved from persistence.
+        when(followUpAnalyzer.unreportedUnresolvedStatuses(
+                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+            .thenReturn(
+                List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
+
+        orchestrator.review(followUpRequest());
+
+        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        verify(reviewClient)
+            .createReview(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+        assertEquals("COMMENT", captor.getValue().event());
+        assertTrue(captor.getValue().body().contains("remain unresolved"));
+      }
+    }
+
+    @Test
+    void shouldTreatAsFollowUpWhenPersistenceHasPriorResponsesDespiteNoBotReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = followUpSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        // No formal bot review exists (listReviews defaults to empty), but a prior round persisted
+        // its findings — the review must still be treated as a follow-up. (#118 fix #1)
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of(PRIOR_FINDING_JSON));
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+            .thenReturn("previous context");
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+        orchestrator.review(followUpRequest());
+
+        // Previous-findings context IS reconstructed without any formal bot review...
+        verify(followUpAnalyzer)
+            .buildPreviousFindingsContext(any(), any(), any(), any(), eq("thrillhousebot[bot]"));
+        // ...and the first-review summary issue-comment is NOT posted.
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      }
+    }
+
+    private static final String PRIOR_FINDING_JSON =
+        "{\"findings\":[{\"risk\":\"medium\",\"file\":\"src/Main.java\",\"line\":10,"
+            + "\"title\":\"Dropped finding\",\"description\":\"d\"}]}";
+
+    private ReviewSession followUpSession() {
+      var session = mock(ReviewSession.class);
+      session.id = 1L;
+      when(session.getRepository()).thenReturn("owner/repo");
+      when(session.getPrNumber()).thenReturn(42);
+      when(session.getPrTitle()).thenReturn("Test PR");
+      when(session.getCommitSha()).thenReturn("abcdefgh");
+      when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+      doNothing()
+          .when(checkRunClient)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of());
+      when(prClient.compareCommits(
+              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+      return session;
+    }
+
+    private ReviewOrchestrator.ReviewRequest followUpRequest() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 42, "abcdefgh", "Test PR", "", "base1234567", "main", 123L, false);
+    }
+  }
+
+  @Nested
   class ResolveAddressedThreads {
 
     private static final String AUTH = "auth";
