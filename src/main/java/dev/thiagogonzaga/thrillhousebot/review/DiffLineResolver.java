@@ -168,6 +168,37 @@ public final class DiffLineResolver {
     return false;
   }
 
+  /**
+   * Resolves the {@code file} key to its non-empty exact value or, failing that, to the unique
+   * non-empty {@link FilePaths#same} variant value.
+   *
+   * <p>A non-empty exact entry is authoritative and is returned immediately. The variant fallback
+   * runs when the exact entry is absent or empty. If multiple different variant keys match, it
+   * returns {@code null} to avoid making a comment placement on the wrong file on genuine
+   * ambiguity.
+   */
+  private static <V extends Collection<?>> V resolveForFileOrVariant(
+      Map<String, V> byFile, String file) {
+    V exact = byFile.get(file);
+    if (exact != null && !exact.isEmpty()) {
+      return exact;
+    }
+    V resolved = null;
+    for (var entry : byFile.entrySet()) {
+      V value = entry.getValue();
+      if (!entry.getKey().equals(file)
+          && !value.isEmpty()
+          && FilePaths.same(file, entry.getKey())) {
+        if (resolved != null) {
+          // Genuine ambiguity (two suffix-colliding diff keys) - return null rather than guess
+          return null;
+        }
+        resolved = value;
+      }
+    }
+    return resolved;
+  }
+
   /** Trimmed, non-blank lines of an anchor (a finding's {@code suggestion_old}). */
   private static List<String> normalizedAnchorLines(String anchor) {
     if (anchor == null || anchor.isBlank()) {
@@ -188,7 +219,7 @@ public final class DiffLineResolver {
     if (file == null || requestedLine <= 0) {
       return OptionalInt.empty();
     }
-    TreeSet<Integer> lines = rightSideLinesByFile.get(file);
+    TreeSet<Integer> lines = resolveForFileOrVariant(rightSideLinesByFile, file);
     if (lines == null || lines.isEmpty()) {
       return OptionalInt.empty();
     }
