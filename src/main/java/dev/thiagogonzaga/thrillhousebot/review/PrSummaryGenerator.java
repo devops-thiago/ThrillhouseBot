@@ -68,11 +68,17 @@ public class PrSummaryGenerator {
       return;
     }
     var resolved =
-        result.previousStatuses().stream().filter(s -> "resolved".equals(s.status())).count();
+        result.previousStatuses().stream()
+            .filter(s -> "resolved".equalsIgnoreCase(s.status()))
+            .count();
     var unresolved =
-        result.previousStatuses().stream().filter(s -> "unresolved".equals(s.status())).count();
+        result.previousStatuses().stream()
+            .filter(s -> "unresolved".equalsIgnoreCase(s.status()))
+            .count();
     var justified =
-        result.previousStatuses().stream().filter(s -> "justified".equals(s.status())).count();
+        result.previousStatuses().stream()
+            .filter(s -> "justified".equalsIgnoreCase(s.status()))
+            .count();
     sb.append("### Previous Findings Status\n");
     sb.append("| Status | Count |\n");
     sb.append("|--------|-------|\n");
