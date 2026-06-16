@@ -540,15 +540,53 @@ public class FollowUpAnalyzer {
     // The current round reports on the newest prior round — drop everything it accounted for.
     closeReported(open, chrono.get(chrono.size() - 1).findings(), currentStatuses);
 
+    // Cluster the remaining open findings by tolerant identity.
+    var clusters = new ArrayList<List<OpenFinding>>();
+    for (var openFinding : open.values()) {
+      List<OpenFinding> home = null;
+      for (var cluster : clusters) {
+        if (cluster.stream()
+            .anyMatch(member -> isSameFinding(member.finding(), openFinding.finding()))) {
+          home = cluster;
+          break;
+        }
+      }
+      if (home == null) {
+        home = new ArrayList<>();
+        clusters.add(home);
+      }
+      home.add(openFinding);
+    }
+
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
-    for (var entry : open.values()) {
-      var finding = entry.finding();
-      if (lineResolver.isFindingPresent(
-              finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE)
-          && answeredRootComment(finding, inlineComments, botLogin) == null) {
+    for (var cluster : clusters) {
+      boolean anyPresent = false;
+      boolean anyReplied = false;
+      OpenFinding target = null;
+
+      for (var member : cluster) {
+        var finding = member.finding();
+        boolean present =
+            lineResolver.isFindingPresent(
+                finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE);
+        if (present) {
+          anyPresent = true;
+          if (target == null) {
+            target = member;
+          }
+        }
+        if (answeredRootComment(finding, inlineComments, botLogin) != null) {
+          anyReplied = true;
+        }
+      }
+
+      if (anyPresent && !anyReplied) {
+        if (target == null) {
+          target = cluster.get(0);
+        }
         held.add(
             new ReviewResult.PreviousFindingStatus(
-                entry.id(),
+                target.id(),
                 STATUS_UNRESOLVED,
                 "Flagged in an earlier round and still present; not addressed in this revision."));
       }
