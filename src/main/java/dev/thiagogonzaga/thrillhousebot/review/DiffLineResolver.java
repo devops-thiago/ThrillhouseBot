@@ -191,34 +191,34 @@ public final class DiffLineResolver {
   }
 
   /**
-   * Resolves the {@code file} key to its non-empty exact value or, failing that, to the unique
-   * non-empty {@link FilePaths#same} variant value.
+   * Resolves {@code file} to its non-empty exact right-side line set or, failing that, to the
+   * unique non-empty {@link FilePaths#same} variant set.
    *
    * <p>A non-empty exact entry is authoritative and is returned immediately. The variant fallback
-   * runs when the exact entry is absent or empty. If multiple different variant keys match, it
-   * returns {@code null} to avoid making a comment placement on the wrong file on genuine
-   * ambiguity.
+   * runs when the exact entry is absent or empty. If multiple different variant keys match, an
+   * empty set is returned to avoid placing a comment on the wrong file on genuine ambiguity — the
+   * caller treats empty exactly as "no resolvable line", the safe direction. The result is never
+   * {@code null}.
    */
-  private static <V extends Collection<?>> V resolveForFileOrVariant(
-      Map<String, V> byFile, String file) {
-    V exact = byFile.get(file);
+  private TreeSet<Integer> resolveRightSideLinesForFileOrVariant(String file) {
+    TreeSet<Integer> exact = rightSideLinesByFile.get(file);
     if (exact != null && !exact.isEmpty()) {
       return exact;
     }
-    V resolved = null;
-    for (var entry : byFile.entrySet()) {
-      V value = entry.getValue();
+    TreeSet<Integer> resolved = null;
+    for (var entry : rightSideLinesByFile.entrySet()) {
+      TreeSet<Integer> value = entry.getValue();
       if (!entry.getKey().equals(file)
           && !value.isEmpty()
           && FilePaths.same(file, entry.getKey())) {
         if (resolved != null) {
-          // Genuine ambiguity (two suffix-colliding diff keys) - return null rather than guess
-          return null;
+          // Genuine ambiguity (two suffix-colliding diff keys) - empty rather than guess.
+          return new TreeSet<>();
         }
         resolved = value;
       }
     }
-    return resolved;
+    return resolved != null ? resolved : new TreeSet<>();
   }
 
   /** Trimmed, non-blank lines of an anchor (a finding's {@code suggestion_old}). */
@@ -241,8 +241,8 @@ public final class DiffLineResolver {
     if (file == null || requestedLine <= 0) {
       return OptionalInt.empty();
     }
-    TreeSet<Integer> lines = resolveForFileOrVariant(rightSideLinesByFile, file);
-    if (lines == null || lines.isEmpty()) {
+    TreeSet<Integer> lines = resolveRightSideLinesForFileOrVariant(file);
+    if (lines.isEmpty()) {
       return OptionalInt.empty();
     }
     if (lines.contains(requestedLine)) {
@@ -295,27 +295,53 @@ public final class DiffLineResolver {
     var newLine = 0;
     var inHunk = false;
     for (String rawLine : PromptTemplateEscaper.neutralizeMarkers(patch).split("\n", -1)) {
-      if (rawLine.startsWith("@@")) {
-        var matcher = HUNK_HEADER.matcher(rawLine);
-        if (matcher.find()) {
-          newLine = Integer.parseInt(matcher.group(1));
-          inHunk = true;
-        }
+      OptionalInt hunkStart = hunkStart(rawLine);
+      if (hunkStart.isPresent()) {
+        newLine = hunkStart.getAsInt();
+        inHunk = true;
         continue;
       }
-      if (inHunk && !rawLine.isEmpty()) {
-        var marker = rawLine.charAt(0);
-        if (marker == '+' || marker == ' ') {
-          lines.add(newLine);
-          String stripped = rawLine.substring(1).strip();
-          if (!stripped.isEmpty()) {
-            text.add(stripped);
-          }
-          lineText.put(newLine, rawLine.substring(1));
-          newLine++;
-        }
+      if (inHunk && isRightSideLine(rawLine)) {
+        appendRightSide(lines, text, lineText, newLine, rawLine);
+        newLine++;
       }
     }
     return new RightSide(lines, text, lineText);
+  }
+
+  /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */
+  private static OptionalInt hunkStart(String rawLine) {
+    if (!rawLine.startsWith("@@")) {
+      return OptionalInt.empty();
+    }
+    var matcher = HUNK_HEADER.matcher(rawLine);
+    return matcher.find()
+        ? OptionalInt.of(Integer.parseInt(matcher.group(1)))
+        : OptionalInt.empty();
+  }
+
+  /** Whether the line exists on the diff's right side — an addition or a surviving context line. */
+  private static boolean isRightSideLine(String rawLine) {
+    if (rawLine.isEmpty()) {
+      return false;
+    }
+    var marker = rawLine.charAt(0);
+    return marker == '+' || marker == ' ';
+  }
+
+  /** Records one right-side line under {@code newLine}: its number, trimmed text, and raw text. */
+  private static void appendRightSide(
+      TreeSet<Integer> lines,
+      List<String> text,
+      Map<Integer, String> lineText,
+      int newLine,
+      String rawLine) {
+    lines.add(newLine);
+    String content = rawLine.substring(1);
+    String stripped = content.strip();
+    if (!stripped.isEmpty()) {
+      text.add(stripped);
+    }
+    lineText.put(newLine, content);
   }
 }

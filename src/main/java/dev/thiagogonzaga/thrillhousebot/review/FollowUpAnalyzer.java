@@ -609,14 +609,33 @@ public class FollowUpAnalyzer {
     if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty() || lineResolver == null) {
       return List.of();
     }
-    // Persisted newest-first; replay oldest → newest so each round's previous_findings_status
-    // (which reports on the round immediately before it) can close the findings it addressed.
+    var chrono = toChronological(priorAiResponseJsons);
+    var open = openFindingsAcrossRounds(chrono, currentStatuses);
+    var clusters = clusterByIdentity(open);
+    return heldFromClusters(clusters, inlineComments, lineResolver, botLogin);
+  }
+
+  /**
+   * Parses the persisted (newest-first) responses into oldest → newest order, so each round's
+   * {@code previous_findings_status} (which reports on the round immediately before it) can close
+   * the findings it addressed.
+   */
+  private List<ReviewResponse> toChronological(List<String> priorAiResponseJsons) {
     var chrono = new ArrayList<ReviewResponse>();
     for (var i = priorAiResponseJsons.size() - 1; i >= 0; i--) {
       chrono.add(parseResponse(priorAiResponseJsons.get(i)));
     }
-    // Still-open prior findings keyed by content, so a finding carried across rounds is held at
-    // most once; insertion order is preserved for stable, deterministic output.
+    return chrono;
+  }
+
+  /**
+   * The still-open prior findings keyed by content (a finding carried across rounds is held at most
+   * once; insertion order is preserved for stable, deterministic output). Each round closes what
+   * the next round's status addressed, and {@code currentStatuses} — which reports on the newest
+   * prior round — drops everything the current round accounted for.
+   */
+  private Map<String, OpenFinding> openFindingsAcrossRounds(
+      List<ReviewResponse> chrono, List<ReviewResponse.PreviousFindingStatus> currentStatuses) {
     var open = new LinkedHashMap<String, OpenFinding>();
     for (var i = 0; i < chrono.size(); i++) {
       if (i > 0) {
@@ -624,10 +643,12 @@ public class FollowUpAnalyzer {
       }
       addOpenFindings(open, chrono.get(i).findings());
     }
-    // The current round reports on the newest prior round — drop everything it accounted for.
     closeReported(open, chrono.get(chrono.size() - 1).findings(), currentStatuses);
+    return open;
+  }
 
-    // Cluster the remaining open findings by tolerant identity.
+  /** Groups the open findings into clusters of tolerant ({@link #isSameFinding}) identity. */
+  private static List<List<OpenFinding>> clusterByIdentity(Map<String, OpenFinding> open) {
     var clusters = new ArrayList<List<OpenFinding>>();
     for (var openFinding : open.values()) {
       List<OpenFinding> home = null;
@@ -644,28 +665,19 @@ public class FollowUpAnalyzer {
       }
       home.add(openFinding);
     }
+    return clusters;
+  }
 
+  /** Holds one unresolved status per cluster whose code is still present and unanswered. */
+  private List<ReviewResult.PreviousFindingStatus> heldFromClusters(
+      List<List<OpenFinding>> clusters,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      String botLogin) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var cluster : clusters) {
-      boolean anyReplied = false;
-      OpenFinding target = null;
-
-      for (var member : cluster) {
-        var finding = member.finding();
-        boolean present = lineResolver.isFindingPresent(finding.file(), finding.suggestionOld());
-        if (present && target == null) {
-          target = member;
-        }
-        // The maintainer reply is located by the round-relative marker (member.id()) plus the
-        // finding's own content rather than by title, so a null-title finding's thread is still
-        // seen and a thread-less finding cannot bind to a different finding that reused the same
-        // marker index in another round (#133).
-        if (answeredRootComment(finding, member.id(), inlineComments, botLogin) != null) {
-          anyReplied = true;
-        }
-      }
-
-      if (target != null && !anyReplied) {
+      OpenFinding target = holdableTarget(cluster, inlineComments, lineResolver, botLogin);
+      if (target != null) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
                 target.id(),
@@ -674,6 +686,33 @@ public class FollowUpAnalyzer {
       }
     }
     return held;
+  }
+
+  /**
+   * The first still-present member of the cluster to hold, or {@code null} when its code is gone or
+   * a maintainer has replied on it. The reply is located by the round-relative marker ({@link
+   * OpenFinding#id()}) plus the finding's own content rather than by title, so a null-title
+   * finding's thread is still seen and a thread-less finding cannot bind to a different finding
+   * that reused the same marker index in another round (#133).
+   */
+  private OpenFinding holdableTarget(
+      List<OpenFinding> cluster,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      String botLogin) {
+    OpenFinding target = null;
+    boolean anyReplied = false;
+    for (var member : cluster) {
+      var finding = member.finding();
+      if (target == null
+          && lineResolver.isFindingPresent(finding.file(), finding.suggestionOld())) {
+        target = member;
+      }
+      if (answeredRootComment(finding, member.id(), inlineComments, botLogin) != null) {
+        anyReplied = true;
+      }
+    }
+    return anyReplied ? null : target;
   }
 
   /** A still-open prior finding and the 1-based id it carried within the round that raised it. */
