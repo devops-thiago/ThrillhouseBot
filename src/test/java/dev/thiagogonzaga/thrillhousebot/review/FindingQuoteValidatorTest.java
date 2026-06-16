@@ -689,6 +689,31 @@ class FindingQuoteValidatorTest {
   }
 
   /**
+   * Mechanism (a)+(b) interaction, #121: a chain that is BOTH verbatim-present in the diff AND
+   * restated in {@code suggestion_new} (the common "the fix wraps the existing call" shape) must
+   * not be subtracted as the proposed fix — its diff presence grounds the finding. Naming a
+   * separate off-diff helper alongside it must not demote. Diff presence wins over fix-restatement.
+   */
+  @Test
+  void keepsFindingWhenPresentChainIsAlsoRestatedInSuggestionNew() {
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "DashboardAccessChecker.java",
+            221,
+            "Potential NullPointerException when accountOwner is null",
+            // present core chain (verbatim in the diff) cited alongside an off-diff helper
+            "`r.owner().equals(accountOwner)` is case-sensitive; `cfg.opts().get()` set the owner.",
+            MATCHED_OLD,
+            // the proposed fix wraps the present chain, so it restates it verbatim
+            "r != null && r.owner().equals(accountOwner)");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, DESCRIPTION_DIFF));
+  }
+
+  /**
    * Mechanism (a), #121: a finding with no {@code suggestion_new} to subtract still demotes when
    * its only cited chain is a phantom. The null-suggestion path must be a no-op (nothing to
    * subtract), not an accidental keep — covering the {@code suggestionNew == null} branch.
