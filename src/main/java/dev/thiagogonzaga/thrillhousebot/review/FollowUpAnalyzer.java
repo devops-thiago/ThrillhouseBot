@@ -623,19 +623,50 @@ public class FollowUpAnalyzer {
     // The current round reports on the newest prior round — drop everything it accounted for.
     closeReported(open, chrono.get(chrono.size() - 1).findings(), currentStatuses);
 
+    // Cluster the remaining open findings by tolerant identity.
+    var clusters = new ArrayList<List<OpenFinding>>();
+    for (var openFinding : open.values()) {
+      List<OpenFinding> home = null;
+      for (var cluster : clusters) {
+        if (cluster.stream()
+            .anyMatch(member -> isSameFinding(member.finding(), openFinding.finding()))) {
+          home = cluster;
+          break;
+        }
+      }
+      if (home == null) {
+        home = new ArrayList<>();
+        clusters.add(home);
+      }
+      home.add(openFinding);
+    }
+
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
-    for (var entry : open.values()) {
-      var finding = entry.finding();
-      // The maintainer reply is located by the round-relative marker (entry.id()) plus the
-      // finding's own content rather than by title, so a null-title finding's thread is still seen
-      // and a thread-less finding cannot bind to a different finding that reused the same marker
-      // index in another round (#133).
-      if (lineResolver.isFindingPresent(
-              finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE)
-          && answeredRootComment(finding, entry.id(), inlineComments, botLogin) == null) {
+    for (var cluster : clusters) {
+      boolean anyReplied = false;
+      OpenFinding target = null;
+
+      for (var member : cluster) {
+        var finding = member.finding();
+        boolean present =
+            lineResolver.isFindingPresent(
+                finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE);
+        if (present && target == null) {
+          target = member;
+        }
+        // The maintainer reply is located by the round-relative marker (member.id()) plus the
+        // finding's own content rather than by title, so a null-title finding's thread is still
+        // seen and a thread-less finding cannot bind to a different finding that reused the same
+        // marker index in another round (#133).
+        if (answeredRootComment(finding, member.id(), inlineComments, botLogin) != null) {
+          anyReplied = true;
+        }
+      }
+
+      if (target != null && !anyReplied) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
-                entry.id(),
+                target.id(),
                 STATUS_UNRESOLVED,
                 "Flagged in an earlier round and still present; not addressed in this revision."));
       }

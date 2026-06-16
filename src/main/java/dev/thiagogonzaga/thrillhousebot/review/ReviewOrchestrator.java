@@ -215,14 +215,19 @@ public class ReviewOrchestrator {
           buildBaseComparison(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
 
       var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
-      // First-review detection consults the persisted prior responses, not just formal GitHub
-      // reviews: every completed round persists its AI response keyed by repo+PR (surviving a
-      // force-push/rebase), so the previous-findings context is reconstructed for every follow-up
-      // round even on the rare path where no formal review was emitted. (#118)
+      // Two independent flags decouple UX presentation from context loading (#134):
+      //  • isFirstVisibleReview — true when no bot-authored review exists on the PR.
+      //    Gates the first-review summary issue-comment and the APPROVE celebration body.
+      //  • hasContext — true when persistence holds prior AI responses (surviving force-push/
+      //    rebase). Gates previous-findings context loading, inline comment fetching, and the
+      //    deterministic backstop. A persisted-but-unreviewed prior round (e.g. createReview
+      //    failed after persistAiResponse) must still reconstruct context without suppressing
+      //    the first user-visible summary. (#118, #134)
       List<String> priorAiResponseJsons =
           sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
-      var hasBotReview = priorReviews.stream().anyMatch(r -> BOT_LOGIN.equals(r.user().login()));
-      var isFirstReview = !hasBotReview && priorAiResponseJsons.isEmpty();
+      var isFirstVisibleReview =
+          priorReviews.stream().noneMatch(r -> BOT_LOGIN.equals(r.user().login()));
+      var hasContext = !priorAiResponseJsons.isEmpty();
       String previousAiResponseJson =
           priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(0);
       List<String> olderAiResponseJsons =
@@ -230,18 +235,18 @@ public class ReviewOrchestrator {
               ? priorAiResponseJsons.subList(1, priorAiResponseJsons.size())
               : List.of();
       List<GitHubReviewClient.PullRequestComment> inlineComments =
-          isFirstReview
-              ? List.of()
-              : fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber());
+          hasContext
+              ? fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber())
+              : List.of();
       String previousFindings =
-          isFirstReview
-              ? ""
-              : followUpAnalyzer.buildPreviousFindingsContext(
+          hasContext
+              ? followUpAnalyzer.buildPreviousFindingsContext(
                   previousAiResponseJson,
                   priorReviews,
                   inlineComments,
                   olderAiResponseJsons,
-                  BOT_LOGIN);
+                  BOT_LOGIN)
+              : "";
 
       var instructions =
           instructionsResolver.resolve(
@@ -290,18 +295,18 @@ public class ReviewOrchestrator {
       // statuses, so an APPROVE can never sail over them. Spans every prior round, not just the
       // newest, so a finding dropped rounds after it was raised is still caught. (#118, #130)
       var backstopUnresolved =
-          isFirstReview
-              ? List.<ReviewResult.PreviousFindingStatus>of()
-              : followUpAnalyzer.unreportedUnresolvedStatuses(
+          hasContext
+              ? followUpAnalyzer.unreportedUnresolvedStatuses(
                   priorAiResponseJsons,
                   aiResponse.previousFindingsStatus(),
                   inlineComments,
                   new DiffLineResolver(patchesByFile(files)),
-                  BOT_LOGIN);
+                  BOT_LOGIN)
+              : List.<ReviewResult.PreviousFindingStatus>of();
       var result =
           buildResult(
               aiResponse,
-              isFirstReview,
+              isFirstVisibleReview,
               diffStats,
               unresolvedPrevious,
               offendingCiChecks,
@@ -325,7 +330,7 @@ public class ReviewOrchestrator {
 
       // Summary goes first so it tops the PR conversation, before the inline finding comments.
       // Posted on clean first reviews too: the celebration line lives inside the summary
-      if (isFirstReview && !result.summaryMarkdown().isBlank()) {
+      if (isFirstVisibleReview && !result.summaryMarkdown().isBlank()) {
         commentClient.createComment(
             auth,
             ACCEPT,
