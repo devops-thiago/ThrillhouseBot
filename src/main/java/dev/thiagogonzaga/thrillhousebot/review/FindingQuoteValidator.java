@@ -25,7 +25,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 /**
  * Deterministic guard against findings that quote code which is not in the diff. The model
@@ -57,8 +56,6 @@ public class FindingQuoteValidator {
 
   /** Shared tail of every log line that strips a suggestion and caps confidence. */
   private static final String DEMOTION_SUFFIX = " dropping its suggestion and capping confidence";
-
-  private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
   public record DiffLine(String normalizedText, int rightLineNum, char marker) {}
 
@@ -158,8 +155,9 @@ public class FindingQuoteValidator {
    * one never demotes (#121, mechanism b). <b>The proposed fix is not a citation:</b> among chains
    * <em>absent</em> from the diff, one whose compacted form the compacted {@code suggestion_new}
    * restates is the hypothetical fix — absent by definition — and is not counted as fabrication
-   * (#121, mechanism a). The match is whitespace-insensitive so reformatting can't hide a real
-   * citation.
+   * (#121, mechanism a). The match ignores all whitespace — Unicode-aware, and over a scope joined
+   * across diff lines — so reformatting or a wrapped citation can't hide a real one (see {@link
+   * #stripWhitespace}).
    */
   private static boolean descriptionCitesAbsentCode(
       ReviewResponse.Finding finding, DiffIndex index) {
@@ -167,12 +165,12 @@ public class FindingQuoteValidator {
     if (cited.isEmpty()) {
       return false;
     }
-    List<String> compactedScope = compactedLines(index.diffLinesFor(finding.file()));
+    String compactedScope = compactScope(index.diffLinesFor(finding.file()));
     String compactedSuggestion =
-        finding.suggestionNew() == null ? "" : compact(finding.suggestionNew());
+        finding.suggestionNew() == null ? "" : stripWhitespace(finding.suggestionNew());
     boolean fabricated = false;
     for (String expression : cited) {
-      String needle = compact(expression);
+      String needle = stripWhitespace(expression);
       if (appearsIn(needle, compactedScope)) {
         // Present verbatim in the diff: the finding is grounded — keep it, whatever else it cites.
         return false;
@@ -347,32 +345,51 @@ public class FindingQuoteValidator {
   }
 
   /**
-   * The scoped diff lines with all whitespace removed, compacted once for reuse across citations.
+   * The scoped diff lines stripped of whitespace and concatenated in diff order. Joining the lines
+   * — rather than testing each in isolation — lets a citation the source wraps across two physical
+   * diff lines (e.g. {@code obj.method()} then {@code .chain(null)}) still be found.
    */
-  private static List<String> compactedLines(List<DiffLine> scope) {
-    var compacted = new ArrayList<String>(scope.size());
+  private static String compactScope(List<DiffLine> scope) {
+    var joined = new StringBuilder();
     for (DiffLine line : scope) {
-      compacted.add(compact(line.normalizedText()));
+      joined.append(stripWhitespace(line.normalizedText()));
     }
-    return compacted;
+    return joined.toString();
   }
 
   /**
    * Whether {@code needle} — an already-compacted call chain (see {@link #citedCallExpressions}) —
-   * occurs within any already-compacted diff line. Both sides are whitespace-stripped so
-   * indentation or reformatting can't hide a citation.
+   * occurs within the compacted, joined diff scope. Both sides are whitespace-stripped so
+   * indentation or reformatting can't hide a citation, and joining the scope lets a citation the
+   * source wraps across two diff lines still be found.
    */
-  private static boolean appearsIn(String needle, List<String> compactedScope) {
-    for (String line : compactedScope) {
-      if (line.contains(needle)) {
-        return true;
-      }
-    }
-    return false;
+  private static boolean appearsIn(String needle, String compactedScope) {
+    return compactedScope.contains(needle);
   }
 
-  private static String compact(String text) {
-    return WHITESPACE.matcher(text).replaceAll("");
+  /**
+   * Removes every whitespace character so a citation matches the diff regardless of reformatting.
+   * The strip is Unicode-aware: {@link Character#isSpaceChar} catches the non-breaking spaces
+   * (U+00A0, U+2007, U+202F) that {@link Character#isWhitespace} omits, so even an exotic space
+   * can't hide a real citation.
+   *
+   * <p>Whitespace inside string/char literals is stripped too, so a phantom that differs from real
+   * code only by intra-literal spacing (e.g. {@code put("a b")} vs {@code put("ab")}) reads as
+   * present and is not demoted. That residual false negative is deliberate: telling a real literal
+   * interior from an incidental quote (a comment apostrophe, a string the source splits across diff
+   * lines) can't be done reliably on diff text alone, and demoting on a misread would drop a
+   * genuinely present finding — the costly direction this guard exists to avoid. Catching that
+   * phantom needs the cross-file context tracked separately in #55.
+   */
+  private static String stripWhitespace(String text) {
+    var out = new StringBuilder(text.length());
+    for (int i = 0; i < text.length(); i++) {
+      char c = text.charAt(i);
+      if (!Character.isWhitespace(c) && !Character.isSpaceChar(c)) {
+        out.append(c);
+      }
+    }
+    return out.toString();
   }
 
   static QuoteMatch matchQuote(List<String> quoted, Set<String> diffLines) {
