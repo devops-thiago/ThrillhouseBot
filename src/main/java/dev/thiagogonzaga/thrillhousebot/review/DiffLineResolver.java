@@ -16,12 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.OptionalInt;
 import java.util.TreeSet;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
@@ -83,11 +85,8 @@ public final class DiffLineResolver {
     if (anchorLines.isEmpty()) {
       return isLineInDiff(file, line, tolerance);
     }
-    List<String> text = rightSideTextByFile.get(file);
-    if (text == null) {
-      text = byPathVariant(rightSideTextByFile, file);
-    }
-    return text != null && containsContiguous(text, anchorLines);
+    return presentInFileOrVariant(
+        rightSideTextByFile, file, text -> containsContiguous(text, anchorLines));
   }
 
   /** Whether {@code needle} appears as a contiguous, in-order run within {@code haystack}. */
@@ -121,27 +120,52 @@ public final class DiffLineResolver {
     if (file == null || line <= 0) {
       return false;
     }
-    NavigableSet<Integer> lines = rightSideLinesByFile.get(file);
-    if (lines == null) {
-      lines = byPathVariant(rightSideLinesByFile, file);
-    }
-    if (lines == null || lines.isEmpty()) {
-      return false;
-    }
+    return presentInFileOrVariant(
+        rightSideLinesByFile, file, lines -> lineWithinTolerance(lines, line, tolerance));
+  }
+
+  /** Whether {@code line} — or a member within {@code tolerance} of it — is in {@code lines}. */
+  private static boolean lineWithinTolerance(NavigableSet<Integer> lines, int line, int tolerance) {
     Integer floor = lines.floor(line);
     Integer ceiling = lines.ceiling(line);
     return (floor != null && line - floor <= tolerance)
         || (ceiling != null && ceiling - line <= tolerance);
   }
 
-  /** The value for the diff filename matching {@code file} as a path variant, or {@code null}. */
-  private static <V> V byPathVariant(Map<String, V> byFile, String file) {
+  /**
+   * Whether {@code predicate} holds for {@code file}'s own diff entry or, failing that, for any
+   * other diff file whose path is a {@link FilePaths#same} variant of it.
+   *
+   * <p>A <em>non-empty</em> exact entry is authoritative: the file is in the diff under exactly
+   * that name, so the result is decided from it alone and no variant is consulted — a same-suffix
+   * file that merely shares the path must never resurrect a finding whose code changed away in its
+   * own file. The variant fallback runs only when the exact entry is absent <em>or empty</em>: a
+   * deletion-only patch stores an empty right side under its exact key, which previously
+   * short-circuited the fallback and masked a variant that held the real data (#132a).
+   *
+   * <p>The fallback inspects <em>every</em> matching variant rather than the first the backing
+   * {@link HashMap} happens to iterate, so an ambiguous shortened path — two changed files sharing
+   * a suffix — yields the same answer regardless of map order (#132b, no more flaky wrong-file
+   * binding) and leans toward "present in any candidate". That lean is the safe direction for the
+   * downgrade-only #118 approve backstop, which prefers a needless APPROVE→COMMENT over silently
+   * approving over a still-open finding.
+   */
+  private static <V extends Collection<?>> boolean presentInFileOrVariant(
+      Map<String, V> byFile, String file, Predicate<V> predicate) {
+    V exact = byFile.get(file);
+    if (exact != null && !exact.isEmpty()) {
+      return predicate.test(exact);
+    }
     for (var entry : byFile.entrySet()) {
-      if (FilePaths.same(file, entry.getKey())) {
-        return entry.getValue();
+      V value = entry.getValue();
+      if (!entry.getKey().equals(file)
+          && !value.isEmpty()
+          && FilePaths.same(file, entry.getKey())
+          && predicate.test(value)) {
+        return true;
       }
     }
-    return null;
+    return false;
   }
 
   /** Trimmed, non-blank lines of an anchor (a finding's {@code suggestion_old}). */

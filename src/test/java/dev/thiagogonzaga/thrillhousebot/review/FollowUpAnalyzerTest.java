@@ -696,12 +696,37 @@ class FollowUpAnalyzerTest {
     return held.stream().map(ReviewResult.PreviousFindingStatus::id).toList();
   }
 
+  /** A round persisting a single finding at {@code file}:{@code line} titled {@code title}. */
+  private static String roundJson(String file, int line, String title) {
+    return "{\"findings\": [{\"risk\": \"medium\", \"file\": \""
+        + file
+        + "\", \"line\": "
+        + line
+        + ", \"title\": \""
+        + title
+        + "\", \"description\": \"d\"}]}";
+  }
+
+  /** A round with one finding plus a previous_findings_status verdict on the prior round's id 1. */
+  private static String roundJson(String file, int line, String title, String priorStatus) {
+    return "{\"findings\": [{\"risk\": \"medium\", \"file\": \""
+        + file
+        + "\", \"line\": "
+        + line
+        + ", \"title\": \""
+        + title
+        + "\", \"description\": \"d\"}], \"previous_findings_status\": [{\"id\": 1, \"status\": \""
+        + priorStatus
+        + "\", \"note\": \"n\"}]}";
+  }
+
   @Test
   void unreportedUnresolvedShouldHoldSilentlyDroppedFindingsStillInDiff() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT);
 
     assertEquals(List.of(1, 2), heldIds(held));
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -715,7 +740,7 @@ class FollowUpAnalyzerTest {
     assertTrue(
         analyzer
             .unreportedUnresolvedStatuses(
-                PREVIOUS_JSON,
+                List.of(PREVIOUS_JSON),
                 List.of(
                     new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
                     new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional")),
@@ -728,7 +753,7 @@ class FollowUpAnalyzerTest {
     // only finding two is the silent drop the backstop reconstructs. Pins the 1-based id mapping.
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            PREVIOUS_JSON,
+            List.of(PREVIOUS_JSON),
             List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
             List.of(),
             resolver,
@@ -747,7 +772,7 @@ class FollowUpAnalyzerTest {
     for (String junk : new String[] {"wontfix", "open", "RESOLVE", "", null}) {
       var held =
           analyzer.unreportedUnresolvedStatuses(
-              PREVIOUS_JSON,
+              List.of(PREVIOUS_JSON),
               List.of(
                   new ReviewResponse.PreviousFindingStatus(1, junk, "?"),
                   new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed")),
@@ -770,7 +795,7 @@ class FollowUpAnalyzerTest {
     assertTrue(
         analyzer
             .unreportedUnresolvedStatuses(
-                PREVIOUS_JSON,
+                List.of(PREVIOUS_JSON),
                 List.of(
                     new ReviewResponse.PreviousFindingStatus(1, "RESOLVED", "fixed"),
                     new ReviewResponse.PreviousFindingStatus(2, "Justified", "intentional")),
@@ -789,7 +814,8 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "intentional, leaving as is", "maintainer"));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), comments, resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT);
 
     // Finding #1's thread carries a maintainer reply → defer to the human; only #2 is held.
     assertEquals(List.of(2), heldIds(held));
@@ -820,7 +846,8 @@ class FollowUpAnalyzerTest {
                 BOT),
             comment(101L, 100L, "src/A.java", "intentional, won't fix", "maintainer"));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertTrue(
         held.isEmpty(),
@@ -850,7 +877,8 @@ class FollowUpAnalyzerTest {
                 "**HIGH — null**\n\nfrees then dereferences\n<!-- thrillhousebot:finding=1 -->",
                 BOT));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -884,7 +912,8 @@ class FollowUpAnalyzerTest {
                 BOT),
             comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -920,7 +949,8 @@ class FollowUpAnalyzerTest {
                 BOT),
             comment(201L, 200L, "src/A.java", "intentional", "maintainer"));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -953,7 +983,8 @@ class FollowUpAnalyzerTest {
                 BOT),
             comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -984,7 +1015,8 @@ class FollowUpAnalyzerTest {
                 BOT),
             comment(101L, 100L, "src/A.java", "tracking this", BOT));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1004,7 +1036,8 @@ class FollowUpAnalyzerTest {
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1015,7 +1048,8 @@ class FollowUpAnalyzerTest {
 
     // src/B.java is absent from this round's diff → finding #2's code is gone; only #1 is held.
     var held =
-        analyzer.unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1028,18 +1062,308 @@ class FollowUpAnalyzerTest {
         analyzer.unreportedUnresolvedStatuses(null, List.of(), List.of(), resolver, BOT).isEmpty());
     assertTrue(
         analyzer
-            .unreportedUnresolvedStatuses("not json", List.of(), List.of(), resolver, BOT)
+            .unreportedUnresolvedStatuses(List.of(), List.of(), List.of(), resolver, BOT)
             .isEmpty());
     assertTrue(
         analyzer
-            .unreportedUnresolvedStatuses(PREVIOUS_JSON, List.of(), List.of(), null, BOT)
+            .unreportedUnresolvedStatuses(List.of("not json"), List.of(), List.of(), resolver, BOT)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses(List.of(PREVIOUS_JSON), List.of(), List.of(), null, BOT)
             .isEmpty());
     // Null statuses ⇒ the model reported nothing ⇒ every present finding is a silent drop.
     assertEquals(
         2,
         analyzer
-            .unreportedUnresolvedStatuses(PREVIOUS_JSON, null, List.of(), resolver, BOT)
+            .unreportedUnresolvedStatuses(List.of(PREVIOUS_JSON), null, List.of(), resolver, BOT)
             .size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldSilentlyDroppedFindingFromAnOlderRound() {
+    // #130: round 1 raised A.java:10; the newest prior round raised B.java:5. The current round
+    // marks the newest round's B resolved but never accounts for A (it is no longer a *numbered*
+    // previous finding). The backstop must still reconstruct A from the older round.
+    var prior = List.of(roundJson("src/B.java", 5, "B finding"), roundJson("src/A.java", 10, "A"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            prior,
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed B")),
+            List.of(),
+            resolver,
+            BOT);
+
+    // B is cleared by the current round; only the older, silently dropped A is held.
+    assertEquals(1, held.size());
+    assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldNotHoldFindingResolvedInAnIntermediateRound() {
+    // Regression guard for the widened scope: round 1 raised A.java:10; the newest prior round
+    // marked it resolved (previous_findings_status id 1 → A) and raised B.java:5. The current round
+    // drops everything. A was legitimately addressed, so only B is held — never re-block A.
+    var prior =
+        List.of(
+            roundJson("src/B.java", 5, "B finding", "resolved"), roundJson("src/A.java", 10, "A"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(1, held.size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldReHoldAResolvedFindingOnlyWhenReRaisedAndStillPresent() {
+    // A finding resolved in round 2 but RE-RAISED in round 3 is re-opened: a re-raise means the
+    // model flagged it again, so the round-2 closure is intentionally superseded. The hold is
+    // downgrade-only and, crucially, gated by presence — it fires only because the suggestion_old
+    // anchor is still in the diff (the resolution did not actually remove the code). Had the code
+    // been fixed, the anchor would be gone and isFindingPresent would drop it.
+    var round1 =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "T",
+           "description": "d", "suggestion_old": "still_here();"}
+        ]}
+        """;
+    var round2 =
+        "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"resolved\", \"note\": \"claimed fixed\"}]}";
+    var round3 =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "T",
+           "description": "d", "suggestion_old": "still_here();"}
+        ]}
+        """;
+    var patch =
+        """
+        @@ -10,1 +10,1 @@
+        -old();
+        +still_here();
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
+
+    // newest-first [round3, round2, round1]; the current round silently drops the re-raised
+    // finding.
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(round3, round2, round1), List.of(), List.of(), resolver, BOT);
+
+    // Re-raised and the flagged code still present → held (safe, downgrade-only).
+    assertEquals(1, held.size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldNotHoldFindingJustifiedInAnIntermediateRound() {
+    // A "justified" verdict closes a finding just like "resolved": round 1 raised A, the newest
+    // prior round justified it and raised B, the current round drops everything → only B is held.
+    var prior =
+        List.of(
+            roundJson("src/B.java", 5, "B finding", "justified"), roundJson("src/A.java", 10, "A"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(1, held.size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldOlderFindingOnlyMarkedUnresolvedThenDropped() {
+    // An intermediate "unresolved" verdict does NOT close a finding (only resolved/justified do):
+    // round 1 raised A; the newest prior round marked A unresolved and raised B; the current round
+    // resolves B and drops A. A is still open and must be held.
+    var prior =
+        List.of(
+            roundJson("src/B.java", 5, "B finding", "unresolved"),
+            roundJson("src/A.java", 10, "A"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            prior,
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed B")),
+            List.of(),
+            resolver,
+            BOT);
+
+    assertEquals(1, held.size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldDeduplicateFindingCarriedAcrossRounds() {
+    // The same finding (same file + line + title) raised in two rounds is held once, not twice.
+    var prior = List.of(roundJson("src/A.java", 10, "A"), roundJson("src/A.java", 10, "A"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+
+    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(1, held.size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldDistinctSameTitleFindingsAtDifferentLines() {
+    // Two genuinely-distinct anchorless findings share a file and title but sit at different lines.
+    // The dedup key discriminates anchorless findings by line, so neither evicts the other — both
+    // silent drops are held (a missed hold would let APPROVE sail over one of them).
+    var json =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 10, "title": "Dup", "description": "d"},
+          {"risk": "medium", "file": "src/A.java", "line": 80, "title": "Dup", "description": "d"}
+        ]}
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("src/A.java", "@@ -10,1 +10,1 @@\n-o\n+n\n@@ -80,1 +80,1 @@\n-o\n+n"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+
+    assertEquals(2, held.size());
+  }
+
+  /**
+   * Two findings on src/A.java sharing a title and the generic anchor {@code dangerous_call();}.
+   */
+  private static final String SHARED_ANCHOR_PAIR_JSON =
+      """
+      {"findings": [
+        {"risk": "high", "file": "src/A.java", "line": 10, "title": "Dangerous call",
+         "description": "d", "suggestion_old": "dangerous_call();"},
+        {"risk": "high", "file": "src/A.java", "line": 90, "title": "Dangerous call",
+         "description": "d", "suggestion_old": "dangerous_call();"}
+      ]}
+      """;
+
+  /** Patch where the shared anchor {@code dangerous_call();} is present at both line 10 and 90. */
+  private static DiffLineResolver sharedAnchorResolver() {
+    return new DiffLineResolver(
+        Map.of(
+            "src/A.java",
+            "@@ -10,1 +10,1 @@\n-old();\n+dangerous_call();\n@@ -90,1 +90,1 @@\n-old();\n+dangerous_call();"));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldDistinctFindingsSharingAnAnchorAtDifferentLines() {
+    // Two genuinely-distinct findings share a file, title, AND a generic suggestion_old anchor but
+    // sit at different lines. The dedup key is keyed on the LINE (not the anchor), so they never
+    // collapse — both silent drops are held. Collapsing them (keying on the anchor and dropping the
+    // line) would drop one and let APPROVE sail over a still-open finding — the #118 missed hold.
+    // The accepted price is that a single finding re-raised at a drifted line counts twice; the two
+    // cases present the identical signal, and an over-count is the safe direction, a missed hold is
+    // not.
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(SHARED_ANCHOR_PAIR_JSON), List.of(), List.of(), sharedAnchorResolver(), BOT);
+
+    assertEquals(List.of(1, 2), heldIds(held));
+    assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldResolveOnlyTheReferencedFindingWhenAnAnchorIsShared() {
+    // Same shared-anchor pair, but the current round resolves finding #1 (line 10). Because each
+    // finding has its own line-keyed identity, the resolution removes only #1 — the distinct #2
+    // (line 90) stays held. A key that collapsed the pair on the anchor would let resolving #1
+    // evict
+    // #2, dropping a still-open finding.
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(SHARED_ANCHOR_PAIR_JSON),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed #1")),
+            List.of(),
+            sharedAnchorResolver(),
+            BOT);
+
+    assertEquals(List.of(2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldNotHoldOlderAnchoredFindingWhoseCodeIsGone() {
+    // #130 + #129: an OLDER round's finding whose suggestion_old anchor was deleted (it lives only
+    // on the diff's left side) must not be held by the multi-round replay, even though its stale
+    // line still sits within tolerance of surviving context — the raw-line proxy would over-block.
+    var round1 =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 42, "title": "Buggy call",
+           "description": "d", "suggestion_old": "buggy_42();", "suggestion_new": ""}
+        ]}
+        """;
+    var round2 = roundJson("src/B.java", 5, "Newer finding");
+    var patchA =
+        """
+        @@ -38,6 +38,4 @@
+         ctx_38();
+         ctx_39();
+        -buggy_41();
+        -buggy_42();
+         ctx_44();
+         ctx_45();
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patchA, "src/B.java", patch(5)));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(round2, round1), List.of(), List.of(), resolver, BOT);
+
+    // A's deleted anchor is gone from the right side → not held; only the still-present B is held.
+    assertEquals(1, held.size());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldStillHoldFindingGivenAnUnrecognizedCurrentRoundVerdict() {
+    // The backstop must not trust the model's vocabulary: a non-standard current-round verdict
+    // ("pending") does NOT account for a still-open finding, so it stays held — otherwise a
+    // malformed status would sneak a silent drop past the APPROVE gate (the #118 hole).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "pending", "in progress")),
+            List.of(),
+            resolver,
+            BOT);
+
+    // Finding #1 carries an unrecognized verdict and is still held alongside the unreported #2.
+    assertEquals(List.of(1, 2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHandleFindingsMissingFileOrTitleAndOutOfRangeStatus() {
+    // A finding without a file cannot be placed in the diff → never keyed or held; a finding
+    // without a title falls back to its line for identity; a status id outside the round's range
+    // (and one pointing at the un-keyable null-file finding) is ignored without error.
+    var json =
+        """
+        {"findings": [
+          {"risk": "low", "file": null, "line": 1, "title": "no file", "description": "d"},
+          {"risk": "low", "file": "src/C.java", "line": 7, "title": null, "description": "d"},
+          {"risk": "medium", "file": "src/D.java", "line": 9, "title": "D finding",
+           "description": "d"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/C.java", patch(7), "src/D.java", patch(9)));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "resolved", "null-file finding"),
+                new ReviewResponse.PreviousFindingStatus(0, "resolved", "non-positive id"),
+                new ReviewResponse.PreviousFindingStatus(99, "resolved", "out of range")),
+            List.of(),
+            resolver,
+            BOT);
+
+    // Only the null-title (C) and titled (D) findings survive; the null-file one is dropped.
+    assertEquals(2, held.size());
+    assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
   }
 
   @Test
@@ -1064,7 +1388,8 @@ class FollowUpAnalyzerTest {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
 
     assertFalse(resolver.isLineInDiff("src/A.java", 10, 3)); // old line drifted out of range
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1097,9 +1422,45 @@ class FollowUpAnalyzerTest {
 
     // Stale line 42 is within ±3 of the surviving context line now at right-line 41.
     assertTrue(resolver.isLineInDiff("src/A.java", 42, 3)); // raw proxy would over-block here
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
 
     assertTrue(held.isEmpty());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldFindingWhoseExactDiffKeyIsEmptyButVariantCarriesIt() {
+    // #132(a) end-to-end: the finding's own file is in the diff as a deletion-only patch, so its
+    // exact key has an empty right side; the flagged code actually survives under a longer path
+    // variant. The empty exact entry must not mask the variant, or the backstop would silently
+    // approve over a still-open finding.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "dir/Main.java", "line": 1, "title": "Dangerous call",
+           "description": "unsafe", "suggestion_old": "dangerous_call()",
+           "suggestion_new": "safe_call()"}
+        ]}
+        """;
+    var deletionOnly =
+        """
+        @@ -1,2 +1,0 @@
+        -removed_one
+        -removed_two
+        """;
+    var variantWithAnchor =
+        """
+        @@ -1,0 +1,1 @@
+        +dangerous_call()
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", variantWithAnchor));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
   }
 
   @Test
