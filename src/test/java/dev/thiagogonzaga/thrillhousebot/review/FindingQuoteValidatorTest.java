@@ -836,6 +836,145 @@ class FindingQuoteValidatorTest {
     assertEquals("low", result.findings().get(0).confidence());
   }
 
+  /**
+   * (a) The cited chain {@code obj.method().chain(null)} is present, but the source wraps it across
+   * two physical diff lines. Matching each line in isolation would miss it and wrongly demote;
+   * because the compacted scope is joined in diff order, the wrapped chain is still found and the
+   * finding is kept intact.
+   */
+  @Test
+  void keepsFindingWhenDescriptionCitesAChainTheSourceWrapsAcrossLines() {
+    var diff =
+        """
+        ### Wrap.java (modified, +1 -1)
+        ```diff
+        @@ -1,5 +1,5 @@
+         public class Wrap {
+             var x = obj.method()
+                 .chain(null);
+        -    int unrelated = 1;
+        +    int unrelated = 2;
+         }
+        ```
+        """;
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "Wrap.java",
+            4,
+            "Title",
+            "The result of `obj.method().chain(null)` is dereferenced without a guard.",
+            "int unrelated = 1;",
+            "fixed");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, diff));
+  }
+
+  /**
+   * (b) The cited chain carries a non-breaking space (U+00A0) inside its argument list. An
+   * ASCII-only {@code \\s} would leave the space in place so the needle no longer matched its
+   * ASCII-spaced source, wrongly demoting the finding; Unicode-aware compaction normalizes it and
+   * the finding is kept.
+   */
+  @Test
+  void keepsFindingWhenDescriptionCitesAChainWithUnicodeWhitespace() {
+    var diff =
+        """
+        ### Config.java (modified, +1 -1)
+        ```diff
+        @@ -1,3 +1,3 @@
+         public class Config {
+        -    return config.value().orElse(null);
+        +    return config.value().orElseGet(Config::fallback);
+         }
+        ```
+        """;
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "Config.java",
+            2,
+            "Title",
+            "The expression `config.value().orElse(\u00A0null)` can return null here.",
+            "return config.value().orElse(null);",
+            "fixed");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, diff));
+  }
+
+  /**
+   * The conservative trade for issue #122: a description that cites a string/char literal differing
+   * from the real code only by spacing <em>inside</em> the literal ({@code cache.put("a b")} vs the
+   * source's {@code cache.put("ab")}) is kept, not demoted. Distinguishing a genuine literal
+   * interior from an incidental quote can't be done reliably on diff text alone, so the guard never
+   * demotes on intra-literal spacing — a deliberate false negative in the safe direction.
+   */
+  @Test
+  void keepsFindingWhoseCitedLiteralDiffersOnlyByIntraLiteralSpacing() {
+    var diff =
+        """
+        ### Cache.java (modified, +1 -1)
+        ```diff
+        @@ -1,3 +1,3 @@
+         public class Cache {
+        -    int unrelated = 1;
+        +    cache.put("ab");
+         }
+        ```
+        """;
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "Cache.java",
+            2,
+            "Title",
+            "The entry from `cache.put(\"a b\")` is overwritten on the next call.",
+            "int unrelated = 1;",
+            "fixed");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, diff));
+  }
+
+  /**
+   * An apostrophe or stray quote in a comment near the cited chain must not break the match. The
+   * whole scope is compared with all whitespace removed, so the comment's punctuation is
+   * irrelevant: the cited {@code config.value().orElse(null)} is found and the finding is kept.
+   */
+  @Test
+  void keepsFindingWhenScopeHasCommentApostropheNearCitedChain() {
+    var diff =
+        """
+        ### Foo.java (modified, +1 -1)
+        ```diff
+        @@ -1,4 +1,4 @@
+         public class Foo {
+             // can't fix config.value() .orElse(null) but here's why
+        -    int unrelated = 1;
+        +    int unrelated = 2;
+         }
+        ```
+        """;
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "Foo.java",
+            3,
+            "Title",
+            "The value `config.value().orElse(null)` can be null here.",
+            "int unrelated = 1;",
+            "fixed");
+    var response = response(finding);
+
+    assertSame(response, validator.validate(response, diff));
+  }
+
   @Test
   void noNewlineIndicatorIsNotQuotableContent() {
     var diff =
