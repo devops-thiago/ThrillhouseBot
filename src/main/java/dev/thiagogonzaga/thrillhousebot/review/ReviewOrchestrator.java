@@ -287,12 +287,13 @@ public class ReviewOrchestrator {
               previousAiResponseJson, aiResponse.previousFindingsStatus());
       // Deterministic backstop: reconstruct the bot's own prior findings the model silently dropped
       // from previous_findings_status but that are still present in this diff, as unresolved
-      // statuses, so an APPROVE can never sail over them. (#118)
+      // statuses, so an APPROVE can never sail over them. Spans every prior round, not just the
+      // newest, so a finding dropped rounds after it was raised is still caught. (#118, #130)
       var backstopUnresolved =
           isFirstReview
               ? List.<ReviewResult.PreviousFindingStatus>of()
               : followUpAnalyzer.unreportedUnresolvedStatuses(
-                  previousAiResponseJson,
+                  priorAiResponseJsons,
                   aiResponse.previousFindingsStatus(),
                   inlineComments,
                   new DiffLineResolver(patchesByFile(files)),
