@@ -1208,6 +1208,40 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldHoldFindingWhoseExactDiffKeyIsEmptyButVariantCarriesIt() {
+    // #132(a) end-to-end: the finding's own file is in the diff as a deletion-only patch, so its
+    // exact key has an empty right side; the flagged code actually survives under a longer path
+    // variant. The empty exact entry must not mask the variant, or the backstop would silently
+    // approve over a still-open finding.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "dir/Main.java", "line": 1, "title": "Dangerous call",
+           "description": "unsafe", "suggestion_old": "dangerous_call()",
+           "suggestion_new": "safe_call()"}
+        ]}
+        """;
+    var deletionOnly =
+        """
+        @@ -1,2 +1,0 @@
+        -removed_one
+        -removed_two
+        """;
+    var variantWithAnchor =
+        """
+        @@ -1,0 +1,1 @@
+        +dangerous_call()
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", variantWithAnchor));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
   void buildPreviousFindingsContextShouldReturnEmptyForNull() {
     assertEquals("", analyzer.buildPreviousFindingsContext(null, "thrillhousebot"));
   }

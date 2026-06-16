@@ -401,4 +401,158 @@ class DiffLineResolverTest {
     assertTrue(resolver.isFindingPresent("A.java", 1, "first();\nthird();", 3));
     assertFalse(resolver.isFindingPresent("A.java", 1, "second();", 3));
   }
+
+  @Test
+  void isLineInDiffFallsBackToVariantWhenExactEntryIsEmpty() {
+    // #132(a): a deletion-only file stores its exact-path key with an empty right side, while a
+    // longer path variant holds the real right-side lines. The empty exact entry must not
+    // short-circuit the variant fallback and drop a still-open finding.
+    var deletionOnly =
+        """
+        @@ -10,2 +10,0 @@
+        -removed_one
+        -removed_two
+        """;
+    var resolver =
+        new DiffLineResolver(Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", PATCH));
+
+    assertTrue(resolver.isLineInDiff("dir/Main.java", 11, 3));
+  }
+
+  @Test
+  void isFindingPresentFallsBackToVariantWhenExactEntryIsEmpty() {
+    // #132(a), content path: the deletion-only exact entry is empty, so the anchor must be matched
+    // against the variant that actually carries the flagged code.
+    var deletionOnly =
+        """
+        @@ -10,2 +10,0 @@
+        -removed_one
+        -removed_two
+        """;
+    var resolver =
+        new DiffLineResolver(Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", PATCH));
+
+    assertTrue(resolver.isFindingPresent("dir/Main.java", 999, "new_line()", 3));
+  }
+
+  @Test
+  void isFindingPresentTreatsNonEmptyExactMatchAsAuthoritativeOverVariant() {
+    // When the finding's own file is in the diff (non-empty right side), presence is decided from
+    // it alone: a same-suffix variant that still contains the anchor must not resurrect a finding
+    // whose code was changed away in its own file.
+    var exactChangedAway =
+        """
+        @@ -1,1 +1,1 @@
+        -dangerous_call()
+        +safe_call()
+        """;
+    var variantStillHasIt =
+        """
+        @@ -1,0 +1,1 @@
+        +dangerous_call()
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("dir/Helper.java", exactChangedAway, "src/dir/Helper.java", variantStillHasIt));
+
+    assertFalse(resolver.isFindingPresent("dir/Helper.java", 1, "dangerous_call()", 3));
+  }
+
+  @Test
+  void isFindingPresentHoldsWhicheverSuffixVariantCarriesTheSurvivingCode() {
+    // #132(b): two changed files share the suffix "util/Helper.java", so the ambiguous shortened
+    // model path FilePaths.same-matches both. The flagged code survives in only one of them. The
+    // old first-match-wins lookup would test presence against whichever variant the map yielded
+    // first and silently drop the finding when that was the wrong one; the scan now checks EVERY
+    // matching variant, so a decoy variant lacking the anchor cannot shadow the one that has it.
+    // Asserting the hold for both placements documents that the decision does not depend on which
+    // suffix-colliding variant happens to carry the code (the placement where the anchor lands in a
+    // non-first-iterated variant is the one that actually pins the all-variants scan).
+    var withAnchor =
+        """
+        @@ -1,0 +1,1 @@
+        +dangerous_call()
+        """;
+    var withoutAnchor =
+        """
+        @@ -1,0 +1,1 @@
+        +safe_call()
+        """;
+    var anchorInA =
+        new DiffLineResolver(
+            Map.of("a/util/Helper.java", withAnchor, "b/util/Helper.java", withoutAnchor));
+    var anchorInB =
+        new DiffLineResolver(
+            Map.of("a/util/Helper.java", withoutAnchor, "b/util/Helper.java", withAnchor));
+
+    assertTrue(anchorInA.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+    assertTrue(anchorInB.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+  }
+
+  @Test
+  void isFindingPresentDoesNotHoldWhenAnchorSurvivesInNoVariant() {
+    // #132(b): genuinely ambiguous path, but the flagged code survives in neither candidate — the
+    // finding is not held.
+    var withoutAnchor =
+        """
+        @@ -1,0 +1,1 @@
+        +safe_call()
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("a/util/Helper.java", withoutAnchor, "b/util/Helper.java", withoutAnchor));
+
+    assertFalse(resolver.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+  }
+
+  @Test
+  void isLineInDiffChecksEveryMatchingVariantNotJustTheFirstCandidate() {
+    // #132(b): suffix-colliding files both FilePaths.same-match the shortened path, but only one
+    // carries the target line. The scan checks every matching variant, so a decoy variant whose
+    // lines are elsewhere cannot shadow the one that holds the line — the old first-match lookup
+    // could have tested the decoy and dropped the match.
+    var atLine20 =
+        """
+        @@ -1,1 +20,1 @@
+        +twenty
+        """;
+    var farAway =
+        """
+        @@ -1,1 +99,1 @@
+        +far
+        """;
+    var resolver =
+        new DiffLineResolver(Map.of("a/util/Helper.java", atLine20, "b/util/Helper.java", farAway));
+
+    assertTrue(resolver.isLineInDiff("util/Helper.java", 20, 3));
+    assertFalse(resolver.isLineInDiff("util/Helper.java", 50, 3));
+  }
+
+  @Test
+  void isFindingPresentSkipsEmptyVariantSoDeletionOnlyFileDoesNotHold() {
+    // A path variant whose only patch is deletion-only carries no right-side text. It is skipped
+    // (not matched as an empty entry), so a finding whose shortened path resolves solely to that
+    // deleted file counts as no longer present.
+    var deletionOnly =
+        """
+        @@ -1,2 +1,0 @@
+        -dangerous_call()
+        -also_removed()
+        """;
+    var resolver = new DiffLineResolver(Map.of("a/util/Helper.java", deletionOnly));
+
+    assertFalse(resolver.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+  }
+
+  @Test
+  void shouldNotBindBareFilenameToDirectoryVariantThroughTheFallback() {
+    // The variant scan delegates path matching to FilePaths.same, whose guard requires the shorter
+    // path to contain a directory segment. A bare "B.java" must never bind to a directory-bearing
+    // key like "src/B.java" — a bare name matches every file of that name in the repo, and a wrong
+    // bind here would falsely hold or clear approval.
+    var resolver = new DiffLineResolver(Map.of("src/B.java", PATCH));
+
+    assertFalse(resolver.isFindingPresent("B.java", 1, "new_line()", 3));
+    assertFalse(resolver.isLineInDiff("B.java", 11, 3));
+  }
 }
