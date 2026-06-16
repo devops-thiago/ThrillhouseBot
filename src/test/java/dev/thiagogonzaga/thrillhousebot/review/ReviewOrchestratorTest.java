@@ -2912,14 +2912,14 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldTreatAsFollowUpWhenPersistenceHasPriorResponsesDespiteNoBotReview() {
+    void shouldLoadContextFromPersistenceEvenWithoutBotReview() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = followUpSession();
         mockedStatic
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
         // No formal bot review exists (listReviews defaults to empty), but a prior round persisted
-        // its findings — the review must still be treated as a follow-up. (#118 fix #1)
+        // its findings — context must still be reconstructed for follow-up analysis. (#118)
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
@@ -2930,12 +2930,45 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(followUpRequest());
 
-        // Previous-findings context IS reconstructed without any formal bot review...
+        // Previous-findings context IS reconstructed without any formal bot review
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(any(), any(), any(), any(), eq("thrillhousebot[bot]"));
-        // ...and the first-review summary issue-comment is NOT posted.
-        verify(commentClient, never())
-            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      }
+    }
+
+    @Test
+    void shouldPostSummaryOnPersistedButUnreviewedPr() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = followUpSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        // No formal bot review exists, but persistence holds a prior round's AI response.
+        // The summary must still be posted: isFirstVisibleReview is true. (#134)
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of(PRIOR_FINDING_JSON));
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+            .thenReturn("previous context");
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+            .thenReturn("ThrillhouseBot PR Summary\n\nAll clear!");
+
+        orchestrator.review(followUpRequest());
+
+        // Summary IS posted because no bot review exists on the PR (first visible review)
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
+        // Context IS still loaded from persistence
+        verify(followUpAnalyzer)
+            .buildPreviousFindingsContext(any(), any(), any(), any(), eq("thrillhousebot[bot]"));
       }
     }
 
