@@ -555,4 +555,30 @@ class DiffLineResolverTest {
     assertFalse(resolver.isFindingPresent("B.java", 1, "new_line()", 3));
     assertFalse(resolver.isLineInDiff("B.java", 11, 3));
   }
+
+  @Test
+  void isLineInDiffTreatsNonEmptyExactMatchAsAuthoritativeOverVariant() {
+    // The line-membership counterpart to the isFindingPresent authoritative-exact test: when the
+    // file's own diff entry is non-empty, the decision is made from it alone — a same-suffix
+    // variant
+    // carrying the requested line must not be consulted.
+    var exactAtLine20 =
+        """
+        @@ -1,1 +20,1 @@
+        +twenty
+        """;
+    var variantAtLine50 =
+        """
+        @@ -1,1 +50,1 @@
+        +fifty
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("dir/F.java", exactAtLine20, "src/dir/F.java", variantAtLine50));
+
+    // 50 is far from the exact entry's only line (20); the variant's line 50 is never consulted.
+    assertFalse(resolver.isLineInDiff("dir/F.java", 50, 3));
+    // Sanity: the exact entry's own line still resolves.
+    assertTrue(resolver.isLineInDiff("dir/F.java", 20, 3));
+  }
 }
