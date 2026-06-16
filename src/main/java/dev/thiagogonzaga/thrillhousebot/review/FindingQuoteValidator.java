@@ -279,7 +279,11 @@ public class FindingQuoteValidator {
 
   /**
    * Advances past a string or char literal opened at {@code start}, honoring backslash escapes.
-   * Returns the index just past the closing quote, or the end of input for an unterminated literal.
+   * Returns the index just past the closing quote. For an unterminated literal it returns {@code
+   * start + 1}, treating the lone quote as an ordinary character rather than swallowing the rest of
+   * the input — the description is free-text prose where a bare apostrophe (a contraction or
+   * possessive) is far more common than a real char literal, and swallowing to end-of-input would
+   * unbalance the enclosing parentheses and silently drop an otherwise valid citation.
    */
   private static int skipLiteral(String s, int start) {
     char quote = s.charAt(start);
@@ -296,7 +300,7 @@ public class FindingQuoteValidator {
       }
       i++;
     }
-    return n; // unterminated literal
+    return start + 1; // unterminated literal: treat the lone quote as an ordinary character
   }
 
   private static boolean isIdentifierStart(char c) {

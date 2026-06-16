@@ -655,7 +655,10 @@ class FindingQuoteValidatorTest {
         "It validates with `pattern_2.match(\"a\\\"b\").orElseThrow()` before continuing.",
         // a char-literal slash holds no real bracket, a leading dollar sign is a valid identifier
         // start, and the sentence break exercises a dot that is not followed by an identifier
-        "Two call sites exist. The `path.split('/')` output (the $tmp local) is never checked."
+        "Two call sites exist. The `path.split('/')` output (the $tmp local) is never checked.",
+        // a lone apostrophe inside the cited call's arguments must not swallow the rest of the
+        // citation: the phantom chain is still extracted whole and, being absent, demoted
+        "accountOwner is `dashboardConfig.lookup(the user's key).orElse(null)`, which may be null."
       })
   void demotesFindingWhenDescriptionCitesAbsentNestedCallChain(String description) {
     var result =
