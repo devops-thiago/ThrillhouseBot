@@ -58,18 +58,6 @@ public class FindingQuoteValidator {
   /** Shared tail of every log line that strips a suggestion and caps confidence. */
   private static final String DEMOTION_SUFFIX = " dropping its suggestion and capping confidence";
 
-  /**
-   * A chained call expression: a receiver followed by one or more {@code .member} segments, with
-   * optional argument lists. Single names like {@code installedRepos()} are deliberately excluded —
-   * they are too common to flag against the diff's narrow window. A match is only treated as a code
-   * citation when it actually contains a call ({@code '('}). Quantifiers are possessive: each class
-   * never overlaps the token that follows it, so no backtracking is ever needed and large inputs
-   * cannot trigger catastrophic backtracking.
-   */
-  private static final Pattern CHAINED_CALL =
-      Pattern.compile(
-          "[A-Za-z_$][A-Za-z0-9_$]*+(?:\\([^()]*+\\))?+(?:\\.[A-Za-z_$][A-Za-z0-9_$]*+(?:\\([^()]*+\\))?+)++");
-
   private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
   public record DiffLine(String normalizedText, int rightLineNum, char marker) {}
@@ -197,22 +185,165 @@ public class FindingQuoteValidator {
     return fabricated;
   }
 
-  /** The chained call expressions a description presents as code, e.g. {@code a.b().c(null)}. */
+  /** The end index and shape of one chained-call scan: see {@link #scanChainedCall}. */
+  private record ChainSpan(int end, int memberSegments, boolean hasCall) {}
+
+  /**
+   * The chained call expressions a description presents as code, e.g. {@code a.b(c.d()).e(null)}.
+   *
+   * <p>Each candidate is consumed with a manual, bracket-matched walk rather than a regex. An
+   * argument list can itself hold a call or a lambda — i.e. nested parentheses — which a bounded
+   * character class cannot span; a balanced-paren regex could, but only by re-introducing the
+   * catastrophic-backtracking risk the possessive quantifiers were chosen to avoid. The walk spans
+   * a {@code receiver.member} chain in full, including nested-call and lambda arguments, so a
+   * nested expression surfaces as one whole citation and its inner sub-expressions are never
+   * emitted as standalone citations. Only chains with at least one {@code .member} segment and an
+   * actual call ({@code '('}) are kept; bare names like {@code installedRepos()} and dotted field
+   * access like {@code config.value} are deliberately excluded — they are not distinctive enough to
+   * flag against the diff's narrow window.
+   *
+   * <p>A bare-name call (a receiver call with no following {@code .member}, e.g. {@code
+   * requireNonNull(user.getName())}) is itself excluded, but its argument list may wrap a real
+   * chain. Rather than skipping the whole wrapper, the walk descends past the bare receiver so the
+   * inner chain ({@code user.getName()}) is still extracted — otherwise a fabricated mechanism
+   * cited only inside such a wrapper would escape the guard.
+   */
   private static List<String> citedCallExpressions(String description) {
     if (description == null || description.isBlank()) {
       return List.of();
     }
     var expressions = new ArrayList<String>();
-    var matcher = CHAINED_CALL.matcher(description);
-    while (matcher.find()) {
-      String expression = matcher.group();
-      // Require an actual call: a dotted field chain (e.g. config.value) or a bare name is not
-      // distinctive enough to flag against the diff's narrow window.
-      if (expression.indexOf('(') >= 0) {
-        expressions.add(expression);
+    int i = 0;
+    int n = description.length();
+    while (i < n) {
+      if (isIdentifierStart(description.charAt(i))) {
+        ChainSpan span = scanChainedCall(description, i);
+        if (span.memberSegments() >= 1 && span.hasCall()) {
+          expressions.add(description.substring(i, span.end()));
+          i = span.end(); // a genuine chain: skip it whole, never surfacing its inner sub-exprs
+        } else if (span.hasCall()) {
+          // a bare-name call: descend past just the receiver so its argument list is re-scanned
+          i = skipIdentifier(description, i);
+        } else {
+          i = span.end(); // a bare name or dotted field access with no call: nothing to recover
+        }
+      } else {
+        i++;
       }
     }
     return expressions;
+  }
+
+  /**
+   * Consumes a chained-call expression starting at {@code start} (an identifier-start character): a
+   * receiver, an optional argument list, then zero or more {@code .member} segments each with an
+   * optional argument list. Argument lists are spanned with balanced-bracket counting (see {@link
+   * #skipBalancedParens}), so nested calls and lambdas are absorbed whole. The returned end index
+   * is always past the receiver, so the caller always makes progress.
+   */
+  private static ChainSpan scanChainedCall(String s, int start) {
+    int i = skipIdentifier(s, start);
+    boolean hasCall = false;
+    int afterArgs = skipBalancedParens(s, i);
+    if (afterArgs > i) {
+      hasCall = true;
+      i = afterArgs;
+    }
+    int segments = 0;
+    while (i < s.length() && s.charAt(i) == '.') {
+      int nameEnd = skipIdentifier(s, i + 1);
+      if (nameEnd == i + 1) {
+        break; // a '.' not followed by an identifier ends the chain
+      }
+      i = nameEnd;
+      afterArgs = skipBalancedParens(s, i);
+      if (afterArgs > i) {
+        hasCall = true;
+        i = afterArgs;
+      }
+      segments++;
+    }
+    return new ChainSpan(i, segments, hasCall);
+  }
+
+  /**
+   * Advances past an identifier at {@code start}, or returns {@code start} if none begins there.
+   */
+  private static int skipIdentifier(String s, int start) {
+    if (start >= s.length() || !isIdentifierStart(s.charAt(start))) {
+      return start;
+    }
+    int i = start + 1;
+    while (i < s.length() && isIdentifierPart(s.charAt(i))) {
+      i++;
+    }
+    return i;
+  }
+
+  /**
+   * If {@code start} is an opening parenthesis, returns the index just past its matching close,
+   * counting nesting depth and skipping string/char literals so parentheses inside a literal don't
+   * unbalance the count. Returns {@code start} unchanged when there is no argument list there or
+   * the parentheses are unbalanced — in which case the chain simply ends before the {@code '('}.
+   */
+  private static int skipBalancedParens(String s, int start) {
+    int n = s.length();
+    if (start >= n || s.charAt(start) != '(') {
+      return start;
+    }
+    int depth = 0;
+    int i = start;
+    while (i < n) {
+      char c = s.charAt(i);
+      if (c == '"' || c == '\'') {
+        i = skipLiteral(s, i);
+        continue;
+      }
+      if (c == '(') {
+        depth++;
+      } else if (c == ')') {
+        depth--;
+        if (depth == 0) {
+          return i + 1;
+        }
+      }
+      i++;
+    }
+    return start; // unbalanced — consume nothing
+  }
+
+  /**
+   * Advances past a string or char literal opened at {@code start}, honoring backslash escapes.
+   * Returns the index just past the closing quote. For an unterminated literal it returns {@code
+   * start + 1}, treating the lone quote as an ordinary character rather than swallowing the rest of
+   * the input — the description is free-text prose where a bare apostrophe (a contraction or
+   * possessive) is far more common than a real char literal, and swallowing to end-of-input would
+   * unbalance the enclosing parentheses and silently drop an otherwise valid citation.
+   */
+  private static int skipLiteral(String s, int start) {
+    char quote = s.charAt(start);
+    int n = s.length();
+    int i = start + 1;
+    while (i < n) {
+      char c = s.charAt(i);
+      if (c == '\\') {
+        i += 2; // skip the escaped character
+        continue;
+      }
+      if (c == quote) {
+        return i + 1;
+      }
+      i++;
+    }
+    return start + 1; // unterminated literal: treat the lone quote as an ordinary character
+  }
+
+  private static boolean isIdentifierStart(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '$';
+  }
+
+  private static boolean isIdentifierPart(char c) {
+    return isIdentifierStart(c) || (c >= '0' && c <= '9');
   }
 
   /**
