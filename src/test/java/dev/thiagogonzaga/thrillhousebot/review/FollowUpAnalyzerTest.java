@@ -1236,7 +1236,8 @@ class FollowUpAnalyzerTest {
         new DiffLineResolver(
             Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", variantWithAnchor));
 
-    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
 
     assertEquals(List.of(1), heldIds(held));
   }
