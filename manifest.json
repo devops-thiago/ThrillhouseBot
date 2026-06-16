@@ -19,7 +19,8 @@
     "checks": "write",
     "pull_requests": "write",
     "contents": "read",
-    "issues": "write"
+    "issues": "write",
+    "actions": "read"
   },
   "request_oauth_on_install": false
 }
