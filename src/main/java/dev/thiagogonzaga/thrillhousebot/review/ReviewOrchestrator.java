@@ -767,10 +767,16 @@ public class ReviewOrchestrator {
         .count();
   }
 
+  // A backstop-held finding can be summary-only — its flagged line was outside the diff when first
+  // raised, so it was never posted as an inline comment and has no thread to reply on (#133a).
+  // The guidance therefore qualifies the reply path ("where one exists") instead of promising a
+  // thread that may not be there; fixing the code, or a model resolved/justified verdict, still
+  // clears such a finding.
   static String unresolvedPreviousMessage(long unresolved) {
     return String.format(
         "No new issues in this revision, but %d previous finding(s) remain unresolved — "
-            + "fix them or reply on their threads with why they are deferred.",
+            + "fix them, or reply on their review thread (where one exists) with why they are"
+            + " deferred.",
         unresolved);
   }
 

@@ -237,21 +237,68 @@ public class FollowUpAnalyzer {
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       String botLogin) {
-    // Markers reuse the same indices every review round, so a PR with several rounds carries
-    // several comments with this exact marker. Restricting to the finding's file and taking the
-    // newest match binds the latest round's findings to their own threads, not a previous
-    // round's thread that happens to share the index.
+    Long markerRoot = markerRootComment(finding, findingId, false, inlineComments, botLogin);
+    if (markerRoot != null) {
+      return markerRoot;
+    }
+    return rootCommentByTitle(finding, inlineComments, botLogin);
+  }
+
+  /**
+   * The newest bot root comment on the finding's file carrying its {@code findingId} marker, or
+   * {@code null} when none does. Markers reuse the same indices every review round, so a PR with
+   * several rounds carries several comments with this exact marker; restricting to the finding's
+   * file and taking the newest match binds the latest round's findings to their own threads, not a
+   * previous round's thread that happens to share the index. Title-independent, so it locates a
+   * null-title finding's thread that {@link #rootCommentsByTitle} cannot.
+   *
+   * <p>The newest-match heuristic alone is not enough when the finding had <em>no</em> thread of
+   * its own that round (its line was outside the diff, so it was summary-only): the newest {@code
+   * finding=N} comment on the file can then be an <em>earlier, unrelated</em> round's finding that
+   * happens to reuse index {@code N}. {@code requireOwnContent} closes that gap for the
+   * safety-critical clearing decision — when set, a match must also carry the finding's own content
+   * ({@link #bodyCarriesOwnContent}: its title in the comment header, or its description when it
+   * has no title), so a thread-less finding cannot bind to a different finding's same-index thread.
+   * A finding with neither title nor description matches nothing under {@code requireOwnContent},
+   * so the caller holds rather than risks an over-clear.
+   */
+  private static Long markerRootComment(
+      ReviewResponse.Finding finding,
+      int findingId,
+      boolean requireOwnContent,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      String botLogin) {
     String marker = SuggestionFormatter.findingMarker(findingId);
     var markerMatches =
         botRootComments(inlineComments, botLogin)
             .filter(c -> c.body() != null && c.body().contains(marker))
             .filter(c -> finding.file() == null || FilePaths.same(finding.file(), c.path()))
+            .filter(c -> !requireOwnContent || bodyCarriesOwnContent(finding, c.body()))
             .map(GitHubReviewClient.PullRequestComment::id)
             .toList();
-    if (!markerMatches.isEmpty()) {
-      return markerMatches.get(markerMatches.size() - 1);
+    return markerMatches.isEmpty() ? null : markerMatches.get(markerMatches.size() - 1);
+  }
+
+  /**
+   * Whether {@code body} is this finding's own comment, judged by content the bot embeds in every
+   * comment ({@link SuggestionFormatter#formatReviewComment}). It distinguishes the finding's own
+   * thread from a <em>different</em> finding that reused the same marker index in an earlier round.
+   *
+   * <p>A titled finding is matched on the header framing {@code " — {title}**"}, not a bare title
+   * substring, so a short title does not match an unrelated comment that merely mentions the word
+   * and a title does not match a longer title that contains it as a prefix (dogfood #133). A
+   * null-title finding has no usable header title — the bot renders the literal {@code "null"},
+   * which is too generic — so it falls back to its description, which the bot prints verbatim in
+   * the body. A finding with neither matches nothing, so the caller holds rather than risk an
+   * over-clear.
+   */
+  private static boolean bodyCarriesOwnContent(ReviewResponse.Finding finding, String body) {
+    String title = finding.title();
+    if (title != null && !title.isBlank()) {
+      return body.contains(" — " + title + "**");
     }
-    return rootCommentByTitle(finding, inlineComments, botLogin);
+    String description = finding.description();
+    return description != null && !description.isBlank() && body.contains(description);
   }
 
   /**
@@ -282,6 +329,46 @@ public class FollowUpAnalyzer {
       }
     }
     return null;
+  }
+
+  /**
+   * Maintainer-reply check for a finding whose 1-based prompt {@code findingId} is known — the
+   * backstop's newest-prior-round case. The finding's own {@code thrillhousebot:finding=N} marked
+   * thread is authoritative: when one exists, only a reply on <em>it</em> clears the hold. The
+   * marker is title-independent, so a {@code null}-title finding's thread is seen — the title-only
+   * {@link #answeredRootComment(ReviewResponse.Finding, List, String)} consults {@link
+   * #rootCommentsByTitle}, which returns {@code List.of()} for a null title and can never find the
+   * reply, leaving the backstop to hold the finding every round with no human escape (#133b). It
+   * also keeps a reply on a same-title sibling's thread (a different index) from clearing this
+   * finding.
+   *
+   * <p>Because clearing the hold is the dangerous direction (over-clearing re-introduces the #118
+   * silent approve-over-open), the marked thread is resolved with {@code requireOwnContent}: a
+   * thread-less finding (no inline comment that round) must not bind to an earlier round's
+   * <em>different</em> finding that merely reuses index {@code N} on the same file and was
+   * answered. The content key is the finding's title in the comment header, or its description when
+   * it has no title — so a null-title finding is matched by its own description rather than the
+   * recurring marker alone.
+   *
+   * <p>When no own-content match is found but a {@code finding=N} comment <em>does</em> exist on
+   * the file, that comment belongs to a different finding (the index recurs across rounds), so the
+   * hold stands — the title-only fallback must not bind to it. Only genuinely pre-marker comments,
+   * with no marker for this index on the file at all, fall through to the title scan, where the
+   * title is the only available key.
+   */
+  private static Long answeredRootComment(
+      ReviewResponse.Finding finding,
+      int findingId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      String botLogin) {
+    Long own = markerRootComment(finding, findingId, true, inlineComments, botLogin);
+    if (own != null) {
+      return hasHumanReply(own, inlineComments, botLogin) ? own : null;
+    }
+    if (markerRootComment(finding, findingId, false, inlineComments, botLogin) != null) {
+      return null;
+    }
+    return answeredRootComment(finding, inlineComments, botLogin);
   }
 
   /** All bot root comments matching the finding's file and title, oldest first. */
@@ -569,7 +656,11 @@ public class FollowUpAnalyzer {
         if (present && target == null) {
           target = member;
         }
-        if (answeredRootComment(finding, inlineComments, botLogin) != null) {
+        // The maintainer reply is located by the round-relative marker (member.id()) plus the
+        // finding's own content rather than by title, so a null-title finding's thread is still
+        // seen and a thread-less finding cannot bind to a different finding that reused the same
+        // marker index in another round (#133).
+        if (answeredRootComment(finding, member.id(), inlineComments, botLogin) != null) {
           anyReplied = true;
         }
       }
