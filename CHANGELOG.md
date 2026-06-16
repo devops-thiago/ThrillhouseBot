@@ -7,6 +7,7 @@ All notable changes to ThrillhouseBot.
 ### Changed
 
 - **CI**: consolidated the seven duplicated Trivy scan + SARIF-upload steps across `ci.yml`, `release.yml`, and `security-scan.yml` into a single `.github/actions/trivy-scan` composite action, centralizing the pinned action SHA, Trivy version, `format: sarif`, and the `limit-severities-for-sarif` flag. The CI filesystem scan now applies `limit-severities-for-sarif` like every other scan (closes the gap tracked in #76).
+- **GitHub App Permissions**: Added `actions: read` permission to `manifest.json` (and documented in `README.md`). This is required to read GitHub Actions workflow runs and check suite statuses to evaluate CI status for PR approval gating (introduced in PR #95).
 
 ## [0.1.0] — 2026-06-12
 

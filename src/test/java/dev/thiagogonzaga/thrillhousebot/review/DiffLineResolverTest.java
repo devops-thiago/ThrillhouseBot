@@ -132,6 +132,56 @@ class DiffLineResolverTest {
   }
 
   @Test
+  void isLineInDiffShouldAcceptExactLineAndLinesWithinTolerance() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    assertTrue(resolver.isLineInDiff("main.py", 11, 3)); // exact right-side line
+    assertTrue(resolver.isLineInDiff("main.py", 13, 3)); // one past line 12, within tolerance
+    assertTrue(resolver.isLineInDiff("main.py", 8, 3)); // two before line 10, within tolerance
+  }
+
+  @Test
+  void isLineInDiffShouldRejectLineFarFromDiffUnlikeResolveRightSideLine() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    // resolveRightSideLine snaps a far line onto the nearest hunk line; isLineInDiff must not, so
+    // the approve backstop never treats a merely-touched file as a still-present finding.
+    assertEquals(OptionalInt.of(12), resolver.resolveRightSideLine("main.py", 99));
+    assertFalse(resolver.isLineInDiff("main.py", 99, 3)); // only a floor exists, far below
+    assertFalse(resolver.isLineInDiff("main.py", 2, 3)); // only a ceiling exists, far above
+  }
+
+  @Test
+  void isLineInDiffShouldRejectWhenFileHasNoRightSideLines() {
+    var deletionOnly =
+        """
+        @@ -10,2 +10,0 @@
+        -removed_one
+        -removed_two
+        """;
+    var resolver = new DiffLineResolver(Map.of("main.py", deletionOnly));
+
+    assertFalse(resolver.isLineInDiff("main.py", 10, 3));
+  }
+
+  @Test
+  void isLineInDiffShouldRejectMissingFileAndInvalidInputs() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    assertFalse(resolver.isLineInDiff("other.py", 11, 3));
+    assertFalse(resolver.isLineInDiff(null, 11, 3));
+    assertFalse(resolver.isLineInDiff("main.py", 0, 3));
+  }
+
+  @Test
+  void isLineInDiffShouldMatchAcrossPathVariants() {
+    var resolver = new DiffLineResolver(Map.of("src/dir/Main.java", PATCH));
+
+    // The model may report a shorter path than GitHub's diff filename; FilePaths.same bridges them.
+    assertTrue(resolver.isLineInDiff("dir/Main.java", 11, 3));
+  }
+
+  @Test
   void shouldIgnoreDeletionOnlyLines() {
     var patch =
         """

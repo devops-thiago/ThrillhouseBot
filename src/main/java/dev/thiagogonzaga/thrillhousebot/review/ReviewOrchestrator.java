@@ -215,12 +215,14 @@ public class ReviewOrchestrator {
           buildBaseComparison(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
 
       var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
-      var isFirstReview = priorReviews.stream().noneMatch(r -> BOT_LOGIN.equals(r.user().login()));
+      // First-review detection consults the persisted prior responses, not just formal GitHub
+      // reviews: every completed round persists its AI response keyed by repo+PR (surviving a
+      // force-push/rebase), so the previous-findings context is reconstructed for every follow-up
+      // round even on the rare path where no formal review was emitted. (#118)
       List<String> priorAiResponseJsons =
-          isFirstReview
-              ? List.of()
-              : sessionPersistence.findAllPriorAiResponseJsons(
-                  repository, req.prNumber(), session.id);
+          sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
+      var hasBotReview = priorReviews.stream().anyMatch(r -> BOT_LOGIN.equals(r.user().login()));
+      var isFirstReview = !hasBotReview && priorAiResponseJsons.isEmpty();
       String previousAiResponseJson =
           priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(0);
       List<String> olderAiResponseJsons =
@@ -283,8 +285,26 @@ public class ReviewOrchestrator {
       var unresolvedPrevious =
           followUpAnalyzer.unresolvedFindings(
               previousAiResponseJson, aiResponse.previousFindingsStatus());
+      // Deterministic backstop: reconstruct the bot's own prior findings the model silently dropped
+      // from previous_findings_status but that are still present in this diff, as unresolved
+      // statuses, so an APPROVE can never sail over them. (#118)
+      var backstopUnresolved =
+          isFirstReview
+              ? List.<ReviewResult.PreviousFindingStatus>of()
+              : followUpAnalyzer.unreportedUnresolvedStatuses(
+                  previousAiResponseJson,
+                  aiResponse.previousFindingsStatus(),
+                  inlineComments,
+                  new DiffLineResolver(patchesByFile(files)),
+                  BOT_LOGIN);
       var result =
-          buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, offendingCiChecks);
+          buildResult(
+              aiResponse,
+              isFirstReview,
+              diffStats,
+              unresolvedPrevious,
+              offendingCiChecks,
+              backstopUnresolved);
 
       // Finalize check run before posting PR review — avoid approving then failing later
       String conclusion = conclusionForResult(result);
@@ -729,7 +749,8 @@ public class ReviewOrchestrator {
       boolean isFirstReview,
       DiffStats diffStats,
       List<Finding> unresolvedPrevious,
-      List<ReviewResult.CiCheck> offendingCiChecks) {
+      List<ReviewResult.CiCheck> offendingCiChecks,
+      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
     var findings = new ArrayList<Finding>();
     var critical = 0;
     var high = 0;
@@ -758,9 +779,17 @@ public class ReviewOrchestrator {
     var outstanding = new ArrayList<Finding>(findings);
     outstanding.addAll(unresolvedPrevious);
     ReviewState state = ReviewState.fromFindings(outstanding);
-    var previousStatuses = followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus());
+    // Merge the model's previous-findings statuses with the backstop's reconstructed unresolved
+    // ones (#118): the silently dropped findings then flow through the same gate, counts, and
+    // messages as any unresolved status, so no separate path is needed. Backstop statuses reach the
+    // gate but never `outstanding`, keeping the hold downgrade-only (APPROVE → COMMENT, never
+    // REQUEST_CHANGES).
+    var previousStatuses =
+        new ArrayList<ReviewResult.PreviousFindingStatus>(
+            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()));
+    previousStatuses.addAll(backstopUnresolved);
     // Unresolved statuses that could not be mapped back to stored findings (e.g. pre-persistence
-    // sessions) must still hold the approval back
+    // sessions), or that the model dropped but the backstop reconstructed, must still hold approval
     if (state == ReviewState.APPROVE && followUpAnalyzer.hasUnresolved(previousStatuses)) {
       state = ReviewState.COMMENT;
     }
@@ -803,6 +832,16 @@ public class ReviewOrchestrator {
         summaryMarkdown,
         previousStatuses,
         offendingCiChecks);
+  }
+
+  ReviewResult buildResult(
+      ReviewResponse aiResponse,
+      boolean isFirstReview,
+      DiffStats diffStats,
+      List<Finding> unresolvedPrevious,
+      List<ReviewResult.CiCheck> offendingCiChecks) {
+    return buildResult(
+        aiResponse, isFirstReview, diffStats, unresolvedPrevious, offendingCiChecks, List.of());
   }
 
   ReviewResult buildResult(
