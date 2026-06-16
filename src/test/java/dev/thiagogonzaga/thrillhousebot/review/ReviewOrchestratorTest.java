@@ -2879,6 +2879,29 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldQualifyReplyGuidanceSinceABackstopFindingMayHaveNoThread() {
+      // #133(a): a backstop-held finding can be summary-only — its flagged line was outside the
+      // diff when first raised, so it was never posted inline and has no thread to reply on. The
+      // COMMENT guidance must not unconditionally tell the maintainer to "reply on their threads";
+      // it qualifies the reply path so it stays honest when no thread exists.
+      delegateStatusGate();
+      var result =
+          buildWithBackstop(
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("where one exists"), "the reply guidance must be qualified");
+      assertFalse(
+          body.contains("reply on their threads"),
+          "must not unconditionally promise a thread that may not exist");
+    }
+
+    @Test
     void shouldHoldApproveOverSilentlyDroppedPriorFindingThroughReview() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = followUpSession();

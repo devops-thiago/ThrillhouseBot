@@ -796,6 +796,182 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldSeeMaintainerReplyOnNullTitleFindingViaMarker() {
+    // #133(b): a prior finding persisted with title == null. Its inline thread carries the hidden
+    // finding marker, so the maintainer reply must be seen even though the title-only
+    // rootCommentsByTitle returns nothing for a null title. Without the marker-keyed lookup the
+    // backstop would hold this finding every round with no way for the human to clear it.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
+           "description": "anchorless finding"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**HIGH — some defect**\n<!-- thrillhousebot:finding=1 -->",
+                BOT),
+            comment(101L, 100L, "src/A.java", "intentional, won't fix", "maintainer"));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+
+    assertTrue(
+        held.isEmpty(),
+        "a maintainer reply on a null-title finding's marked thread must clear the hold");
+  }
+
+  @Test
+  void unreportedUnresolvedShouldStillHoldNullTitleFindingWhenThreadHasNoReply() {
+    // #133(b): the marker locates the null-title finding's thread, but with no human reply on it
+    // the hold stands. Pins that the marker path clears the hold only on an actual reply, not on
+    // the mere existence of the thread, and that presence still resolves for a null-title finding.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
+           "description": "anchorless finding"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**HIGH — some defect**\n<!-- thrillhousebot:finding=1 -->",
+                BOT));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldBindReplyToTheFindingsOwnMarkedThread() {
+    // #133(b): two same-title findings in the round. The maintainer replied only on finding #2's
+    // marked thread; the marker keeps the reply bound to #2, so #1 is still held and #2 is cleared
+    // — a title-only check could not tell the two threads apart.
+    var json =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 10, "title": "Missing null check",
+           "description": "first"},
+          {"risk": "medium", "file": "src/A.java", "line": 50, "title": "Missing null check",
+           "description": "second"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10) + "\n" + patch(50)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**MEDIUM — Missing null check**\n<!-- thrillhousebot:finding=1 -->",
+                BOT),
+            comment(
+                200L,
+                null,
+                "src/A.java",
+                "**MEDIUM — Missing null check**\n<!-- thrillhousebot:finding=2 -->",
+                BOT),
+            comment(201L, 200L, "src/A.java", "intentional", "maintainer"));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldThreadlessFindingDespiteEarlierRoundReusingItsMarkerIndex() {
+    // #133 over-clear guard: the newest prior round's finding #1 ("Use-after-free") was
+    // summary-only
+    // that round (its flagged line was outside the diff), so it has no thread of its own; its code
+    // is still present now. An EARLIER, unrelated round posted a DIFFERENT finding at the same
+    // marker index 1 on the same file ("Naming nit") that a maintainer answered. The marker index
+    // recurs every round, so a marker-only lookup would bind to that earlier answered thread and
+    // clear a still-open finding — re-introducing the #118 silent approve-over-open. Requiring the
+    // marked comment to carry this finding's own title keeps the hold.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "Use-after-free",
+           "description": "frees then dereferences"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**LOW — Naming nit**\n<!-- thrillhousebot:finding=1 -->",
+                BOT),
+            comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldFindingWhenItsMarkedThreadHasOnlyABotReply() {
+    // #133 over-clear guard: the finding's own marked thread exists, but its only reply is the bot
+    // itself. The marker locates the thread, yet hasHumanReply must exclude the bot, so the hold
+    // stands — pins the marker-keyed branch (not just the title path) to clear only on a human
+    // reply.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "Use-after-free",
+           "description": "frees then dereferences"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**HIGH — Use-after-free**\n<!-- thrillhousebot:finding=1 -->",
+                BOT),
+            comment(101L, 100L, "src/A.java", "tracking this", BOT));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldNullTitleFindingWhenNoThreadExistsAtAll() {
+    // #133(b) safe-direction lock: a null-title finding with neither a marker thread nor a
+    // title-matchable thread. markerRootComment returns null and the title-only fallback finds
+    // nothing (rootCommentsByTitle is empty for a null title), so the still-present finding is
+    // held.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
+           "description": "anchorless finding"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
   void unreportedUnresolvedShouldExcludeFindingsNotInCurrentDiff() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
