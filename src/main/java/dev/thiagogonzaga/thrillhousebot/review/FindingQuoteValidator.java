@@ -43,7 +43,12 @@ import java.util.regex.Pattern;
  * but its free-text {@code description} cites a chained call expression as existing source that
  * appears nowhere in scope — the fabricated mechanism is treated like a partial quote. Only
  * distinctive {@code receiver.member(...)} chains are checked, so bare method names that simply
- * fall outside the diff window are never penalized.
+ * fall outside the diff window are never penalized. Two further guards keep this from suppressing
+ * true positives: a chain found verbatim in the diff grounds the finding and keeps it (diff
+ * presence wins, even over a {@code suggestion_new} that wraps that same code); and among chains
+ * absent from the diff, one that merely restates the finding's own {@code suggestion_new} is the
+ * proposed fix, not a fabricated mechanism. A finding is demoted only when it cites an absent chain
+ * that is neither present in the diff nor a restatement of its own fix.
  */
 @ApplicationScoped
 public class FindingQuoteValidator {
@@ -151,12 +156,22 @@ public class FindingQuoteValidator {
   }
 
   /**
-   * Whether the finding's description presents, as existing source, a chained call expression that
-   * cannot be found anywhere in the diff scoped to its file. This catches the failure mode where a
-   * genuine {@code suggestion_old} quote passes the gate but the supporting prose invents the
-   * mechanism (e.g. {@code dashboardConfig.accountOwner().orElse(null)} for a method parameter that
-   * is never derived that way). The match is whitespace-insensitive so reformatting can't hide a
-   * real citation — meaning the check only fires when the expression is genuinely absent.
+   * Whether the finding's description rests on a fabricated mechanism: it cites at least one
+   * chained call expression as existing source that is absent from the diff scoped to its file and
+   * is not merely a restatement of the finding's own proposed fix. This catches the failure mode
+   * where a genuine {@code suggestion_old} quote passes the gate but the supporting prose invents
+   * the mechanism (e.g. {@code dashboardConfig.accountOwner().orElse(null)} for a method parameter
+   * that is never derived that way).
+   *
+   * <p>Two guards keep this from suppressing true positives. <b>Diff presence wins:</b> a chain
+   * found verbatim in the diff grounds the finding and keeps it immediately, before any
+   * fix-restatement is considered — so a {@code suggestion_new} that wraps the existing code it
+   * modifies can never strip the grounding chain, and naming an off-diff helper alongside a present
+   * one never demotes (#121, mechanism b). <b>The proposed fix is not a citation:</b> among chains
+   * <em>absent</em> from the diff, one whose compacted form the compacted {@code suggestion_new}
+   * restates is the hypothetical fix — absent by definition — and is not counted as fabrication
+   * (#121, mechanism a). The match is whitespace-insensitive so reformatting can't hide a real
+   * citation.
    */
   private static boolean descriptionCitesAbsentCode(
       ReviewResponse.Finding finding, DiffIndex index) {
@@ -165,12 +180,21 @@ public class FindingQuoteValidator {
       return false;
     }
     List<String> compactedScope = compactedLines(index.diffLinesFor(finding.file()));
+    String compactedSuggestion =
+        finding.suggestionNew() == null ? "" : compact(finding.suggestionNew());
+    boolean fabricated = false;
     for (String expression : cited) {
-      if (!appearsIn(expression, compactedScope)) {
-        return true;
+      String needle = compact(expression);
+      if (appearsIn(needle, compactedScope)) {
+        // Present verbatim in the diff: the finding is grounded — keep it, whatever else it cites.
+        return false;
+      }
+      // Absent from the diff: a fabricated mechanism unless it merely restates the proposed fix.
+      if (!compactedSuggestion.contains(needle)) {
+        fabricated = true;
       }
     }
-    return false;
+    return fabricated;
   }
 
   /** The chained call expressions a description presents as code, e.g. {@code a.b().c(null)}. */
@@ -203,11 +227,11 @@ public class FindingQuoteValidator {
   }
 
   /**
-   * Whether {@code expression} occurs, ignoring whitespace, within any already-compacted diff line.
-   * The expression is always a non-empty call chain (see {@link #citedCallExpressions}).
+   * Whether {@code needle} — an already-compacted call chain (see {@link #citedCallExpressions}) —
+   * occurs within any already-compacted diff line. Both sides are whitespace-stripped so
+   * indentation or reformatting can't hide a citation.
    */
-  private static boolean appearsIn(String expression, List<String> compactedScope) {
-    String needle = compact(expression);
+  private static boolean appearsIn(String needle, List<String> compactedScope) {
     for (String line : compactedScope) {
       if (line.contains(needle)) {
         return true;
