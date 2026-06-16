@@ -1043,6 +1043,60 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldHoldFindingWithBlankTitleAndNoDescription() {
+    // #133 no-content-key path: a degenerate finding with a blank title and no description yields
+    // no content key, so the marker alone cannot safely identify its thread; the backstop holds it
+    // (the safe direction) rather than risk binding to a different finding that reused the same
+    // marker index. A marked bot comment is present so the content-correspondence check runs.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "", "description": null}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**HIGH — flagged here**\n<!-- thrillhousebot:finding=1 -->",
+                BOT));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldFindingWithBlankTitleAndBlankDescription() {
+    // #133 no-content-key path: both title and description are blank, so ownContentKey yields no
+    // key and the backstop holds the still-present finding (the safe direction).
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "", "description": ""}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**HIGH — flagged here**\n<!-- thrillhousebot:finding=1 -->",
+                BOT));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
   void unreportedUnresolvedShouldExcludeFindingsNotInCurrentDiff() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
