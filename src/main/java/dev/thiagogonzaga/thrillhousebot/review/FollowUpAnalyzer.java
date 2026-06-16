@@ -560,7 +560,6 @@ public class FollowUpAnalyzer {
 
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var cluster : clusters) {
-      boolean anyPresent = false;
       boolean anyReplied = false;
       OpenFinding target = null;
 
@@ -569,21 +568,15 @@ public class FollowUpAnalyzer {
         boolean present =
             lineResolver.isFindingPresent(
                 finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE);
-        if (present) {
-          anyPresent = true;
-          if (target == null) {
-            target = member;
-          }
+        if (present && target == null) {
+          target = member;
         }
         if (answeredRootComment(finding, inlineComments, botLogin) != null) {
           anyReplied = true;
         }
       }
 
-      if (anyPresent && !anyReplied) {
-        if (target == null) {
-          target = cluster.get(0);
-        }
+      if (target != null && !anyReplied) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
                 target.id(),
