@@ -224,7 +224,7 @@ class DiffLineResolverTest {
 
     // The raw line-number proxy drops it (32 is far from the old line 10); content matching holds.
     assertFalse(resolver.isLineInDiff("A.java", 10, 3));
-    assertTrue(resolver.isFindingPresent("A.java", 10, "dangerous_call()", 3));
+    assertTrue(resolver.isFindingPresent("A.java", "dangerous_call()"));
   }
 
   @Test
@@ -249,7 +249,7 @@ class DiffLineResolverTest {
     // line now at right-line 41 (ctx_45), so it reads "present" though the bug was deleted.
     assertTrue(resolver.isLineInDiff("A.java", 42, 3));
     // Content matching is not: the anchor exists only as a deletion, never on the right side.
-    assertFalse(resolver.isFindingPresent("A.java", 42, "buggy_42()", 3));
+    assertFalse(resolver.isFindingPresent("A.java", "buggy_42()"));
   }
 
   @Test
@@ -263,13 +263,13 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
-    assertTrue(resolver.isFindingPresent("A.java", 1, "alpha()\nbeta()", 3));
-    assertTrue(resolver.isFindingPresent("A.java", 1, "beta()\ngamma()", 3));
+    assertTrue(resolver.isFindingPresent("A.java", "alpha()\nbeta()"));
+    assertTrue(resolver.isFindingPresent("A.java", "beta()\ngamma()"));
     // A line changed away breaks the block.
-    assertFalse(resolver.isFindingPresent("A.java", 1, "alpha()\ndelta()", 3));
+    assertFalse(resolver.isFindingPresent("A.java", "alpha()\ndelta()"));
     // Lines that survive only non-adjacently or out of order are not a contiguous run (#129(b)).
-    assertFalse(resolver.isFindingPresent("A.java", 1, "alpha()\ngamma()", 3));
-    assertFalse(resolver.isFindingPresent("A.java", 1, "gamma()\nbeta()", 3));
+    assertFalse(resolver.isFindingPresent("A.java", "alpha()\ngamma()"));
+    assertFalse(resolver.isFindingPresent("A.java", "gamma()\nbeta()"));
   }
 
   @Test
@@ -287,7 +287,7 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
-    assertFalse(resolver.isFindingPresent("A.java", 1, "validate(x);\npersist(x);", 3));
+    assertFalse(resolver.isFindingPresent("A.java", "validate(x);\npersist(x);"));
   }
 
   @Test
@@ -308,7 +308,7 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
-    assertTrue(resolver.isFindingPresent("A.java", 2, "return null;", 3));
+    assertTrue(resolver.isFindingPresent("A.java", "return null;"));
   }
 
   @Test
@@ -322,7 +322,7 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
-    assertTrue(resolver.isFindingPresent("A.java", 1, "String s = \"<<DIFF_START>>\";", 3));
+    assertTrue(resolver.isFindingPresent("A.java", "String s = \"<<DIFF_START>>\";"));
   }
 
   @Test
@@ -336,17 +336,18 @@ class DiffLineResolverTest {
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
     // Blank lines in the anchor must not be required against the right-side text.
-    assertTrue(resolver.isFindingPresent("A.java", 1, "alpha()\n\n   \nbeta()", 3));
+    assertTrue(resolver.isFindingPresent("A.java", "alpha()\n\n   \nbeta()"));
   }
 
   @Test
-  void isFindingPresentShouldFallBackToLineMembershipWithoutAnchor() {
+  void isFindingPresentShouldFallBackToHoldingWithoutAnchorIfFileHasChanges() {
     var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
 
-    // No anchor (null or blank): behaves like isLineInDiff.
-    assertTrue(resolver.isFindingPresent("main.py", 11, null, 3));
-    assertTrue(resolver.isFindingPresent("main.py", 11, "   ", 3));
-    assertFalse(resolver.isFindingPresent("main.py", 99, null, 3));
+    // No anchor (null or blank): leans toward holding (returns true) if the file has changes.
+    assertTrue(resolver.isFindingPresent("main.py", null));
+    assertTrue(resolver.isFindingPresent("main.py", "   "));
+    assertTrue(resolver.isFindingPresent("main.py", null));
+    assertFalse(resolver.isFindingPresent("other.py", null));
   }
 
   @Test
@@ -354,17 +355,17 @@ class DiffLineResolverTest {
     var resolver = new DiffLineResolver(Map.of("src/dir/Main.java", PATCH));
 
     // Path variant resolves, indentation is stripped, and the stale line number is irrelevant.
-    assertTrue(resolver.isFindingPresent("dir/Main.java", 999, "new_line()", 3));
+    assertTrue(resolver.isFindingPresent("dir/Main.java", "new_line()"));
   }
 
   @Test
   void isFindingPresentShouldRejectNullFileAndAnchorOutsideItsOwnFile() {
     var resolver = new DiffLineResolver(Map.of("A.java", PATCH));
 
-    assertFalse(resolver.isFindingPresent(null, 11, "new_line()", 3));
+    assertFalse(resolver.isFindingPresent(null, "new_line()"));
     // The anchor text exists in A.java's diff, but the finding points at a file not in the diff —
     // matching is file-scoped so an unrelated file never validates the finding.
-    assertFalse(resolver.isFindingPresent("B.java", 11, "new_line()", 3));
+    assertFalse(resolver.isFindingPresent("B.java", "new_line()"));
   }
 
   @Test
@@ -379,7 +380,7 @@ class DiffLineResolverTest {
 
     // The flagged code was deleted outright: it survives only on the left side, so the file's
     // right-side text is empty and the finding counts as no longer present.
-    assertFalse(resolver.isFindingPresent("A.java", 10, "buggy_call()", 3));
+    assertFalse(resolver.isFindingPresent("A.java", "buggy_call()"));
   }
 
   @Test
@@ -398,8 +399,8 @@ class DiffLineResolverTest {
     assertEquals(3, lines.size());
     // ... but is excluded from the right-side text, so "first();" and "third();" are adjacent and
     // match contiguously. Were the blank kept, it would sit between them and break the run.
-    assertTrue(resolver.isFindingPresent("A.java", 1, "first();\nthird();", 3));
-    assertFalse(resolver.isFindingPresent("A.java", 1, "second();", 3));
+    assertTrue(resolver.isFindingPresent("A.java", "first();\nthird();"));
+    assertFalse(resolver.isFindingPresent("A.java", "second();"));
   }
 
   @Test
@@ -432,7 +433,7 @@ class DiffLineResolverTest {
     var resolver =
         new DiffLineResolver(Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", PATCH));
 
-    assertTrue(resolver.isFindingPresent("dir/Main.java", 999, "new_line()", 3));
+    assertTrue(resolver.isFindingPresent("dir/Main.java", "new_line()"));
   }
 
   @Test
@@ -455,7 +456,7 @@ class DiffLineResolverTest {
         new DiffLineResolver(
             Map.of("dir/Helper.java", exactChangedAway, "src/dir/Helper.java", variantStillHasIt));
 
-    assertFalse(resolver.isFindingPresent("dir/Helper.java", 1, "dangerous_call()", 3));
+    assertFalse(resolver.isFindingPresent("dir/Helper.java", "dangerous_call()"));
   }
 
   @Test
@@ -485,8 +486,8 @@ class DiffLineResolverTest {
         new DiffLineResolver(
             Map.of("a/util/Helper.java", withoutAnchor, "b/util/Helper.java", withAnchor));
 
-    assertTrue(anchorInA.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
-    assertTrue(anchorInB.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+    assertTrue(anchorInA.isFindingPresent("util/Helper.java", "dangerous_call()"));
+    assertTrue(anchorInB.isFindingPresent("util/Helper.java", "dangerous_call()"));
   }
 
   @Test
@@ -502,7 +503,7 @@ class DiffLineResolverTest {
         new DiffLineResolver(
             Map.of("a/util/Helper.java", withoutAnchor, "b/util/Helper.java", withoutAnchor));
 
-    assertFalse(resolver.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+    assertFalse(resolver.isFindingPresent("util/Helper.java", "dangerous_call()"));
   }
 
   @Test
@@ -541,7 +542,7 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("a/util/Helper.java", deletionOnly));
 
-    assertFalse(resolver.isFindingPresent("util/Helper.java", 1, "dangerous_call()", 3));
+    assertFalse(resolver.isFindingPresent("util/Helper.java", "dangerous_call()"));
   }
 
   @Test
@@ -552,7 +553,7 @@ class DiffLineResolverTest {
     // bind here would falsely hold or clear approval.
     var resolver = new DiffLineResolver(Map.of("src/B.java", PATCH));
 
-    assertFalse(resolver.isFindingPresent("B.java", 1, "new_line()", 3));
+    assertFalse(resolver.isFindingPresent("B.java", "new_line()"));
     assertFalse(resolver.isLineInDiff("B.java", 11, 3));
   }
 
@@ -636,5 +637,48 @@ class DiffLineResolverTest {
         new DiffLineResolver(Map.of("dir/F.java", deletionOnly, "src/dir/F.java", PATCH));
 
     assertEquals(OptionalInt.of(11), resolver.resolveRightSideLine("dir/F.java", 11));
+  }
+
+  @Test
+  void shouldReturnLineTextFromPatch() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    assertEquals("def unchanged():", resolver.getLineText("main.py", 10));
+    assertEquals("    new_line()", resolver.getLineText("main.py", 11));
+    assertEquals("    added_line()", resolver.getLineText("main.py", 12));
+    assertNull(resolver.getLineText("main.py", 9));
+    assertNull(resolver.getLineText("main.py", 0));
+    assertNull(resolver.getLineText("main.py", -5));
+    assertNull(resolver.getLineText("other.py", 11));
+    assertNull(resolver.getLineText(null, 11));
+  }
+
+  @Test
+  void shouldReturnLineTextAcrossPathVariants() {
+    var deletionOnly =
+        """
+        @@ -1,2 +1,0 @@
+        -dangerous_call()
+        -also_removed()
+        """;
+    var resolver =
+        new DiffLineResolver(Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", PATCH));
+
+    // 1. Exact match exists but is empty (deletion-only) -> falls back to variant and resolves line
+    assertEquals("    new_line()", resolver.getLineText("dir/Main.java", 11));
+
+    // 2. Bare filename does not bind to directory variant (requires directory segment)
+    assertNull(resolver.getLineText("Main.java", 11));
+
+    // 3. Suffix variant with directory segment matches and resolves line
+    var resolverSuffix =
+        new DiffLineResolver(Map.of("a/dir/Main.java", deletionOnly, "b/dir/Main.java", PATCH));
+    assertEquals("    new_line()", resolverSuffix.getLineText("dir/Main.java", 11));
+
+    // 4. Both exact match and variants are empty (or no matching variant has the line) -> returns
+    // null
+    var emptyResolver = new DiffLineResolver(Map.of("dir/Main.java", deletionOnly));
+    assertNull(emptyResolver.getLineText("dir/Main.java", 11));
+    assertNull(emptyResolver.getLineText("Main.java", 11));
   }
 }

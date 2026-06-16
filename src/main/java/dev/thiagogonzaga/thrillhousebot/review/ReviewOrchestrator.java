@@ -278,6 +278,8 @@ public class ReviewOrchestrator {
       aiResponse =
           followUpAnalyzer.dropRepliedDuplicates(
               aiResponse, priorAiResponseJsons, inlineComments, BOT_LOGIN);
+      var lineResolver = new DiffLineResolver(patchesByFile(files));
+      aiResponse = populateMissingAnchors(aiResponse, lineResolver);
       persistAiResponse(session, aiResponse);
 
       // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
@@ -300,7 +302,7 @@ public class ReviewOrchestrator {
                   priorAiResponseJsons,
                   aiResponse.previousFindingsStatus(),
                   inlineComments,
-                  new DiffLineResolver(patchesByFile(files)),
+                  lineResolver,
                   BOT_LOGIN)
               : List.<ReviewResult.PreviousFindingStatus>of();
       var result =
@@ -425,6 +427,40 @@ public class ReviewOrchestrator {
     } catch (JsonProcessingException e) {
       Log.warn("Failed to serialize AI response for session persistence", e);
     }
+  }
+
+  ReviewResponse populateMissingAnchors(ReviewResponse response, DiffLineResolver lineResolver) {
+    if (response.findings().isEmpty()) {
+      return response;
+    }
+    var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
+    var changed = false;
+    for (ReviewResponse.Finding finding : response.findings()) {
+      if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
+        String fallback = lineResolver.getLineText(finding.file(), finding.line());
+        if (fallback != null && !fallback.isBlank()) {
+          Log.infof(
+              "Populating missing content anchor for finding '%s' (%s:%d) with: '%s'",
+              finding.title(), finding.file(), finding.line(), fallback.strip());
+          adjusted.add(
+              new ReviewResponse.Finding(
+                  finding.risk(),
+                  finding.confidence(),
+                  finding.file(),
+                  finding.line(),
+                  finding.title(),
+                  finding.description(),
+                  fallback,
+                  finding.suggestionNew()));
+          changed = true;
+          continue;
+        }
+      }
+      adjusted.add(finding);
+    }
+    return changed
+        ? new ReviewResponse(adjusted, response.previousFindingsStatus(), response.summary())
+        : response;
   }
 
   long createCheckRun(String auth, String owner, String repo, String headSha, String detailsUrl) {
