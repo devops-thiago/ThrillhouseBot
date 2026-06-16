@@ -188,6 +188,26 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldCountPreviousFindingsStatusCaseInsensitively() {
+    // Counting must be case-insensitive, consistent with the gate logic; a model emitting
+    // "Resolved"/"UNRESOLVED"/"Justified" would otherwise be undercounted to zero in the table.
+    var statuses =
+        List.of(
+            new ReviewResult.PreviousFindingStatus(1, "Resolved", "Fixed"),
+            new ReviewResult.PreviousFindingStatus(2, "UNRESOLVED", "Still broken"),
+            new ReviewResult.PreviousFindingStatus(3, "Justified", "Intentional"));
+
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
+
+    var summary = generator.generate(1, 0, 0, null, result);
+
+    assertTrue(summary.contains("✅ Resolved | 1"), summary);
+    assertTrue(summary.contains("⚠️ Still present | 1"), summary);
+    assertTrue(summary.contains("💬 Justified | 1"), summary);
+  }
+
+  @Test
   void shouldLimitKeyFindingsToFive() {
     var findings =
         List.of(

@@ -580,14 +580,23 @@ public class FollowUpAnalyzer {
     return body != null ? body : "";
   }
 
-  /** Converts AI response's previous_findings_status into ReviewResult statuses. */
+  /**
+   * Converts AI response's previous_findings_status into ReviewResult statuses, keeping only the
+   * recognized values (resolved / justified / unresolved). An unrecognized status is meaningless
+   * noise that no count or gate acts on, and for a still-open finding the backstop already emits a
+   * synthetic {@code "unresolved"} for that id — passing the raw value through too would leave two
+   * entries with the same id in the result. Dropping it keeps {@code previousStatuses} one-per-id
+   * and matches the backstop's recognized-status contract (#131).
+   */
   public List<ReviewResult.PreviousFindingStatus> toStatuses(
       List<ReviewResponse.PreviousFindingStatus> aiStatuses) {
     if (aiStatuses == null) return List.of();
 
     var result = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var s : aiStatuses) {
-      result.add(new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()));
+      if (isRecognizedStatus(s.status())) {
+        result.add(new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()));
+      }
     }
     return result;
   }

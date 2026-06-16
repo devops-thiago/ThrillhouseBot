@@ -997,6 +997,26 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void toStatusesShouldDropUnrecognizedStatuses() {
+    // #131: an unrecognized status is meaningless, and for a still-open finding the backstop
+    // already emits a synthetic "unresolved" for that id — passing the raw value through too would
+    // leave two entries with the same id in previousStatuses. Only recognized values survive,
+    // case-insensitively.
+    var aiStatuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "wontfix", "nope"),
+            new ReviewResponse.PreviousFindingStatus(2, "Resolved", "fixed"),
+            new ReviewResponse.PreviousFindingStatus(3, "", "blank"),
+            new ReviewResponse.PreviousFindingStatus(4, null, "missing"));
+
+    var statuses = analyzer.toStatuses(aiStatuses);
+
+    assertEquals(1, statuses.size());
+    assertEquals(2, statuses.get(0).id());
+    assertEquals("Resolved", statuses.get(0).status());
+  }
+
+  @Test
   void hasUnresolvedShouldReturnTrueWhenUnresolvedPresent() {
     var statuses =
         List.of(
