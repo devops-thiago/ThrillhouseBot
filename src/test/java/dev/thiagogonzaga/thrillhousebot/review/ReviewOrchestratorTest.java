@@ -2450,6 +2450,106 @@ class ReviewOrchestratorTest {
     }
   }
 
+  @Nested
+  class PopulateMissingAnchors {
+
+    @Test
+    void shouldPopulateMissingAnchorsFromDiff() {
+      var patch =
+          """
+          @@ -10,3 +10,4 @@
+           def unchanged():
+          -    old_line()
+          +    new_line()
+          +    added_line()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var findingWithAnchor =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 11, "Title", "Desc", "existing_anchor", "new_line()");
+      var findingWithoutAnchor =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 11, "Title", "Desc", null, "new_line()");
+      var findingOnContextLine =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 10, "Title", "Desc", "   ", "new_line()");
+      var findingOutsideDiff =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 99, "Title", "Desc", null, "new_line()");
+
+      var response =
+          new ReviewResponse(
+              List.of(
+                  findingWithAnchor,
+                  findingWithoutAnchor,
+                  findingOnContextLine,
+                  findingOutsideDiff),
+              List.of(),
+              null);
+
+      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+
+      assertEquals(4, updated.findings().size());
+
+      // 1. Finding with existing anchor is left unchanged
+      assertEquals("existing_anchor", updated.findings().get(0).suggestionOld());
+
+      // 2. Finding without anchor is populated from diff
+      assertEquals("    new_line()", updated.findings().get(1).suggestionOld());
+
+      // 3. Finding on context line is populated from diff
+      assertEquals("def unchanged():", updated.findings().get(2).suggestionOld());
+
+      // 4. Finding outside diff has no anchor and is left null
+      assertNull(updated.findings().get(3).suggestionOld());
+    }
+
+    @Test
+    void shouldReturnOriginalResponseWhenFindingsIsEmpty() {
+      var lineResolver = new DiffLineResolver(Map.of());
+      var response = new ReviewResponse(List.of(), List.of(), null);
+      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      assertSame(response, updated);
+    }
+
+    @Test
+    void shouldNotPopulateWhenSuggestionOldIsNotBlank() {
+      var patch =
+          """
+          @@ -10,3 +10,4 @@
+           def unchanged():
+          -    old_line()
+          +    new_line()
+          +    added_line()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var finding =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 11, "Title", "Desc", "  anchor  ", "new_line()");
+      var response = new ReviewResponse(List.of(finding), List.of(), null);
+      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      assertSame(response, updated);
+    }
+
+    @Test
+    void shouldNotPopulateWhenFallbackIsBlank() {
+      var patch =
+          """
+          @@ -1,3 +1,3 @@
+          +first()
+          +
+          +third()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var finding =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 2, "Title", "Desc", null, "new_line()");
+      var response = new ReviewResponse(List.of(finding), List.of(), null);
+      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      assertSame(response, updated);
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // resolveMissingPrDetails
   // ─────────────────────────────────────────────────────────────
@@ -2886,6 +2986,16 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
         delegateStatusGate();
+        when(reviewClient.listPullRequestComments(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.PullRequestComment(
+                        1L,
+                        null,
+                        "src/Main.java",
+                        "body",
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(

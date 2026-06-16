@@ -37,15 +37,18 @@ public final class DiffLineResolver {
 
   private final Map<String, TreeSet<Integer>> rightSideLinesByFile;
   private final Map<String, List<String>> rightSideTextByFile;
+  private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
     this.rightSideLinesByFile = new HashMap<>();
     this.rightSideTextByFile = new HashMap<>();
+    this.rightSideLineTextByFile = new HashMap<>();
     patchesByFile.forEach(
         (file, patch) -> {
           RightSide rightSide = parseRightSide(patch);
           rightSideLinesByFile.put(file, rightSide.lines());
           rightSideTextByFile.put(file, rightSide.text());
+          rightSideLineTextByFile.put(file, rightSide.lineText());
         });
   }
 
@@ -72,21 +75,42 @@ public final class DiffLineResolver {
    * APPROVE→COMMENT, the safe direction for a downgrade-only backstop, never the #118 under-block.
    *
    * <p>When the finding has no anchor (a suggestion-less finding, or one whose suggestion was
-   * stripped), it falls back to {@link #isLineInDiff}. That fallback is a coarse line proxy that
-   * retains the raw-line fragility in <em>both</em> directions (it can under-block on drift and
-   * over-block on nearby context); it applies only to the minority of anchorless findings, for
-   * which no flagged-code content survives to match against.
+   * stripped), it falls back to checking whether the file has any changes in the diff. This leans
+   * toward holding (returning true) for the downgrade-only backstop, avoiding the drift-fragile
+   * under-blocking behavior of a raw line check.
    */
-  public boolean isFindingPresent(String file, int line, String anchor, int tolerance) {
+  public boolean isFindingPresent(String file, String anchor) {
     if (file == null) {
       return false;
     }
     List<String> anchorLines = normalizedAnchorLines(anchor);
     if (anchorLines.isEmpty()) {
-      return isLineInDiff(file, line, tolerance);
+      return presentInFileOrVariant(rightSideLinesByFile, file, lines -> true);
     }
     return presentInFileOrVariant(
         rightSideTextByFile, file, text -> containsContiguous(text, anchorLines));
+  }
+
+  /**
+   * Retrieves the right-side text of a specific line number, or {@code null} if not in the diff.
+   */
+  public String getLineText(String file, int line) {
+    if (file == null || line <= 0) {
+      return null;
+    }
+    Map<Integer, String> exact = rightSideLineTextByFile.get(file);
+    if (exact != null && !exact.isEmpty()) {
+      return exact.get(line);
+    }
+    for (var entry : rightSideLineTextByFile.entrySet()) {
+      var value = entry.getValue();
+      if (!entry.getKey().equals(file)
+          && !value.isEmpty()
+          && FilePaths.same(file, entry.getKey())) {
+        return value.get(line);
+      }
+    }
+    return null;
   }
 
   /** Whether {@code needle} appears as a contiguous, in-order run within {@code haystack}. */
@@ -111,9 +135,7 @@ public final class DiffLineResolver {
   /**
    * Whether {@code line} — or a line within {@code tolerance} of it — is an actual right-side line
    * of the file's diff. Unlike {@link #resolveRightSideLine}, this never snaps to an arbitrarily
-   * distant line. It is the anchorless fallback for {@link #isFindingPresent}: a coarse
-   * line-membership proxy used only when a finding carries no flagged-code anchor to match by
-   * content. The file is matched with {@link FilePaths#same}, so a model path variant still
+   * distant line. The file is matched with {@link FilePaths#same}, so a model path variant still
    * resolves to the diff's filename.
    */
   public boolean isLineInDiff(String file, int line, int tolerance) {
@@ -249,7 +271,8 @@ public final class DiffLineResolver {
    * test the anchor as a contiguous run; blank lines are dropped from both sides so a blank line
    * inside a block never breaks an otherwise-adjacent match.
    */
-  private record RightSide(TreeSet<Integer> lines, List<String> text) {}
+  private record RightSide(
+      TreeSet<Integer> lines, List<String> text, Map<Integer, String> lineText) {}
 
   /**
    * Walks a unified-diff patch once, collecting the right-side line numbers and the trimmed text of
@@ -264,8 +287,9 @@ public final class DiffLineResolver {
   private static RightSide parseRightSide(String patch) {
     var lines = new TreeSet<Integer>();
     var text = new ArrayList<String>();
+    var lineText = new HashMap<Integer, String>();
     if (patch == null || patch.isBlank()) {
-      return new RightSide(lines, text);
+      return new RightSide(lines, text, lineText);
     }
 
     var newLine = 0;
@@ -287,10 +311,11 @@ public final class DiffLineResolver {
           if (!stripped.isEmpty()) {
             text.add(stripped);
           }
+          lineText.put(newLine, rawLine.substring(1));
           newLine++;
         }
       }
     }
-    return new RightSide(lines, text);
+    return new RightSide(lines, text, lineText);
   }
 }

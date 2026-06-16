@@ -565,9 +565,7 @@ public class FollowUpAnalyzer {
 
       for (var member : cluster) {
         var finding = member.finding();
-        boolean present =
-            lineResolver.isFindingPresent(
-                finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE);
+        boolean present = lineResolver.isFindingPresent(finding.file(), finding.suggestionOld());
         if (present && target == null) {
           target = member;
         }
