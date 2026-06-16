@@ -2882,8 +2882,8 @@ class ReviewOrchestratorTest {
     void shouldQualifyReplyGuidanceSinceABackstopFindingMayHaveNoThread() {
       // #133(a): a backstop-held finding can be summary-only — its flagged line was outside the
       // diff when first raised, so it was never posted inline and has no thread to reply on. The
-      // COMMENT guidance must not unconditionally tell the maintainer to "reply on their threads";
-      // it qualifies the reply path so it stays honest when no thread exists.
+      // COMMENT guidance must qualify the reply path (where a thread exists) rather than directing
+      // the maintainer to a thread that may not be there.
       delegateStatusGate();
       var result =
           buildWithBackstop(
