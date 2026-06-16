@@ -785,6 +785,66 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldHoldStillOpenFindingThatDriftedBeyondTolerance() {
+    // #129(a): a force-push moved the still-open code from old line 10 to line 32. The raw
+    // line-number proxy would drop it (re-opening #118); the suggestion_old anchor still matches.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "Dangerous call",
+           "description": "unsafe", "suggestion_old": "dangerous_call();",
+           "suggestion_new": "safe_call();"}
+        ]}
+        """;
+    var patch =
+        """
+        @@ -10,2 +30,3 @@
+         keep_one();
+        +inserted_line();
+         dangerous_call();
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
+
+    assertFalse(resolver.isLineInDiff("src/A.java", 10, 3)); // old line drifted out of range
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldNotHoldFixedFindingWhoseContextSurvives() {
+    // #129(b): line 42's bug was deleted, but GitHub still emits surrounding context lines, so the
+    // raw line-number proxy is fooled into holding. The deleted anchor is gone from the right side.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 42, "title": "Buggy call",
+           "description": "bug", "suggestion_old": "buggy_42();",
+           "suggestion_new": ""}
+        ]}
+        """;
+    var patch =
+        """
+        @@ -38,8 +38,4 @@
+         ctx_38();
+         ctx_39();
+        -buggy_40();
+        -buggy_41();
+        -buggy_42();
+        -buggy_43();
+         ctx_44();
+         ctx_45();
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
+
+    // Stale line 42 is within ±3 of the surviving context line now at right-line 41.
+    assertTrue(resolver.isLineInDiff("src/A.java", 42, 3)); // raw proxy would over-block here
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), List.of(), resolver, BOT);
+
+    assertTrue(held.isEmpty());
+  }
+
+  @Test
   void buildPreviousFindingsContextShouldReturnEmptyForNull() {
     assertEquals("", analyzer.buildPreviousFindingsContext(null, "thrillhousebot"));
   }
