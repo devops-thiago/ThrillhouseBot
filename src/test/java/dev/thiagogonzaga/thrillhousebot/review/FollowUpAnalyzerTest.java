@@ -798,14 +798,15 @@ class FollowUpAnalyzerTest {
   @Test
   void unreportedUnresolvedShouldSeeMaintainerReplyOnNullTitleFindingViaMarker() {
     // #133(b): a prior finding persisted with title == null. Its inline thread carries the hidden
-    // finding marker, so the maintainer reply must be seen even though the title-only
-    // rootCommentsByTitle returns nothing for a null title. Without the marker-keyed lookup the
-    // backstop would hold this finding every round with no way for the human to clear it.
+    // finding marker and the finding's description (the bot embeds both in every comment), so the
+    // maintainer reply must be seen even though the title-only rootCommentsByTitle returns nothing
+    // for a null title. Without the marker-keyed lookup the backstop would hold this finding every
+    // round with no way for the human to clear it.
     var json =
         """
         {"findings": [
           {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
-           "description": "anchorless finding"}
+           "description": "frees then dereferences"}
         ]}
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
@@ -815,7 +816,7 @@ class FollowUpAnalyzerTest {
                 100L,
                 null,
                 "src/A.java",
-                "**HIGH — some defect**\n<!-- thrillhousebot:finding=1 -->",
+                "**HIGH — null**\n\nfrees then dereferences\n<!-- thrillhousebot:finding=1 -->",
                 BOT),
             comment(101L, 100L, "src/A.java", "intentional, won't fix", "maintainer"));
 
@@ -828,14 +829,15 @@ class FollowUpAnalyzerTest {
 
   @Test
   void unreportedUnresolvedShouldStillHoldNullTitleFindingWhenThreadHasNoReply() {
-    // #133(b): the marker locates the null-title finding's thread, but with no human reply on it
-    // the hold stands. Pins that the marker path clears the hold only on an actual reply, not on
-    // the mere existence of the thread, and that presence still resolves for a null-title finding.
+    // #133(b): the marker plus the finding's description locate the null-title finding's thread,
+    // but
+    // with no human reply on it the hold stands. Pins that the marker path clears the hold only on
+    // an actual reply, not on the mere existence of the thread.
     var json =
         """
         {"findings": [
           {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
-           "description": "anchorless finding"}
+           "description": "frees then dereferences"}
         ]}
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
@@ -845,8 +847,42 @@ class FollowUpAnalyzerTest {
                 100L,
                 null,
                 "src/A.java",
-                "**HIGH — some defect**\n<!-- thrillhousebot:finding=1 -->",
+                "**HIGH — null**\n\nfrees then dereferences\n<!-- thrillhousebot:finding=1 -->",
                 BOT));
+
+    var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldNullTitleFindingWhenEarlierRoundReusedItsMarkerIndex() {
+    // #133 over-clear guard for null-title findings: the newest round's finding #1 has title ==
+    // null
+    // and was summary-only that round (no thread of its own); its code is still present. An
+    // EARLIER,
+    // unrelated round posted a DIFFERENT finding at the same marker index 1 on the same file that a
+    // maintainer answered. The marker index recurs every round and a null title gives no title key,
+    // so without content correspondence the marker would bind to that earlier answered thread and
+    // clear a still-open finding — the #118 silent approve-over-open. Matching the finding's own
+    // description keeps the hold.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
+           "description": "frees then dereferences"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**LOW — Naming nit**\n\nrename the local for clarity\n<!-- thrillhousebot:finding=1 -->",
+                BOT),
+            comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"));
 
     var held = analyzer.unreportedUnresolvedStatuses(json, List.of(), comments, resolver, BOT);
 
@@ -924,14 +960,16 @@ class FollowUpAnalyzerTest {
 
   @Test
   void unreportedUnresolvedShouldHoldFindingWhenItsMarkedThreadHasOnlyABotReply() {
-    // #133 over-clear guard: the finding's own marked thread exists, but its only reply is the bot
-    // itself. The marker locates the thread, yet hasHumanReply must exclude the bot, so the hold
-    // stands — pins the marker-keyed branch (not just the title path) to clear only on a human
-    // reply.
+    // #133 over-clear guard: a null-title finding's own marked thread exists, but its only reply is
+    // the bot itself. The null title forces resolution through the marker-keyed branch (the
+    // title-only path cannot see a null-title thread at all), and hasHumanReply must exclude the
+    // bot
+    // there, so the hold stands. Removing the hasHumanReply check on that branch would flip this to
+    // a clear.
     var json =
         """
         {"findings": [
-          {"risk": "high", "file": "src/A.java", "line": 10, "title": "Use-after-free",
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": null,
            "description": "frees then dereferences"}
         ]}
         """;
@@ -942,7 +980,7 @@ class FollowUpAnalyzerTest {
                 100L,
                 null,
                 "src/A.java",
-                "**HIGH — Use-after-free**\n<!-- thrillhousebot:finding=1 -->",
+                "**HIGH — null**\n\nfrees then dereferences\n<!-- thrillhousebot:finding=1 -->",
                 BOT),
             comment(101L, 100L, "src/A.java", "tracking this", BOT));
 
