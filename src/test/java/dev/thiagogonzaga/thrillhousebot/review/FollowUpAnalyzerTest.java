@@ -990,6 +990,39 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldNotClearWhenAShortTitleIsASubstringOfAnotherFinding() {
+    // #133 dogfood: finding #1's title is short ("NPE") and it is thread-less this round. An
+    // earlier
+    // round raised a DIFFERENT finding at the same marker index 1 on the same file whose title
+    // CONTAINS "NPE" ("NPE in handler") and was answered. A bare title-substring match would treat
+    // that unrelated answered thread as this finding's and over-clear; anchoring on the header
+    // framing " — NPE**" does not match " — NPE in handler**", and the marker=1 comment still
+    // present on the file blocks the title-only fallback, so the hold stands.
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "NPE",
+           "description": "dereferences a value that may be null"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var comments =
+        List.of(
+            comment(
+                100L,
+                null,
+                "src/A.java",
+                "**HIGH — NPE in handler**\n\nguard the handler\n<!-- thrillhousebot:finding=1 -->",
+                BOT),
+            comment(101L, 100L, "src/A.java", "intentional", "maintainer"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
   void unreportedUnresolvedShouldHoldFindingWhenItsMarkedThreadHasOnlyABotReply() {
     // #133 over-clear guard: a null-title finding's own marked thread exists, but its only reply is
     // the bot itself. The null title forces resolution through the marker-keyed branch (the
