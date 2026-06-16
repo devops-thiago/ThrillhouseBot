@@ -1454,4 +1454,80 @@ class FollowUpAnalyzerTest {
   void hasUnresolvedShouldReturnFalseForEmptyList() {
     assertFalse(analyzer.hasUnresolved(List.of()));
   }
+
+  @Test
+  void unreportedUnresolvedShouldDeduplicateDriftedReRaisedFindingAcrossRounds() {
+    // A finding raised in round 1 and re-raised in round 2 (with line/path drift)
+    // is held once, not twice, if both are dropped (unreported) in the current round.
+    var round1 =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 10, "title": "SQL injection in query",
+           "description": "The query concatenates user input directly without sanitization",
+           "suggestion_old": "query = \\"SELECT * FROM users WHERE id = \\" + id;"}
+        ]}
+        """;
+    var round2 =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 32, "title": "SQL injection in database query",
+           "description": "The database query concatenates user input directly without sanitization",
+           "suggestion_old": "query = \\"SELECT * FROM users WHERE id = \\" + id;"}
+        ]}
+        """;
+    // Both anchors are present in the current diff.
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                "src/A.java",
+                "@@ -10,1 +10,1 @@\n-old1\n+query = \"SELECT * FROM users WHERE id = \" + id;\n@@ -32,1 +32,1 @@\n-old2\n+query = \"SELECT * FROM users WHERE id = \" + id;\n"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(round2, round1), List.of(), List.of(), resolver, BOT);
+
+    // Only one status is held (deduplicated).
+    assertEquals(1, held.size());
+    assertEquals("unresolved", held.get(0).status());
+  }
+
+  @Test
+  void unreportedUnresolvedShouldExcludeDriftedReRaisedFindingIfAnyMemberHasReply() {
+    // If a finding was re-raised with drift, but one of the copies has a maintainer reply,
+    // the entire cluster is considered replied to and is not held.
+    var round1 =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 10, "title": "SQL injection in query",
+           "description": "The query concatenates user input directly without sanitization",
+           "suggestion_old": "query = \\"SELECT * FROM users WHERE id = \\" + id;"}
+        ]}
+        """;
+    var round2 =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 32, "title": "SQL injection in database query",
+           "description": "The database query concatenates user input directly without sanitization",
+           "suggestion_old": "query = \\"SELECT * FROM users WHERE id = \\" + id;"}
+        ]}
+        """;
+    var comments =
+        List.of(
+            comment(100L, null, "src/A.java", "SQL injection in query", BOT),
+            comment(101L, 100L, "src/A.java", "intentional", "maintainer"));
+
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                "src/A.java",
+                "@@ -10,1 +10,1 @@\n-old1\n+query = \"SELECT * FROM users WHERE id = \" + id;\n@@ -32,1 +32,1 @@\n-old2\n+query = \"SELECT * FROM users WHERE id = \" + id;\n"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(round2, round1), List.of(), comments, resolver, BOT);
+
+    // One of the cluster members has a reply → entire cluster is considered replied → empty held
+    // list.
+    assertTrue(held.isEmpty());
+  }
 }
