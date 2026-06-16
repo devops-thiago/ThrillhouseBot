@@ -177,6 +177,12 @@ public class FindingQuoteValidator {
    * actual call ({@code '('}) are kept; bare names like {@code installedRepos()} and dotted field
    * access like {@code config.value} are deliberately excluded — they are not distinctive enough to
    * flag against the diff's narrow window.
+   *
+   * <p>A bare-name call (a receiver call with no following {@code .member}, e.g. {@code
+   * requireNonNull(user.getName())}) is itself excluded, but its argument list may wrap a real
+   * chain. Rather than skipping the whole wrapper, the walk descends past the bare receiver so the
+   * inner chain ({@code user.getName()}) is still extracted — otherwise a fabricated mechanism
+   * cited only inside such a wrapper would escape the guard.
    */
   private static List<String> citedCallExpressions(String description) {
     if (description == null || description.isBlank()) {
@@ -190,8 +196,13 @@ public class FindingQuoteValidator {
         ChainSpan span = scanChainedCall(description, i);
         if (span.memberSegments() >= 1 && span.hasCall()) {
           expressions.add(description.substring(i, span.end()));
+          i = span.end(); // a genuine chain: skip it whole, never surfacing its inner sub-exprs
+        } else if (span.hasCall()) {
+          // a bare-name call: descend past just the receiver so its argument list is re-scanned
+          i = skipIdentifier(description, i);
+        } else {
+          i = span.end(); // a bare name or dotted field access with no call: nothing to recover
         }
-        i = span.end();
       } else {
         i++;
       }

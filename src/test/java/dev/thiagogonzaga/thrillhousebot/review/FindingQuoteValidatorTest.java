@@ -588,7 +588,10 @@ class FindingQuoteValidatorTest {
         "It mentions `obj.run(\"oops` without ever closing the quote.",
         // a null-guard clause cites no call chain, so the present chain still matches and is kept
         "Guard `owner == null || accountOwner == null` before"
-            + " `r.owner().equals(accountOwner)`, which is present."
+            + " `r.owner().equals(accountOwner)`, which is present.",
+        // a present chain wrapped in a bare-name call: the inner chain is descended into and found
+        // in the diff, so the finding is not over-demoted
+        "The value `requireNonNull(r.owner().equals(accountOwner))` is recomputed each call."
       })
   void keepsFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
     var response = response(describedFinding(MATCHED_OLD, description));
@@ -658,7 +661,11 @@ class FindingQuoteValidatorTest {
         "Two call sites exist. The `path.split('/')` output (the $tmp local) is never checked.",
         // a lone apostrophe inside the cited call's arguments must not swallow the rest of the
         // citation: the phantom chain is still extracted whole and, being absent, demoted
-        "accountOwner is `dashboardConfig.lookup(the user's key).orElse(null)`, which may be null."
+        "accountOwner is `dashboardConfig.lookup(the user's key).orElse(null)`, which may be null.",
+        // a phantom chain wrapped in a bare-name call must still be checked: the wrapper itself is
+        // not a citation, but the inner config.fetch(accountId) is extracted and, being absent,
+        // demoted
+        "It is wrapped as `requireNonNull(config.fetch(accountId))`, which can throw."
       })
   void demotesFindingWhenDescriptionCitesAbsentNestedCallChain(String description) {
     var result =
