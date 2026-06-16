@@ -503,8 +503,10 @@ public class FollowUpAnalyzer {
 
   /**
    * A prior finding (1-based {@code id}) is a still-open silent drop when the model named it in no
-   * status entry, its flagged line is still in the current diff, and no maintainer has replied on
-   * its thread. {@link DiffLineResolver#isLineInDiff} already rejects a null file.
+   * status entry, its flagged code is still present in the current diff, and no maintainer has
+   * replied on its thread. Presence is judged by {@link DiffLineResolver#isFindingPresent} against
+   * the finding's persisted {@code suggestion_old} anchor, so it survives line drift and is not
+   * fooled by unchanged context (#129); the resolver already rejects a null file.
    */
   private static boolean isUnreportedAndStillOpen(
       ReviewResponse.Finding finding,
@@ -514,7 +516,8 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       String botLogin) {
     return !reportedIds.contains(id)
-        && lineResolver.isLineInDiff(finding.file(), finding.line(), DUPLICATE_LINE_TOLERANCE)
+        && lineResolver.isFindingPresent(
+            finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE)
         && answeredRootComment(finding, inlineComments, botLogin) == null;
   }
 

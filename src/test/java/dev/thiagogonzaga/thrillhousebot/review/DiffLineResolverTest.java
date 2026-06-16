@@ -209,4 +209,196 @@ class DiffLineResolverTest {
     assertTrue(lines.contains(1));
     assertTrue(lines.contains(2));
   }
+
+  @Test
+  void isFindingPresentShouldHoldAnchorThatDriftedBeyondToleranceViaContent() {
+    // The still-open code survived verbatim but a force-push pushed it from old line 10 to line 32.
+    var patch =
+        """
+        @@ -10,2 +30,3 @@
+         keep_one()
+        +inserted_line()
+             dangerous_call()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    // The raw line-number proxy drops it (32 is far from the old line 10); content matching holds.
+    assertFalse(resolver.isLineInDiff("A.java", 10, 3));
+    assertTrue(resolver.isFindingPresent("A.java", 10, "dangerous_call()", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldNotHoldDeletedCodeWhenOnlyNearbyContextSurvives() {
+    // #129(b), literal mechanism: the flagged line 42 is deleted outright; the bug-block survives
+    // only as left-side deletions, while context lines 38-39 / 44-45 remain on the right side.
+    var patch =
+        """
+        @@ -38,8 +38,4 @@
+         ctx_38()
+         ctx_39()
+        -buggy_40()
+        -buggy_41()
+        -buggy_42()
+        -buggy_43()
+         ctx_44()
+         ctx_45()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    // The raw line-number proxy is fooled: stale line 42 is within ±3 of the surviving context
+    // line now at right-line 41 (ctx_45), so it reads "present" though the bug was deleted.
+    assertTrue(resolver.isLineInDiff("A.java", 42, 3));
+    // Content matching is not: the anchor exists only as a deletion, never on the right side.
+    assertFalse(resolver.isFindingPresent("A.java", 42, "buggy_42()", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldRequireAnchorAsContiguousInOrderRun() {
+    var patch =
+        """
+        @@ -1,3 +1,3 @@
+         alpha()
+         beta()
+         gamma()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertTrue(resolver.isFindingPresent("A.java", 1, "alpha()\nbeta()", 3));
+    assertTrue(resolver.isFindingPresent("A.java", 1, "beta()\ngamma()", 3));
+    // A line changed away breaks the block.
+    assertFalse(resolver.isFindingPresent("A.java", 1, "alpha()\ndelta()", 3));
+    // Lines that survive only non-adjacently or out of order are not a contiguous run (#129(b)).
+    assertFalse(resolver.isFindingPresent("A.java", 1, "alpha()\ngamma()", 3));
+    assertFalse(resolver.isFindingPresent("A.java", 1, "gamma()\nbeta()", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldNotHoldMultiLineAnchorSurvivingScattered() {
+    // The flagged two-line block was replaced, but each of its lines coincidentally survives in an
+    // unrelated place; they never appear adjacent, so the block counts as gone (#129(b)).
+    var patch =
+        """
+        @@ -1,5 +1,5 @@
+         validate(x);
+         do_one();
+         do_two();
+         do_three();
+         persist(x);
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertFalse(resolver.isFindingPresent("A.java", 1, "validate(x);\npersist(x);", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldLeanTowardHoldingForARecurringSingleLineAnchor() {
+    // Accepted residual: a generic single-line anchor that recurs verbatim reads as present even
+    // when the flagged occurrence changed away. The stale prior-revision line cannot disambiguate
+    // it, so the downgrade-only backstop errs toward holding rather than risking the #118 drop.
+    var patch =
+        """
+        @@ -1,6 +1,6 @@
+         if (a) {
+        -  return null;
+        +  return value;
+         }
+         if (b) {
+           return null;
+         }
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertTrue(resolver.isFindingPresent("A.java", 2, "return null;", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldNeutralizeDiffMarkersBeforeMatching() {
+    // suggestion_old is quoted from the neutralized diff (<<DIFF_START>>), but the raw GitHub patch
+    // still carries the triple-bracket sentinel; the patch side must be neutralized to match.
+    var patch =
+        """
+        @@ -1,0 +1,1 @@
+        +String s = "<<<DIFF_START>>>";
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertTrue(resolver.isFindingPresent("A.java", 1, "String s = \"<<DIFF_START>>\";", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldIgnoreBlankAnchorLines() {
+    var patch =
+        """
+        @@ -1,2 +1,2 @@
+         alpha()
+        +beta()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    // Blank lines in the anchor must not be required against the right-side text.
+    assertTrue(resolver.isFindingPresent("A.java", 1, "alpha()\n\n   \nbeta()", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldFallBackToLineMembershipWithoutAnchor() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    // No anchor (null or blank): behaves like isLineInDiff.
+    assertTrue(resolver.isFindingPresent("main.py", 11, null, 3));
+    assertTrue(resolver.isFindingPresent("main.py", 11, "   ", 3));
+    assertFalse(resolver.isFindingPresent("main.py", 99, null, 3));
+  }
+
+  @Test
+  void isFindingPresentShouldMatchAnchorAcrossPathVariantsAndIgnoreLine() {
+    var resolver = new DiffLineResolver(Map.of("src/dir/Main.java", PATCH));
+
+    // Path variant resolves, indentation is stripped, and the stale line number is irrelevant.
+    assertTrue(resolver.isFindingPresent("dir/Main.java", 999, "new_line()", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldRejectNullFileAndAnchorOutsideItsOwnFile() {
+    var resolver = new DiffLineResolver(Map.of("A.java", PATCH));
+
+    assertFalse(resolver.isFindingPresent(null, 11, "new_line()", 3));
+    // The anchor text exists in A.java's diff, but the finding points at a file not in the diff —
+    // matching is file-scoped so an unrelated file never validates the finding.
+    assertFalse(resolver.isFindingPresent("B.java", 11, "new_line()", 3));
+  }
+
+  @Test
+  void isFindingPresentShouldNotHoldWhenFileHasOnlyDeletions() {
+    var deletionOnly =
+        """
+        @@ -10,2 +10,0 @@
+        -buggy_call()
+        -also_removed()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", deletionOnly));
+
+    // The flagged code was deleted outright: it survives only on the left side, so the file's
+    // right-side text is empty and the finding counts as no longer present.
+    assertFalse(resolver.isFindingPresent("A.java", 10, "buggy_call()", 3));
+  }
+
+  @Test
+  void shouldTrackBlankRightSideLineNumberButNotItsText() {
+    var patch =
+        """
+        @@ -1,0 +1,3 @@
+        +first();
+        +
+        +third();
+        """;
+    var lines = DiffLineResolver.parseRightSideLines(patch);
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    // A blank added line still advances the right-side counter (it is a commentable line) ...
+    assertEquals(3, lines.size());
+    // ... but is excluded from the right-side text, so "first();" and "third();" are adjacent and
+    // match contiguously. Were the blank kept, it would sit between them and break the run.
+    assertTrue(resolver.isFindingPresent("A.java", 1, "first();\nthird();", 3));
+    assertFalse(resolver.isFindingPresent("A.java", 1, "second();", 3));
+  }
 }
