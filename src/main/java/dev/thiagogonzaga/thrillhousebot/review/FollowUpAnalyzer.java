@@ -26,10 +26,12 @@ import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /** Analyzes follow-up reviews by comparing new findings against prior reviews. */
@@ -47,6 +49,10 @@ public class FollowUpAnalyzer {
    */
   private static final Set<String> RECOGNIZED_STATUSES =
       Set.of(STATUS_RESOLVED, STATUS_JUSTIFIED, STATUS_UNRESOLVED);
+
+  /** Shared blank response for missing/unparseable persisted rounds (empty, never-null lists). */
+  private static final ReviewResponse EMPTY_RESPONSE =
+      new ReviewResponse(List.of(), List.of(), null);
 
   private final ObjectMapper mapper;
 
@@ -457,59 +463,92 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * Deterministic approve backstop for issue #118. Prior findings the model left OUT of
-   * previous_findings_status entirely — neither resolved, justified, nor even reported as
-   * unresolved — that are still present in the current diff and carry no maintainer reply, surfaced
-   * as synthetic {@code "unresolved"} statuses. Merging these into the result's previous-findings
-   * statuses makes the existing APPROVE → COMMENT gate hold over a silently dropped finding, and
-   * makes every downstream count and message truthful, without a separate code path.
+   * Deterministic approve backstop for issues #118 and #130. The bot's own prior findings the model
+   * silently dropped — still present in the current diff, carrying no maintainer reply, and not
+   * closed by any round — surfaced as synthetic {@code "unresolved"} statuses. Merging these into
+   * the result's previous-findings statuses makes the existing APPROVE → COMMENT gate hold over a
+   * silently dropped finding and keeps every downstream count and message truthful, without a
+   * separate code path.
    *
-   * <p>The findings are reconstructed from the persisted previous response (keyed by repo+PR, so it
-   * survives a force-push/rebase), which means the backstop fires even when the model received the
+   * <p>The findings are reconstructed from the persisted prior responses (keyed by repo+PR, so they
+   * survive a force-push/rebase), which means the backstop fires even when the model received the
    * previous-findings context but ignored it — the exact PR #99 dogfood symptom.
    *
-   * <p>Scoped to the newest prior round only ({@code previousAiResponseJson});
-   * previous_findings_status ids are 1-based positions over exactly that list, so iterating it
-   * keeps the id mapping aligned with {@link #unresolvedFindings} and rules the off-by-one out by
-   * construction. Findings the model <em>did</em> account for (a <em>recognized</em> status id —
-   * resolved / justified / unresolved) are skipped, so this never double-counts the model-reported
-   * {@code unresolved} items the {@link #hasUnresolved} gate already holds; an unrecognized status
-   * is not an accounting and falls through to the backstop (#131).
+   * <p>It considers <em>all</em> prior rounds, not just the newest (#130). Each round persists only
+   * its own new findings; a finding raised in round 1 is referenced in later rounds only via their
+   * {@code previous_findings_status}, so a still-open finding the model drops several rounds after
+   * raising it would otherwise never be re-checked. The rounds are replayed oldest → newest:
+   *
+   * <ul>
+   *   <li>A round's {@code previous_findings_status} reports on the round immediately before it
+   *       (ids are 1-based positions over that round's findings). A {@code resolved}/{@code
+   *       justified} verdict there closes the referenced finding, so it is removed from the open
+   *       set — this is what keeps the widened scope from re-holding a finding that was
+   *       legitimately addressed in an intermediate round (the "block any prior finding"
+   *       over-strictness #118 explicitly rejected).
+   *   <li>Findings carried across rounds are deduplicated by content (file + line + title), so the
+   *       same finding raised at one location is held at most once, while two distinct findings at
+   *       different lines are never collapsed into one.
+   *   <li>The current round reports on the newest prior round; a finding it accounted for with a
+   *       <em>recognized</em> verdict (resolved / justified / unresolved, {@link
+   *       #isRecognizedStatus}) is dropped — resolved/justified means addressed, and a reported
+   *       {@code unresolved} is already held by the model gate ({@link #unresolvedFindings} +
+   *       {@link #hasUnresolved}), so reconstructing it here would double-count. An
+   *       <em>unrecognized</em> verdict is not an accounting, so the backstop still holds it — a
+   *       malformed status string must not sneak a still-open finding past the APPROVE gate (#131).
+   *   <li>Presence is judged by {@link DiffLineResolver#isFindingPresent} against each finding's
+   *       persisted {@code suggestion_old} anchor, so a still-open finding survives line drift and
+   *       a fixed one is not kept alive by surviving context (#129).
+   * </ul>
    *
    * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
    * so they can turn APPROVE into COMMENT, never into REQUEST_CHANGES. A maintainer reply on the
    * thread clears the hold (the human is engaged; defer to them, matching {@link
    * #dropRepliedDuplicates}), as does the model marking the finding resolved/justified.
+   *
+   * @param priorAiResponseJsons every completed prior round's persisted AI response, newest first
+   *     (as {@link
+   *     dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence#findAllPriorAiResponseJsons}
+   *     returns them)
+   * @param currentStatuses the current round's {@code previous_findings_status} (reports on the
+   *     newest prior round)
    */
   public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatuses(
-      String previousAiResponseJson,
-      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<String> priorAiResponseJsons,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
       String botLogin) {
-    var previous = parsePreviousFindings(previousAiResponseJson);
-    if (previous.isEmpty() || lineResolver == null) {
+    if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty() || lineResolver == null) {
       return List.of();
     }
-    var reportedIds = new HashSet<Integer>();
-    if (statuses != null) {
-      for (var status : statuses) {
-        // Only a recognized status accounts for a finding. An unrecognized value (empty, null, a
-        // typo, "wontfix") must fall through to the backstop; otherwise the finding escapes both
-        // this skip and the unresolved gate. (#131)
-        if (isRecognizedStatus(status.status())) {
-          reportedIds.add(status.id());
-        }
-      }
+    // Persisted newest-first; replay oldest → newest so each round's previous_findings_status
+    // (which reports on the round immediately before it) can close the findings it addressed.
+    var chrono = new ArrayList<ReviewResponse>();
+    for (var i = priorAiResponseJsons.size() - 1; i >= 0; i--) {
+      chrono.add(parseResponse(priorAiResponseJsons.get(i)));
     }
+    // Still-open prior findings keyed by content, so a finding carried across rounds is held at
+    // most once; insertion order is preserved for stable, deterministic output.
+    var open = new LinkedHashMap<String, OpenFinding>();
+    for (var i = 0; i < chrono.size(); i++) {
+      if (i > 0) {
+        closeAddressed(open, chrono.get(i - 1).findings(), chrono.get(i).previousFindingsStatus());
+      }
+      addOpenFindings(open, chrono.get(i).findings());
+    }
+    // The current round reports on the newest prior round — drop everything it accounted for.
+    closeReported(open, chrono.get(chrono.size() - 1).findings(), currentStatuses);
+
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
-    for (var i = 0; i < previous.size(); i++) {
-      var id = i + 1;
-      if (isUnreportedAndStillOpen(
-          previous.get(i), id, reportedIds, lineResolver, inlineComments, botLogin)) {
+    for (var entry : open.values()) {
+      var finding = entry.finding();
+      if (lineResolver.isFindingPresent(
+              finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE)
+          && answeredRootComment(finding, inlineComments, botLogin) == null) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
-                id,
+                entry.id(),
                 STATUS_UNRESOLVED,
                 "Flagged in an earlier round and still present; not addressed in this revision."));
       }
@@ -517,24 +556,98 @@ public class FollowUpAnalyzer {
     return held;
   }
 
+  /** A still-open prior finding and the 1-based id it carried within the round that raised it. */
+  private record OpenFinding(ReviewResponse.Finding finding, int id) {}
+
+  private static void addOpenFindings(
+      Map<String, OpenFinding> open, List<ReviewResponse.Finding> findings) {
+    for (var i = 0; i < findings.size(); i++) {
+      var key = findingKey(findings.get(i));
+      if (key != null) {
+        open.put(key, new OpenFinding(findings.get(i), i + 1));
+      }
+    }
+  }
+
   /**
-   * A prior finding (1-based {@code id}) is a still-open silent drop when the model named it in no
-   * status entry, its flagged code is still present in the current diff, and no maintainer has
-   * replied on its thread. Presence is judged by {@link DiffLineResolver#isFindingPresent} against
-   * the finding's persisted {@code suggestion_old} anchor, so it survives line drift and is not
-   * fooled by unchanged context (#129); the resolver already rejects a null file.
+   * Removes the findings a following round marked resolved or justified (the verdicts that close
+   * one). An unresolved or unrecognized verdict from an intermediate round leaves the finding open.
    */
-  private static boolean isUnreportedAndStillOpen(
-      ReviewResponse.Finding finding,
-      int id,
-      Set<Integer> reportedIds,
-      DiffLineResolver lineResolver,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
-    return !reportedIds.contains(id)
-        && lineResolver.isFindingPresent(
-            finding.file(), finding.line(), finding.suggestionOld(), DUPLICATE_LINE_TOLERANCE)
-        && answeredRootComment(finding, inlineComments, botLogin) == null;
+  private static void closeAddressed(
+      Map<String, OpenFinding> open,
+      List<ReviewResponse.Finding> reportedRound,
+      List<ReviewResponse.PreviousFindingStatus> statuses) {
+    removeReferenced(open, reportedRound, statuses, FollowUpAnalyzer::isAddressedVerdict);
+  }
+
+  /**
+   * Removes the findings the current round accounted for with a recognized verdict
+   * (resolved/justified are addressed; a reported unresolved is already held by the model gate). An
+   * unrecognized verdict does not count as accounting for the finding, so the backstop still holds
+   * it.
+   */
+  private static void closeReported(
+      Map<String, OpenFinding> open,
+      List<ReviewResponse.Finding> reportedRound,
+      List<ReviewResponse.PreviousFindingStatus> statuses) {
+    removeReferenced(open, reportedRound, statuses, FollowUpAnalyzer::isRecognizedStatus);
+  }
+
+  private static void removeReferenced(
+      Map<String, OpenFinding> open,
+      List<ReviewResponse.Finding> reportedRound,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      Predicate<String> closesFinding) {
+    if (statuses == null) {
+      return;
+    }
+    for (var status : statuses) {
+      if (!closesFinding.test(status.status())) {
+        continue;
+      }
+      var id = status.id();
+      if (id >= 1 && id <= reportedRound.size()) {
+        var key = findingKey(reportedRound.get(id - 1));
+        if (key != null) {
+          open.remove(key);
+        }
+      }
+    }
+  }
+
+  /**
+   * The verdicts that <em>close</em> a finding an intermediate round reported on — resolved or
+   * justified. A reported {@code unresolved} keeps it open here (it is held by the model gate, and
+   * an intermediate round may yet drop it); {@link #isRecognizedStatus} is the wider current-round
+   * predicate that also treats {@code unresolved} as accounted-for.
+   */
+  private static boolean isAddressedVerdict(String status) {
+    return STATUS_RESOLVED.equalsIgnoreCase(status) || STATUS_JUSTIFIED.equalsIgnoreCase(status);
+  }
+
+  /**
+   * Content identity for cross-round dedup and status-to-finding matching: file, line, and title. A
+   * null file yields no key — {@link DiffLineResolver#isFindingPresent} could not place it in the
+   * diff anyway.
+   *
+   * <p>The line is the discriminator, deliberately NOT the {@code suggestion_old} anchor. Keying on
+   * the line distinguishes two genuinely-distinct findings that share a file and title but sit at
+   * different lines — e.g. a generic anchor like {@code return null;} flagged under one title at
+   * two sites — so neither evicts the other from the open set; collapsing them would drop a
+   * still-open silent finding and let APPROVE sail over it (the #118 missed hold). The cost is that
+   * one finding re-raised at a <em>drifted</em> line is keyed twice and held twice — a duplicate,
+   * downgrade-only over-count in the "Still present" summary. That is accepted on purpose: a
+   * drifted re-raise and two distinct same-anchor findings present the identical signal (same
+   * file+title, different line), so any key that deduplicates the former necessarily collapses the
+   * latter, and an over-count is the safe direction where a missed hold is not. (The anchor is
+   * still used for <em>presence</em> via {@link DiffLineResolver#isFindingPresent}; it just does
+   * not define identity.)
+   */
+  private static String findingKey(ReviewResponse.Finding finding) {
+    if (finding.file() == null) {
+      return null;
+    }
+    return finding.file() + '\0' + finding.line() + '\0' + finding.title();
   }
 
   /**
@@ -552,14 +665,23 @@ public class FollowUpAnalyzer {
   }
 
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {
+    return parseResponse(aiResponseJson).findings();
+  }
+
+  /**
+   * Full persisted previous response, with empty (never null) findings and statuses on a missing or
+   * unparseable input — the backstop replay needs both lists, and the compact constructor of {@link
+   * ReviewResponse} guarantees non-null copies.
+   */
+  private ReviewResponse parseResponse(String aiResponseJson) {
     if (aiResponseJson == null || aiResponseJson.isBlank()) {
-      return List.of();
+      return EMPTY_RESPONSE;
     }
     try {
-      return mapper.readValue(aiResponseJson, ReviewResponse.class).findings();
+      return mapper.readValue(aiResponseJson, ReviewResponse.class);
     } catch (JsonProcessingException e) {
       Log.warn("Could not parse previous AI response, falling back to review body context", e);
-      return List.of();
+      return EMPTY_RESPONSE;
     }
   }
 
