@@ -620,10 +620,12 @@ class FindingQuoteValidatorTest {
 
   /**
    * Mechanism (a), #121: a chain the description cites that is also the finding's own {@code
-   * suggestion_new} is the proposed fix — a hypothetical, absent from the diff by definition.
-   * Subtracting it (the deterministic form of #106's "existing code, not the suggested fix") leaves
-   * no absent existing-source citation, so a finding that describes its own fix is not demoted. The
-   * chain is genuinely absent from {@code DESCRIPTION_DIFF}, so only the subtraction keeps it.
+   * suggestion_new} is the proposed fix — a hypothetical, absent from the diff by definition. The
+   * chain is still extracted, but since it is absent from {@code DESCRIPTION_DIFF} and restated in
+   * {@code suggestion_new}, it is not counted as a fabricated mechanism (the deterministic form of
+   * #106's "existing code, not the suggested fix"), so a finding that describes its own fix is not
+   * demoted. Its absence from the diff is what makes the {@code suggestion_new} restatement the
+   * only thing keeping it.
    */
   @ParameterizedTest
   @ValueSource(
