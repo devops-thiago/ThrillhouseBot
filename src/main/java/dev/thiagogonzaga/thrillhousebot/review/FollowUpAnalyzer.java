@@ -37,6 +37,16 @@ import java.util.stream.Stream;
 public class FollowUpAnalyzer {
 
   private static final String STATUS_UNRESOLVED = "unresolved";
+  private static final String STATUS_RESOLVED = "resolved";
+  private static final String STATUS_JUSTIFIED = "justified";
+
+  /**
+   * The only statuses the prompt contract defines for {@code previous_findings_status} ("resolved"
+   * | "unresolved" | "justified"). A value outside this set does not count as the model accounting
+   * for a finding — see {@link #isRecognizedStatus} and #131.
+   */
+  private static final Set<String> RECOGNIZED_STATUSES =
+      Set.of(STATUS_RESOLVED, STATUS_JUSTIFIED, STATUS_UNRESOLVED);
 
   private final ObjectMapper mapper;
 
@@ -461,9 +471,10 @@ public class FollowUpAnalyzer {
    * <p>Scoped to the newest prior round only ({@code previousAiResponseJson});
    * previous_findings_status ids are 1-based positions over exactly that list, so iterating it
    * keeps the id mapping aligned with {@link #unresolvedFindings} and rules the off-by-one out by
-   * construction. Findings the model <em>did</em> account for (any status id) are skipped, so this
-   * never double-counts the model-reported {@code unresolved} items the {@link #hasUnresolved} gate
-   * already holds.
+   * construction. Findings the model <em>did</em> account for (a <em>recognized</em> status id —
+   * resolved / justified / unresolved) are skipped, so this never double-counts the model-reported
+   * {@code unresolved} items the {@link #hasUnresolved} gate already holds; an unrecognized status
+   * is not an accounting and falls through to the backstop (#131).
    *
    * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
    * so they can turn APPROVE into COMMENT, never into REQUEST_CHANGES. A maintainer reply on the
@@ -483,7 +494,12 @@ public class FollowUpAnalyzer {
     var reportedIds = new HashSet<Integer>();
     if (statuses != null) {
       for (var status : statuses) {
-        reportedIds.add(status.id());
+        // Only a recognized status accounts for a finding. An unrecognized value (empty, null, a
+        // typo, "wontfix") must fall through to the backstop; otherwise the finding escapes both
+        // this skip and the unresolved gate. (#131)
+        if (isRecognizedStatus(status.status())) {
+          reportedIds.add(status.id());
+        }
       }
     }
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
@@ -516,6 +532,20 @@ public class FollowUpAnalyzer {
     return !reportedIds.contains(id)
         && lineResolver.isLineInDiff(finding.file(), finding.line(), DUPLICATE_LINE_TOLERANCE)
         && answeredRootComment(finding, inlineComments, botLogin) == null;
+  }
+
+  /**
+   * A model-reported status counts as the model accounting for a finding only when it is one of the
+   * contract's recognized values (resolved / justified / unresolved, case-insensitively). Any other
+   * value — empty, null, a typo, or an out-of-vocabulary word like {@code "wontfix"} — must fall
+   * through to the backstop: otherwise a still-open finding with an unrecognized status escapes
+   * BOTH the backstop (its id is present in {@code reportedIds}) AND the {@link #hasUnresolved}
+   * gate (its value is not {@code "unresolved"}), re-introducing the silent approve-over-open the
+   * backstop exists to stop. {@code unresolved} stays in the set so the backstop never
+   * double-counts an item the gate already holds via the model's own status. (#131)
+   */
+  private static boolean isRecognizedStatus(String status) {
+    return status != null && RECOGNIZED_STATUSES.contains(status.toLowerCase(Locale.ROOT));
   }
 
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {

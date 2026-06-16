@@ -737,6 +737,50 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldHoldFindingsWithUnrecognizedStatus() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    // #131: a status outside the contract's resolved/justified/unresolved vocabulary does NOT count
+    // as the model accounting for the finding. Finding #1 is still open in the diff, so each junk
+    // value must fall through to the backstop and be held — otherwise it would escape both the
+    // backstop (id present) and the unresolved gate (value != "unresolved").
+    for (String junk : new String[] {"wontfix", "open", "RESOLVE", "", null}) {
+      var held =
+          analyzer.unreportedUnresolvedStatuses(
+              PREVIOUS_JSON,
+              List.of(
+                  new ReviewResponse.PreviousFindingStatus(1, junk, "?"),
+                  new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed")),
+              List.of(),
+              resolver,
+              BOT);
+      // #2 carries a recognized status and is accounted for; only #1 (junk status) is held.
+      assertEquals(
+          List.of(1), heldIds(held), "status \"" + junk + "\" must not suppress the backstop");
+    }
+  }
+
+  @Test
+  void unreportedUnresolvedShouldRecognizeStatusesCaseInsensitively() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    // Recognized statuses are matched case-insensitively, so upper/mixed case still accounts for a
+    // finding and nothing is held — the model-reported "unresolved" stays held by the gate, not
+    // double-counted here.
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses(
+                PREVIOUS_JSON,
+                List.of(
+                    new ReviewResponse.PreviousFindingStatus(1, "RESOLVED", "fixed"),
+                    new ReviewResponse.PreviousFindingStatus(2, "Justified", "intentional")),
+                List.of(),
+                resolver,
+                BOT)
+            .isEmpty());
+  }
+
+  @Test
   void unreportedUnresolvedShouldExcludeFindingsWithMaintainerReply() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
     var comments =
