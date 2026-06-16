@@ -581,4 +581,60 @@ class DiffLineResolverTest {
     // Sanity: the exact entry's own line still resolves.
     assertTrue(resolver.isLineInDiff("dir/F.java", 20, 3));
   }
+
+  @Test
+  void resolveRightSideLineShouldMatchAcrossPathVariants() {
+    var resolver = new DiffLineResolver(Map.of("src/dir/F.java", PATCH));
+    assertEquals(OptionalInt.of(11), resolver.resolveRightSideLine("dir/F.java", 11));
+  }
+
+  @Test
+  void resolveRightSideLineTreatsNonEmptyExactMatchAsAuthoritativeOverVariant() {
+    var exactAtLine20 =
+        """
+        @@ -1,1 +20,1 @@
+        +twenty
+        """;
+    var variantAtLine50 =
+        """
+        @@ -1,1 +50,1 @@
+        +fifty
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of("dir/F.java", exactAtLine20, "src/dir/F.java", variantAtLine50));
+
+    assertEquals(OptionalInt.of(20), resolver.resolveRightSideLine("dir/F.java", 50));
+  }
+
+  @Test
+  void resolveRightSideLineReturnsEmptyOnAmbiguity() {
+    var aVariant =
+        """
+        @@ -1,1 +20,1 @@
+        +twenty
+        """;
+    var bVariant =
+        """
+        @@ -1,1 +50,1 @@
+        +fifty
+        """;
+    var resolver = new DiffLineResolver(Map.of("a/dir/F.java", aVariant, "b/dir/F.java", bVariant));
+
+    assertTrue(resolver.resolveRightSideLine("dir/F.java", 20).isEmpty());
+  }
+
+  @Test
+  void resolveRightSideLineFallsBackToVariantWhenExactEntryIsEmpty() {
+    var deletionOnly =
+        """
+        @@ -10,2 +10,0 @@
+        -removed_one
+        -removed_two
+        """;
+    var resolver =
+        new DiffLineResolver(Map.of("dir/F.java", deletionOnly, "src/dir/F.java", PATCH));
+
+    assertEquals(OptionalInt.of(11), resolver.resolveRightSideLine("dir/F.java", 11));
+  }
 }
