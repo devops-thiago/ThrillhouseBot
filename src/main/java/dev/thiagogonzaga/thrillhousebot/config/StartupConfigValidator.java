@@ -131,8 +131,9 @@ public class StartupConfigValidator {
   private void logDashboardStatus() {
     var hasClientId = config.dashboard().clientId().filter(s -> !s.isBlank()).isPresent();
     var hasClientSecret = config.dashboard().clientSecret().filter(s -> !s.isBlank()).isPresent();
-    // The message and level live on the enum, so dispatch is a single boolean check — no enum
-    // switch (whose synthetic default reads as an uncovered branch) and no if/else-on-enum chain.
+    // Keeping the message and log level on the enum makes dispatch a single boolean check. That
+    // avoids the extra, never-exercised branch arcs that an enum-based switch or a per-constant
+    // comparison chain would introduce, keeping patch coverage at 100 percent.
     var status = dashboardOauthStatus(hasClientId, hasClientSecret);
     if (status.warn) {
       log.warn(status.message);
