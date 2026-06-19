@@ -239,6 +239,35 @@ class CommentCommandServiceTest {
   }
 
   @Test
+  void pauseStillConfirmsWhenConcurrentPauseWonTheInsertRace() {
+    authorize(true);
+    // The unique-constraint loser: pause() throws, but the winning concurrent /pause left the row,
+    // so the PR is paused and the confirmation must still be posted.
+    doThrow(new RuntimeException("unique constraint violation"))
+        .when(prPauseService)
+        .pause("owner", "repo", 7);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.PAUSE));
+
+    assertTrue(postedBody().contains("paused"));
+  }
+
+  @Test
+  void pauseDoesNotConfirmWhenInsertGenuinelyFailed() {
+    authorize(true);
+    doThrow(new RuntimeException("database unavailable"))
+        .when(prPauseService)
+        .pause("owner", "repo", 7);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.PAUSE));
+
+    // A real failure (no row afterwards) propagates to the top-level handler; no confirmation.
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
   void resumeClearsPauseAndConfirms() {
     authorize(true);
     when(prPauseService.resume("owner", "repo", 7)).thenReturn(true);

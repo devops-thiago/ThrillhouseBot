@@ -26,6 +26,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.util.ArrayList;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -43,6 +44,11 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class MaintainerReplyService {
 
   private static final String ACCEPT = "application/vnd.github+json";
+
+  // GitHub serves 30 review comments per page by default; request the 100 max and walk a bounded
+  // number of pages so a busy thread's root comment and prior replies are not missed past page one.
+  private static final int COMMENTS_PER_PAGE = 100;
+  private static final int MAX_COMMENT_PAGES = 10;
 
   private final GitHubAuthClient authClient;
   private final ManualReviewAuthorizer authorizer;
@@ -228,14 +234,23 @@ public class MaintainerReplyService {
   }
 
   private List<GitHubReviewClient.PullRequestComment> listReviewComments(String auth, ReplyTask t) {
+    var all = new ArrayList<GitHubReviewClient.PullRequestComment>();
     try {
-      var comments =
-          reviewClient.listPullRequestComments(auth, ACCEPT, t.owner(), t.repo(), t.prNumber());
-      return comments != null ? comments : List.of();
+      List<GitHubReviewClient.PullRequestComment> batch;
+      int page = 1;
+      do {
+        batch =
+            reviewClient.listPullRequestComments(
+                auth, ACCEPT, t.owner(), t.repo(), t.prNumber(), COMMENTS_PER_PAGE, page);
+        if (batch != null) {
+          all.addAll(batch);
+        }
+        page++;
+      } while (batch != null && batch.size() == COMMENTS_PER_PAGE && page <= MAX_COMMENT_PAGES);
     } catch (RuntimeException e) {
       Log.warn("Failed to list PR review comments for reply context", e);
-      return List.of();
     }
+    return all;
   }
 
   private static GitHubReviewClient.PullRequestComment findRoot(
@@ -255,10 +270,11 @@ public class MaintainerReplyService {
       long triggeringCommentId) {
     var sb = new StringBuilder();
     for (var c : comments) {
-      if (c.inReplyToId() == null || c.inReplyToId() != rootCommentId) {
-        continue;
-      }
-      if (c.id() == triggeringCommentId) {
+      // Keep only the other replies on this thread: skip non-replies, replies to a different root,
+      // and the message that triggered this reply.
+      if (c.inReplyToId() == null
+          || c.inReplyToId() != rootCommentId
+          || c.id() == triggeringCommentId) {
         continue;
       }
       String author = c.user() != null ? c.user().login() : "unknown";

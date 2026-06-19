@@ -62,6 +62,15 @@ public interface ThrillhouseConfig {
 
     @WithName("webhook-secret")
     String webhookSecret();
+
+    /**
+     * GitHub login(s) of this App's bot account, used to skip the bot's own comments and avoid
+     * infinite reply loops. Defaults to the names this project ships under; override when the App
+     * is deployed under a different slug (its bot login is {@code <app-slug>[bot]}).
+     */
+    @WithName("bot-logins")
+    @WithDefault("thrillhousebot[bot],thrillhouse-bot[bot]")
+    List<String> botLogins();
   }
 
   interface WebhookConfig {

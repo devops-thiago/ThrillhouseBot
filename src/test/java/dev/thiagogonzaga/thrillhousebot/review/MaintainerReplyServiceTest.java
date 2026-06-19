@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -133,7 +134,7 @@ class MaintainerReplyServiceTest {
   void replyOnBotThreadPostsAnswerWithFindingAndPriorRepliesAsContext() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(
             List.of(
                 comment(99L, null, BOT, "**CRITICAL — possible NPE** on user lookup"),
@@ -176,10 +177,37 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
+  void walksAllCommentPagesToFindARootBeyondTheFirstPage() {
+    authorize();
+    // Page 1 is full (100 comments) so a second page is fetched; the bot finding root is on page 2.
+    var firstPage = new ArrayList<GitHubReviewClient.PullRequestComment>();
+    for (int i = 0; i < 100; i++) {
+      firstPage.add(comment(2000L + i, 77L, "octocat", "noise " + i));
+    }
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(100), eq(1)))
+        .thenReturn(firstPage);
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(100), eq(2)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**finding** on page two")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+
+    service.handle(reviewThreadTask(false));
+
+    // Root comment 99 lived on page 2; without pagination the bot would have stayed silent.
+    verify(reviewClient)
+        .listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(100), eq(2));
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
   void replyOnHumanThreadWithoutMentionPostsNothing() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(
             List.of(
                 comment(99L, null, "someone", "I think this is wrong"),
@@ -196,7 +224,7 @@ class MaintainerReplyServiceTest {
   void replyOnHumanThreadWithMentionStillAnswers() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, "someone", "what does the bot think?")));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
         .thenReturn("My take: looks fine.");
@@ -238,7 +266,7 @@ class MaintainerReplyServiceTest {
   void blankAssistantReplyPostsNothing() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("   ");
 
@@ -252,7 +280,7 @@ class MaintainerReplyServiceTest {
   void assistantFailureIsSwallowed() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
         .thenThrow(new RuntimeException("model down"));
@@ -295,7 +323,7 @@ class MaintainerReplyServiceTest {
   void listCommentsFailureStillAnswersAnExplicitMention() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenThrow(new RuntimeException("GitHub 503"));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Still here.");
 
@@ -345,7 +373,7 @@ class MaintainerReplyServiceTest {
   void postFailureIsSwallowedByOuterHandler() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("answer");
     doThrow(new RuntimeException("GitHub 422"))
@@ -373,7 +401,7 @@ class MaintainerReplyServiceTest {
   void botThreadReplyWithNullDiffHunkSendsEmptyCodeContext() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
     var task =
@@ -395,7 +423,7 @@ class MaintainerReplyServiceTest {
   void threadRenderingSkipsOtherThreadsAndHandlesAnonymousReplies() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(
             List.of(
                 comment(99L, null, BOT, "**finding**"),
@@ -424,7 +452,7 @@ class MaintainerReplyServiceTest {
     // The root exists but its author is unknown (e.g. deleted account): it must not count as the
     // bot's thread, so an unmentioned reply on it is left alone.
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(commentNoUser(99L, null, "author is null")));
 
     service.handle(reviewThreadTask(false));
@@ -438,7 +466,7 @@ class MaintainerReplyServiceTest {
   void nullAssistantReplyPostsNothing() {
     authorize();
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(null);
 
@@ -453,7 +481,7 @@ class MaintainerReplyServiceTest {
     authorize();
     // GitHub returning a null body (vs an empty list) must not NPE — it falls back to no context.
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(null);
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
 
@@ -470,7 +498,7 @@ class MaintainerReplyServiceTest {
     authorize();
     // The root is not first in the list, so the id filter must skip a non-matching comment first.
     when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(
             List.of(
                 comment(500L, 88L, "x", "unrelated thread"),

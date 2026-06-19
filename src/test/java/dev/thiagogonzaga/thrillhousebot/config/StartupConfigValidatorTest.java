@@ -127,6 +127,21 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenAppIdIsNotNumeric() {
+    // A non-numeric app id passes a bare presence check but yields a JWT GitHub rejects, so it must
+    // be rejected at boot rather than on the first webhook.
+    var ex = assertFailsValidation(new ConfigBuilder().appId("my-app").build());
+    assertTrue(
+        ex.getMessage().contains("GITHUB_APP_ID must be the numeric GitHub App id"),
+        ex.getMessage());
+  }
+
+  @Test
+  void passesWhenAppIdIsNumericWithSurroundingWhitespace() {
+    new ConfigBuilder().appId("  12345  ").build().validate();
+  }
+
+  @Test
   void failsFastWhenPrivateKeyMissing() {
     var ex = assertFailsValidation(new ConfigBuilder().privateKey("  ").build());
     assertTrue(ex.getMessage().contains("GITHUB_PRIVATE_KEY is required"), ex.getMessage());

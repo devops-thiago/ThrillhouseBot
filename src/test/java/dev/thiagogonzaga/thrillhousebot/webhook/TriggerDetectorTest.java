@@ -16,7 +16,11 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class TriggerDetectorTest {
@@ -118,5 +122,49 @@ class TriggerDetectorTest {
     assertFalse(detector.isBotComment("octocat"));
     assertFalse(detector.isBotComment("thrillhousebot"));
     assertFalse(detector.isBotComment(""));
+  }
+
+  @Test
+  void shouldNotDetectCommandInsideFencedCodeBlock() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("```\n/pause\n```"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("~~~\n/resolve\n~~~"));
+  }
+
+  @Test
+  void shouldNotDetectCommandInsideBlockquote() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("> /pause"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("  > someone said /resume"));
+  }
+
+  @Test
+  void shouldNotDetectCommandOrMentionInsideInlineCode() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("use `/review` to trigger a review"));
+    assertFalse(detector.containsBotMention("ping `@thrillhousebot` here"));
+  }
+
+  @Test
+  void shouldStillDetectRealCommandAlongsideQuotedOne() {
+    // A genuine command outside the quoted block still fires.
+    assertEquals(CommentCommand.REVIEW, detector.detectCommand("> quoting a /pause\n/review"));
+  }
+
+  @Test
+  void shouldUseConfiguredBotLogins() {
+    var config = mock(ThrillhouseConfig.class);
+    var github = mock(ThrillhouseConfig.GitHubConfig.class);
+    when(config.github()).thenReturn(github);
+    when(github.botLogins()).thenReturn(List.of("my-app[bot]", " Other[Bot] "));
+    var configured = new TriggerDetector(config);
+
+    assertTrue(configured.isBotComment("my-app[bot]"));
+    assertTrue(configured.isBotComment("other[bot]")); // normalized: trimmed + case-insensitive
+    assertFalse(configured.isBotComment("thrillhousebot[bot]"));
+  }
+
+  @Test
+  void shouldFallBackToDefaultLoginsWhenConfiguredListIsEmpty() {
+    // An empty list would make isBotComment always false and let the bot loop on its own replies.
+    var withEmptyConfig = new TriggerDetector(List.of());
+    assertTrue(withEmptyConfig.isBotComment("thrillhousebot[bot]"));
   }
 }
