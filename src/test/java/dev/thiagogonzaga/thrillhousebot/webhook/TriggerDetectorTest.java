@@ -178,8 +178,8 @@ class TriggerDetectorTest {
 
   @Test
   void shouldIgnoreNullAndBlankConfiguredLogins() {
-    var detector = new TriggerDetector(Arrays.asList("keep[bot]", null, "   "));
-    assertTrue(detector.isBotComment("keep[bot]"));
-    assertFalse(detector.isBotComment("thrillhousebot[bot]")); // replaced by the configured list
+    var configured = new TriggerDetector(Arrays.asList("keep[bot]", null, "   "));
+    assertTrue(configured.isBotComment("keep[bot]"));
+    assertFalse(configured.isBotComment("thrillhousebot[bot]")); // replaced by the configured list
   }
 }
