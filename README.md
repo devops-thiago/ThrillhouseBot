@@ -32,6 +32,7 @@ code review.
 
 ## Features
 
+- Reviews diffs for correctness, security, regressions, stale comments, and code quality
 - Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
@@ -180,8 +181,10 @@ variables are the ones you will change per provider:
 | `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
+| `GITHUB_BOT_LOGINS` | Comma-separated bot account login(s) the bot skips to avoid replying to itself; override when deployed under a different App slug (`<app-slug>[bot]`) | `thrillhousebot[bot],thrillhouse-bot[bot]` |
 | `WEBHOOK_DEDUP_TTL` | Webhook deduplication time-to-live for GitHub redeliveries | `24h` |
 | `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |
+| `MANUAL_TRIGGER_AUTH_TIMEOUT` | Upper bound on the manual-trigger write-access check on the webhook ACK thread; fails closed (denies) if GitHub is slower | `5s` |
 | `WEBHOOK_SKIP_DRAFTS` | Skip auto-review while a PR is a draft (reviewed once marked ready / on later pushes) | `false` |
 | `WEBHOOK_REQUIRED_LABELS` | Comma-separated labels; only auto-review PRs carrying at least one (case-insensitive) | _(empty — no gate)_ |
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
@@ -307,7 +310,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
 
-Early v0.1.0 release:
+This is still an early-stage project; the current constraints are:
 
 - **GitHub only** — no GitLab or Bitbucket integration.
 - **Large diffs** — the model sees at most `thrillhousebot.review.max-diff-lines` diff

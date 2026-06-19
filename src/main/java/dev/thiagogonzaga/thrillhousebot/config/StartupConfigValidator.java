@@ -42,6 +42,7 @@ public class StartupConfigValidator {
   private static final Logger log = LoggerFactory.getLogger(StartupConfigValidator.class);
 
   private static final String PRIVATE_KEY_PROPERTY = "thrillhousebot.github.private-key";
+  private static final String APP_ID_PROPERTY = "thrillhousebot.github.app-id";
 
   private final ThrillhouseConfig config;
   private final String aiApiKey;
@@ -72,7 +73,7 @@ public class StartupConfigValidator {
     var problems = new ArrayList<String>();
 
     var github = config.github();
-    requirePresent(problems, github.appId(), "GITHUB_APP_ID", "thrillhousebot.github.app-id");
+    validateAppId(problems, github.appId());
     validatePrivateKey(problems, github.privateKey());
     requirePresent(
         problems,
@@ -95,6 +96,22 @@ public class StartupConfigValidator {
       List<String> problems, String value, String envVar, String property) {
     if (value == null || value.isBlank()) {
       problems.add(envVar + " is required but is not set (" + property + ")");
+    }
+  }
+
+  /**
+   * The GitHub App id is the JWT issuer; a non-numeric value passes a bare presence check but
+   * yields a JWT GitHub rejects on the first call, so reject it at boot — exactly the late failure
+   * this validator exists to prevent.
+   */
+  private static void validateAppId(List<String> problems, String appId) {
+    if (appId == null || appId.isBlank()) {
+      problems.add("GITHUB_APP_ID is required but is not set (" + APP_ID_PROPERTY + ")");
+      return;
+    }
+    if (!appId.strip().chars().allMatch(Character::isDigit)) {
+      problems.add(
+          "GITHUB_APP_ID must be the numeric GitHub App id (" + APP_ID_PROPERTY + "): " + appId);
     }
   }
 

@@ -29,6 +29,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -204,6 +206,48 @@ class WebhookControllerTest {
                 "default",
                 12345L,
                 false));
+  }
+
+  @Test
+  void shouldIgnorePullRequestWithMissingHead() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    // A pull_request event whose payload omits head (or base) must not NPE — it is ignored.
+    var body =
+        ("{"
+                + "\"action\":\"opened\","
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\","
+                + "\"base\":{\"sha\":\"b\",\"ref\":\"main\"},\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+                + "\"default_branch\":\"main\",\"owner\":{\"login\":\"owner\",\"id\":2}},"
+                + "\"installation\":{\"id\":12345}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldIgnorePullRequestWithMissingBase() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    // head present, base omitted — the other side of the head/base guard.
+    var body =
+        ("{"
+                + "\"action\":\"opened\","
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\","
+                + "\"head\":{\"sha\":\"h\",\"ref\":\"feature\"},\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+                + "\"default_branch\":\"main\",\"owner\":{\"login\":\"owner\",\"id\":2}},"
+                + "\"installation\":{\"id\":12345}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
   @Test
@@ -707,14 +751,21 @@ class WebhookControllerTest {
                 "@@ -1 +1 @@"));
   }
 
-  @Test
-  void shouldIgnoreReviewCommentThatNeitherRepliesNorMentions() {
+  @ParameterizedTest
+  @EnumSource(IgnoredReviewComment.class)
+  void shouldIgnoreReviewCommentWithoutDispatching(IgnoredReviewComment scenario) {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-    when(triggerDetector.containsBotMention("looks good")).thenReturn(false);
+    scenario.applySetup(triggerDetector, reviewConfig);
 
     var body =
-        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "looks good", null, 3000L)
+        buildReviewCommentPayload(
+                "created",
+                42,
+                "owner/repo",
+                scenario.author,
+                scenario.commentBody,
+                scenario.inReplyToId,
+                scenario.commentId)
             .getBytes(StandardCharsets.UTF_8);
 
     var response =
@@ -725,22 +776,45 @@ class WebhookControllerTest {
     verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
   }
 
-  @Test
-  void shouldIgnoreOwnReviewComment() {
-    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isBotComment("thrillhousebot[bot]")).thenReturn(true);
+  /** Review-comment scenarios that must be ignored without dispatching a conversational reply. */
+  private enum IgnoredReviewComment {
+    NEITHER_REPLIES_NOR_MENTIONS("octocat", "looks good", null, 3000L) {
+      @Override
+      void applySetup(
+          TriggerDetector triggerDetector, ThrillhouseConfig.ReviewConfig reviewConfig) {
+        when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+        when(triggerDetector.containsBotMention("looks good")).thenReturn(false);
+      }
+    },
+    OWN_COMMENT("thrillhousebot[bot]", "follow-up", 99L, 4000L) {
+      @Override
+      void applySetup(
+          TriggerDetector triggerDetector, ThrillhouseConfig.ReviewConfig reviewConfig) {
+        when(triggerDetector.isBotComment("thrillhousebot[bot]")).thenReturn(true);
+      }
+    },
+    REPLIES_DISABLED("octocat", "Why?", 99L, 6000L) {
+      @Override
+      void applySetup(
+          TriggerDetector triggerDetector, ThrillhouseConfig.ReviewConfig reviewConfig) {
+        when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
+      }
+    };
 
-    var body =
-        buildReviewCommentPayload(
-                "created", 42, "owner/repo", "thrillhousebot[bot]", "follow-up", 99L, 4000L)
-            .getBytes(StandardCharsets.UTF_8);
+    final String author;
+    final String commentBody;
+    final Long inReplyToId;
+    final long commentId;
 
-    var response =
-        controller.handleWebhook(
-            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
-    assertEquals(200, response.getStatus());
+    IgnoredReviewComment(String author, String commentBody, Long inReplyToId, long commentId) {
+      this.author = author;
+      this.commentBody = commentBody;
+      this.inReplyToId = inReplyToId;
+      this.commentId = commentId;
+    }
 
-    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+    abstract void applySetup(
+        TriggerDetector triggerDetector, ThrillhouseConfig.ReviewConfig reviewConfig);
   }
 
   @Test
@@ -759,23 +833,6 @@ class WebhookControllerTest {
     // Editing a review comment must not re-trigger a reply.
     verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
     verifyNoInteractions(triggerDetector);
-  }
-
-  @Test
-  void shouldIgnoreReviewCommentWhenRepliesDisabled() {
-    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
-
-    var body =
-        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "Why?", 99L, 6000L)
-            .getBytes(StandardCharsets.UTF_8);
-
-    var response =
-        controller.handleWebhook(
-            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
-    assertEquals(200, response.getStatus());
-
-    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
   }
 
   @Test

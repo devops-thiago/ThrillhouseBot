@@ -168,6 +168,12 @@ public class WebhookController {
           log.debug("Ignoring pull_request with missing pull_request, repository, or installation");
           yield true;
         }
+        // head/base drive the review request; a payload missing either would NPE below. The trigger
+        // filter already treats base as nullable, so guard here rather than crash the delivery.
+        if (pr.head() == null || pr.base() == null) {
+          log.debug("Ignoring pull_request #{} with missing head or base", pr.number());
+          yield true;
+        }
 
         // A /pause on this PR silences automatic reviews until /resume — stay silent here, no
         // comment, since the event was not user-initiated.
@@ -238,66 +244,74 @@ public class WebhookController {
     }
 
     var command = triggerDetector.detectCommand(payload.comment().body());
-
     if (command != CommentCommand.NONE) {
-      var repo = payload.repository();
-      if (repo == null || payload.installation() == null) {
-        log.debug("Ignoring {} command with missing repository or installation", command);
-        return true;
-      }
-      // On issue_comment the issue number equals the PR number.
-      var ctx =
-          new CommentCommandService.CommandContext(
-              command,
-              repo.owner().login(),
-              repo.name(),
-              payload.issue().number(),
-              repo.defaultBranch(),
-              payload.installation().id(),
-              payload.comment().user().login(),
-              payload.comment().authorAssociation());
+      return handleCommentCommand(payload, command);
+    }
+    // Not a command: a bare @thrillhousebot mention on a PR is a conversational question.
+    return maybeDispatchConversationalMention(payload);
+  }
 
-      // /review keeps its synchronous authorize-then-dispatch path so the dispatch outcome can roll
-      // back the webhook dedup slot (#89). Every other command runs asynchronously off the ack
-      // thread.
-      if (command == CommentCommand.REVIEW) {
-        return handleReviewCommand(ctx);
-      }
-      commentCommandService.handle(ctx);
+  /**
+   * Builds the command context and routes a recognized comment command. {@code /review} keeps its
+   * synchronous authorize-then-dispatch path so the dispatch outcome can roll back the webhook
+   * dedup slot (#89); every other command runs asynchronously off the ack thread.
+   */
+  private boolean handleCommentCommand(WebhookPayload payload, CommentCommand command) {
+    var repo = payload.repository();
+    if (repo == null || payload.installation() == null) {
+      log.debug("Ignoring {} command with missing repository or installation", command);
       return true;
     }
+    // On issue_comment the issue number equals the PR number.
+    var ctx =
+        new CommentCommandService.CommandContext(
+            command,
+            repo.owner().login(),
+            repo.name(),
+            payload.issue().number(),
+            repo.defaultBranch(),
+            payload.installation().id(),
+            payload.comment().user().login(),
+            payload.comment().authorAssociation());
 
-    // Not a command: a bare @thrillhousebot mention on a PR is a conversational question.
-    if (config.review().conversationalRepliesEnabled()
-        && triggerDetector.containsBotMention(payload.comment().body())) {
-      var repo = payload.repository();
-      if (repo == null || payload.installation() == null) {
-        log.debug("Ignoring bot mention with missing repository or installation");
-        return true;
-      }
-      log.info(
-          "Conversational mention from @{} on PR #{}",
-          payload.comment().user().login(),
-          payload.issue().number());
-      return replyDispatcher.dispatch(
-          new MaintainerReplyService.ReplyTask(
-              repo.owner().login(),
-              repo.name(),
-              payload.issue().number(),
-              payload.installation().id(),
-              payload.comment().user().login(),
-              payload.comment().authorAssociation(),
-              payload.comment().body(),
-              payload.issue().title(),
-              payload.issue().body(),
-              false,
-              null,
-              payload.comment().id(),
-              true,
-              null));
+    if (command == CommentCommand.REVIEW) {
+      return handleReviewCommand(ctx);
     }
-
+    commentCommandService.handle(ctx);
     return true;
+  }
+
+  /** Dispatches a conversational reply for a bare {@code @thrillhousebot} mention on a PR. */
+  private boolean maybeDispatchConversationalMention(WebhookPayload payload) {
+    if (!config.review().conversationalRepliesEnabled()
+        || !triggerDetector.containsBotMention(payload.comment().body())) {
+      return true;
+    }
+    var repo = payload.repository();
+    if (repo == null || payload.installation() == null) {
+      log.debug("Ignoring bot mention with missing repository or installation");
+      return true;
+    }
+    log.info(
+        "Conversational mention from @{} on PR #{}",
+        payload.comment().user().login(),
+        payload.issue().number());
+    return replyDispatcher.dispatch(
+        new MaintainerReplyService.ReplyTask(
+            repo.owner().login(),
+            repo.name(),
+            payload.issue().number(),
+            payload.installation().id(),
+            payload.comment().user().login(),
+            payload.comment().authorAssociation(),
+            payload.comment().body(),
+            payload.issue().title(),
+            payload.issue().body(),
+            false,
+            null,
+            payload.comment().id(),
+            true,
+            null));
   }
 
   /**

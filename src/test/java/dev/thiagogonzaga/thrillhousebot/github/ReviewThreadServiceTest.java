@@ -63,6 +63,54 @@ class ReviewThreadServiceTest {
   }
 
   @Test
+  void shouldWalkAllPagesWhenThreadsSpanMoreThanOnePage() throws Exception {
+    var page1 =
+        mapper.readTree(
+            """
+            {"data": {"repository": {"pullRequest": {"reviewThreads": {
+              "nodes": [{"id": "T1", "isResolved": false, "comments": {"nodes": [{"databaseId": 100}]}}],
+              "pageInfo": {"hasNextPage": true, "endCursor": "CURSOR1"}
+            }}}}}
+            """);
+    var page2 =
+        mapper.readTree(
+            """
+            {"data": {"repository": {"pullRequest": {"reviewThreads": {
+              "nodes": [{"id": "T2", "isResolved": true, "comments": {"nodes": [{"databaseId": 200}]}}],
+              "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }}}}}
+            """);
+    when(graphQLClient.execute(anyString(), any())).thenReturn(page1, page2);
+
+    var threads = service.threadsByRootComment("auth", "owner", "repo", 7);
+
+    assertEquals(2, threads.size());
+    assertEquals("T1", threads.get(100L).id());
+    assertEquals("T2", threads.get(200L).id());
+    // Page 1 carries no cursor; page 2 carries the cursor returned by page 1.
+    var captor = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient, times(2)).execute(eq("auth"), captor.capture());
+    assertNull(captor.getAllValues().get(0).variables().get("after"));
+    assertEquals("CURSOR1", captor.getAllValues().get(1).variables().get("after"));
+  }
+
+  @Test
+  void shouldStopAtThePageBoundWhenGitHubKeepsReportingMorePages() throws Exception {
+    // hasNextPage never goes false, so only the page bound can stop the walk.
+    stubResponse(
+        """
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {
+          "nodes": [{"id": "T", "isResolved": false, "comments": {"nodes": [{"databaseId": 1}]}}],
+          "pageInfo": {"hasNextPage": true, "endCursor": "C"}
+        }}}}}
+        """);
+
+    service.threadsByRootComment("auth", "owner", "repo", 7);
+
+    verify(graphQLClient, times(20)).execute(anyString(), any());
+  }
+
+  @Test
   void shouldSkipThreadsWithMissingIdsOrComments() throws Exception {
     stubResponse(
         """

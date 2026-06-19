@@ -43,7 +43,6 @@ public class CommentCommandService {
   private static final Logger log = LoggerFactory.getLogger(CommentCommandService.class);
 
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final String BOT_LOGIN = "thrillhousebot[bot]";
 
   // GitHub serves 30 review comments per page by default; request the 100 max and walk a bounded
   // number of pages so /resolve covers every bot finding thread, not just the first page.
@@ -79,6 +78,7 @@ public class CommentCommandService {
   private final ReviewSessionPersistence sessionPersistence;
   private final PrPauseService prPauseService;
   private final ManualReviewAuthorizer authorizer;
+  private final TriggerDetector triggerDetector;
 
   @Inject
   public CommentCommandService(
@@ -90,7 +90,8 @@ public class CommentCommandService {
       ReviewDispatcher reviewDispatcher,
       ReviewSessionPersistence sessionPersistence,
       PrPauseService prPauseService,
-      ManualReviewAuthorizer authorizer) {
+      ManualReviewAuthorizer authorizer,
+      TriggerDetector triggerDetector) {
     this.executor = executor;
     this.authClient = authClient;
     this.commentClient = commentClient;
@@ -100,6 +101,7 @@ public class CommentCommandService {
     this.sessionPersistence = sessionPersistence;
     this.prPauseService = prPauseService;
     this.authorizer = authorizer;
+    this.triggerDetector = triggerDetector;
   }
 
   /** PR coordinates and commenter identity for one command. */
@@ -126,7 +128,7 @@ public class CommentCommandService {
             postComment(authClient.getAuthHeader(ctx.installationId()), ctx, PAUSED_NOTICE);
           } catch (RuntimeException e) {
             log.warn(
-                "Failed to post paused notice on {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx));
+                "Failed to post paused notice on {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx), e);
           }
         });
   }
@@ -165,12 +167,17 @@ public class CommentCommandService {
     }
     if (sessionPersistence.hasCompletedReview(repository(ctx), ctx.prNumber())) {
       // A summary was already generated on the first review; the command is a no-op by design.
-      log.info("Ignoring /summary — a summary already exists on {} #{}", repository(ctx), num(ctx));
+      log.info(
+          "Ignoring /summary — a summary already exists on {}/{} #{}",
+          ctx.owner(),
+          ctx.repo(),
+          num(ctx));
       return;
     }
     log.info(
-        "Generating summary via review for {} #{} (triggered by @{})",
-        repository(ctx),
+        "Generating summary via review for {}/{} #{} (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
         num(ctx),
         ctx.login());
     reviewDispatcher.dispatch(
@@ -232,12 +239,36 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /pause from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    prPauseService.pause(ctx.owner(), ctx.repo(), ctx.prNumber());
+    if (!pauseIfPossible(ctx)) {
+      return; // genuine failure already logged — do not post a misleading confirmation
+    }
     postComment(
         auth,
         ctx,
         "⏸️ ThrillhouseBot is now paused on this PR — automatic and manual reviews are silenced. "
             + "Comment `/resume` to re-enable.");
+  }
+
+  /**
+   * Pauses the PR, tolerating a concurrent {@code /pause} that wins the insert race. The unique
+   * constraint lets only one of two simultaneous inserts succeed; the loser's transaction throws,
+   * but the PR is paused either way — so a row that exists afterwards counts as success.
+   *
+   * @return whether the PR is paused after this call (newly, or by a concurrent {@code /pause})
+   */
+  private boolean pauseIfPossible(CommandContext ctx) {
+    try {
+      prPauseService.pause(ctx.owner(), ctx.repo(), ctx.prNumber());
+      return true;
+    } catch (RuntimeException e) {
+      boolean paused = prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber());
+      if (paused) {
+        log.debug("Concurrent /pause already paused {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx));
+      } else {
+        log.error("Failed to pause {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx), e);
+      }
+      return paused;
+    }
   }
 
   private void handleResume(CommandContext ctx, String auth) {
@@ -260,24 +291,24 @@ public class CommentCommandService {
    */
   private List<Long> botRootCommentIds(String auth, CommandContext ctx) {
     var ids = new ArrayList<Long>();
-    for (int page = 1; page <= MAX_COMMENT_PAGES; page++) {
-      var comments =
+    List<GitHubReviewClient.PullRequestComment> comments;
+    int page = 1;
+    do {
+      comments =
           reviewClient.listPullRequestComments(
               auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber(), COMMENTS_PER_PAGE, page);
-      if (comments == null || comments.isEmpty()) {
-        break;
-      }
-      for (var c : comments) {
-        if (c.inReplyToId() == null
-            && c.user() != null
-            && BOT_LOGIN.equalsIgnoreCase(c.user().login())) {
-          ids.add(c.id());
+      if (comments != null) {
+        for (var c : comments) {
+          if (c.inReplyToId() == null
+              && c.user() != null
+              && triggerDetector.isBotComment(c.user().login())) {
+            ids.add(c.id());
+          }
         }
       }
-      if (comments.size() < COMMENTS_PER_PAGE) {
-        break; // a short page is GitHub's last-page marker
-      }
-    }
+      page++;
+      // A short (or absent) page is GitHub's last-page marker; a full page means walk the next one.
+    } while (comments != null && comments.size() == COMMENTS_PER_PAGE && page <= MAX_COMMENT_PAGES);
     return ids;
   }
 

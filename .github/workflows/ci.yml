@@ -88,7 +88,12 @@ jobs:
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
       - name: SonarCloud Scan
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        # SonarCloud's free/community plan analyzes only the main branch and pull requests.
+        # Run it on pushes to main and on same-repo PRs; skip pushes to develop/release/**,
+        # where branch analysis is unavailable and the scan would fail.
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,39 @@
+# Keep the Docker build context small and stable. The image builds only need
+# target/ (runtime/jvm Dockerfiles) and mvnw/.mvn/pom.xml/src (multistage), so
+# everything below is excluded — it bloats the context upload and busts the
+# build cache without being copied into any image.
+
+# Version control and CI metadata
+.git
+.gitignore
+.gitattributes
+.github
+.actions-ref
+
+# Frontend dependencies and build output. The dashboard is built separately and
+# baked into src/main/resources before the image build; the Next.js project
+# itself is never part of an image build context.
+**/node_modules
+frontend/.next
+frontend/out
+frontend/coverage
+frontend/.turbo
+
+# Docs (not copied into any image)
+docs
+
+# Secrets and local env — never ship these in a build context
+.env
+.env.*
+!.env.example
+
+# IDE / editor / OS junk
+.idea
+.vscode
+*.iml
+*.swp
+.DS_Store
+Thumbs.db
+
+# Worktree / agent scratch
+.claude
