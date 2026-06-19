@@ -449,6 +449,42 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
+  void nullCommentListIsTreatedAsEmpty() {
+    authorize();
+    // GitHub returning a null body (vs an empty list) must not NPE — it falls back to no context.
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(null);
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+
+    // Mentioned, so it still answers even though the root could not be loaded.
+    service.handle(reviewThreadTask(true));
+
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
+  void findRootScansPastNonMatchingComments() {
+    authorize();
+    // The root is not first in the list, so the id filter must skip a non-matching comment first.
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                comment(500L, 88L, "x", "unrelated thread"),
+                comment(99L, null, BOT, "**finding**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+
+    service.handle(reviewThreadTask(false));
+
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
   void blankButNonNullPrContextFieldsAreOmitted() {
     authorize();
     when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
