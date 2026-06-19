@@ -128,7 +128,7 @@ public class ManualReviewAuthorizer {
         authCheckExecutor.submit(() -> writeAccessConfirmed(owner, repo, installationId, login));
     try {
       return check.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-    } catch (TimeoutException e) {
+    } catch (TimeoutException _) {
       check.cancel(true);
       log.warn(
           "Permission check for {}/{} user {} exceeded {} on the ACK path — denying manual review",
@@ -148,7 +148,7 @@ public class ManualReviewAuthorizer {
           repo,
           login,
           e.getCause());
-    } catch (InterruptedException e) {
+    } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
       check.cancel(true);
       log.warn(

@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Collabor
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -168,26 +169,33 @@ class ManualReviewAuthorizerTest {
     // ACK-path budget. The check must abandon it and deny rather than block the webhook worker.
     when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofMillis(100));
     when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    // The latch keeps the call in flight (past the timeout) without a wall-clock sleep.
+    var release = new CountDownLatch(1);
     when(installationClient.collaboratorPermission(
             anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(
             inv -> {
-              Thread.sleep(2000);
+              release.await();
               return new CollaboratorPermission("admin", "admin");
             });
 
-    assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+    try {
+      assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+    } finally {
+      release.countDown(); // let the abandoned check finish so its thread does not leak
+    }
   }
 
   @Test
   void shouldFailClosedWhenInterruptedWhileWaitingOnPermissionCheck() {
     when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    // The check is still in flight when the waiting thread is interrupted.
+    // The latch keeps the check in flight so the waiting thread observes the interrupt.
+    var release = new CountDownLatch(1);
     when(installationClient.collaboratorPermission(
             anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(
             inv -> {
-              Thread.sleep(2000);
+              release.await();
               return new CollaboratorPermission("admin", "admin");
             });
 
@@ -198,6 +206,7 @@ class ManualReviewAuthorizerTest {
       assertTrue(Thread.currentThread().isInterrupted());
     } finally {
       Thread.interrupted(); // clear so the flag does not leak into later tests
+      release.countDown();
     }
   }
 
