@@ -24,8 +24,10 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -38,6 +40,8 @@ class WebhookControllerTest {
   @Mock private WebhookVerifier verifier;
 
   @Mock private TriggerDetector triggerDetector;
+
+  @Mock private ReviewTriggerFilter triggerFilter;
 
   @Mock private ReviewDispatcher reviewDispatcher;
 
@@ -62,6 +66,7 @@ class WebhookControllerTest {
             config,
             verifier,
             triggerDetector,
+            triggerFilter,
             reviewDispatcher,
             deduplicator,
             manualReviewAuthorizer,
@@ -307,6 +312,54 @@ class WebhookControllerTest {
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldSkipReviewWhenTriggerFilterRejects() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerFilter.skipReason(any())).thenReturn(Optional.of("PR is a draft"));
+
+    var body =
+        buildPullRequestPayload("opened", 21, "owner/repo", "sha21", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-skip", body);
+    assertEquals(200, response.getStatus());
+
+    // A filtered-out PR must not be reviewed, and the dedup slot stays claimed (it was a
+    // deliberate decision, not a rejected dispatch), so a redelivery is ignored too.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void shouldPassParsedDraftAndLabelsToTriggerFilter() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        ("{"
+                + "\"action\":\"opened\","
+                + "\"pull_request\":{"
+                + "\"number\":33,\"title\":\"t\",\"head\":{\"sha\":\"s\"},"
+                + "\"base\":{\"sha\":\"b\",\"ref\":\"main\"},\"draft\":true,"
+                + "\"labels\":[{\"name\":\"wip\"},{\"name\":\"ai-review\"}]"
+                + "},"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+                + "\"installation\":{\"id\":1}"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    var captor = ArgumentCaptor.forClass(WebhookPayload.PullRequest.class);
+    verify(triggerFilter).skipReason(captor.capture());
+    var pr = captor.getValue();
+    assertTrue(pr.draft());
+    assertEquals(2, pr.labels().size());
+    assertEquals("wip", pr.labels().get(0).name());
+    // Filter said review (default empty Optional), so dispatch still happens.
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
   // ── issue_comment routing tests ────────────────────────────────────────

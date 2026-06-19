@@ -37,6 +37,7 @@ public class WebhookController {
   private final ThrillhouseConfig config;
   private final WebhookVerifier verifier;
   private final TriggerDetector triggerDetector;
+  private final ReviewTriggerFilter triggerFilter;
   private final ReviewDispatcher reviewDispatcher;
   private final WebhookDeduplicator deduplicator;
   private final ManualReviewAuthorizer manualReviewAuthorizer;
@@ -47,6 +48,7 @@ public class WebhookController {
       ThrillhouseConfig config,
       WebhookVerifier verifier,
       TriggerDetector triggerDetector,
+      ReviewTriggerFilter triggerFilter,
       ReviewDispatcher reviewDispatcher,
       WebhookDeduplicator deduplicator,
       ManualReviewAuthorizer manualReviewAuthorizer,
@@ -54,6 +56,7 @@ public class WebhookController {
     this.config = config;
     this.verifier = verifier;
     this.triggerDetector = triggerDetector;
+    this.triggerFilter = triggerFilter;
     this.reviewDispatcher = reviewDispatcher;
     this.deduplicator = deduplicator;
     this.manualReviewAuthorizer = manualReviewAuthorizer;
@@ -149,6 +152,15 @@ public class WebhookController {
         var repo = payload.repository();
         if (pr == null || repo == null || payload.installation() == null) {
           log.debug("Ignoring pull_request with missing pull_request, repository, or installation");
+          yield true;
+        }
+        var skipReason = triggerFilter.skipReason(pr);
+        if (skipReason.isPresent()) {
+          log.info(
+              "Skipping review for PR #{} in {}: {}",
+              pr.number(),
+              repo.fullName(),
+              skipReason.get());
           yield true;
         }
         log.info("Dispatching review for PR #{} in {}", pr.number(), repo.fullName());

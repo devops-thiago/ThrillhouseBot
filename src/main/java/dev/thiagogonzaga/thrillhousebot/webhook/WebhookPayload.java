@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
+import java.util.List;
 
 @RegisterForReflection
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -33,7 +34,18 @@ public record WebhookPayload(
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record PullRequest(
-      int number, String title, Head head, Base base, User user, String body) {}
+      int number,
+      String title,
+      Head head,
+      Base base,
+      User user,
+      String body,
+      boolean draft,
+      List<Label> labels) {}
+
+  @RegisterForReflection
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  public record Label(String name) {}
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
