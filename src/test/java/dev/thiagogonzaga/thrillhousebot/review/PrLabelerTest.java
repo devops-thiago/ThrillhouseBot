@@ -72,6 +72,12 @@ class PrLabelerTest {
     assertTrue(req.existing().isEmpty());
   }
 
+  @Test
+  void addLabelsRequestShouldNormalizeNullLabelsToEmpty() {
+    var req = new GitHubLabelClient.AddLabelsRequest(null);
+    assertTrue(req.labels().isEmpty());
+  }
+
   @Nested
   class Reconcile {
 
