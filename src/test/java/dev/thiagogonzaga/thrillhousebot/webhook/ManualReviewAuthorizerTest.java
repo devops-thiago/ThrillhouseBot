@@ -202,6 +202,21 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
+  void shouldPropagateErrorFromPermissionCheck() {
+    // A fatal Error must not be masked as a denied review — it propagates as it would have before
+    // the check moved onto a separate thread.
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    var fatal = new Error("simulated fatal");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenThrow(fatal);
+
+    var thrown =
+        assertThrows(Error.class, () -> authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+    assertSame(fatal, thrown);
+  }
+
+  @Test
   void shutdownStopsTheAuthCheckExecutor() {
     // @PreDestroy must release the background executor without throwing.
     assertDoesNotThrow(() -> authorizer.shutdown());
