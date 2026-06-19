@@ -4,9 +4,33 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+This release makes the bot interactive and controllable from the PR — conversational replies, comment commands, context-aware labels, and configurable triggers — and hardens startup and the manual-review path.
+
 ### Added
 
 - **Conversational replies**: a maintainer can now reply to one of the bot's review findings, or `@thrillhousebot` it anywhere in a PR thread, and the bot answers in context — pulling in the original finding, the surrounding diff, and the prior thread replies — instead of having to re-run the whole review. Replies are posted back into the same review thread (or as a PR comment for top-level mentions), gated to the same write-access/allowlisted users as a manual `/review`, and can be turned off with `REVIEW_CONVERSATIONAL_REPLIES_ENABLED=false`. Requires subscribing the GitHub App to the new `pull_request_review_comment` event (added to `manifest.json`) (#31)
+- **Comment commands**: drive the bot from a PR with `/help`, `/summary`, `/resolve`, `/pause`, and `/resume` (each also accepts the `@Thrillhousebot <command>` mention form). `/pause` silences the bot on a PR — skipping automatic reviews and ignoring `/review` and `/summary` — until `/resume`; `/resolve` resolves the bot's open finding threads; `/summary` posts the PR summary if one was not generated yet. Every command except `/help` requires repository write access (#32)
+- **Context-aware PR labels** (opt-in): the model is shown the repository's existing labels and picks the few that best describe the change. Off by default (`REVIEW_LABELS_ENABLED`); when on, it either posts a one-line suggestion comment or applies the labels (`REVIEW_LABELS_APPLY`), with optional creation of new labels (`REVIEW_LABELS_ALLOW_CREATE`) and a per-PR cap (`REVIEW_LABELS_MAX`, default 3). Labelling is best-effort and never blocks a review (#61)
+- **Configurable review triggers**: narrow which pull requests are auto-reviewed — skip drafts (`WEBHOOK_SKIP_DRAFTS`), gate on labels (`WEBHOOK_REQUIRED_LABELS` / `WEBHOOK_EXCLUDED_LABELS`), and filter by base-branch glob (`WEBHOOK_BASE_BRANCHES` / `WEBHOOK_IGNORED_BASE_BRANCHES`). Defaults review every PR, matching prior behavior; a manual `/review` always bypasses the filters (#40)
+- **Review on ready-for-review**: a draft PR marked "Ready for review" is reviewed immediately, pairing with `WEBHOOK_SKIP_DRAFTS` so drafts can be skipped until they are ready (#72)
+- **Fail-fast configuration validation**: required configuration (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `AI_API_KEY`) is validated at startup, and the app refuses to boot with a single message naming every missing or malformed value — including a non-numeric App id or a private key that is not valid PEM RSA — instead of failing later on the first webhook (#27)
+- **Configurable bot identity**: the bot's own account login(s) are configurable via `GITHUB_BOT_LOGINS`, so loop protection and `/resolve` keep working when the App is deployed under a different slug (#165)
+
+### Changed
+
+- **Manual-trigger authorization is time-bounded**: the write-access check for a manual `/review` (installation-token mint + collaborator-permission call) now runs under a configurable timeout (`MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`) on the webhook ack thread and fails closed if GitHub is too slow, so a degraded GitHub can no longer tie up a webhook worker past the delivery SLA (#92)
+- **CI — actionlint guardrail**: workflows and the consolidated Trivy composite action are linted (including inline shell via shellcheck), with the release-gate scan path mirrored so it is validated on PR CI (#93)
+- **CI — faster pipeline**: SpotBugs moved off the test job's critical path into the parallel lint job, the test job collapsed into a single Maven reactor, and the native build + image publish skipped for docs-only pushes to `main` (#170)
+- **CI — SonarCloud scoping**: the Sonar scan runs only on `main` and same-repo pull requests (matching the SonarCloud community plan), and a `.dockerignore` keeps the Docker build context small (#165)
+
+### Documentation
+
+- **Repository review guidance**: added a dogfooded `.github/thrillhousebot.md` with GitHub platform facts and review heuristics for this codebase, so the bot stops repeating known false positives and primes recurring misses (#168)
+- Documented the new v0.2.0 configuration keys in `README.md` and `.env.example` — review triggers, PR labels, conversational replies, `MANUAL_TRIGGER_AUTH_TIMEOUT`, and `GITHUB_BOT_LOGINS` (#165)
+
+### Dependencies
+
+- Bumped the Quarkus platform and Maven plugins, GitHub Actions (`actions/checkout`, `actions/setup-java`), and frontend packages (`undici`, `vitest`) (#151, #152, #153, #154, #155, #156)
 
 ## [0.1.1] — 2026-06-16
 
