@@ -131,28 +131,36 @@ public class StartupConfigValidator {
   private void logDashboardStatus() {
     var hasClientId = config.dashboard().clientId().filter(s -> !s.isBlank()).isPresent();
     var hasClientSecret = config.dashboard().clientSecret().filter(s -> !s.isBlank()).isPresent();
-    // Plain if/else on the enum (not a switch) avoids the synthetic, never-taken default branch the
-    // compiler emits for an exhaustive enum switch, which would otherwise read as a partial.
+    // The message and level live on the enum, so dispatch is a single boolean check — no enum
+    // switch (whose synthetic default reads as an uncovered branch) and no if/else-on-enum chain.
     var status = dashboardOauthStatus(hasClientId, hasClientSecret);
-    if (status == DashboardOauthStatus.ENABLED) {
-      log.info(
-          "Dashboard OAuth login enabled (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set).");
-    } else if (status == DashboardOauthStatus.DISABLED) {
-      log.info(
-          "Dashboard OAuth login disabled — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to enable"
-              + " it.");
+    if (status.warn) {
+      log.warn(status.message);
     } else {
-      log.warn(
-          "Dashboard OAuth login disabled — only one of GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET is"
-              + " set; set both (or neither) to fix this.");
+      log.info(status.message);
     }
   }
 
   /** Dashboard OAuth login state derived from whether each credential is present and non-blank. */
   enum DashboardOauthStatus {
-    ENABLED,
-    DISABLED,
-    PARTIAL
+    ENABLED(
+        false,
+        "Dashboard OAuth login enabled (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set)."),
+    DISABLED(
+        false,
+        "Dashboard OAuth login disabled — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to enable it."),
+    PARTIAL(
+        true,
+        "Dashboard OAuth login disabled — only one of GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET is set;"
+            + " set both (or neither) to fix this.");
+
+    private final boolean warn;
+    private final String message;
+
+    DashboardOauthStatus(boolean warn, String message) {
+      this.warn = warn;
+      this.message = message;
+    }
   }
 
   /** Pure classification of the OAuth pair, kept separate so every branch is unit-testable. */
