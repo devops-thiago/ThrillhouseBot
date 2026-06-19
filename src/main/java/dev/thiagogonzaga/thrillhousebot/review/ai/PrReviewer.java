@@ -32,7 +32,8 @@ public interface PrReviewer {
       @V("projectStack") String projectStack,
       @V("relatedTests") String relatedTests,
       @V("previousFindings") String previousFindings,
-      @V("repoInstructions") String repoInstructions);
+      @V("repoInstructions") String repoInstructions,
+      @V("availableLabels") String availableLabels);
 
   @SystemMessage(PrReviewPrompts.SYSTEM)
   TokenStream reviewStream(
@@ -42,5 +43,6 @@ public interface PrReviewer {
       @V("projectStack") String projectStack,
       @V("relatedTests") String relatedTests,
       @V("previousFindings") String previousFindings,
-      @V("repoInstructions") String repoInstructions);
+      @V("repoInstructions") String repoInstructions,
+      @V("availableLabels") String availableLabels);
 }

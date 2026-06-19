@@ -69,9 +69,33 @@ public record ReviewResponse(
       int low,
       @JsonProperty("overall_assessment") String overallAssessment,
       @JsonProperty("pr_purpose") String prPurpose,
-      @JsonProperty("description_gaps") List<String> descriptionGaps) {
+      @JsonProperty("description_gaps") List<String> descriptionGaps,
+      @JsonProperty("suggested_labels") List<String> suggestedLabels) {
     public Summary {
       descriptionGaps = List.copyOf(descriptionGaps != null ? descriptionGaps : List.of());
+      suggestedLabels = List.copyOf(suggestedLabels != null ? suggestedLabels : List.of());
+    }
+
+    /** Convenience constructor for callers (and responses) that predate label suggestions. */
+    public Summary(
+        int totalFindings,
+        int critical,
+        int high,
+        int medium,
+        int low,
+        String overallAssessment,
+        String prPurpose,
+        List<String> descriptionGaps) {
+      this(
+          totalFindings,
+          critical,
+          high,
+          medium,
+          low,
+          overallAssessment,
+          prPurpose,
+          descriptionGaps,
+          List.of());
     }
   }
 }

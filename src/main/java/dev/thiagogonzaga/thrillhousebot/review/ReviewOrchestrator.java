@@ -101,6 +101,8 @@ public class ReviewOrchestrator {
 
   private final ReviewDiffFormatter diffFormatter;
 
+  private final PrLabeler labeler;
+
   private final ObjectMapper mapper;
 
   /**
@@ -150,6 +152,7 @@ public class ReviewOrchestrator {
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       ReviewDiffFormatter diffFormatter,
+      PrLabeler labeler,
       ObjectMapper mapper) {
     this.config = config;
     this.authClient = authClient;
@@ -170,6 +173,7 @@ public class ReviewOrchestrator {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.diffFormatter = diffFormatter;
+    this.labeler = labeler;
     this.mapper = mapper;
   }
 
@@ -252,6 +256,10 @@ public class ReviewOrchestrator {
           instructionsResolver.resolve(
               req.owner(), req.repo(), req.defaultBranch(), req.installationId());
 
+      // Existing repo labels are fetched once (when the feature is on): they both constrain the
+      // model's suggestions in the prompt and are reused to reconcile its output afterwards.
+      var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
+
       String escapedDiff = PromptTemplateEscaper.escape(diff);
       String escapedStack = PromptTemplateEscaper.escape(resolveProjectStack(req));
       var promptInputs =
@@ -263,7 +271,8 @@ public class ReviewOrchestrator {
               PromptTemplateEscaper.escape(
                   diffFormatter.buildRelatedTests(diffFormatter.reviewableFiles(files))),
               PromptTemplateEscaper.escape(previousFindings),
-              buildInstructionsSection(instructions));
+              buildInstructionsSection(instructions),
+              PromptTemplateEscaper.escape(PrLabeler.formatAvailableLabels(repoLabels)));
       // Quote validation runs before dedupe so a merged finding can never inherit a phantom
       // quote from one duplicate while a verbatim sibling gets discarded
       var aiResponse = aiReviewService.review(session, promptInputs);
@@ -346,6 +355,16 @@ public class ReviewOrchestrator {
 
       resolveAddressedThreads(
           auth, req, previousAiResponseJson, inlineComments, aiResponse.previousFindingsStatus());
+
+      labeler.applyOrSuggest(
+          new PrLabeler.LabelRequest(
+              auth,
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              isFirstVisibleReview,
+              aiResponse.summary() != null ? aiResponse.summary().suggestedLabels() : List.of(),
+              repoLabels));
 
       applyReviewResult(session, result);
       broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session));

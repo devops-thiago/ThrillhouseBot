@@ -87,6 +87,8 @@ class ReviewOrchestratorTest {
 
   @Mock private FollowUpAnalyzer followUpAnalyzer;
 
+  @Mock private PrLabeler labeler;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   private ReviewDiffFormatter diffFormatter;
@@ -150,6 +152,7 @@ class ReviewOrchestratorTest {
         summaryGenerator,
         followUpAnalyzer,
         diffFormatter,
+        labeler,
         objectMapper);
   }
 

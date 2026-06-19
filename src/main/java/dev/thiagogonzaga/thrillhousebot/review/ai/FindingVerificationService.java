@@ -281,7 +281,8 @@ public class FindingVerificationService {
         countRisk(findings, RiskLevel.LOW),
         original.overallAssessment(),
         original.prPurpose(),
-        original.descriptionGaps());
+        original.descriptionGaps(),
+        original.suggestedLabels());
   }
 
   private static int countRisk(List<ReviewResponse.Finding> findings, RiskLevel risk) {
