@@ -15,6 +15,36 @@ permissions:
   actions: read
 
 jobs:
+  # Did this push change anything other than docs (*.md, docs/**)? The native build and image
+  # publish (main only) are skipped for docs-only commits. Fails open — anything uncertain
+  # (first push, missing parent, a multi-file change) counts as code, so a real change is never
+  # skipped. Note: a docs-only main commit then has no per-SHA image, so do not cut a release
+  # from one (the release workflow verifies the image exists).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BEFORE" "$SHA")
+          if [ -z "$changed" ] || printf '%s\n' "$changed" | grep -qvE '(\.md$|^docs/)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   format:
     runs-on: ubuntu-latest
     steps:
@@ -28,7 +58,9 @@ jobs:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-      - run: ./mvnw spotless:check -q
+      # spotbugs runs here, off the test job's critical path. It analyzes main classes, so
+      # compile first; spotless needs no compile.
+      - run: ./mvnw clean compile spotbugs:check spotless:check -q
 
   actionlint:
     runs-on: ubuntu-latest
@@ -74,9 +106,9 @@ jobs:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-      - run: ./mvnw clean test
-      - run: ./mvnw spotbugs:check
-      - run: ./mvnw jacoco:report
+      # One reactor: build + test + coverage report in a single Maven run (spotbugs moved to the
+      # format job). Avoids re-starting Maven and recompiling across separate invocations.
+      - run: ./mvnw clean test jacoco:report
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -123,8 +155,8 @@ jobs:
           path: frontend/out/
 
   native-build:
-    needs: [frontend]
-    if: github.ref == 'refs/heads/main'
+    needs: [frontend, changes]
+    if: github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true'
     strategy:
       matrix:
         include:
