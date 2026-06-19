@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
@@ -195,5 +196,21 @@ class StartupConfigValidatorTest {
         .clientSecret(Optional.of("   "))
         .build()
         .validate();
+  }
+
+  @Test
+  void classifiesDashboardOauthStatusForEveryCombination() {
+    assertEquals(
+        StartupConfigValidator.DashboardOauthStatus.ENABLED,
+        StartupConfigValidator.dashboardOauthStatus(true, true));
+    assertEquals(
+        StartupConfigValidator.DashboardOauthStatus.DISABLED,
+        StartupConfigValidator.dashboardOauthStatus(false, false));
+    assertEquals(
+        StartupConfigValidator.DashboardOauthStatus.PARTIAL,
+        StartupConfigValidator.dashboardOauthStatus(true, false));
+    assertEquals(
+        StartupConfigValidator.DashboardOauthStatus.PARTIAL,
+        StartupConfigValidator.dashboardOauthStatus(false, true));
   }
 }

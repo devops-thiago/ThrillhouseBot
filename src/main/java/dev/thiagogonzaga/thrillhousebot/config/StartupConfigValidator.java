@@ -129,19 +129,38 @@ public class StartupConfigValidator {
   }
 
   private void logDashboardStatus() {
-    var clientId = config.dashboard().clientId().filter(s -> !s.isBlank());
-    var clientSecret = config.dashboard().clientSecret().filter(s -> !s.isBlank());
-    if (clientId.isPresent() && clientSecret.isPresent()) {
-      log.info(
-          "Dashboard OAuth login enabled (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set).");
-    } else if (clientId.isEmpty() && clientSecret.isEmpty()) {
-      log.info(
-          "Dashboard OAuth login disabled — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to enable"
-              + " it.");
-    } else {
-      log.warn(
-          "Dashboard OAuth login disabled — only one of GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET is"
-              + " set; set both (or neither) to fix this.");
+    var hasClientId = config.dashboard().clientId().filter(s -> !s.isBlank()).isPresent();
+    var hasClientSecret = config.dashboard().clientSecret().filter(s -> !s.isBlank()).isPresent();
+    switch (dashboardOauthStatus(hasClientId, hasClientSecret)) {
+      case ENABLED ->
+          log.info(
+              "Dashboard OAuth login enabled (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set).");
+      case DISABLED ->
+          log.info(
+              "Dashboard OAuth login disabled — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to"
+                  + " enable it.");
+      case PARTIAL ->
+          log.warn(
+              "Dashboard OAuth login disabled — only one of GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET"
+                  + " is set; set both (or neither) to fix this.");
     }
+  }
+
+  /** Dashboard OAuth login state derived from whether each credential is present and non-blank. */
+  enum DashboardOauthStatus {
+    ENABLED,
+    DISABLED,
+    PARTIAL
+  }
+
+  /** Pure classification of the OAuth pair, kept separate so every branch is unit-testable. */
+  static DashboardOauthStatus dashboardOauthStatus(boolean hasClientId, boolean hasClientSecret) {
+    if (hasClientId && hasClientSecret) {
+      return DashboardOauthStatus.ENABLED;
+    }
+    if (!hasClientId && !hasClientSecret) {
+      return DashboardOauthStatus.DISABLED;
+    }
+    return DashboardOauthStatus.PARTIAL;
   }
 }
