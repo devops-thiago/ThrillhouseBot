@@ -202,8 +202,21 @@ public class CommentCommandService {
     var resolved = 0;
     for (long rootCommentId : botRootCommentIds) {
       var thread = threads.get(rootCommentId);
-      if (thread != null && !thread.resolved() && reviewThreadService.resolve(auth, thread.id())) {
-        resolved++;
+      if (thread == null || thread.resolved()) {
+        continue;
+      }
+      // A failure on one thread (e.g. a transient GraphQL error) must not abort the rest.
+      try {
+        if (reviewThreadService.resolve(auth, thread.id())) {
+          resolved++;
+        }
+      } catch (RuntimeException e) {
+        log.warn(
+            "Failed to resolve thread {} on {} #{} (continuing)",
+            thread.id(),
+            repository(ctx),
+            num(ctx),
+            e);
       }
     }
     postComment(

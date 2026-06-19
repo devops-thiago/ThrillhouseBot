@@ -267,6 +267,30 @@ class CommentCommandServiceTest {
   }
 
   @Test
+  void resolveContinuesWhenOneThreadResolutionThrows() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+        .thenReturn(
+            List.of(
+                comment(100L, null, "thrillhousebot[bot]"),
+                comment(102L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            Map.of(
+                100L, new ReviewThreadService.ThreadRef("T100", false),
+                102L, new ReviewThreadService.ThreadRef("T102", false)));
+    when(reviewThreadService.resolve(any(), eq("T100"))).thenThrow(new RuntimeException("network"));
+    when(reviewThreadService.resolve(any(), eq("T102"))).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    // The failure on T100 must not stop T102 from being resolved.
+    verify(reviewThreadService).resolve(any(), eq("T102"));
+    assertTrue(postedBody().contains("Resolved 1"));
+  }
+
+  @Test
   void resolveSkipsAlreadyResolvedThreads() {
     authorize(true);
     when(reviewClient.listPullRequestComments(
