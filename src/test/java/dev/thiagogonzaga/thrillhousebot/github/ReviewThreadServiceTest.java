@@ -95,6 +95,22 @@ class ReviewThreadServiceTest {
   }
 
   @Test
+  void shouldStopAtThePageBoundWhenGitHubKeepsReportingMorePages() throws Exception {
+    // hasNextPage never goes false, so only the page bound can stop the walk.
+    stubResponse(
+        """
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {
+          "nodes": [{"id": "T", "isResolved": false, "comments": {"nodes": [{"databaseId": 1}]}}],
+          "pageInfo": {"hasNextPage": true, "endCursor": "C"}
+        }}}}}
+        """);
+
+    service.threadsByRootComment("auth", "owner", "repo", 7);
+
+    verify(graphQLClient, times(20)).execute(anyString(), any());
+  }
+
+  @Test
   void shouldSkipThreadsWithMissingIdsOrComments() throws Exception {
     stubResponse(
         """

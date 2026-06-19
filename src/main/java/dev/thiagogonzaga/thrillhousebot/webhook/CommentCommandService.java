@@ -43,7 +43,6 @@ public class CommentCommandService {
   private static final Logger log = LoggerFactory.getLogger(CommentCommandService.class);
 
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final String BOT_LOGIN = "thrillhousebot[bot]";
 
   // GitHub serves 30 review comments per page by default; request the 100 max and walk a bounded
   // number of pages so /resolve covers every bot finding thread, not just the first page.
@@ -79,6 +78,7 @@ public class CommentCommandService {
   private final ReviewSessionPersistence sessionPersistence;
   private final PrPauseService prPauseService;
   private final ManualReviewAuthorizer authorizer;
+  private final TriggerDetector triggerDetector;
 
   @Inject
   public CommentCommandService(
@@ -90,7 +90,8 @@ public class CommentCommandService {
       ReviewDispatcher reviewDispatcher,
       ReviewSessionPersistence sessionPersistence,
       PrPauseService prPauseService,
-      ManualReviewAuthorizer authorizer) {
+      ManualReviewAuthorizer authorizer,
+      TriggerDetector triggerDetector) {
     this.executor = executor;
     this.authClient = authClient;
     this.commentClient = commentClient;
@@ -100,6 +101,7 @@ public class CommentCommandService {
     this.sessionPersistence = sessionPersistence;
     this.prPauseService = prPauseService;
     this.authorizer = authorizer;
+    this.triggerDetector = triggerDetector;
   }
 
   /** PR coordinates and commenter identity for one command. */
@@ -299,7 +301,7 @@ public class CommentCommandService {
         for (var c : comments) {
           if (c.inReplyToId() == null
               && c.user() != null
-              && BOT_LOGIN.equalsIgnoreCase(c.user().login())) {
+              && triggerDetector.isBotComment(c.user().login())) {
             ids.add(c.id());
           }
         }

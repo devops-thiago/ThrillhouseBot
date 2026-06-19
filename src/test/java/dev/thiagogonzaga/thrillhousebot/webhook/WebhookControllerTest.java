@@ -230,6 +230,27 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldIgnorePullRequestWithMissingBase() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    // head present, base omitted — the other side of the head/base guard.
+    var body =
+        ("{"
+                + "\"action\":\"opened\","
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\","
+                + "\"head\":{\"sha\":\"h\",\"ref\":\"feature\"},\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+                + "\"default_branch\":\"main\",\"owner\":{\"login\":\"owner\",\"id\":2}},"
+                + "\"installation\":{\"id\":12345}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldRouteSynchronizePullRequestToOrchestrator() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 

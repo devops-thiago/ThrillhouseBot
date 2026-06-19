@@ -74,7 +74,8 @@ class CommentCommandServiceTest {
             reviewDispatcher,
             sessionPersistence,
             prPauseService,
-            authorizer);
+            authorizer,
+            new TriggerDetector());
   }
 
   private CommentCommandService.CommandContext ctx(CommentCommand command) {

@@ -204,6 +204,39 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
+  void nullCommentPageIsTreatedAsEmptyAndPostsNothing() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
+        .thenReturn(null);
+
+    service.handle(reviewThreadTask(false));
+
+    // No comments resolve a root, and the reply was not an explicit mention, so the bot stays
+    // silent.
+    verifyNoInteractions(replyAssistant);
+  }
+
+  @Test
+  void stopsAtTheCommentPageBoundOnAVeryLongThread() {
+    authorize();
+    // Every page is full, so only the page bound can stop the walk.
+    var fullPage = new ArrayList<GitHubReviewClient.PullRequestComment>();
+    for (int i = 0; i < 100; i++) {
+      fullPage.add(comment(3000L + i, 88L, "octocat", "noise " + i));
+    }
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
+        .thenReturn(fullPage);
+
+    service.handle(reviewThreadTask(false));
+
+    verify(reviewClient, times(10))
+        .listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt());
+  }
+
+  @Test
   void replyOnHumanThreadWithoutMentionPostsNothing() {
     authorize();
     when(reviewClient.listPullRequestComments(

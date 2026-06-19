@@ -127,6 +127,12 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenAppIdNull() {
+    var ex = assertFailsValidation(new ConfigBuilder().appId(null).build());
+    assertTrue(ex.getMessage().contains("GITHUB_APP_ID is required"), ex.getMessage());
+  }
+
+  @Test
   void failsFastWhenAppIdIsNotNumeric() {
     // A non-numeric app id passes a bare presence check but yields a JWT GitHub rejects, so it must
     // be rejected at boot rather than on the first webhook.

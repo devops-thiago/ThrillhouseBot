@@ -20,6 +20,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -122,6 +123,7 @@ class TriggerDetectorTest {
     assertFalse(detector.isBotComment("octocat"));
     assertFalse(detector.isBotComment("thrillhousebot"));
     assertFalse(detector.isBotComment(""));
+    assertFalse(detector.isBotComment(null));
   }
 
   @Test
@@ -166,5 +168,18 @@ class TriggerDetectorTest {
     // An empty list would make isBotComment always false and let the bot loop on its own replies.
     var withEmptyConfig = new TriggerDetector(List.of());
     assertTrue(withEmptyConfig.isBotComment("thrillhousebot[bot]"));
+  }
+
+  @Test
+  void shouldFallBackToDefaultLoginsWhenConfiguredListIsNull() {
+    var withNullConfig = new TriggerDetector((List<String>) null);
+    assertTrue(withNullConfig.isBotComment("thrillhousebot[bot]"));
+  }
+
+  @Test
+  void shouldIgnoreNullAndBlankConfiguredLogins() {
+    var detector = new TriggerDetector(Arrays.asList("keep[bot]", null, "   "));
+    assertTrue(detector.isBotComment("keep[bot]"));
+    assertFalse(detector.isBotComment("thrillhousebot[bot]")); // replaced by the configured list
   }
 }
