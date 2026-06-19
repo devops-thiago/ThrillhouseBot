@@ -39,13 +39,13 @@ class PrPauseServiceTest {
   @Test
   void pauseThenIsPausedReturnsTrue() {
     assertFalse(service.isPaused("owner", "repo", 7));
-    service.pause("owner", "repo", 7, "octocat");
+    service.pause("owner", "repo", 7);
     assertTrue(service.isPaused("owner", "repo", 7));
   }
 
   @Test
   void resumeClearsPause() {
-    service.pause("owner", "repo", 7, "octocat");
+    service.pause("owner", "repo", 7);
     assertTrue(service.resume("owner", "repo", 7));
     assertFalse(service.isPaused("owner", "repo", 7));
   }
@@ -57,8 +57,8 @@ class PrPauseServiceTest {
 
   @Test
   void pauseIsIdempotent() {
-    service.pause("owner", "repo", 7, "octocat");
-    service.pause("owner", "repo", 7, "someoneElse");
+    service.pause("owner", "repo", 7);
+    service.pause("owner", "repo", 7);
 
     assertTrue(service.isPaused("owner", "repo", 7));
     assertEquals(1, PausedPr.count("repository = ?1 and prNumber = ?2", "owner/repo", 7));
@@ -66,7 +66,7 @@ class PrPauseServiceTest {
 
   @Test
   void pauseIsScopedPerPr() {
-    service.pause("owner", "repo", 7, "octocat");
+    service.pause("owner", "repo", 7);
 
     assertFalse(service.isPaused("owner", "repo", 8));
     assertFalse(service.isPaused("other", "repo", 7));

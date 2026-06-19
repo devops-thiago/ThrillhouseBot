@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -43,6 +44,11 @@ public class CommentCommandService {
 
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
+
+  // GitHub serves 30 review comments per page by default; request the 100 max and walk a bounded
+  // number of pages so /resolve covers every bot finding thread, not just the first page.
+  private static final int COMMENTS_PER_PAGE = 100;
+  private static final int MAX_COMMENT_PAGES = 10;
 
   /** Posted when a review-generating command lands on a paused PR. */
   static final String PAUSED_NOTICE =
@@ -213,7 +219,7 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /pause from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    prPauseService.pause(ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.login());
+    prPauseService.pause(ctx.owner(), ctx.repo(), ctx.prNumber());
     postComment(
         auth,
         ctx,
@@ -235,18 +241,31 @@ public class CommentCommandService {
             : "ThrillhouseBot was not paused on this PR.");
   }
 
-  /** Root-comment ids of the bot's own inline finding comments (thread roots carry no reply id). */
+  /**
+   * Root-comment ids of the bot's own inline finding comments (thread roots carry no reply id).
+   * Walks every page so a PR with many comments does not leave later-page bot threads unresolved.
+   */
   private List<Long> botRootCommentIds(String auth, CommandContext ctx) {
-    var comments =
-        reviewClient.listPullRequestComments(auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber());
-    if (comments == null) {
-      return List.of();
+    var ids = new ArrayList<Long>();
+    for (int page = 1; page <= MAX_COMMENT_PAGES; page++) {
+      var comments =
+          reviewClient.listPullRequestComments(
+              auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber(), COMMENTS_PER_PAGE, page);
+      if (comments == null || comments.isEmpty()) {
+        break;
+      }
+      for (var c : comments) {
+        if (c.inReplyToId() == null
+            && c.user() != null
+            && BOT_LOGIN.equalsIgnoreCase(c.user().login())) {
+          ids.add(c.id());
+        }
+      }
+      if (comments.size() < COMMENTS_PER_PAGE) {
+        break; // a short page is GitHub's last-page marker
+      }
     }
-    return comments.stream()
-        .filter(c -> c.inReplyToId() == null)
-        .filter(c -> c.user() != null && BOT_LOGIN.equalsIgnoreCase(c.user().login()))
-        .map(GitHubReviewClient.PullRequestComment::id)
-        .toList();
+    return ids;
   }
 
   private boolean authorized(CommandContext ctx) {

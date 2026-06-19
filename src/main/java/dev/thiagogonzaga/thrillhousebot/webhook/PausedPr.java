@@ -21,12 +21,12 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
-import java.time.Instant;
 
 /**
  * Marks a pull request the bot has been silenced on via {@code /pause}. A single row per PR (the
  * unique constraint enforces it) means the bot skips automatic reviews and manual {@code /review} /
- * {@code /summary} on that PR until {@code /resume} removes the row.
+ * {@code /summary} on that PR until {@code /resume} removes the row. Presence of the row is the
+ * whole state — the bot is paused iff a row exists.
  */
 @Entity
 @Table(
@@ -44,10 +44,4 @@ public class PausedPr extends PanacheEntity {
   /** Pull request number, unique together with {@link #repository}. */
   @Column(nullable = false)
   public int prNumber;
-
-  /** Login of the user who paused the PR (audit only). */
-  public String pausedBy;
-
-  /** When the PR was paused. */
-  public Instant pausedAt;
 }

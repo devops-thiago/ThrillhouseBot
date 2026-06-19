@@ -18,7 +18,6 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
-import java.time.Instant;
 
 /**
  * Tracks which pull requests the bot has been paused on. Short DB transactions only — never spans
@@ -44,7 +43,7 @@ public class PrPauseService {
 
   /** Pauses the bot on the PR. Idempotent: a second pause leaves the single row untouched. */
   @Transactional
-  public void pause(String owner, String repo, int prNumber, String pausedBy) {
+  public void pause(String owner, String repo, int prNumber) {
     var key = repoKey(owner, repo);
     if (repository.count(BY_PR, key, prNumber) > 0) {
       return;
@@ -52,8 +51,6 @@ public class PrPauseService {
     var paused = new PausedPr();
     paused.repository = key;
     paused.prNumber = prNumber;
-    paused.pausedBy = pausedBy;
-    paused.pausedAt = Instant.now();
     repository.persist(paused);
   }
 

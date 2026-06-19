@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -157,7 +158,8 @@ class CommentCommandServiceTest {
     var botRoot = comment(100L, null, "thrillhousebot[bot]");
     var botReply = comment(101L, 100L, "thrillhousebot[bot]");
     var humanRoot = comment(200L, null, "octocat");
-    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
         .thenReturn(List.of(botRoot, botReply, humanRoot));
     when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(
@@ -177,7 +179,8 @@ class CommentCommandServiceTest {
   @Test
   void resolveReportsNothingToDoWhenNoBotThreads() {
     authorize(true);
-    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
         .thenReturn(List.of(comment(200L, null, "octocat")));
 
     service.handle(ctx(CommentCommand.RESOLVE));
@@ -187,12 +190,35 @@ class CommentCommandServiceTest {
   }
 
   @Test
+  void resolveWalksAllCommentPages() {
+    authorize(true);
+    var page1 = new ArrayList<PullRequestComment>();
+    for (int i = 1; i <= 100; i++) {
+      page1.add(comment(i, null, "thrillhousebot[bot]"));
+    }
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+        .thenReturn(page1);
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(2)))
+        .thenReturn(List.of());
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(Map.of());
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    // A full first page must force a second-page fetch so later-page bot threads are not missed.
+    verify(reviewClient)
+        .listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(2));
+  }
+
+  @Test
   void pausePersistsAndConfirms() {
     authorize(true);
 
     service.handle(ctx(CommentCommand.PAUSE));
 
-    verify(prPauseService).pause("owner", "repo", 7, "octocat");
+    verify(prPauseService).pause("owner", "repo", 7);
     assertTrue(postedBody().contains("paused"));
   }
 
@@ -202,7 +228,7 @@ class CommentCommandServiceTest {
 
     service.handle(ctx(CommentCommand.PAUSE));
 
-    verify(prPauseService, never()).pause(any(), any(), anyInt(), any());
+    verify(prPauseService, never()).pause(any(), any(), anyInt());
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 
