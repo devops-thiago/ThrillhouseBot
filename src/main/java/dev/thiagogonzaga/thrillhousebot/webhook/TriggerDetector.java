@@ -16,18 +16,57 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import java.util.Set;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 @ApplicationScoped
 public class TriggerDetector {
 
-  private static final Set<Pattern> TRIGGER_PATTERNS =
-      Set.of(
-          Pattern.compile(
-              ".*(?:^|\\s)/review(?:\\s|$).*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL),
-          Pattern.compile(
-              ".*@thrillhousebot\\s+review\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL));
+  /**
+   * Command word → its matching patterns, in detection precedence order. A comment carrying more
+   * than one command resolves to the first entry that matches, so {@code review} stays first to
+   * preserve the original trigger behavior. Each command accepts both the {@code /word} slash form
+   * and the {@code @Thrillhousebot word} mention form.
+   */
+  private static final Map<CommentCommand, List<Pattern>> COMMAND_PATTERNS = buildPatterns();
+
+  private static Map<CommentCommand, List<Pattern>> buildPatterns() {
+    var patterns = new LinkedHashMap<CommentCommand, List<Pattern>>();
+    patterns.put(CommentCommand.REVIEW, patternsFor("review"));
+    patterns.put(CommentCommand.HELP, patternsFor("help"));
+    patterns.put(CommentCommand.SUMMARY, patternsFor("summary"));
+    patterns.put(CommentCommand.RESOLVE, patternsFor("resolve"));
+    patterns.put(CommentCommand.PAUSE, patternsFor("pause"));
+    patterns.put(CommentCommand.RESUME, patternsFor("resume"));
+    return patterns;
+  }
+
+  private static List<Pattern> patternsFor(String word) {
+    return List.of(
+        Pattern.compile(
+            ".*(?:^|\\s)/" + word + "(?:\\s|$).*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL),
+        Pattern.compile(
+            ".*@thrillhousebot\\s+" + word + "\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL));
+  }
+
+  /**
+   * Parses the first recognized command from a comment body. Each command matches either its slash
+   * form ("/review") or its mention form ("@Thrillhousebot review"). Returns {@link
+   * CommentCommand#NONE} when the comment carries no command.
+   */
+  public CommentCommand detectCommand(String commentBody) {
+    if (commentBody == null || commentBody.isBlank()) {
+      return CommentCommand.NONE;
+    }
+    for (var entry : COMMAND_PATTERNS.entrySet()) {
+      if (entry.getValue().stream().anyMatch(p -> p.matcher(commentBody).matches())) {
+        return entry.getKey();
+      }
+    }
+    return CommentCommand.NONE;
+  }
 
   /** Matches an {@code @thrillhousebot} mention with a word boundary, anywhere in the comment. */
   private static final Pattern MENTION_PATTERN =
@@ -38,10 +77,7 @@ public class TriggerDetector {
    * "@Thrillhousebot review"
    */
   public boolean isReviewTrigger(String commentBody) {
-    if (commentBody == null || commentBody.isBlank()) {
-      return false;
-    }
-    return TRIGGER_PATTERNS.stream().anyMatch(p -> p.matcher(commentBody).matches());
+    return detectCommand(commentBody) == CommentCommand.REVIEW;
   }
 
   /**

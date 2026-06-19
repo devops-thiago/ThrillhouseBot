@@ -47,6 +47,49 @@ class TriggerDetectorTest {
   }
 
   @Test
+  void shouldDetectEachSlashCommand() {
+    assertEquals(CommentCommand.REVIEW, detector.detectCommand("/review"));
+    assertEquals(CommentCommand.HELP, detector.detectCommand("please /help"));
+    assertEquals(CommentCommand.SUMMARY, detector.detectCommand("/summary this PR"));
+    assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
+    assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
+    assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume now"));
+  }
+
+  @Test
+  void shouldDetectEachMentionCommand() {
+    assertEquals(CommentCommand.REVIEW, detector.detectCommand("@Thrillhousebot review"));
+    assertEquals(CommentCommand.HELP, detector.detectCommand("@thrillhousebot help"));
+    assertEquals(CommentCommand.SUMMARY, detector.detectCommand("@thrillhousebot summary please"));
+    assertEquals(CommentCommand.RESOLVE, detector.detectCommand("@thrillhousebot resolve"));
+    assertEquals(CommentCommand.PAUSE, detector.detectCommand("@thrillhousebot pause"));
+    assertEquals(CommentCommand.RESUME, detector.detectCommand("@thrillhousebot resume"));
+  }
+
+  @Test
+  void shouldNotConfuseSimilarCommandWords() {
+    // /resume and /resolve must not match the /review pattern, and vice versa.
+    assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume"));
+    assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
+    assertEquals(CommentCommand.REVIEW, detector.detectCommand("/review"));
+  }
+
+  @Test
+  void shouldReturnNoneForNonCommandComments() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("Looks good!"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("review this"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("@thrillhousebot hello"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand(""));
+    assertEquals(CommentCommand.NONE, detector.detectCommand(null));
+  }
+
+  @Test
+  void shouldPreferReviewWhenMultipleCommandsPresent() {
+    // review has detection precedence so the original trigger behavior is preserved.
+    assertEquals(CommentCommand.REVIEW, detector.detectCommand("/help and /review"));
+  }
+
+  @Test
   void shouldDetectBotMention() {
     assertTrue(detector.containsBotMention("@thrillhousebot hello"));
     assertTrue(detector.containsBotMention("hey @Thrillhousebot what about this?"));
