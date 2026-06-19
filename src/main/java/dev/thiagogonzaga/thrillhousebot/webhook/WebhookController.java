@@ -44,6 +44,8 @@ public class WebhookController {
   private final MaintainerReplyDispatcher replyDispatcher;
   private final WebhookDeduplicator deduplicator;
   private final ManualReviewAuthorizer manualReviewAuthorizer;
+  private final CommentCommandService commentCommandService;
+  private final PrPauseService prPauseService;
   private final ObjectMapper mapper;
 
   @Inject
@@ -56,6 +58,8 @@ public class WebhookController {
       MaintainerReplyDispatcher replyDispatcher,
       WebhookDeduplicator deduplicator,
       ManualReviewAuthorizer manualReviewAuthorizer,
+      CommentCommandService commentCommandService,
+      PrPauseService prPauseService,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
@@ -65,6 +69,8 @@ public class WebhookController {
     this.replyDispatcher = replyDispatcher;
     this.deduplicator = deduplicator;
     this.manualReviewAuthorizer = manualReviewAuthorizer;
+    this.commentCommandService = commentCommandService;
+    this.prPauseService = prPauseService;
     this.mapper = mapper;
   }
 
@@ -162,6 +168,14 @@ public class WebhookController {
           log.debug("Ignoring pull_request with missing pull_request, repository, or installation");
           yield true;
         }
+
+        // A /pause on this PR silences automatic reviews until /resume — stay silent here, no
+        // comment, since the event was not user-initiated.
+        if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
+          log.info("Skipping review for paused PR #{} in {}", pr.number(), repo.fullName());
+          yield true;
+        }
+
         var skipReason = triggerFilter.skipReason(pr);
         if (skipReason.isPresent()) {
           log.info(
@@ -171,6 +185,7 @@ public class WebhookController {
               skipReason.get());
           yield true;
         }
+
         log.info("Dispatching review for PR #{} in {}", pr.number(), repo.fullName());
         yield reviewDispatcher.dispatch(
             new ReviewOrchestrator.ReviewRequest(
@@ -222,42 +237,37 @@ public class WebhookController {
       return true;
     }
 
-    if (triggerDetector.isReviewTrigger(payload.comment().body())) {
+    var command = triggerDetector.detectCommand(payload.comment().body());
+
+    if (command != CommentCommand.NONE) {
       var repo = payload.repository();
       if (repo == null || payload.installation() == null) {
-        log.debug("Ignoring review trigger with missing repository or installation");
+        log.debug("Ignoring {} command with missing repository or installation", command);
         return true;
       }
-      var owner = repo.owner().login();
-      var login = payload.comment().user().login();
-      var installationId = payload.installation().id();
-      // Manual triggers spend the operator's API budget, so restrict them to users who actually
-      // hold write access to the repository (or are explicitly allowlisted).
-      if (!manualReviewAuthorizer.isAuthorized(
-          owner, repo.name(), installationId, login, payload.comment().authorAssociation())) {
-        log.info(
-            "Ignoring unauthorized manual review trigger from @{} on PR #{}",
-            login,
-            payload.issue().number());
-        return true;
-      }
-      log.info("Manual review triggered by @{} on PR #{}", login, payload.issue().number());
-      // On issue_comment the issue number equals the PR number
-      return reviewDispatcher.dispatch(
-          new ReviewOrchestrator.ReviewRequest(
-              owner,
+      // On issue_comment the issue number equals the PR number.
+      var ctx =
+          new CommentCommandService.CommandContext(
+              command,
+              repo.owner().login(),
               repo.name(),
               payload.issue().number(),
-              "",
-              "(manual review)",
-              "",
-              "",
               repo.defaultBranch(),
-              installationId,
-              true));
+              payload.installation().id(),
+              payload.comment().user().login(),
+              payload.comment().authorAssociation());
+
+      // /review keeps its synchronous authorize-then-dispatch path so the dispatch outcome can roll
+      // back the webhook dedup slot (#89). Every other command runs asynchronously off the ack
+      // thread.
+      if (command == CommentCommand.REVIEW) {
+        return handleReviewCommand(ctx);
+      }
+      commentCommandService.handle(ctx);
+      return true;
     }
 
-    // Not a review command: a bare @thrillhousebot mention on a PR is a conversational question.
+    // Not a command: a bare @thrillhousebot mention on a PR is a conversational question.
     if (config.review().conversationalRepliesEnabled()
         && triggerDetector.containsBotMention(payload.comment().body())) {
       var repo = payload.repository();
@@ -286,6 +296,7 @@ public class WebhookController {
               true,
               null));
     }
+
     return true;
   }
 
@@ -356,5 +367,44 @@ public class WebhookController {
             comment.id(),
             mentioned,
             comment.diffHunk()));
+  }
+
+  /**
+   * Handles a manual {@code /review}: honors a pause, restricts the paid review to write-access
+   * holders, then dispatches it.
+   *
+   * @return the dispatch outcome (so a rejected dispatch rolls back the dedup slot), or {@code
+   *     true} when the command was handled without dispatching (paused or unauthorized).
+   */
+  private boolean handleReviewCommand(CommentCommandService.CommandContext ctx) {
+    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      log.info(
+          "Ignoring /review on paused PR #{} in {}/{}", ctx.prNumber(), ctx.owner(), ctx.repo());
+      commentCommandService.notifyPaused(ctx);
+      return true;
+    }
+    // Manual triggers spend the operator's API budget, so restrict them to users who actually
+    // hold write access to the repository (or are explicitly allowlisted).
+    if (!manualReviewAuthorizer.isAuthorized(
+        ctx.owner(), ctx.repo(), ctx.installationId(), ctx.login(), ctx.authorAssociation())) {
+      log.info(
+          "Ignoring unauthorized manual review trigger from @{} on PR #{}",
+          ctx.login(),
+          ctx.prNumber());
+      return true;
+    }
+    log.info("Manual review triggered by @{} on PR #{}", ctx.login(), ctx.prNumber());
+    return reviewDispatcher.dispatch(
+        new ReviewOrchestrator.ReviewRequest(
+            ctx.owner(),
+            ctx.repo(),
+            ctx.prNumber(),
+            "",
+            "(manual review)",
+            "",
+            "",
+            ctx.defaultBranch(),
+            ctx.installationId(),
+            true));
   }
 }

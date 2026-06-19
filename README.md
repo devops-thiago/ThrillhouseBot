@@ -38,6 +38,7 @@ code review.
 - Follow-up reviews track whether earlier findings were addressed or justified
 - Conversational replies: reply to a finding or `@thrillhousebot` it in a PR thread and the bot answers in context
 - A summary comment on the first run, with a risk breakdown
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
@@ -58,6 +59,29 @@ API. Point `AI_BASE_URL` and `AI_MODEL` at your provider of choice:
 
 The default is DeepSeek, used only because it is inexpensive; nothing in the bot
 is tied to it.
+
+## Commands
+
+Drive the bot directly from a PR by commenting one of these. Each also accepts the
+mention form, e.g. `@Thrillhousebot review`.
+
+| Command | What it does | Access |
+|---|---|---|
+| `/help` | List the available commands | anyone |
+| `/review` | Run (or re-run) a full review of the PR | write |
+| `/summary` | Post the PR summary, but only if one has not been generated yet (otherwise no-op) | write |
+| `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
+| `/pause` | Silence the bot on the PR | write |
+| `/resume` | Re-enable the bot on a paused PR | write |
+
+**Access** — every command except `/help` requires the commenter to hold write access to
+the repository (or to be named in
+`THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`), since reviews spend the operator's
+AI budget.
+
+**Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits and
+ignores `/review` and `/summary` (it replies once to say it is paused). `/resume` lifts the
+pause. `/help` and `/resolve` keep working while paused.
 
 ## Quick start
 

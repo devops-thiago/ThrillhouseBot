@@ -78,6 +78,21 @@ public class ReviewSessionPersistence {
         .toList();
   }
 
+  /**
+   * Whether any completed review exists for the PR. The first completed review posts the PR summary
+   * comment, so this doubles as "has a summary already been generated" for the {@code /summary}
+   * command gate.
+   */
+  @Transactional
+  public boolean hasCompletedReview(String repository, int prNumber) {
+    return this.repository.count(
+            "repository = ?1 and prNumber = ?2 and status = ?3",
+            repository,
+            prNumber,
+            ReviewSession.STATUS_COMPLETED)
+        > 0;
+  }
+
   /** Loads a managed session by ID and applies updates — safe after the entity becomes detached. */
   @Transactional
   public void update(long sessionId, Consumer<ReviewSession> mutator) {

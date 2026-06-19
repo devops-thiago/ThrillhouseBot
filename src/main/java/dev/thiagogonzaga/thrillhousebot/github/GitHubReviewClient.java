@@ -55,6 +55,23 @@ public interface GitHubReviewClient {
       @PathParam("repo") String repo,
       @PathParam("pullNumber") int pullNumber);
 
+  /**
+   * Paged variant of {@link #listPullRequestComments}. GitHub serves 30 comments per page by
+   * default; callers that need every comment (e.g. {@code /resolve}) must request a larger {@code
+   * per_page} and walk the pages until a short one.
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
+  @Produces(MediaType.APPLICATION_JSON)
+  List<PullRequestComment> listPullRequestComments(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
+
   @POST
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)

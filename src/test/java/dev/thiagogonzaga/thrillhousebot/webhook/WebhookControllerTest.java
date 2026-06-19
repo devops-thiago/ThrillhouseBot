@@ -55,6 +55,10 @@ class WebhookControllerTest {
 
   @Mock private ManualReviewAuthorizer manualReviewAuthorizer;
 
+  @Mock private CommentCommandService commentCommandService;
+
+  @Mock private PrPauseService prPauseService;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
@@ -79,6 +83,8 @@ class WebhookControllerTest {
             replyDispatcher,
             deduplicator,
             manualReviewAuthorizer,
+            commentCommandService,
+            prPauseService,
             mapper);
   }
 
@@ -298,6 +304,22 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldSkipAutomaticReviewWhenPrPaused() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(prPauseService.isPaused("owner", "myrepo", 99)).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("synchronize", 99, "owner/myrepo", "headsha123", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // A paused PR must not auto-review on new commits.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldIgnoreClosedPullRequest() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 
@@ -404,7 +426,7 @@ class WebhookControllerTest {
   @Test
   void shouldTriggerManualReviewOnReviewCommand() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
         .thenReturn(true);
@@ -425,7 +447,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreUnauthorizedManualReviewTrigger() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("stranger")).thenReturn(false);
     when(manualReviewAuthorizer.isAuthorized(
             anyString(), anyString(), anyLong(), anyString(), any()))
@@ -439,6 +461,51 @@ class WebhookControllerTest {
     assertEquals(200, response.getStatus());
 
     // A user without write access must not be able to spend the operator's API budget.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldSkipManualReviewOnPausedPr() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(prPauseService.isPaused("owner", "repo", 77)).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // A paused PR neither authorizes nor dispatches the review; it just posts the paused notice.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verifyNoInteractions(manualReviewAuthorizer);
+    verify(commentCommandService).notifyPaused(any(CommentCommandService.CommandContext.class));
+  }
+
+  @Test
+  void shouldRouteNonReviewCommandsToCommandService() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/help")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    var ctx = org.mockito.ArgumentCaptor.forClass(CommentCommandService.CommandContext.class);
+    verify(commentCommandService).handle(ctx.capture());
+    assertEquals(CommentCommand.HELP, ctx.getValue().command());
+    assertEquals("owner", ctx.getValue().owner());
+    assertEquals("repo", ctx.getValue().repo());
+    assertEquals(77, ctx.getValue().prNumber());
+    assertEquals(12345L, ctx.getValue().installationId());
+    // /help must not consult authorization or the review dispatcher.
+    verifyNoInteractions(manualReviewAuthorizer);
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -477,7 +544,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreIssueCommentWithoutTrigger() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("Nice PR!")).thenReturn(false);
+    when(triggerDetector.detectCommand("Nice PR!")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
 
     var body =
@@ -487,14 +554,14 @@ class WebhookControllerTest {
     var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
-    // Orchestrator should NOT be called when trigger not detected
+    // Neither the dispatcher nor the command service runs when no command is detected.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verifyNoInteractions(commentCommandService);
   }
 
   @Test
   void shouldIgnoreBotComment() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
     when(triggerDetector.isBotComment("thrillhousebot[bot]")).thenReturn(true);
 
     var body =
@@ -504,8 +571,9 @@ class WebhookControllerTest {
     var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
-    // Orchestrator should NOT be called for bot comments
+    // The bot's own comment is dropped before command detection, so nothing runs.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verifyNoInteractions(commentCommandService);
   }
 
   // ── conversational reply tests ─────────────────────────────────────────
@@ -513,7 +581,8 @@ class WebhookControllerTest {
   @Test
   void shouldDispatchReplyForBotMentionOnPrComment() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot is this thread-safe?")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot is this thread-safe?"))
+        .thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot is this thread-safe?"))
         .thenReturn(true);
@@ -552,7 +621,7 @@ class WebhookControllerTest {
   void shouldNotDispatchReplyForMentionWhenRepliesDisabled() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot hi")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
 
     var body =
@@ -828,7 +897,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreMentionWithMissingInstallation() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot hi")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot hi")).thenReturn(true);
 
@@ -852,7 +921,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreMentionWithMissingRepository() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot hi")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot hi")).thenReturn(true);
 
@@ -1071,7 +1140,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreReviewTriggerWithMissingRepository() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("/review")).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("user")).thenReturn(false);
 
     var body =
@@ -1089,6 +1158,30 @@ class WebhookControllerTest {
     assertEquals(200, response.getStatus());
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldIgnoreCommandWhenInstallationMissing() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("user")).thenReturn(false);
+
+    var body =
+        "{"
+            + "\"action\":\"created\","
+            + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
+            + "\"comment\":{\"id\":1,\"body\":\"/help\",\"user\":{\"login\":\"user\",\"id\":1}},"
+            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"installation\":null"
+            + "}";
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "issue_comment", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus());
+
+    // A command with no installation cannot be authenticated to GitHub, so nothing runs.
+    verifyNoInteractions(commentCommandService);
   }
 
   // ── helper methods ─────────────────────────────────────────────────────
