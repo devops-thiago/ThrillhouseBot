@@ -156,7 +156,7 @@ public class ReviewTriggerFilter {
     Path path;
     try {
       path = Path.of(branch);
-    } catch (InvalidPathException e) {
+    } catch (InvalidPathException _) {
       return false;
     }
     return matchers.stream().anyMatch(m -> m.matches(path));
