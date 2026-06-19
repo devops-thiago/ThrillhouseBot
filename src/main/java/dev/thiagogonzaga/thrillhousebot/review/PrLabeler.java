@@ -126,7 +126,12 @@ public class PrLabeler {
       int prNumber,
       boolean isFirstReview,
       List<String> suggested,
-      List<GitHubLabelClient.Label> existing) {}
+      List<GitHubLabelClient.Label> existing) {
+    public LabelRequest {
+      suggested = suggested == null ? List.of() : List.copyOf(suggested);
+      existing = existing == null ? List.of() : List.copyOf(existing);
+    }
+  }
 
   /**
    * Applies (or, in suggest-only mode, comments) the labels the model suggested for the PR. No-op
