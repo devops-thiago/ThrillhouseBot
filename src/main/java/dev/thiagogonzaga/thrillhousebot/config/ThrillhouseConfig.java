@@ -73,6 +73,52 @@ public interface ThrillhouseConfig {
     @WithDefault("24h")
     @WithName("dedup-ttl")
     Duration dedupTtl();
+
+    /** Filters applied to automatic pull_request events before a review is dispatched. */
+    TriggerFilters triggers();
+
+    /**
+     * Controls which pull requests automatically trigger a review (opened/reopened/synchronize).
+     * Defaults review every PR, matching the original behavior. Filters apply only to automatic
+     * triggers — a manual {@code /review} comment always runs.
+     */
+    interface TriggerFilters {
+      /**
+       * Skip auto-review while a PR is a draft. Pairs with the {@code ready_for_review} trigger so
+       * a draft is reviewed once it is marked ready (#72).
+       */
+      @WithDefault("false")
+      @WithName("skip-drafts")
+      boolean skipDrafts();
+
+      /**
+       * When non-empty, only auto-review PRs carrying at least one of these labels
+       * (case-insensitive exact match). Empty means no label is required.
+       */
+      @WithName("required-labels")
+      Optional<List<String>> requiredLabels();
+
+      /**
+       * Skip auto-review of any PR carrying one of these labels (case-insensitive exact match).
+       * Takes precedence over {@link #requiredLabels()}.
+       */
+      @WithName("excluded-labels")
+      Optional<List<String>> excludedLabels();
+
+      /**
+       * When non-empty, only auto-review PRs whose base branch matches one of these globs (e.g.
+       * {@code main}, {@code release/*}). Empty means every base branch is allowed.
+       */
+      @WithName("base-branches")
+      Optional<List<String>> baseBranches();
+
+      /**
+       * Skip auto-review of PRs whose base branch matches one of these globs. Takes precedence over
+       * {@link #baseBranches()}.
+       */
+      @WithName("ignored-base-branches")
+      Optional<List<String>> ignoredBaseBranches();
+    }
   }
 
   interface ReviewConfig {
