@@ -122,7 +122,8 @@ public class ReviewTriggerFilter {
     }
     var names = new LinkedHashSet<String>();
     for (var label : pr.labels()) {
-      if (label != null && label.name() != null && !label.name().isBlank()) {
+      // pr.labels() comes from List.copyOf, so no null elements — only the name can be absent.
+      if (label.name() != null && !label.name().isBlank()) {
         names.add(label.name().trim().toLowerCase(Locale.ROOT));
       }
     }

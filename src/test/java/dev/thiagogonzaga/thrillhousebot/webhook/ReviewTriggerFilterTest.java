@@ -16,8 +16,12 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class ReviewTriggerFilterTest {
@@ -94,6 +98,15 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("main", false, "ai-review", "hold")).isPresent());
   }
 
+  @Test
+  void shouldIgnoreLabelsWithBlankOrMissingNames() {
+    var filter = filter(false, List.of("ai-review"), List.of(), List.of(), List.of());
+
+    // A label with a null name and one with a blank name are skipped; the real one still matches.
+    assertTrue(filter.skipReason(pr("main", false, "ai-review", null, "  ")).isEmpty());
+    assertTrue(filter.skipReason(pr("main", false, null, "  ")).isPresent());
+  }
+
   // ── base-branch filters ─────────────────────────────────────────────────
 
   @Test
@@ -129,7 +142,16 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr).isPresent());
   }
 
-  // ── robustness: blank/invalid entries are ignored ───────────────────────
+  @Test
+  void shouldSkipWhenBaseBranchIsUnusableAndAllowlistSet() {
+    var filter = filter(false, List.of(), List.of(), List.of("main"), List.of());
+
+    // Blank and path-invalid (embedded NUL) base refs cannot match the allowlist; both are skipped.
+    assertTrue(filter.skipReason(pr("   ", false)).isPresent());
+    assertTrue(filter.skipReason(pr("x" + ((char) 0) + "y", false)).isPresent());
+  }
+
+  // ── robustness: blank/invalid/null config entries are ignored ───────────
 
   @Test
   void shouldIgnoreBlankConfigEntries() {
@@ -140,7 +162,66 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("anything", false, "anything")).isEmpty());
   }
 
+  @Test
+  void shouldIgnoreNullConfigEntriesAndInvalidGlobs() {
+    // null elements (from config parsing) and an unparseable glob must be dropped, not throw.
+    var filter =
+        filter(
+            false,
+            Arrays.asList("ai-review", null, "  "),
+            List.of(),
+            Arrays.asList("main", "[unclosed", null),
+            List.of());
+
+    // required-labels kept only "ai-review"; base-branches kept only the valid "main".
+    assertTrue(filter.skipReason(pr("main", false, "ai-review")).isEmpty());
+    assertTrue(filter.skipReason(pr("main", false)).isPresent(), "missing required label");
+    assertTrue(filter.skipReason(pr("other", false, "ai-review")).isPresent(), "base not allowed");
+  }
+
+  // ── config-backed constructor (the @Inject path) ────────────────────────
+
+  @Test
+  void shouldApplyFiltersFromConfig() {
+    var filter =
+        new ReviewTriggerFilter(
+            config(true, List.of("ai"), List.of("wip"), List.of("main"), List.of("legacy")));
+
+    assertTrue(filter.skipReason(pr("main", true)).isPresent(), "draft");
+    assertTrue(filter.skipReason(pr("legacy", false, "ai")).isPresent(), "ignored base branch");
+    assertTrue(filter.skipReason(pr("main", false, "wip", "ai")).isPresent(), "excluded label");
+    assertTrue(filter.skipReason(pr("main", false)).isPresent(), "missing required label");
+    assertTrue(filter.skipReason(pr("main", false, "ai")).isEmpty(), "all gates satisfied");
+  }
+
+  @Test
+  void shouldReviewEverythingWhenConfigOptionalsAreEmpty() {
+    var filter = new ReviewTriggerFilter(config(false, null, null, null, null));
+
+    assertTrue(filter.skipReason(pr("anything", true, "wip")).isEmpty());
+  }
+
   // ── helpers ─────────────────────────────────────────────────────────────
+
+  /** Builds a config; null list args become {@link Optional#empty()} (the unset-env case). */
+  private static ThrillhouseConfig config(
+      boolean skipDrafts,
+      List<String> required,
+      List<String> excluded,
+      List<String> baseBranches,
+      List<String> ignoredBaseBranches) {
+    var cfg = mock(ThrillhouseConfig.class);
+    var webhook = mock(ThrillhouseConfig.WebhookConfig.class);
+    var triggers = mock(ThrillhouseConfig.WebhookConfig.TriggerFilters.class);
+    when(cfg.webhook()).thenReturn(webhook);
+    when(webhook.triggers()).thenReturn(triggers);
+    when(triggers.skipDrafts()).thenReturn(skipDrafts);
+    when(triggers.requiredLabels()).thenReturn(Optional.ofNullable(required));
+    when(triggers.excludedLabels()).thenReturn(Optional.ofNullable(excluded));
+    when(triggers.baseBranches()).thenReturn(Optional.ofNullable(baseBranches));
+    when(triggers.ignoredBaseBranches()).thenReturn(Optional.ofNullable(ignoredBaseBranches));
+    return cfg;
+  }
 
   private static ReviewTriggerFilter filter(
       boolean skipDrafts,
