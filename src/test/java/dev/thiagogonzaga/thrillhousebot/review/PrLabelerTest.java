@@ -78,6 +78,13 @@ class PrLabelerTest {
     assertTrue(req.labels().isEmpty());
   }
 
+  @Test
+  void allowNewLabelsShouldReflectConfig() {
+    assertFalse(labeler.allowNewLabels());
+    when(labelsConfig.allowCreate()).thenReturn(true);
+    assertTrue(labeler.allowNewLabels());
+  }
+
   @Nested
   class Reconcile {
 

@@ -1215,6 +1215,10 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        // Return a real label so buildLabelGuidance produces a non-blank string — this exercises
+        // the labelGuidance.isBlank() = false branch in the orchestrator.
+        when(labeler.fetchExistingLabels(anyString(), anyString(), anyString()))
+            .thenReturn(List.of(new GitHubLabelClient.Label("bug", null, "ededed")));
         // Non-null summary carrying suggested labels — exercises the orchestrator's label hand-off.
         var summary =
             new ReviewResponse.Summary(
