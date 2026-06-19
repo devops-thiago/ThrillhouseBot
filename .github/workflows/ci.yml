@@ -30,6 +30,32 @@ jobs:
           restore-keys: ${{ runner.os }}-m2
       - run: ./mvnw spotless:check -q
 
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      # release.yml references the trivy-scan composite through a runtime
+      # side-path (./.actions-ref/.github/actions/...) populated by a sparse
+      # checkout, so that path does not exist at lint time. Mirror it with a
+      # symlink so actionlint resolves and validates the release-gate scan's
+      # inputs too — those scans are otherwise never exercised on PR CI.
+      - name: Mirror release.yml side-path for the trivy-scan composite
+        run: |
+          mkdir -p .actions-ref/.github
+          ln -s "$PWD/.github/actions" .actions-ref/.github/actions
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+      # shellcheck ships on ubuntu-latest, so actionlint also lints inline run: scripts.
+      - name: Lint workflows and composite actions
+        run: ./actionlint -color
+
   test:
     runs-on: ubuntu-latest
     permissions:
