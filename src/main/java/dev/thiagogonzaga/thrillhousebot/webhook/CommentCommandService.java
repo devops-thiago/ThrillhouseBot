@@ -237,7 +237,9 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /pause from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    pauseIdempotently(ctx);
+    if (!pauseIfPossible(ctx)) {
+      return; // genuine failure already logged — do not post a misleading confirmation
+    }
     postComment(
         auth,
         ctx,
@@ -248,17 +250,22 @@ public class CommentCommandService {
   /**
    * Pauses the PR, tolerating a concurrent {@code /pause} that wins the insert race. The unique
    * constraint lets only one of two simultaneous inserts succeed; the loser's transaction throws,
-   * but the PR is paused either way, so a row that already exists is success — only a genuine
-   * failure (no row afterwards) is propagated, keeping the confirmation comment intact.
+   * but the PR is paused either way — so a row that exists afterwards counts as success.
+   *
+   * @return whether the PR is paused after this call (newly, or by a concurrent {@code /pause})
    */
-  private void pauseIdempotently(CommandContext ctx) {
+  private boolean pauseIfPossible(CommandContext ctx) {
     try {
       prPauseService.pause(ctx.owner(), ctx.repo(), ctx.prNumber());
+      return true;
     } catch (RuntimeException e) {
-      if (!prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
-        throw e;
+      boolean paused = prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber());
+      if (paused) {
+        log.debug("Concurrent /pause already paused {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx));
+      } else {
+        log.error("Failed to pause {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx), e);
       }
-      log.debug("Concurrent /pause already paused {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx));
+      return paused;
     }
   }
 
