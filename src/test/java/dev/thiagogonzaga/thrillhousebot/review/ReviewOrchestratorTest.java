@@ -4030,4 +4030,25 @@ class ReviewOrchestratorTest {
       assertFalse(statusVal.statuses().isEmpty());
     }
   }
+
+  @Nested
+  class CombineSections {
+
+    @Test
+    void shouldReturnSecondWhenFirstIsBlank() {
+      assertEquals("b", ReviewOrchestrator.combineSections("", "b"));
+      assertEquals("b", ReviewOrchestrator.combineSections("  ", "b"));
+    }
+
+    @Test
+    void shouldReturnFirstWhenSecondIsBlank() {
+      assertEquals("a", ReviewOrchestrator.combineSections("a", ""));
+      assertEquals("a", ReviewOrchestrator.combineSections("a", "  "));
+    }
+
+    @Test
+    void shouldJoinBothWithBlankLineSeparator() {
+      assertEquals("a\n\nb", ReviewOrchestrator.combineSections("a", "b"));
+    }
+  }
 }
