@@ -147,7 +147,9 @@ public class WebhookController {
     if (action == null) return true;
 
     return switch (action) {
-      case "opened", "reopened", "synchronize" -> {
+      // ready_for_review fires when a draft PR is marked ready; it is not followed by a
+      // synchronize, so without this the PR stays unreviewed until the next push. (#72)
+      case "opened", "reopened", "synchronize", "ready_for_review" -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
         if (pr == null || repo == null || payload.installation() == null) {
