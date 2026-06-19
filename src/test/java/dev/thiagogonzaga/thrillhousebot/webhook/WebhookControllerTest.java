@@ -239,6 +239,34 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldRouteReadyForReviewPullRequestToOrchestrator() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    // A draft marked "Ready for review" fires ready_for_review, not synchronize, so it must
+    // dispatch on its own or the PR stays unreviewed until the next push. (#72)
+    var body =
+        buildPullRequestPayload("ready_for_review", 21, "org/svc", "sha21", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(reviewDispatcher)
+        .dispatch(
+            new ReviewOrchestrator.ReviewRequest(
+                "org",
+                "svc",
+                21,
+                "sha21",
+                "Test PR title",
+                "PR body",
+                "basesha456",
+                "main",
+                12345L,
+                false));
+  }
+
+  @Test
   void shouldDefaultMissingPrBodyToEmptyDescription() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 
