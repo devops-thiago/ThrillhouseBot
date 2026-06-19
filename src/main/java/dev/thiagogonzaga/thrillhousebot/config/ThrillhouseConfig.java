@@ -151,6 +151,16 @@ public interface ThrillhouseConfig {
     @WithName("verifier-enabled")
     boolean verifierEnabled();
 
+    /**
+     * Whether the bot answers maintainer replies to its review findings and {@code @thrillhousebot}
+     * mentions in PR threads with a contextual AI reply. Each reply spends the operator's AI
+     * budget, so this is the operator's kill switch; replies are additionally restricted to the
+     * same write-access/allowlisted users as a manual {@code /review}.
+     */
+    @WithDefault("true")
+    @WithName("conversational-replies-enabled")
+    boolean conversationalRepliesEnabled();
+
     @WithDefault("**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**")
     @WithName("ignored-files")
     List<String> ignoredFiles();

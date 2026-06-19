@@ -67,6 +67,19 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       CreatePullRequestCommentRequest request);
 
+  @POST
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments/{commentId}/replies")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  PullRequestCommentResponse replyToReviewComment(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      @PathParam("commentId") long commentId,
+      ReplyToReviewCommentRequest request);
+
   @DELETE
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}")
   void deletePendingReview(
@@ -101,6 +114,9 @@ public interface GitHubReviewClient {
       String path,
       int line,
       String side) {}
+
+  /** Reply posted into an existing review thread, keyed by the thread's root comment id in path. */
+  record ReplyToReviewCommentRequest(String body) {}
 
   record PullRequestCommentResponse(long id, String body, String path, Integer line) {}
 

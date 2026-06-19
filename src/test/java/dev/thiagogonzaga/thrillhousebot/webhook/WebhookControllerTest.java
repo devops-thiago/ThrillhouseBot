@@ -21,6 +21,8 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
+import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +39,8 @@ class WebhookControllerTest {
 
   @Mock private ThrillhouseConfig.GitHubConfig githubConfig;
 
+  @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
+
   @Mock private WebhookVerifier verifier;
 
   @Mock private TriggerDetector triggerDetector;
@@ -44,6 +48,8 @@ class WebhookControllerTest {
   @Mock private ReviewTriggerFilter triggerFilter;
 
   @Mock private ReviewDispatcher reviewDispatcher;
+
+  @Mock private MaintainerReplyDispatcher replyDispatcher;
 
   @Mock private WebhookDeduplicator deduplicator;
 
@@ -61,6 +67,8 @@ class WebhookControllerTest {
     MockitoAnnotations.openMocks(this);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.webhookSecret()).thenReturn("test-secret");
+    when(config.review()).thenReturn(reviewConfig);
+    when(reviewConfig.conversationalRepliesEnabled()).thenReturn(true);
     controller =
         new WebhookController(
             config,
@@ -68,6 +76,7 @@ class WebhookControllerTest {
             triggerDetector,
             triggerFilter,
             reviewDispatcher,
+            replyDispatcher,
             deduplicator,
             manualReviewAuthorizer,
             mapper);
@@ -499,6 +508,190 @@ class WebhookControllerTest {
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
+  // ── conversational reply tests ─────────────────────────────────────────
+
+  @Test
+  void shouldDispatchReplyForBotMentionOnPrComment() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isReviewTrigger("@thrillhousebot is this thread-safe?")).thenReturn(false);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot is this thread-safe?"))
+        .thenReturn(true);
+    when(replyDispatcher.dispatch(any(MaintainerReplyService.ReplyTask.class))).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload(
+                "created", 77, "owner/repo", "octocat", "@thrillhousebot is this thread-safe?")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher)
+        .dispatch(
+            new MaintainerReplyService.ReplyTask(
+                "owner",
+                "repo",
+                77,
+                12345L,
+                "octocat",
+                "OWNER",
+                "@thrillhousebot is this thread-safe?",
+                "PR Title",
+                "desc",
+                false,
+                null,
+                1L,
+                true,
+                null));
+    // A bare mention is a question, not a review command.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldNotDispatchReplyForMentionWhenRepliesDisabled() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
+    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 5, "owner/repo", "octocat", "@thrillhousebot hi")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldDispatchReplyForReviewCommentReply() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("Why is this flagged?")).thenReturn(false);
+    when(replyDispatcher.dispatch(any(MaintainerReplyService.ReplyTask.class))).thenReturn(true);
+
+    var body =
+        buildReviewCommentPayload(
+                "created", 42, "owner/repo", "octocat", "Why is this flagged?", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher)
+        .dispatch(
+            new MaintainerReplyService.ReplyTask(
+                "owner",
+                "repo",
+                42,
+                12345L,
+                "octocat",
+                "OWNER",
+                "Why is this flagged?",
+                "PR Title",
+                "PR body",
+                true,
+                99L,
+                1000L,
+                false,
+                "@@ -1 +1 @@"));
+  }
+
+  @Test
+  void shouldDispatchReplyForReviewCommentMentionOnNewLine() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot thoughts?")).thenReturn(true);
+    when(replyDispatcher.dispatch(any(MaintainerReplyService.ReplyTask.class))).thenReturn(true);
+
+    // A brand-new inline comment (no in_reply_to_id) that mentions the bot replies under itself.
+    var body =
+        buildReviewCommentPayload(
+                "created", 42, "owner/repo", "octocat", "@thrillhousebot thoughts?", null, 2000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher)
+        .dispatch(
+            new MaintainerReplyService.ReplyTask(
+                "owner",
+                "repo",
+                42,
+                12345L,
+                "octocat",
+                "OWNER",
+                "@thrillhousebot thoughts?",
+                "PR Title",
+                "PR body",
+                true,
+                2000L,
+                2000L,
+                true,
+                "@@ -1 +1 @@"));
+  }
+
+  @Test
+  void shouldIgnoreReviewCommentThatNeitherRepliesNorMentions() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("looks good")).thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "looks good", null, 3000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreOwnReviewComment() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("thrillhousebot[bot]")).thenReturn(true);
+
+    var body =
+        buildReviewCommentPayload(
+                "created", 42, "owner/repo", "thrillhousebot[bot]", "follow-up", 99L, 4000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreEditedReviewComment() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        buildReviewCommentPayload("edited", 42, "owner/repo", "octocat", "edited text", 99L, 5000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // Editing a review comment must not re-trigger a reply.
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+    verifyNoInteractions(triggerDetector);
+  }
+
   // ── installation / ping event tests ─────────────────────────────────────
 
   @Test
@@ -776,6 +969,58 @@ class WebhookControllerTest {
         + "\"installation\":{\"id\":"
         + installationId
         + "}"
+        + "}");
+  }
+
+  private String buildReviewCommentPayload(
+      String action,
+      int prNumber,
+      String fullName,
+      String userLogin,
+      String commentBody,
+      Long inReplyToId,
+      long commentId) {
+    return ("{"
+        + "\"action\":\""
+        + action
+        + "\","
+        + "\"comment\":{"
+        + "\"id\":"
+        + commentId
+        + ","
+        + "\"body\":\""
+        + commentBody
+        + "\","
+        + "\"author_association\":\"OWNER\","
+        + "\"path\":\"src/Foo.java\","
+        + "\"diff_hunk\":\"@@ -1 +1 @@\","
+        + (inReplyToId != null ? "\"in_reply_to_id\":" + inReplyToId + "," : "")
+        + "\"user\":{\"login\":\""
+        + userLogin
+        + "\",\"id\":1}"
+        + "},"
+        + "\"pull_request\":{"
+        + "\"number\":"
+        + prNumber
+        + ","
+        + "\"title\":\"PR Title\","
+        + "\"head\":{\"sha\":\"headsha\"},"
+        + "\"base\":{\"sha\":\"basesha\"},"
+        + "\"body\":\"PR body\""
+        + "},"
+        + "\"repository\":{"
+        + "\"full_name\":\""
+        + fullName
+        + "\","
+        + "\"name\":\""
+        + fullName.substring(fullName.indexOf('/') + 1)
+        + "\","
+        + "\"default_branch\":\"main\","
+        + "\"owner\":{\"login\":\""
+        + fullName.substring(0, fullName.indexOf('/'))
+        + "\",\"id\":2}"
+        + "},"
+        + "\"installation\":{\"id\":12345}"
         + "}");
   }
 

@@ -150,13 +150,30 @@ sequenceDiagram
     Note over TB: Full re-review even if this SHA was already reviewed
 ```
 
+### Conversational reply (reply to a finding or `@thrillhousebot` mention)
+
+```mermaid
+sequenceDiagram
+    actor Dev
+    participant GH as GitHub
+    participant TB as ThrillhouseBot
+
+    Dev->>GH: Replies to a finding / mentions @thrillhousebot
+    GH->>TB: POST /api/webhook (pull_request_review_comment or issue_comment: created)
+
+    Note over TB: Bot-loop guard → mention/reply detected → ACK 200
+    Note over TB: Async on review executor: authorize (write access)
+    Note over TB: Build threaded prompt (finding + diff hunk + thread)
+    TB->>GH: POST reply in the review thread (or a PR comment)
+```
+
 ## Packages
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review | `WebhookController`, `WebhookVerifier`, `TriggerDetector` |
-| `review/` | Orchestrates a review: formats the diff, calls the AI layer, maps findings to a risk level and review state, writes the summary comment | `ReviewOrchestrator`, `ReviewDispatcher`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `PrSummaryGenerator` |
-| `review/ai/` | The LangChain4j layer: streams the model response, parses it into findings, and runs a second pass to verify them | `PrReviewer`, `AiReviewService`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser` |
+| `review/` | Orchestrates a review: formats the diff, calls the AI layer, maps findings to a risk level and review state, writes the summary comment; also answers maintainer replies/mentions in PR threads | `ReviewOrchestrator`, `ReviewDispatcher`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `PrSummaryGenerator`, `MaintainerReplyService`, `MaintainerReplyDispatcher` |
+| `review/ai/` | The LangChain4j layer: streams the model response, parses it into findings, runs a second pass to verify them, and writes conversational replies | `PrReviewer`, `AiReviewService`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant` |
 | `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `InstructionsResolver` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster, and review session persistence | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository` |
 | `config/` | Wiring: the outbound HTTP client, the review thread pool, and typed config | `HttpClientProducer`, `ReviewExecutorProducer`, `ThrillhouseConfig` |

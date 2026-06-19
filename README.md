@@ -32,11 +32,11 @@ code review.
 
 ## Features
 
-- Reviews diffs for correctness, security, regressions, stale comments, and code quality
 - Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
 - Follow-up reviews track whether earlier findings were addressed or justified
+- Conversational replies: reply to a finding or `@thrillhousebot` it in a PR thread and the bot answers in context
 - A summary comment on the first run, with a risk breakdown
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
@@ -163,6 +163,7 @@ variables are the ones you will change per provider:
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist) | _(empty)_ |
+| `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer maintainer replies to findings and `@thrillhousebot` mentions in PR threads with an AI reply | `true` |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth credentials for dashboard login | _(required for dashboard)_ |
 | `DASHBOARD_URL` | Public dashboard URL (OAuth callback base) | `http://localhost:8080` |
 | `DATASOURCE_DB_KIND` | `h2` or `postgresql` | `h2` (dev), `postgresql` (`%prod`) |
