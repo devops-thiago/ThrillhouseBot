@@ -175,8 +175,25 @@ class StartupConfigValidatorTest {
   }
 
   @Test
-  void bootsWhenDashboardOauthIsPartiallyConfigured() {
-    // Only one of the OAuth pair set: dashboard stays disabled, but the app still boots.
-    new ConfigBuilder().clientSecret(Optional.empty()).build().validate();
+  void failsFastWhenPrivateKeyNull() {
+    var ex = assertFailsValidation(new ConfigBuilder().privateKey(null).build());
+    assertTrue(ex.getMessage().contains("GITHUB_PRIVATE_KEY is required"), ex.getMessage());
+  }
+
+  @Test
+  void bootsWhenDashboardOauthHasOnlyClientSecret() {
+    // Mirror of the partial case (secret set, id absent): dashboard stays disabled, app still
+    // boots.
+    new ConfigBuilder().clientId(Optional.empty()).build().validate();
+  }
+
+  @Test
+  void treatsBlankDashboardOauthValuesAsDisabled() {
+    // Present-but-blank OAuth values are filtered out, so the dashboard is treated as disabled.
+    new ConfigBuilder()
+        .clientId(Optional.of("   "))
+        .clientSecret(Optional.of("   "))
+        .build()
+        .validate();
   }
 }
