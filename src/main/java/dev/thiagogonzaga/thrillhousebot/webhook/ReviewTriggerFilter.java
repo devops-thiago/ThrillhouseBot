@@ -117,7 +117,7 @@ public class ReviewTriggerFilter {
 
   /** Lower-cased names of the labels currently on the PR; empty when the payload omits them. */
   private static Set<String> labelNames(WebhookPayload.PullRequest pr) {
-    if (pr.labels() == null || pr.labels().isEmpty()) {
+    if (pr.labels().isEmpty()) {
       return Set.of();
     }
     var names = new LinkedHashSet<String>();

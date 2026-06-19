@@ -41,7 +41,11 @@ public record WebhookPayload(
       User user,
       String body,
       boolean draft,
-      List<Label> labels) {}
+      List<Label> labels) {
+    public PullRequest {
+      labels = labels == null ? List.of() : List.copyOf(labels);
+    }
+  }
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
