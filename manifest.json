@@ -13,7 +13,8 @@
   "public": false,
   "default_events": [
     "pull_request",
-    "issue_comment"
+    "issue_comment",
+    "pull_request_review_comment"
   ],
   "default_permissions": {
     "checks": "write",

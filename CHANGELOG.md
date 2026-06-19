@@ -2,6 +2,12 @@
 
 All notable changes to ThrillhouseBot.
 
+## [Unreleased]
+
+### Added
+
+- **Conversational replies**: a maintainer can now reply to one of the bot's review findings, or `@thrillhousebot` it anywhere in a PR thread, and the bot answers in context — pulling in the original finding, the surrounding diff, and the prior thread replies — instead of having to re-run the whole review. Replies are posted back into the same review thread (or as a PR comment for top-level mentions), gated to the same write-access/allowlisted users as a manual `/review`, and can be turned off with `REVIEW_CONVERSATIONAL_REPLIES_ENABLED=false`. Requires subscribing the GitHub App to the new `pull_request_review_comment` event (added to `manifest.json`) (#31)
+
 ## [0.1.1] — 2026-06-16
 
 ### Added

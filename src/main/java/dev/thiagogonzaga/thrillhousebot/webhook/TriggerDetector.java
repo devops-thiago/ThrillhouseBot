@@ -29,6 +29,10 @@ public class TriggerDetector {
           Pattern.compile(
               ".*@thrillhousebot\\s+review\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL));
 
+  /** Matches an {@code @thrillhousebot} mention with a word boundary, anywhere in the comment. */
+  private static final Pattern MENTION_PATTERN =
+      Pattern.compile(".*@thrillhousebot\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
   /**
    * Checks whether a comment body contains a review trigger keyword. Triggers: "/review" or
    * "@Thrillhousebot review"
@@ -38,6 +42,18 @@ public class TriggerDetector {
       return false;
     }
     return TRIGGER_PATTERNS.stream().anyMatch(p -> p.matcher(commentBody).matches());
+  }
+
+  /**
+   * Checks whether a comment @-mentions the bot ({@code @thrillhousebot}). Used to detect a
+   * maintainer addressing the bot for a conversational reply, distinct from the {@code review}
+   * command which {@link #isReviewTrigger} already routes to a full review.
+   */
+  public boolean containsBotMention(String commentBody) {
+    if (commentBody == null || commentBody.isBlank()) {
+      return false;
+    }
+    return MENTION_PATTERN.matcher(commentBody).matches();
   }
 
   /** Checks whether the comment author is the bot itself. Prevents infinite review loops. */

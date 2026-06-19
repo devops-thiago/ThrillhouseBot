@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
+import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import jakarta.inject.Inject;
@@ -39,6 +41,7 @@ public class WebhookController {
   private final TriggerDetector triggerDetector;
   private final ReviewTriggerFilter triggerFilter;
   private final ReviewDispatcher reviewDispatcher;
+  private final MaintainerReplyDispatcher replyDispatcher;
   private final WebhookDeduplicator deduplicator;
   private final ManualReviewAuthorizer manualReviewAuthorizer;
   private final ObjectMapper mapper;
@@ -50,6 +53,7 @@ public class WebhookController {
       TriggerDetector triggerDetector,
       ReviewTriggerFilter triggerFilter,
       ReviewDispatcher reviewDispatcher,
+      MaintainerReplyDispatcher replyDispatcher,
       WebhookDeduplicator deduplicator,
       ManualReviewAuthorizer manualReviewAuthorizer,
       ObjectMapper mapper) {
@@ -58,6 +62,7 @@ public class WebhookController {
     this.triggerDetector = triggerDetector;
     this.triggerFilter = triggerFilter;
     this.reviewDispatcher = reviewDispatcher;
+    this.replyDispatcher = replyDispatcher;
     this.deduplicator = deduplicator;
     this.manualReviewAuthorizer = manualReviewAuthorizer;
     this.mapper = mapper;
@@ -108,6 +113,7 @@ public class WebhookController {
           switch (eventType) {
             case "pull_request" -> handlePullRequest(payload);
             case "issue_comment" -> handleIssueComment(payload);
+            case "pull_request_review_comment" -> handleReviewComment(payload);
             case "installation", "installation_repositories" -> {
               log.info(
                   "App installation event (action: {}), installation id: {}",
@@ -250,6 +256,105 @@ public class WebhookController {
               installationId,
               true));
     }
+
+    // Not a review command: a bare @thrillhousebot mention on a PR is a conversational question.
+    if (config.review().conversationalRepliesEnabled()
+        && triggerDetector.containsBotMention(payload.comment().body())) {
+      var repo = payload.repository();
+      if (repo == null || payload.installation() == null) {
+        log.debug("Ignoring bot mention with missing repository or installation");
+        return true;
+      }
+      log.info(
+          "Conversational mention from @{} on PR #{}",
+          payload.comment().user().login(),
+          payload.issue().number());
+      return replyDispatcher.dispatch(
+          new MaintainerReplyService.ReplyTask(
+              repo.owner().login(),
+              repo.name(),
+              payload.issue().number(),
+              payload.installation().id(),
+              payload.comment().user().login(),
+              payload.comment().authorAssociation(),
+              payload.comment().body(),
+              payload.issue().title(),
+              payload.issue().body(),
+              false,
+              null,
+              payload.comment().id(),
+              true,
+              null));
+    }
     return true;
+  }
+
+  /**
+   * Handles {@code pull_request_review_comment} events — a maintainer replying inside an inline
+   * review thread, or mentioning the bot on a diff line. A reply on the bot's own finding thread
+   * (or any inline comment mentioning the bot) gets a contextual answer.
+   *
+   * @return {@code false} only when a reply was attempted but the dispatcher rejected it (so the
+   *     dedup slot should be rolled back); {@code true} when the event was handled or ignored.
+   */
+  private boolean handleReviewComment(WebhookPayload payload) {
+    if (!"created".equals(payload.action())) {
+      log.debug("Ignoring pull_request_review_comment action: {}", payload.action());
+      return true;
+    }
+    if (!config.review().conversationalRepliesEnabled()) {
+      return true;
+    }
+
+    var comment = payload.comment();
+    if (comment == null || comment.user() == null) {
+      log.debug("Ignoring review comment with missing author info");
+      return true;
+    }
+    // Prevent infinite loops — never answer the bot's own comments.
+    if (triggerDetector.isBotComment(comment.user().login())) {
+      log.debug("Ignoring own review comment");
+      return true;
+    }
+
+    var pr = payload.pullRequest();
+    var repo = payload.repository();
+    if (pr == null || repo == null || payload.installation() == null) {
+      log.debug("Ignoring review comment with missing pull_request, repository, or installation");
+      return true;
+    }
+
+    boolean mentioned = triggerDetector.containsBotMention(comment.body());
+    boolean isReply = comment.inReplyToId() != null;
+    // Only a reply (possibly to the bot's finding — confirmed downstream) or an explicit mention is
+    // addressed to the bot; a brand-new inline comment from a human is not.
+    if (!mentioned && !isReply) {
+      log.debug("Ignoring review comment that neither replies to a thread nor mentions the bot");
+      return true;
+    }
+
+    // The thread root is the reply target; a top-level comment that mentions the bot is its own
+    // root.
+    Long rootCommentId = isReply ? comment.inReplyToId() : comment.id();
+    log.info(
+        "Conversational review-thread reply from @{} on PR #{}",
+        comment.user().login(),
+        pr.number());
+    return replyDispatcher.dispatch(
+        new MaintainerReplyService.ReplyTask(
+            repo.owner().login(),
+            repo.name(),
+            pr.number(),
+            payload.installation().id(),
+            comment.user().login(),
+            comment.authorAssociation(),
+            comment.body(),
+            pr.title(),
+            pr.body(),
+            true,
+            rootCommentId,
+            comment.id(),
+            mentioned,
+            comment.diffHunk()));
   }
 }

@@ -47,6 +47,23 @@ class TriggerDetectorTest {
   }
 
   @Test
+  void shouldDetectBotMention() {
+    assertTrue(detector.containsBotMention("@thrillhousebot hello"));
+    assertTrue(detector.containsBotMention("hey @Thrillhousebot what about this?"));
+    assertTrue(detector.containsBotMention("@thrillhousebot review")); // still a mention
+    assertTrue(detector.containsBotMention("line one\n@thrillhousebot wdyt"));
+  }
+
+  @Test
+  void shouldNotDetectMentionWithoutBot() {
+    assertFalse(detector.containsBotMention("looks good"));
+    assertFalse(
+        detector.containsBotMention("email me at me@thrillhousebottle.com")); // word boundary
+    assertFalse(detector.containsBotMention(""));
+    assertFalse(detector.containsBotMention(null));
+  }
+
+  @Test
   void shouldDetectBotLogin() {
     assertTrue(detector.isBotComment("thrillhousebot[bot]"));
     assertTrue(detector.isBotComment("thrillhouse-bot[bot]"));
