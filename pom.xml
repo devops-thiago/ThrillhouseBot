@@ -19,14 +19,14 @@
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.36.3</quarkus.platform.version>
-        <quarkus-langchain4j.version>1.11.0</quarkus-langchain4j.version>
+        <quarkus-langchain4j.version>1.11.2</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
         <argLine></argLine>
-        <spotless.version>3.6.0</spotless.version>
+        <spotless.version>3.7.0</spotless.version>
         <google-java-format.version>1.27.0</google-java-format.version>
 
         <!-- SonarCloud Configuration -->
