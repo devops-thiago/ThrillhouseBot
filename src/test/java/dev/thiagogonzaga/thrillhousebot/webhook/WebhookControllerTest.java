@@ -1159,6 +1159,30 @@ class WebhookControllerTest {
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
+  @Test
+  void shouldIgnoreCommandWhenInstallationMissing() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("user")).thenReturn(false);
+
+    var body =
+        "{"
+            + "\"action\":\"created\","
+            + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
+            + "\"comment\":{\"id\":1,\"body\":\"/help\",\"user\":{\"login\":\"user\",\"id\":1}},"
+            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"installation\":null"
+            + "}";
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "issue_comment", null, DELIVERY, body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus());
+
+    // A command with no installation cannot be authenticated to GitHub, so nothing runs.
+    verifyNoInteractions(commentCommandService);
+  }
+
   // ── helper methods ─────────────────────────────────────────────────────
 
   private String buildPullRequestPayload(

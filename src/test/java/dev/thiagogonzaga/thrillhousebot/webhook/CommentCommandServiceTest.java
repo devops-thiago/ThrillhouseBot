@@ -156,22 +156,28 @@ class CommentCommandServiceTest {
   void resolveResolvesOnlyUnresolvedBotThreads() {
     authorize(true);
     var botRoot = comment(100L, null, "thrillhousebot[bot]");
+    var botRoot2 = comment(102L, null, "thrillhousebot[bot]");
     var botReply = comment(101L, 100L, "thrillhousebot[bot]");
     var humanRoot = comment(200L, null, "octocat");
+    var authorless = new PullRequestComment(300L, null, "src/Foo.java", "body", null);
     when(reviewClient.listPullRequestComments(
             any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
-        .thenReturn(List.of(botRoot, botReply, humanRoot));
+        .thenReturn(List.of(botRoot, botRoot2, botReply, humanRoot, authorless));
     when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(
             Map.of(
                 100L, new ReviewThreadService.ThreadRef("T100", false),
+                102L, new ReviewThreadService.ThreadRef("T102", false),
                 200L, new ReviewThreadService.ThreadRef("T200", false)));
     when(reviewThreadService.resolve(any(), eq("T100"))).thenReturn(true);
+    when(reviewThreadService.resolve(any(), eq("T102"))).thenReturn(false); // GitHub didn't confirm
 
     service.handle(ctx(CommentCommand.RESOLVE));
 
-    // Only the bot's own root-comment thread is resolved; the human thread is left alone.
+    // Both bot threads are attempted; only the confirmed one is counted. The human thread is left
+    // alone, and the bot's reply (not a thread root) is ignored.
     verify(reviewThreadService).resolve(any(), eq("T100"));
+    verify(reviewThreadService).resolve(any(), eq("T102"));
     verify(reviewThreadService, never()).resolve(any(), eq("T200"));
     assertTrue(postedBody().contains("Resolved 1"));
   }
@@ -258,6 +264,101 @@ class CommentCommandServiceTest {
     service.notifyPaused(ctx(CommentCommand.REVIEW));
 
     assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
+  }
+
+  @Test
+  void resolveSkipsAlreadyResolvedThreads() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+        .thenReturn(List.of(comment(100L, null, "thrillhousebot[bot]")));
+    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T100", true)));
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    // An already-resolved thread is not resolved again, and the message reflects nothing to do.
+    verify(reviewThreadService, never()).resolve(any(), any());
+    assertTrue(postedBody().contains("No open"));
+  }
+
+  @Test
+  void resolveStopsAtMaxCommentPages() {
+    authorize(true);
+    var fullPage = new ArrayList<PullRequestComment>();
+    for (int i = 1; i <= 100; i++) {
+      fullPage.add(comment(i, null, "octocat"));
+    }
+    // Every page is full, so the walk is bounded by the page cap rather than a short page.
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), anyInt()))
+        .thenReturn(fullPage);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    verify(reviewClient, times(10))
+        .listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), anyInt());
+    assertTrue(postedBody().contains("No open"));
+  }
+
+  @Test
+  void resolveHandlesNullCommentsPage() {
+    authorize(true);
+    when(reviewClient.listPullRequestComments(
+            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+        .thenReturn(null);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    verify(reviewThreadService, never()).threadsByRootComment(any(), any(), any(), anyInt());
+    assertTrue(postedBody().contains("No open"));
+  }
+
+  @Test
+  void resolveIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.RESOLVE));
+
+    verify(reviewClient, never())
+        .listPullRequestComments(any(), any(), any(), any(), anyInt(), anyInt(), anyInt());
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void resumeIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.RESUME));
+
+    verify(prPauseService, never()).resume(any(), any(), anyInt());
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void executeSwallowsRuntimeExceptions() {
+    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
+
+    // A failure inside the async task must be logged, not propagated to the executor thread.
+    assertDoesNotThrow(() -> service.handle(ctx(CommentCommand.HELP)));
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void executeIgnoresReviewCommand() {
+    // /review is handled synchronously by the controller; the service's switch default is a no-op.
+    service.execute(ctx(CommentCommand.REVIEW));
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verify(reviewDispatcher, never()).dispatch(any());
+  }
+
+  @Test
+  void notifyPausedSwallowsRuntimeExceptions() {
+    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
+
+    assertDoesNotThrow(() -> service.notifyPaused(ctx(CommentCommand.REVIEW)));
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 
   private static PullRequestComment comment(long id, Long inReplyToId, String login) {
