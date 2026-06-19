@@ -164,6 +164,12 @@ variables are the ones you will change per provider:
 | `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
 | `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive interval in ms; `0` or negative disables it (and stale replay-buffer eviction) | `25000` |
 
+The app validates configuration at startup and **fails fast** if a required value
+(`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `AI_API_KEY`) is missing or — for
+the private key — not a valid PEM RSA key, naming every offending variable in one message instead of
+surfacing later on the first webhook or review. Dashboard OAuth (`GITHUB_CLIENT_ID` /
+`GITHUB_CLIENT_SECRET`) is optional: leave both unset and the dashboard login is simply disabled.
+
 Cost tracking uses per-model pricing keyed by the model name, for example:
 
 ```properties
