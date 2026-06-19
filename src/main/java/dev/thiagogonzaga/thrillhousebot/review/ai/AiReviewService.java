@@ -109,8 +109,7 @@ public class AiReviewService {
       String projectStack,
       String relatedTests,
       String previousFindings,
-      String repoInstructions,
-      String availableLabels) {}
+      String repoInstructions) {}
 
   private ReviewResponse streamOnce(ReviewSession session, PromptInputs inputs, int attempt) {
     var result = new CompletableFuture<ReviewResponse>();
@@ -133,8 +132,7 @@ public class AiReviewService {
               inputs.projectStack(),
               inputs.relatedTests(),
               inputs.previousFindings(),
-              inputs.repoInstructions(),
-              inputs.availableLabels());
+              inputs.repoInstructions());
 
       stream
           .onPartialResponse(

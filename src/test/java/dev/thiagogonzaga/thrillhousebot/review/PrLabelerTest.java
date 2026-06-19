@@ -65,6 +65,13 @@ class PrLabelerTest {
     return new PrLabeler.LabelRequest("token", "octo", "repo", 7, firstReview, suggested, existing);
   }
 
+  @Test
+  void labelRequestShouldNormalizeNullCollectionsToEmpty() {
+    var req = new PrLabeler.LabelRequest("t", "o", "r", 1, true, null, null);
+    assertTrue(req.suggested().isEmpty());
+    assertTrue(req.existing().isEmpty());
+  }
+
   @Nested
   class Reconcile {
 
@@ -122,9 +129,10 @@ class PrLabelerTest {
     }
 
     @Test
-    void shouldIgnoreExistingLabelsWithBlankNames() {
+    void shouldIgnoreExistingLabelsWithNullOrBlankNames() {
       var resolved =
-          labeler.reconcile(List.of("bug"), java.util.Arrays.asList(label(" "), label("bug")));
+          labeler.reconcile(
+              List.of("bug"), java.util.Arrays.asList(label(null), label(" "), label("bug")));
       assertEquals(List.of("bug"), resolved);
     }
   }
@@ -166,7 +174,12 @@ class PrLabelerTest {
     @Test
     void shouldCreateMissingLabelsThenAddWhenCreateEnabled() {
       when(labelsConfig.allowCreate()).thenReturn(true);
-      labeler.applyOrSuggest(request(false, List.of("bug", "area/api"), List.of(label("bug"))));
+      // A null-named label in the set is filtered out while building the "already exists" view.
+      labeler.applyOrSuggest(
+          request(
+              false,
+              List.of("bug", "area/api"),
+              java.util.Arrays.asList(label(null), label("bug"))));
 
       // Only the missing label is created; the existing one is left alone.
       var createCaptor = ArgumentCaptor.forClass(GitHubLabelClient.CreateLabelRequest.class);
@@ -314,48 +327,51 @@ class PrLabelerTest {
   }
 
   @Nested
-  class FormatAvailableLabels {
+  class BuildLabelGuidance {
 
     @Test
     void shouldReturnEmptyForNoLabels() {
-      assertEquals("", PrLabeler.formatAvailableLabels(List.of(), false));
-      assertEquals("", PrLabeler.formatAvailableLabels(null, false));
+      assertEquals("", PrLabeler.buildLabelGuidance(List.of(), false));
+      assertEquals("", PrLabeler.buildLabelGuidance(null, false));
     }
 
     @Test
     void shouldReturnEmptyWhenEveryLabelNameIsBlank() {
       assertEquals(
-          "",
-          PrLabeler.formatAvailableLabels(java.util.Arrays.asList(label(null), label(" ")), true));
+          "", PrLabeler.buildLabelGuidance(java.util.Arrays.asList(label(null), label(" ")), true));
     }
 
     @Test
-    void shouldRenderLabelsAndRestrictWhenCreateDisabled() {
+    void shouldRenderHeaderLabelListAndRestrictWhenCreateDisabled() {
       var rendered =
-          PrLabeler.formatAvailableLabels(
+          PrLabeler.buildLabelGuidance(
               List.of(label("bug", "Something is broken"), label("docs")), false);
-      assertEquals(
-          "- bug: Something is broken\n- docs\n"
-              + "Choose only labels from the list above — do not invent new ones.\n",
-          rendered);
+      assertTrue(rendered.contains("## Available Repository Labels"));
+      assertTrue(rendered.contains("- bug: Something is broken\n"));
+      assertTrue(rendered.contains("- docs\n"));
+      assertTrue(
+          rendered.contains("Choose only labels from the list above — do not invent new ones."));
     }
 
     @Test
     void shouldInviteNewLabelsWhenCreateEnabled() {
-      var rendered = PrLabeler.formatAvailableLabels(List.of(label("bug")), true);
-      assertTrue(rendered.startsWith("- bug\n"));
+      var rendered = PrLabeler.buildLabelGuidance(List.of(label("bug")), true);
+      assertTrue(rendered.contains("## Available Repository Labels"));
+      assertTrue(rendered.contains("- bug\n"));
       assertTrue(rendered.contains("you may propose a short, lower-case, hyphenated new label"));
     }
 
     @Test
-    void shouldSkipBlankNamesAndBlankDescriptions() {
+    void shouldSkipNullOrBlankNamesAndBlankDescriptions() {
       var rendered =
-          PrLabeler.formatAvailableLabels(
+          PrLabeler.buildLabelGuidance(
               java.util.Arrays.asList(
                   label(null), label(" "), label("docs", "  "), label("bug", "broken")),
               false);
       // Null- and blank-named labels are skipped; blank description dropped, the real one kept.
-      assertTrue(rendered.startsWith("- docs\n- bug: broken\n"));
+      assertTrue(rendered.contains("- docs\n"));
+      assertTrue(rendered.contains("- bug: broken\n"));
+      assertFalse(rendered.contains("null"));
     }
   }
 }

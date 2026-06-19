@@ -262,6 +262,14 @@ public class ReviewOrchestrator {
 
       String escapedDiff = PromptTemplateEscaper.escape(diff);
       String escapedStack = PromptTemplateEscaper.escape(resolveProjectStack(req));
+      // The label guidance and the repo-instructions file share the prompt's trailing
+      // {{repoInstructions}} slot; the label section is escaped (it carries repo label names),
+      // the instructions section escapes its own maintainer content.
+      String labelGuidance = PrLabeler.buildLabelGuidance(repoLabels, labeler.allowNewLabels());
+      String trailingGuidance =
+          combineSections(
+              labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
+              buildInstructionsSection(instructions));
       var promptInputs =
           new AiReviewService.PromptInputs(
               escapedDiff,
@@ -271,9 +279,7 @@ public class ReviewOrchestrator {
               PromptTemplateEscaper.escape(
                   diffFormatter.buildRelatedTests(diffFormatter.reviewableFiles(files))),
               PromptTemplateEscaper.escape(previousFindings),
-              buildInstructionsSection(instructions),
-              PromptTemplateEscaper.escape(
-                  PrLabeler.formatAvailableLabels(repoLabels, labeler.allowNewLabels())));
+              trailingGuidance);
       // Quote validation runs before dedupe so a merged finding can never inherit a phantom
       // quote from one duplicate while a verbatim sibling gets discarded
       var aiResponse = aiReviewService.review(session, promptInputs);
@@ -427,6 +433,17 @@ public class ReviewOrchestrator {
         + "The repository maintainers have provided these additional review guidelines.\n"
         + "These take precedence over default rules where they conflict.\n"
         + PromptTemplateEscaper.escape(instructions.content());
+  }
+
+  /** Joins two optional prompt sections with a blank line, dropping any that are blank. */
+  static String combineSections(String first, String second) {
+    if (first.isBlank()) {
+      return second;
+    }
+    if (second.isBlank()) {
+      return first;
+    }
+    return first + "\n\n" + second;
   }
 
   /** Title and author description block the model checks the implementation against. */

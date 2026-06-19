@@ -50,7 +50,7 @@ class AiReviewServiceTest {
   @Mock private SessionEventBroadcaster broadcaster;
 
   private static final AiReviewService.PromptInputs PROMPT_INPUTS =
-      new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "", "");
+      new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "");
 
   private AiReviewService service;
 
@@ -68,7 +68,6 @@ class AiReviewServiceTest {
   void shouldUseUnknownErrorReasonOnRetryAfterNullMessageFailure() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -103,7 +102,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new ErrorTokenStream(new RuntimeException()));
 
@@ -119,7 +117,6 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
 
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -147,7 +144,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString());
 
     var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
@@ -160,7 +156,6 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -188,7 +183,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new OrphanedAfterCompleteTokenStream(2_000));
     when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -204,7 +198,6 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -260,7 +253,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(stream);
 
@@ -283,7 +275,6 @@ class AiReviewServiceTest {
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(30);
     var streamWaitStarted = new CountDownLatch(1);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -329,7 +320,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new HangingTokenStream());
 
@@ -344,7 +334,6 @@ class AiReviewServiceTest {
   void shouldParseFromCompleteResponseWhenNoPartialTokens() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -366,7 +355,6 @@ class AiReviewServiceTest {
   void shouldCoalesceStreamBroadcastsForManySmallTokens() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -406,7 +394,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(
             new PartialThenErrorTokenStream(
@@ -436,7 +423,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new FakeTokenStream(payload, 256));
     when(parser.parse(payload)).thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -455,7 +441,6 @@ class AiReviewServiceTest {
   void shouldFlushOnTimeIntervalBeforeCompletion() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -488,7 +473,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new PartialHangingTokenStream("partial-output"));
 
@@ -507,7 +491,6 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     var chunk = "x".repeat(500);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -544,7 +527,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenThrow(new RuntimeException());
 
@@ -566,7 +548,6 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -596,7 +577,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new ErrorTokenStream(new Exception("checked failure")));
 
@@ -613,7 +593,6 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     var longMessage = "x".repeat(250);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -684,7 +663,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenThrow(new RuntimeException())
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
@@ -719,7 +697,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new FakeTokenStream("not-json"));
     when(parser.parse(anyString())).thenThrow(new IllegalArgumentException("still bad"));
@@ -736,7 +713,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString());
   }
 
@@ -746,7 +722,6 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -781,7 +756,6 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
-            anyString(),
             anyString()))
         .thenReturn(new HangingTokenStream());
 
@@ -799,7 +773,6 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
-            anyString(),
             anyString(),
             anyString(),
             anyString(),

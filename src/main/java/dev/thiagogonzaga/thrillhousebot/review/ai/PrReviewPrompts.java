@@ -204,15 +204,6 @@ public final class PrReviewPrompts {
             {{previousFindings}}
             {{/if}}
 
-            {{#if availableLabels}}
-            ## Available Repository Labels
-            These labels already exist in the repository. Pick the ones that best describe this PR
-            (area, change type, risk) and return them, by their exact name, in
-            summary.suggested_labels; prefer the few most relevant (typically 1-3). Follow the
-            closing instruction below on whether you may propose a label that is not listed.
-            {{availableLabels}}
-            {{/if}}
-
             {{#if repoInstructions}}
             {{repoInstructions}}
             {{/if}}

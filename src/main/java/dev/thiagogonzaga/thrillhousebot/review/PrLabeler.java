@@ -102,38 +102,40 @@ public class PrLabeler {
   }
 
   /**
-   * Renders the repo's labels as a prompt section ({@code - name: description} lines) followed by a
-   * closing instruction whose wording depends on {@code allowNewLabels}: restrict the model to the
-   * listed labels, or let it propose a new one. Empty string when there are no usable labels, which
-   * suppresses the prompt section entirely.
+   * Builds the full "Available Repository Labels" prompt section — heading, instructions, the
+   * {@code - name: description} list, and a closing line whose wording depends on {@code
+   * allowNewLabels} (restrict the model to the listed labels, or let it propose a new one). Returns
+   * an empty string when there are no usable labels, which suppresses the section entirely. The
+   * orchestrator folds this into the {@code repoInstructions} prompt variable.
    */
-  public static String formatAvailableLabels(
+  public static String buildLabelGuidance(
       List<GitHubLabelClient.Label> labels, boolean allowNewLabels) {
     if (labels == null || labels.isEmpty()) {
       return "";
     }
-    var sb = new StringBuilder();
-    var rendered = 0;
+    var list = new StringBuilder();
     for (var label : labels) {
       if (label.name() == null || label.name().isBlank()) {
         continue;
       }
-      sb.append("- ").append(label.name().strip());
+      list.append("- ").append(label.name().strip());
       if (label.description() != null && !label.description().isBlank()) {
-        sb.append(": ").append(label.description().strip());
+        list.append(": ").append(label.description().strip());
       }
-      sb.append('\n');
-      rendered++;
+      list.append('\n');
     }
-    if (rendered == 0) {
+    if (list.isEmpty()) {
       return "";
     }
-    sb.append(
-        allowNewLabels
-            ? "If none of these fit well, you may propose a short, lower-case, hyphenated new "
-                + "label name (for example \"area/api\"); keep new labels to a minimum.\n"
+    return "## Available Repository Labels\n"
+        + "These labels already exist in the repository. Pick the ones that best describe this PR"
+        + " (area, change type, risk) and return them, by their exact name, in"
+        + " summary.suggested_labels; prefer the few most relevant (typically 1-3).\n"
+        + list
+        + (allowNewLabels
+            ? "If none of these fit well, you may propose a short, lower-case, hyphenated new"
+                + " label name (for example \"area/api\"); keep new labels to a minimum.\n"
             : "Choose only labels from the list above — do not invent new ones.\n");
-    return sb.toString();
   }
 
   /** Coordinates one labelling action. */
@@ -192,17 +194,9 @@ public class PrLabeler {
     if (suggested == null || suggested.isEmpty()) {
       return List.of();
     }
-    Map<String, String> canonical = new HashMap<>();
-    if (existing != null) {
-      for (var label : existing) {
-        if (label.name() != null && !label.name().isBlank()) {
-          canonical.putIfAbsent(
-              label.name().strip().toLowerCase(Locale.ROOT), label.name().strip());
-        }
-      }
-    }
-    boolean allowCreate = config.review().labels().allowCreate();
-    int max = Math.max(0, config.review().labels().maxLabels());
+    var canonical = canonicalNames(existing);
+    var allowCreate = config.review().labels().allowCreate();
+    var max = Math.max(0, config.review().labels().maxLabels());
 
     var result = new ArrayList<String>();
     var seen = new HashSet<String>();
@@ -210,21 +204,49 @@ public class PrLabeler {
       if (result.size() >= max) {
         break;
       }
-      if (suggestion == null || suggestion.isBlank()) {
-        continue;
-      }
-      var key = suggestion.strip().toLowerCase(Locale.ROOT);
-      if (!seen.add(key)) {
-        continue;
-      }
-      var match = canonical.get(key);
-      if (match != null) {
-        result.add(match);
-      } else if (allowCreate) {
-        result.add(suggestion.strip());
+      var label = resolveSuggestion(suggestion, canonical, allowCreate, seen);
+      if (label != null) {
+        result.add(label);
       }
     }
     return result;
+  }
+
+  /**
+   * Lower-cased existing label name → its canonical (repo) casing; blank/null names are dropped.
+   */
+  private static Map<String, String> canonicalNames(List<GitHubLabelClient.Label> existing) {
+    var canonical = new HashMap<String, String>();
+    if (existing == null) {
+      return canonical;
+    }
+    for (var label : existing) {
+      var name = label.name();
+      if (name != null && !name.isBlank()) {
+        canonical.putIfAbsent(name.strip().toLowerCase(Locale.ROOT), name.strip());
+      }
+    }
+    return canonical;
+  }
+
+  /**
+   * Resolves one suggestion to the label to apply, or {@code null} to skip it (blank, a duplicate
+   * of one already taken, or an unknown label while creation is disabled).
+   */
+  private static String resolveSuggestion(
+      String suggestion, Map<String, String> canonical, boolean allowCreate, Set<String> seen) {
+    if (suggestion == null || suggestion.isBlank()) {
+      return null;
+    }
+    var key = suggestion.strip().toLowerCase(Locale.ROOT);
+    if (!seen.add(key)) {
+      return null;
+    }
+    var match = canonical.get(key);
+    if (match != null) {
+      return match;
+    }
+    return allowCreate ? suggestion.strip() : null;
   }
 
   private void applyLabels(LabelRequest request, List<String> resolved) {
