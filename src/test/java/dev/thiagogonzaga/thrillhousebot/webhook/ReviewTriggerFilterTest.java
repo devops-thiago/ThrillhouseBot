@@ -179,6 +179,14 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("other", false, "ai-review")).isPresent(), "base not allowed");
   }
 
+  @Test
+  void shouldTreatNullConfigListsAsNoFilter() {
+    // The package-private constructor must tolerate null lists (defensive null guards).
+    var filter = filter(false, null, null, null, null);
+
+    assertTrue(filter.skipReason(pr("anything", false, "whatever")).isEmpty());
+  }
+
   // ── config-backed constructor (the @Inject path) ────────────────────────
 
   @Test
