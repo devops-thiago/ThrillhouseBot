@@ -161,6 +161,17 @@ public interface ThrillhouseConfig {
      */
     @WithName("manual-trigger-allowed-logins")
     Optional<List<String>> manualTriggerAllowedLogins();
+
+    /**
+     * Upper bound on the manual-review write-access check — the installation-token mint (on a cold
+     * cache) plus the GitHub collaborator-permission call — which runs on the synchronous webhook
+     * acknowledgement thread. GitHub expects the {@code 200} ACK within ~10s, so when this elapses
+     * the check fails closed (denying the manual review) instead of letting a degraded GitHub tie
+     * up a webhook worker past the delivery SLA.
+     */
+    @WithDefault("5s")
+    @WithName("manual-trigger-auth-timeout")
+    Duration manualTriggerAuthTimeout();
   }
 
   interface DashboardConfig {

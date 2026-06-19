@@ -23,8 +23,10 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.CollaboratorPermission;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -47,6 +49,7 @@ class ManualReviewAuthorizerTest {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.empty());
+    when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofSeconds(5));
     authorizer = new ManualReviewAuthorizer(config, authClient, installationClient);
   }
 
@@ -158,5 +161,73 @@ class ManualReviewAuthorizerTest {
   void shouldTreatPermissionLevelCaseInsensitively() {
     stubPermission("WRITE");
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+  }
+
+  @Test
+  void shouldFailClosedWhenPermissionCheckExceedsTimeout() {
+    // GitHub is degraded: the permission call would eventually answer "admin", but not within the
+    // ACK-path budget. The check must abandon it and deny rather than block the webhook worker.
+    when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofMillis(100));
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    // The latch keeps the call in flight (past the timeout) without a wall-clock sleep.
+    var release = new CountDownLatch(1);
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              release.await();
+              return new CollaboratorPermission("admin", "admin");
+            });
+
+    try {
+      assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+    } finally {
+      release.countDown(); // let the abandoned check finish so its thread does not leak
+    }
+  }
+
+  @Test
+  void shouldFailClosedWhenInterruptedWhileWaitingOnPermissionCheck() {
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    // The latch keeps the check in flight so the waiting thread observes the interrupt.
+    var release = new CountDownLatch(1);
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              release.await();
+              return new CollaboratorPermission("admin", "admin");
+            });
+
+    Thread.currentThread().interrupt(); // observed when hasWriteAccess waits on the check
+    try {
+      assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+      // The handler restores the interrupt flag rather than swallowing it.
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted(); // clear so the flag does not leak into later tests
+      release.countDown();
+    }
+  }
+
+  @Test
+  void shouldPropagateErrorFromPermissionCheck() {
+    // A fatal Error must not be masked as a denied review — it propagates as it would have before
+    // the check moved onto a separate thread.
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    var fatal = new Error("simulated fatal");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenThrow(fatal);
+
+    var thrown =
+        assertThrows(Error.class, () -> authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+    assertSame(fatal, thrown);
+  }
+
+  @Test
+  void shutdownStopsTheAuthCheckExecutor() {
+    // @PreDestroy must release the background executor without throwing.
+    assertDoesNotThrow(() -> authorizer.shutdown());
   }
 }

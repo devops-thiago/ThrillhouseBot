@@ -18,11 +18,18 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +64,15 @@ public class ManualReviewAuthorizer {
   private final GitHubAuthClient authClient;
   private final GitHubInstallationClient installationClient;
 
+  /**
+   * Runs the write-access check (token mint + permission call) off the webhook acknowledgement
+   * thread so it can be abandoned once {@code manual-trigger-auth-timeout} elapses. Virtual threads
+   * keep an abandoned-but-still-blocked check cheap if GitHub is slow to respond.
+   */
+  private final ExecutorService authCheckExecutor =
+      Executors.newThreadPerTaskExecutor(
+          Thread.ofVirtual().name("manual-review-auth-", 0).factory());
+
   @Inject
   public ManualReviewAuthorizer(
       ThrillhouseConfig config,
@@ -65,6 +81,11 @@ public class ManualReviewAuthorizer {
     this.config = config;
     this.authClient = authClient;
     this.installationClient = installationClient;
+  }
+
+  @PreDestroy
+  void shutdown() {
+    authCheckExecutor.shutdownNow();
   }
 
   /**
@@ -102,20 +123,49 @@ public class ManualReviewAuthorizer {
   }
 
   private boolean hasWriteAccess(String owner, String repo, long installationId, String login) {
+    var timeout = config.review().manualTriggerAuthTimeout();
+    Future<Boolean> check =
+        authCheckExecutor.submit(() -> writeAccessConfirmed(owner, repo, installationId, login));
     try {
-      var permission =
-          installationClient.collaboratorPermission(
-              authClient.getAuthHeader(installationId), ACCEPT, owner, repo, login);
-      var level = permission == null ? null : permission.permission();
-      return level != null && WRITE_PERMISSIONS.contains(level.trim().toLowerCase(Locale.ROOT));
-    } catch (RuntimeException e) {
+      return check.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    } catch (TimeoutException _) {
+      check.cancel(true);
       log.warn(
-          "Permission check failed for {}/{} user {}: {} — denying manual review",
+          "Permission check for {}/{} user {} exceeded {} on the ACK path — denying manual review",
           owner,
           repo,
           login,
-          e.getMessage());
-      return false;
+          timeout);
+    } catch (ExecutionException e) {
+      // Fail closed on an expected runtime failure, but let a fatal Error (OOM, etc.) propagate as
+      // it would have before the check ran on a separate thread, rather than masking it.
+      if (e.getCause() instanceof Error error) {
+        throw error;
+      }
+      log.warn(
+          "Permission check failed for {}/{} user {} — denying manual review",
+          owner,
+          repo,
+          login,
+          e.getCause());
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      check.cancel(true);
+      log.warn(
+          "Permission check for {}/{} user {} was interrupted — denying manual review",
+          owner,
+          repo,
+          login);
     }
+    return false;
+  }
+
+  private boolean writeAccessConfirmed(
+      String owner, String repo, long installationId, String login) {
+    var permission =
+        installationClient.collaboratorPermission(
+            authClient.getAuthHeader(installationId), ACCEPT, owner, repo, login);
+    var level = permission == null ? null : permission.permission();
+    return level != null && WRITE_PERMISSIONS.contains(level.trim().toLowerCase(Locale.ROOT));
   }
 }
