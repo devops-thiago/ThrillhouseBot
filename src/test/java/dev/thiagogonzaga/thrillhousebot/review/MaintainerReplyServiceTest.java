@@ -256,4 +256,82 @@ class MaintainerReplyServiceTest {
     verify(reviewClient, never())
         .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
   }
+
+  @Test
+  void mentionInlineCommentWithoutResolvableRootPostsNothing() {
+    authorize();
+    // reviewThread mention with no in_reply_to root id — nothing to reply under.
+    var task =
+        new MaintainerReplyService.ReplyTask(
+            "owner",
+            "repo",
+            42,
+            12345L,
+            "octocat",
+            "OWNER",
+            "@thrillhousebot wat",
+            "t",
+            "b",
+            true,
+            null,
+            7L,
+            true,
+            "@@ hunk");
+
+    service.handle(task);
+
+    verifyNoInteractions(replyAssistant);
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void listCommentsFailureStillAnswersAnExplicitMention() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenThrow(new RuntimeException("GitHub 503"));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Still here.");
+
+    service.handle(reviewThreadTask(true));
+
+    // The root could not be loaded, but the explicit mention is still answered (finding is empty).
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
+  void mentionStillRepliesWhenDiffFetchFailsAndPrContextIsBlank() {
+    authorize();
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenThrow(new RuntimeException("files 500"));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+
+    // Null title and description exercise the blank-PR-context branches.
+    var task =
+        new MaintainerReplyService.ReplyTask(
+            "owner",
+            "repo",
+            42,
+            12345L,
+            "octocat",
+            "OWNER",
+            "@thrillhousebot hi",
+            null,
+            null,
+            false,
+            null,
+            2000L,
+            true,
+            null);
+
+    service.handle(task);
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals("Answer.", body.getValue().body());
+    verify(diffFormatter, never()).buildDiffString(any()); // never reached — fetch threw first
+  }
 }

@@ -692,6 +692,91 @@ class WebhookControllerTest {
     verifyNoInteractions(triggerDetector);
   }
 
+  @Test
+  void shouldIgnoreReviewCommentWhenRepliesDisabled() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "Why?", 99L, 6000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreReviewCommentWithMissingAuthor() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"comment\":{\"id\":1,\"body\":\"reply\",\"in_reply_to_id\":99,\"user\":null},"
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"installation\":{\"id\":12345}"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreReviewCommentWithMissingPullRequest() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"comment\":{\"id\":1,\"body\":\"reply\",\"author_association\":\"OWNER\",\"in_reply_to_id\":99,\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"pull_request\":null,"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"installation\":{\"id\":12345}"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreMentionWithMissingRepository() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot hi")).thenReturn(true);
+
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"issue\":{\"number\":5,\"title\":\"T\",\"body\":\"d\",\"pull_request\":{\"url\":\"u\"}},"
+                + "\"comment\":{\"id\":1,\"body\":\"@thrillhousebot hi\",\"author_association\":\"OWNER\",\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"repository\":null,"
+                + "\"installation\":{\"id\":12345}"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
   // ── installation / ping event tests ─────────────────────────────────────
 
   @Test
