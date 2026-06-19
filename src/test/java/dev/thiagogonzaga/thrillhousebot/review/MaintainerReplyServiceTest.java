@@ -73,6 +73,12 @@ class MaintainerReplyServiceTest {
         id, inReplyToId, "src/Foo.java", body, new GitHubReviewClient.ReviewResponse.User(login));
   }
 
+  /** A comment with no {@code user} object at all (e.g. a deleted account). */
+  private static GitHubReviewClient.PullRequestComment commentNoUser(
+      long id, Long inReplyToId, String body) {
+    return new GitHubReviewClient.PullRequestComment(id, inReplyToId, "src/Foo.java", body, null);
+  }
+
   private MaintainerReplyService.ReplyTask reviewThreadTask(boolean mentioned) {
     return new MaintainerReplyService.ReplyTask(
         "owner",
@@ -383,5 +389,93 @@ class MaintainerReplyServiceTest {
     verify(reviewClient)
         .replyToReviewComment(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
+  void threadRenderingSkipsOtherThreadsAndHandlesAnonymousReplies() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                comment(99L, null, BOT, "**finding**"),
+                commentNoUser(500L, 99L, "anon reply"), // no user object → rendered as @unknown
+                comment(600L, 77L, "x", "different thread reply"), // belongs to another root (77)
+                comment(1000L, 99L, "octocat", "Why?"))); // the triggering comment
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+
+    service.handle(reviewThreadTask(false));
+
+    var thread = ArgumentCaptor.forClass(String.class);
+    verify(replyAssistant).reply(any(), any(), any(), any(), thread.capture());
+    assertTrue(thread.getValue().contains("@unknown"), "anonymous reply rendered as @unknown");
+    assertTrue(thread.getValue().contains("anon reply"));
+    assertFalse(
+        thread.getValue().contains("different thread"), "a reply on another root is excluded");
+    assertFalse(thread.getValue().contains("Why?"), "triggering comment excluded");
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
+  void rootWithNullAuthorIsNotTreatedAsBotThread() {
+    authorize();
+    // The root exists but its author is unknown (e.g. deleted account): it must not count as the
+    // bot's thread, so an unmentioned reply on it is left alone.
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(commentNoUser(99L, null, "author is null")));
+
+    service.handle(reviewThreadTask(false));
+
+    verifyNoInteractions(replyAssistant);
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void nullAssistantReplyPostsNothing() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(null);
+
+    service.handle(reviewThreadTask(false));
+
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void blankButNonNullPrContextFieldsAreOmitted() {
+    authorize();
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of());
+    when(diffFormatter.buildDiffString(any())).thenReturn("d");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+    // Whitespace-only (non-null) title and description exercise the !isBlank() branch.
+    var task =
+        new MaintainerReplyService.ReplyTask(
+            "owner",
+            "repo",
+            42,
+            12345L,
+            "octocat",
+            "OWNER",
+            "@thrillhousebot hi",
+            "   ",
+            "   ",
+            false,
+            null,
+            2000L,
+            true,
+            null);
+
+    service.handle(task);
+
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), any());
   }
 }

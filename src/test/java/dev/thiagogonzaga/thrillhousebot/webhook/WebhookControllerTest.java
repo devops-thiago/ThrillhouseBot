@@ -755,6 +755,28 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldIgnoreReviewCommentWithMissingComment() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"comment\":null,"
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"installation\":{\"id\":12345}"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
   void shouldIgnoreReviewCommentWithMissingRepository() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
