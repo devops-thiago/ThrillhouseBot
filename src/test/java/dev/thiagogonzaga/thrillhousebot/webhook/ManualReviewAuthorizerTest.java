@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.CollaboratorPermission;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +48,7 @@ class ManualReviewAuthorizerTest {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.empty());
+    when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofSeconds(5));
     authorizer = new ManualReviewAuthorizer(config, authClient, installationClient);
   }
 
@@ -158,5 +160,22 @@ class ManualReviewAuthorizerTest {
   void shouldTreatPermissionLevelCaseInsensitively() {
     stubPermission("WRITE");
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+  }
+
+  @Test
+  void shouldFailClosedWhenPermissionCheckExceedsTimeout() {
+    // GitHub is degraded: the permission call would eventually answer "admin", but not within the
+    // ACK-path budget. The check must abandon it and deny rather than block the webhook worker.
+    when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofMillis(100));
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              Thread.sleep(2000);
+              return new CollaboratorPermission("admin", "admin");
+            });
+
+    assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
   }
 }
