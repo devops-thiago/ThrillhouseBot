@@ -178,4 +178,32 @@ class ManualReviewAuthorizerTest {
 
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
   }
+
+  @Test
+  void shouldFailClosedWhenInterruptedWhileWaitingOnPermissionCheck() {
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    // The check is still in flight when the waiting thread is interrupted.
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              Thread.sleep(2000);
+              return new CollaboratorPermission("admin", "admin");
+            });
+
+    Thread.currentThread().interrupt(); // observed when hasWriteAccess waits on the check
+    try {
+      assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
+      // The handler restores the interrupt flag rather than swallowing it.
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted(); // clear so the flag does not leak into later tests
+    }
+  }
+
+  @Test
+  void shutdownStopsTheAuthCheckExecutor() {
+    // @PreDestroy must release the background executor without throwing.
+    assertDoesNotThrow(() -> authorizer.shutdown());
+  }
 }

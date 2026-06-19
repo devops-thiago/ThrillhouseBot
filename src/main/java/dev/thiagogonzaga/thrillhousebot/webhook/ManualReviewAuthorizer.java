@@ -137,13 +137,12 @@ public class ManualReviewAuthorizer {
           login,
           timeout);
     } catch (ExecutionException e) {
-      var cause = e.getCause() != null ? e.getCause() : e;
       log.warn(
-          "Permission check failed for {}/{} user {}: {} — denying manual review",
+          "Permission check failed for {}/{} user {} — denying manual review",
           owner,
           repo,
           login,
-          cause.getMessage());
+          e.getCause());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       check.cancel(true);
