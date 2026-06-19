@@ -131,18 +131,20 @@ public class StartupConfigValidator {
   private void logDashboardStatus() {
     var hasClientId = config.dashboard().clientId().filter(s -> !s.isBlank()).isPresent();
     var hasClientSecret = config.dashboard().clientSecret().filter(s -> !s.isBlank()).isPresent();
-    switch (dashboardOauthStatus(hasClientId, hasClientSecret)) {
-      case ENABLED ->
-          log.info(
-              "Dashboard OAuth login enabled (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set).");
-      case DISABLED ->
-          log.info(
-              "Dashboard OAuth login disabled — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to"
-                  + " enable it.");
-      case PARTIAL ->
-          log.warn(
-              "Dashboard OAuth login disabled — only one of GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET"
-                  + " is set; set both (or neither) to fix this.");
+    // Plain if/else on the enum (not a switch) avoids the synthetic, never-taken default branch the
+    // compiler emits for an exhaustive enum switch, which would otherwise read as a partial.
+    var status = dashboardOauthStatus(hasClientId, hasClientSecret);
+    if (status == DashboardOauthStatus.ENABLED) {
+      log.info(
+          "Dashboard OAuth login enabled (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set).");
+    } else if (status == DashboardOauthStatus.DISABLED) {
+      log.info(
+          "Dashboard OAuth login disabled — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to enable"
+              + " it.");
+    } else {
+      log.warn(
+          "Dashboard OAuth login disabled — only one of GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET is"
+              + " set; set both (or neither) to fix this.");
     }
   }
 
