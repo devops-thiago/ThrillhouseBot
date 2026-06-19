@@ -182,6 +182,40 @@ public interface ThrillhouseConfig {
     @WithDefault("5s")
     @WithName("manual-trigger-auth-timeout")
     Duration manualTriggerAuthTimeout();
+
+    LabelsConfig labels();
+  }
+
+  /**
+   * Opt-in context-aware PR labelling. When {@link #enabled()} the model is shown the repository's
+   * existing labels and asked which best describe the change; the result is either applied to the
+   * PR or posted as a suggestion comment.
+   */
+  interface LabelsConfig {
+    /** Master switch — the whole feature is off unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * When {@code true}, the matched labels are added to the PR. When {@code false} (the default),
+     * they are only posted as a suggestion comment on the first review — applying is the explicit
+     * opt-in.
+     */
+    @WithDefault("false")
+    boolean apply();
+
+    /**
+     * When {@code true}, labels the model suggests that do not yet exist in the repository are
+     * created before being applied. Off by default so the bot never invents labels.
+     */
+    @WithName("allow-create")
+    @WithDefault("false")
+    boolean allowCreate();
+
+    /** Upper bound on how many labels are applied or suggested for one PR. */
+    @WithName("max-labels")
+    @WithDefault("3")
+    int maxLabels();
   }
 
   interface DashboardConfig {

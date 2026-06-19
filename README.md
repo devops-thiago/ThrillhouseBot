@@ -188,6 +188,10 @@ variables are the ones you will change per provider:
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist) | _(empty)_ |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer maintainer replies to findings and `@thrillhousebot` mentions in PR threads with an AI reply | `true` |
+| `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
+| `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
+| `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |
+| `REVIEW_LABELS_MAX` | Maximum labels applied or suggested per PR | `3` |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth credentials for dashboard login | _(required for dashboard)_ |
 | `DASHBOARD_URL` | Public dashboard URL (OAuth callback base) | `http://localhost:8080` |
 | `DATASOURCE_DB_KIND` | `h2` or `postgresql` | `h2` (dev), `postgresql` (`%prod`) |
@@ -249,6 +253,26 @@ Place a `.github/thrillhousebot.md` file in any repo to customize the review:
 ```
 
 Fallback chain: `.github/thrillhousebot.md` → `.github/copilot-instructions.md` → `CLAUDE.md` → `AGENTS.md` → `AGENT.md`
+
+## PR labels
+
+ThrillhouseBot can suggest context-aware labels (area, change type, risk) drawn
+from the diff. The feature is **off by default**; turn it on with
+`REVIEW_LABELS_ENABLED=true`.
+
+When enabled, the model is shown the repository's existing labels and picks the
+few that best describe the PR — it only ever chooses from labels that already
+exist, so it respects whatever label scheme the repo already uses. What happens
+next depends on `REVIEW_LABELS_APPLY`:
+
+- `false` (default): the suggestions are posted as a one-line comment on the
+  first review, leaving the decision to a maintainer.
+- `true`: the labels are added to the PR automatically.
+
+Set `REVIEW_LABELS_ALLOW_CREATE=true` to let the bot create a suggested label
+that doesn't exist yet (off by default, so it never invents labels), and
+`REVIEW_LABELS_MAX` to cap how many labels it applies or suggests (default `3`).
+Labelling is best-effort — a failure here never blocks or fails the review.
 
 ## Observability
 

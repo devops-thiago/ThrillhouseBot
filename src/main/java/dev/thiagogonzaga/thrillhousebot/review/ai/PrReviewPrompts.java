@@ -147,6 +147,11 @@ public final class PrReviewPrompts {
               mismatches between what the author claims and what the code does (claimed changes
               that are missing, significant changes the description never mentions). Empty array
               when there is no description or no mismatch.
+            - suggested_labels: ONLY when an "Available Repository Labels" section is provided,
+              a JSON array of label names that best categorize this PR — area, change type, risk.
+              Follow that section's guidance on which labels you may use, pick the few most
+              relevant (typically 1-3), and emit an empty array if none clearly apply. Omit the
+              field entirely when no such section is present.
 
             If no issues found: return empty findings array and total_findings: 0.
 

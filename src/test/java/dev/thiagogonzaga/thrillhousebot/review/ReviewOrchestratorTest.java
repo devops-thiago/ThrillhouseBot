@@ -87,6 +87,8 @@ class ReviewOrchestratorTest {
 
   @Mock private FollowUpAnalyzer followUpAnalyzer;
 
+  @Mock private PrLabeler labeler;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   private ReviewDiffFormatter diffFormatter;
@@ -150,6 +152,7 @@ class ReviewOrchestratorTest {
         summaryGenerator,
         followUpAnalyzer,
         diffFormatter,
+        labeler,
         objectMapper);
   }
 
@@ -1178,6 +1181,68 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("Everything's coming up Thrillhouse")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void shouldForwardModelSuggestedLabelsToTheLabeler() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        // Return a real label so buildLabelGuidance produces a non-blank string — this exercises
+        // the labelGuidance.isBlank() = false branch in the orchestrator.
+        when(labeler.fetchExistingLabels(anyString(), anyString(), anyString()))
+            .thenReturn(List.of(new GitHubLabelClient.Label("bug", null, "ededed")));
+        // Non-null summary carrying suggested labels — exercises the orchestrator's label hand-off.
+        var summary =
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of("bug", "docs"));
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        var captor = ArgumentCaptor.forClass(PrLabeler.LabelRequest.class);
+        verify(labeler).applyOrSuggest(captor.capture());
+        assertEquals(List.of("bug", "docs"), captor.getValue().suggested());
+        assertTrue(captor.getValue().isFirstReview());
       }
     }
 
@@ -3967,6 +4032,27 @@ class ReviewOrchestratorTest {
               1,
               List.of(new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "s", "c", "d")));
       assertFalse(statusVal.statuses().isEmpty());
+    }
+  }
+
+  @Nested
+  class CombineSections {
+
+    @Test
+    void shouldReturnSecondWhenFirstIsBlank() {
+      assertEquals("b", ReviewOrchestrator.combineSections("", "b"));
+      assertEquals("b", ReviewOrchestrator.combineSections("  ", "b"));
+    }
+
+    @Test
+    void shouldReturnFirstWhenSecondIsBlank() {
+      assertEquals("a", ReviewOrchestrator.combineSections("a", ""));
+      assertEquals("a", ReviewOrchestrator.combineSections("a", "  "));
+    }
+
+    @Test
+    void shouldJoinBothWithBlankLineSeparator() {
+      assertEquals("a\n\nb", ReviewOrchestrator.combineSections("a", "b"));
     }
   }
 }

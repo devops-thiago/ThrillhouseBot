@@ -172,9 +172,9 @@ sequenceDiagram
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review | `WebhookController`, `WebhookVerifier`, `TriggerDetector` |
-| `review/` | Orchestrates a review: formats the diff, calls the AI layer, maps findings to a risk level and review state, writes the summary comment; also answers maintainer replies/mentions in PR threads | `ReviewOrchestrator`, `ReviewDispatcher`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `PrSummaryGenerator`, `MaintainerReplyService`, `MaintainerReplyDispatcher` |
+| `review/` | Orchestrates a review: formats the diff, calls the AI layer, maps findings to a risk level and review state, writes the summary comment, optionally labels the PR, and answers maintainer replies/mentions in PR threads | `ReviewOrchestrator`, `ReviewDispatcher`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher` |
 | `review/ai/` | The LangChain4j layer: streams the model response, parses it into findings, runs a second pass to verify them, and writes conversational replies | `PrReviewer`, `AiReviewService`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant` |
-| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `InstructionsResolver` |
+| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `InstructionsResolver` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster, and review session persistence | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository` |
 | `config/` | Wiring: the outbound HTTP client, the review thread pool, and typed config | `HttpClientProducer`, `ReviewExecutorProducer`, `ThrillhouseConfig` |
 | `frontend/` | The Next.js dashboard, built to a static export and served by Quarkus | — |

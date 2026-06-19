@@ -24,16 +24,9 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 @RegisterAiService
 public interface PrReviewer {
 
-  @SystemMessage(PrReviewPrompts.SYSTEM)
-  ReviewResponse review(
-      @UserMessage(PrReviewPrompts.USER) @V("diff") String diff,
-      @V("prContext") String prContext,
-      @V("baseComparison") String baseComparison,
-      @V("projectStack") String projectStack,
-      @V("relatedTests") String relatedTests,
-      @V("previousFindings") String previousFindings,
-      @V("repoInstructions") String repoInstructions);
-
+  // {{repoInstructions}} carries the orchestrator's pre-rendered trailing guidance: the available
+  // repository labels (when labelling is on) followed by any repo instructions file. Folding both
+  // into one template variable keeps this method within a sane parameter count.
   @SystemMessage(PrReviewPrompts.SYSTEM)
   TokenStream reviewStream(
       @UserMessage(PrReviewPrompts.USER) @V("diff") String diff,

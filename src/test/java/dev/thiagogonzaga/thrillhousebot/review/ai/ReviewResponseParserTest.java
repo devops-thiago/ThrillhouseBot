@@ -66,6 +66,25 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void shouldParseSuggestedLabelsFromSummary() {
+    var response =
+        parser.parse(
+            "{\"findings\":[],\"summary\":{\"total_findings\":0,"
+                + "\"suggested_labels\":[\"bug\",\"area/api\"]}}");
+
+    assertNotNull(response.summary());
+    assertEquals(java.util.List.of("bug", "area/api"), response.summary().suggestedLabels());
+  }
+
+  @Test
+  void shouldDefaultSuggestedLabelsToEmptyWhenAbsent() {
+    var response = parser.parse("{\"findings\":[],\"summary\":{\"total_findings\":0}}");
+
+    assertNotNull(response.summary());
+    assertTrue(response.summary().suggestedLabels().isEmpty());
+  }
+
+  @Test
   void shouldParseFindingConfidence() {
     var response =
         parser.parse(
