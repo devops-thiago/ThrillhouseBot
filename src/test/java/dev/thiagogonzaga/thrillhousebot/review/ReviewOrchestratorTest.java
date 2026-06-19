@@ -1185,6 +1185,64 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldForwardModelSuggestedLabelsToTheLabeler() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        // Non-null summary carrying suggested labels — exercises the orchestrator's label hand-off.
+        var summary =
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of("bug", "docs"));
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        var captor = ArgumentCaptor.forClass(PrLabeler.LabelRequest.class);
+        verify(labeler).applyOrSuggest(captor.capture());
+        assertEquals(List.of("bug", "docs"), captor.getValue().suggested());
+        assertTrue(captor.getValue().isFirstReview());
+      }
+    }
+
+    @Test
     void shouldPersistAiResponseJsonWhenUpdatingCompletedSession() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);

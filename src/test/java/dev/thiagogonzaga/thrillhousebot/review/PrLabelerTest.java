@@ -109,6 +109,24 @@ class PrLabelerTest {
           labeler.reconcile(java.util.Arrays.asList("bug", "", null), List.of(label("bug")));
       assertEquals(List.of("bug"), resolved);
     }
+
+    @Test
+    void shouldReturnEmptyForNoSuggestions() {
+      assertTrue(labeler.reconcile(List.of(), List.of(label("bug"))).isEmpty());
+      assertTrue(labeler.reconcile(null, List.of(label("bug"))).isEmpty());
+    }
+
+    @Test
+    void shouldDropEverythingWhenExistingIsNullAndCreateDisabled() {
+      assertTrue(labeler.reconcile(List.of("bug"), null).isEmpty());
+    }
+
+    @Test
+    void shouldIgnoreExistingLabelsWithBlankNames() {
+      var resolved =
+          labeler.reconcile(List.of("bug"), java.util.Arrays.asList(label(" "), label("bug")));
+      assertEquals(List.of("bug"), resolved);
+    }
   }
 
   @Nested
@@ -187,6 +205,19 @@ class PrLabelerTest {
       assertDoesNotThrow(
           () -> labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug")))));
     }
+
+    @Test
+    void shouldStillAddLabelsWhenCreatingAMissingLabelFails() {
+      when(labelsConfig.allowCreate()).thenReturn(true);
+      when(labelClient.createLabel(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenThrow(new RuntimeException("label already exists"));
+
+      labeler.applyOrSuggest(request(false, List.of("area/api"), List.of()));
+
+      // The create failure is swallowed; the add still goes through.
+      verify(labelClient)
+          .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
   }
 
   @Nested
@@ -217,6 +248,52 @@ class PrLabelerTest {
           .thenThrow(new RuntimeException("rate limited"));
       assertTrue(labeler.fetchExistingLabels("token", "octo", "repo").isEmpty());
     }
+
+    @Test
+    void shouldPaginateUntilAShortPage() {
+      var fullPage = new java.util.ArrayList<GitHubLabelClient.Label>();
+      for (int i = 0; i < 100; i++) {
+        fullPage.add(label("label-" + i));
+      }
+      when(labelClient.listLabels(
+              anyString(), anyString(), anyString(), anyString(), eq(100), eq(1)))
+          .thenReturn(fullPage);
+      when(labelClient.listLabels(
+              anyString(), anyString(), anyString(), anyString(), eq(100), eq(2)))
+          .thenReturn(List.of(label("last")));
+
+      var labels = labeler.fetchExistingLabels("token", "octo", "repo");
+
+      assertEquals(101, labels.size());
+      verify(labelClient, times(2))
+          .listLabels(anyString(), anyString(), anyString(), anyString(), eq(100), anyInt());
+    }
+
+    @Test
+    void shouldStopWhenAPageComesBackNull() {
+      when(labelClient.listLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+          .thenReturn(null);
+      assertTrue(labeler.fetchExistingLabels("token", "octo", "repo").isEmpty());
+    }
+
+    @Test
+    void shouldStopAtThePageCapWhenEveryPageIsFull() {
+      var fullPage = new java.util.ArrayList<GitHubLabelClient.Label>();
+      for (int i = 0; i < 100; i++) {
+        fullPage.add(label("label-" + i));
+      }
+      // Every page comes back full, so only the MAX_LABEL_PAGES guard can end the loop.
+      when(labelClient.listLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+          .thenReturn(fullPage);
+
+      var labels = labeler.fetchExistingLabels("token", "octo", "repo");
+
+      assertEquals(100 * PrLabeler.MAX_LABEL_PAGES, labels.size());
+      verify(labelClient, times(PrLabeler.MAX_LABEL_PAGES))
+          .listLabels(anyString(), anyString(), anyString(), anyString(), eq(100), anyInt());
+    }
   }
 
   @Nested
@@ -234,6 +311,15 @@ class PrLabelerTest {
           PrLabeler.formatAvailableLabels(
               List.of(label("bug", "Something is broken"), label("docs")));
       assertEquals("- bug: Something is broken\n- docs\n", rendered);
+    }
+
+    @Test
+    void shouldSkipBlankNamesAndBlankDescriptions() {
+      var rendered =
+          PrLabeler.formatAvailableLabels(
+              java.util.Arrays.asList(label(" "), label("docs", "  "), label("bug", "broken")));
+      // Blank-named label is skipped; the blank description is dropped, the real one kept.
+      assertEquals("- docs\n- bug: broken\n", rendered);
     }
   }
 }
