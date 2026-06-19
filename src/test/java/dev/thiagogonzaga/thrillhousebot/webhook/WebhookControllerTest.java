@@ -581,7 +581,8 @@ class WebhookControllerTest {
   @Test
   void shouldDispatchReplyForBotMentionOnPrComment() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot is this thread-safe?")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot is this thread-safe?"))
+        .thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot is this thread-safe?"))
         .thenReturn(true);
@@ -620,7 +621,7 @@ class WebhookControllerTest {
   void shouldNotDispatchReplyForMentionWhenRepliesDisabled() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot hi")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
 
     var body =
@@ -896,7 +897,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreMentionWithMissingInstallation() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot hi")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot hi")).thenReturn(true);
 
@@ -920,7 +921,7 @@ class WebhookControllerTest {
   @Test
   void shouldIgnoreMentionWithMissingRepository() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.detectCommand("@thrillhousebot hi")).thenReturn(CommentCommand.NONE);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot hi")).thenReturn(true);
 

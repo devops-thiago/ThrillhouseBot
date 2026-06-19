@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
@@ -40,7 +41,7 @@ public class WebhookController {
   private final TriggerDetector triggerDetector;
   private final ReviewTriggerFilter triggerFilter;
   private final ReviewDispatcher reviewDispatcher;
-  private final MaintainerReplyService.ReplyDispatcher replyDispatcher;
+  private final MaintainerReplyDispatcher replyDispatcher;
   private final WebhookDeduplicator deduplicator;
   private final ManualReviewAuthorizer manualReviewAuthorizer;
   private final CommentCommandService commentCommandService;
@@ -54,7 +55,7 @@ public class WebhookController {
       TriggerDetector triggerDetector,
       ReviewTriggerFilter triggerFilter,
       ReviewDispatcher reviewDispatcher,
-      MaintainerReplyService.ReplyDispatcher replyDispatcher,
+      MaintainerReplyDispatcher replyDispatcher,
       WebhookDeduplicator deduplicator,
       ManualReviewAuthorizer manualReviewAuthorizer,
       CommentCommandService commentCommandService,
