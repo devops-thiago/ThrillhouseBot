@@ -755,6 +755,79 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldIgnoreReviewCommentWithMissingRepository() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    // pull_request present but repository missing — exercises the second operand of the guard.
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"comment\":{\"id\":1,\"body\":\"reply\",\"author_association\":\"OWNER\",\"in_reply_to_id\":99,\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
+                + "\"repository\":null,"
+                + "\"installation\":{\"id\":12345}"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreReviewCommentWithMissingInstallation() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    // pull_request and repository present, but installation missing — exercises the third
+    // operand of the compound guard.
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"comment\":{\"id\":1,\"body\":\"reply\",\"author_association\":\"OWNER\",\"in_reply_to_id\":99,\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"installation\":null"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldIgnoreMentionWithMissingInstallation() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot hi")).thenReturn(true);
+
+    // repository present but installation missing — exercises the mention guard's second operand.
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"issue\":{\"number\":5,\"title\":\"T\",\"body\":\"d\",\"pull_request\":{\"url\":\"u\"}},"
+                + "\"comment\":{\"id\":1,\"body\":\"@thrillhousebot hi\",\"author_association\":\"OWNER\",\"user\":{\"login\":\"octocat\",\"id\":1}},"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"installation\":null"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
   void shouldIgnoreMentionWithMissingRepository() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isReviewTrigger("@thrillhousebot hi")).thenReturn(false);

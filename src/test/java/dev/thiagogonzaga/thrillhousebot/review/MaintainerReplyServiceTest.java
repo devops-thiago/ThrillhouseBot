@@ -334,4 +334,54 @@ class MaintainerReplyServiceTest {
     assertEquals("Answer.", body.getValue().body());
     verify(diffFormatter, never()).buildDiffString(any()); // never reached — fetch threw first
   }
+
+  @Test
+  void postFailureIsSwallowedByOuterHandler() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("answer");
+    doThrow(new RuntimeException("GitHub 422"))
+        .when(reviewClient)
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+
+    // The post itself blowing up must be swallowed by handle()'s outer guard.
+    assertDoesNotThrow(() -> service.handle(reviewThreadTask(false)));
+  }
+
+  @Test
+  void mentionWithBlankReplyPostsNothing() {
+    authorize();
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of());
+    when(diffFormatter.buildDiffString(any())).thenReturn("diff");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("");
+
+    service.handle(mentionTask());
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void botThreadReplyWithNullDiffHunkSendsEmptyCodeContext() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+    var task =
+        new MaintainerReplyService.ReplyTask(
+            "owner", "repo", 42, 12345L, "octocat", "OWNER", "why?", "t", "b", true, 99L, 1000L,
+            false, null);
+
+    service.handle(task);
+
+    var codeContext = ArgumentCaptor.forClass(String.class);
+    verify(replyAssistant).reply(any(), any(), any(), codeContext.capture(), any());
+    assertTrue(codeContext.getValue().isEmpty(), "null diff hunk yields empty code context");
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
 }
