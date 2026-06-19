@@ -207,16 +207,33 @@ class PrLabelerTest {
     }
 
     @Test
-    void shouldStillAddLabelsWhenCreatingAMissingLabelFails() {
+    void shouldNotCallAddLabelsWhenEveryCreationFails() {
       when(labelsConfig.allowCreate()).thenReturn(true);
       when(labelClient.createLabel(anyString(), anyString(), anyString(), anyString(), any()))
-          .thenThrow(new RuntimeException("label already exists"));
+          .thenThrow(new RuntimeException("rate limited"));
 
       labeler.applyOrSuggest(request(false, List.of("area/api"), List.of()));
 
-      // The create failure is swallowed; the add still goes through.
-      verify(labelClient)
+      // The only label could not be created, so there is nothing GitHub would accept.
+      verify(labelClient, never())
           .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldApplyOnlyTheLabelsThatExistOrWereCreated() {
+      when(labelsConfig.allowCreate()).thenReturn(true);
+      when(labelClient.createLabel(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenThrow(new RuntimeException("boom"));
+
+      // "bug" already exists; creating "area/api" fails — only "bug" may be applied, so the
+      // failed name never reaches addLabels (which would 422 the whole request).
+      labeler.applyOrSuggest(request(false, List.of("bug", "area/api"), List.of(label("bug"))));
+
+      var captor = ArgumentCaptor.forClass(GitHubLabelClient.AddLabelsRequest.class);
+      verify(labelClient)
+          .addLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      assertEquals(List.of("bug"), captor.getValue().labels());
     }
   }
 
@@ -301,25 +318,44 @@ class PrLabelerTest {
 
     @Test
     void shouldReturnEmptyForNoLabels() {
-      assertEquals("", PrLabeler.formatAvailableLabels(List.of()));
-      assertEquals("", PrLabeler.formatAvailableLabels(null));
+      assertEquals("", PrLabeler.formatAvailableLabels(List.of(), false));
+      assertEquals("", PrLabeler.formatAvailableLabels(null, false));
     }
 
     @Test
-    void shouldRenderNameAndDescription() {
+    void shouldReturnEmptyWhenEveryLabelNameIsBlank() {
+      assertEquals(
+          "",
+          PrLabeler.formatAvailableLabels(java.util.Arrays.asList(label(null), label(" ")), true));
+    }
+
+    @Test
+    void shouldRenderLabelsAndRestrictWhenCreateDisabled() {
       var rendered =
           PrLabeler.formatAvailableLabels(
-              List.of(label("bug", "Something is broken"), label("docs")));
-      assertEquals("- bug: Something is broken\n- docs\n", rendered);
+              List.of(label("bug", "Something is broken"), label("docs")), false);
+      assertEquals(
+          "- bug: Something is broken\n- docs\n"
+              + "Choose only labels from the list above — do not invent new ones.\n",
+          rendered);
+    }
+
+    @Test
+    void shouldInviteNewLabelsWhenCreateEnabled() {
+      var rendered = PrLabeler.formatAvailableLabels(List.of(label("bug")), true);
+      assertTrue(rendered.startsWith("- bug\n"));
+      assertTrue(rendered.contains("you may propose a short, lower-case, hyphenated new label"));
     }
 
     @Test
     void shouldSkipBlankNamesAndBlankDescriptions() {
       var rendered =
           PrLabeler.formatAvailableLabels(
-              java.util.Arrays.asList(label(" "), label("docs", "  "), label("bug", "broken")));
-      // Blank-named label is skipped; the blank description is dropped, the real one kept.
-      assertEquals("- docs\n- bug: broken\n", rendered);
+              java.util.Arrays.asList(
+                  label(null), label(" "), label("docs", "  "), label("bug", "broken")),
+              false);
+      // Null- and blank-named labels are skipped; blank description dropped, the real one kept.
+      assertTrue(rendered.startsWith("- docs\n- bug: broken\n"));
     }
   }
 }

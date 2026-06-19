@@ -272,7 +272,8 @@ public class ReviewOrchestrator {
                   diffFormatter.buildRelatedTests(diffFormatter.reviewableFiles(files))),
               PromptTemplateEscaper.escape(previousFindings),
               buildInstructionsSection(instructions),
-              PromptTemplateEscaper.escape(PrLabeler.formatAvailableLabels(repoLabels)));
+              PromptTemplateEscaper.escape(
+                  PrLabeler.formatAvailableLabels(repoLabels, labeler.allowNewLabels())));
       // Quote validation runs before dedupe so a merged finding can never inherit a phantom
       // quote from one duplicate while a verbatim sibling gets discarded
       var aiResponse = aiReviewService.review(session, promptInputs);

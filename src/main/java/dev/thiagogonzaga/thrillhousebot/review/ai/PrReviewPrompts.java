@@ -148,10 +148,10 @@ public final class PrReviewPrompts {
               that are missing, significant changes the description never mentions). Empty array
               when there is no description or no mismatch.
             - suggested_labels: ONLY when an "Available Repository Labels" section is provided,
-              a JSON array of the label names from that list (exact text) that best categorize
-              this PR — area, change type, risk. Pick only the few most relevant (typically 1-3),
-              choose nothing outside the list, and emit an empty array if none clearly apply.
-              Omit the field entirely when no such section is present.
+              a JSON array of label names that best categorize this PR — area, change type, risk.
+              Follow that section's guidance on which labels you may use, pick the few most
+              relevant (typically 1-3), and emit an empty array if none clearly apply. Omit the
+              field entirely when no such section is present.
 
             If no issues found: return empty findings array and total_findings: 0.
 
@@ -207,8 +207,9 @@ public final class PrReviewPrompts {
             {{#if availableLabels}}
             ## Available Repository Labels
             These labels already exist in the repository. Pick the ones that best describe this PR
-            and return them, by their exact name, in summary.suggested_labels. Choose only labels
-            from this list — do not invent new ones — and prefer the few most relevant.
+            (area, change type, risk) and return them, by their exact name, in
+            summary.suggested_labels; prefer the few most relevant (typically 1-3). Follow the
+            closing instruction below on whether you may propose a label that is not listed.
             {{availableLabels}}
             {{/if}}
 

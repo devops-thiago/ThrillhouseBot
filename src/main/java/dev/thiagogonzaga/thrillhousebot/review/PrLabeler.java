@@ -68,6 +68,11 @@ public class PrLabeler {
     return config.review().labels().enabled();
   }
 
+  /** Whether the model may propose labels that don't exist yet (the allow-create path). */
+  public boolean allowNewLabels() {
+    return config.review().labels().allowCreate();
+  }
+
   /**
    * Fetches every label defined on the repository, paginating up to {@link #MAX_LABEL_PAGES}.
    * Returns an empty list when the feature is disabled or the lookup fails — labelling then simply
@@ -97,14 +102,18 @@ public class PrLabeler {
   }
 
   /**
-   * Renders the repo's labels as a prompt section ({@code - name: description} lines) the model
-   * chooses from. Empty string when there are none, which suppresses the prompt section entirely.
+   * Renders the repo's labels as a prompt section ({@code - name: description} lines) followed by a
+   * closing instruction whose wording depends on {@code allowNewLabels}: restrict the model to the
+   * listed labels, or let it propose a new one. Empty string when there are no usable labels, which
+   * suppresses the prompt section entirely.
    */
-  public static String formatAvailableLabels(List<GitHubLabelClient.Label> labels) {
+  public static String formatAvailableLabels(
+      List<GitHubLabelClient.Label> labels, boolean allowNewLabels) {
     if (labels == null || labels.isEmpty()) {
       return "";
     }
     var sb = new StringBuilder();
+    var rendered = 0;
     for (var label : labels) {
       if (label.name() == null || label.name().isBlank()) {
         continue;
@@ -114,7 +123,16 @@ public class PrLabeler {
         sb.append(": ").append(label.description().strip());
       }
       sb.append('\n');
+      rendered++;
     }
+    if (rendered == 0) {
+      return "";
+    }
+    sb.append(
+        allowNewLabels
+            ? "If none of these fit well, you may propose a short, lower-case, hyphenated new "
+                + "label name (for example \"area/api\"); keep new labels to a minimum.\n"
+            : "Choose only labels from the list above — do not invent new ones.\n");
     return sb.toString();
   }
 
@@ -210,8 +228,12 @@ public class PrLabeler {
   }
 
   private void applyLabels(LabelRequest request, List<String> resolved) {
-    if (config.review().labels().allowCreate()) {
-      ensureLabelsExist(request, resolved);
+    // In allow-create mode, drop any label whose creation failed — GitHub 422s the whole
+    // add-labels request if a single name doesn't exist, which would apply nothing at all.
+    List<String> applicable =
+        config.review().labels().allowCreate() ? ensureLabelsExist(request, resolved) : resolved;
+    if (applicable.isEmpty()) {
+      return;
     }
     labelClient.addLabels(
         request.auth(),
@@ -219,22 +241,28 @@ public class PrLabeler {
         request.owner(),
         request.repo(),
         request.prNumber(),
-        new GitHubLabelClient.AddLabelsRequest(resolved));
+        new GitHubLabelClient.AddLabelsRequest(applicable));
     Log.infof(
         "Applied %d label(s) to %s/%s #%d: %s",
-        resolved.size(), request.owner(), request.repo(), request.prNumber(), resolved);
+        applicable.size(), request.owner(), request.repo(), request.prNumber(), applicable);
   }
 
-  /** Creates any reconciled label that is not already defined in the repo (allow-create path). */
-  private void ensureLabelsExist(LabelRequest request, List<String> resolved) {
+  /**
+   * Creates any reconciled label that is not already defined in the repo (allow-create path) and
+   * returns the labels safe to apply: those that already existed plus those just created. A label
+   * whose creation fails is dropped so it cannot 422 the subsequent add-labels call.
+   */
+  private List<String> ensureLabelsExist(LabelRequest request, List<String> resolved) {
+    // request.existing() is never null — the record's constructor normalizes it.
     Set<String> existingNames =
-        (request.existing() == null ? List.<GitHubLabelClient.Label>of() : request.existing())
-            .stream()
-                .filter(label -> label.name() != null)
-                .map(label -> label.name().strip().toLowerCase(Locale.ROOT))
-                .collect(Collectors.toSet());
+        request.existing().stream()
+            .filter(label -> label.name() != null)
+            .map(label -> label.name().strip().toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+    var applicable = new ArrayList<String>();
     for (var name : resolved) {
       if (existingNames.contains(name.toLowerCase(Locale.ROOT))) {
+        applicable.add(name);
         continue;
       }
       try {
@@ -245,11 +273,13 @@ public class PrLabeler {
             request.repo(),
             new GitHubLabelClient.CreateLabelRequest(
                 name, DEFAULT_NEW_LABEL_COLOR, CREATED_LABEL_DESCRIPTION));
+        applicable.add(name);
         Log.infof("Created repository label '%s' on %s/%s", name, request.owner(), request.repo());
       } catch (RuntimeException e) {
-        Log.debugf(e, "Could not create label '%s' (it may already exist)", name);
+        Log.debugf(e, "Could not create label '%s'; skipping it", name);
       }
     }
+    return applicable;
   }
 
   private void suggestLabels(LabelRequest request, List<String> resolved) {
