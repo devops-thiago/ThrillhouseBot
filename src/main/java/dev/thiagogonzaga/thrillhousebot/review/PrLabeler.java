@@ -308,7 +308,7 @@ public class PrLabeler {
               request.prNumber(),
               LABELS_PER_PAGE,
               1);
-      if (labels == null || labels.isEmpty()) {
+      if (labels == null) {
         return Set.of();
       }
       var keys = new HashSet<String>();
