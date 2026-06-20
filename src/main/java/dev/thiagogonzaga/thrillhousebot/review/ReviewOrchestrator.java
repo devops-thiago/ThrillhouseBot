@@ -35,6 +35,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1170,22 +1171,86 @@ public class ReviewOrchestrator {
   }
 
   /**
-   * Resolves the required status-check contexts for the PR's target branch, returning {@code null}
-   * (gate on all checks) when the branch is unprotected or the lookup fails.
+   * Resolves the required status-check contexts for the PR's target branch. The contexts come from
+   * two GitHub mechanisms, unioned: repository/organization <em>rulesets</em> (modern; needs only
+   * read access) and <em>classic branch protection</em> (legacy; needs admin). Returns an empty
+   * {@link Optional} — which the caller maps to {@code null}, gating on every check — only when
+   * neither mechanism governs the branch or both lookups fail.
    */
   private Optional<List<String>> resolveRequiredContexts(String auth, ReviewRequest req) {
+    String branch;
     try {
       var prDetails =
           prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
       if (prDetails == null || prDetails.base() == null || prDetails.base().ref() == null) {
         return Optional.empty();
       }
+      branch = prDetails.base().ref();
+    } catch (Exception e) {
+      Log.warnf(e, "Could not resolve target branch; gating CI on all checks");
+      return Optional.empty();
+    }
+
+    var contexts = new LinkedHashSet<String>();
+    boolean resolved = false;
+    var fromRulesets = requiredContextsFromRulesets(auth, req, branch);
+    if (fromRulesets.isPresent()) {
+      resolved = true;
+      contexts.addAll(fromRulesets.get());
+    }
+    var fromClassic = requiredContextsFromClassicProtection(auth, req, branch);
+    if (fromClassic.isPresent()) {
+      resolved = true;
+      contexts.addAll(fromClassic.get());
+    }
+
+    return resolved ? Optional.of(List.copyOf(contexts)) : Optional.empty();
+  }
+
+  /**
+   * Required contexts declared by rulesets governing {@code branch}. An empty {@link Optional}
+   * means no ruleset applies (or the lookup failed); a present-but-empty list means a ruleset
+   * applies but mandates no status checks.
+   */
+  private Optional<List<String>> requiredContextsFromRulesets(
+      String auth, ReviewRequest req, String branch) {
+    try {
+      var rules = checkRunClient.getBranchRules(auth, ACCEPT, req.owner(), req.repo(), branch);
+      if (rules == null || rules.isEmpty()) {
+        return Optional.empty();
+      }
+      var contexts = new ArrayList<String>();
+      for (var rule : rules) {
+        if (rule.isRequiredStatusChecks() && rule.parameters() != null) {
+          for (var check : rule.parameters().requiredStatusChecks()) {
+            if (check.context() != null) {
+              contexts.add(check.context());
+            }
+          }
+        }
+      }
+      return Optional.of(contexts);
+    } catch (Exception e) {
+      Log.warnf(
+          e, "Could not fetch branch rules (rulesets) for %s; trying classic protection", branch);
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Required contexts declared by classic branch protection. An empty {@link Optional} means the
+   * branch is not protected this way — expected, not an error, for ruleset-only repositories — or
+   * the lookup failed.
+   */
+  private Optional<List<String>> requiredContextsFromClassicProtection(
+      String auth, ReviewRequest req, String branch) {
+    try {
       var protection =
-          checkRunClient.getRequiredStatusChecks(
-              auth, ACCEPT, req.owner(), req.repo(), prDetails.base().ref());
+          checkRunClient.getRequiredStatusChecks(auth, ACCEPT, req.owner(), req.repo(), branch);
       return protection == null ? Optional.empty() : Optional.of(protection.contexts());
     } catch (Exception e) {
-      Log.warnf(e, "Could not fetch required status checks for branch, falling back to all checks");
+      // A 404 here is normal when the repo uses rulesets instead of classic branch protection.
+      Log.debugf(e, "No classic branch protection for %s", branch);
       return Optional.empty();
     }
   }

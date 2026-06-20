@@ -3993,6 +3993,103 @@ class ReviewOrchestratorTest {
                 argThat(req -> "APPROVE".equals(req.event())));
       }
     }
+
+    @Test
+    void reviewShouldGateOnRulesetRequiredChecksWhenClassicProtectionIs404() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        // Repo uses rulesets, not classic protection: the classic endpoint 404s. The ruleset marks
+        // only "build" as required, so the failing-but-unrequired "flaky" check must be ignored and
+        // APPROVE must stand. (Were we falling back to gating on ALL checks, "flaky" would block
+        // it.)
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                2,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null),
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        2L, "flaky", "completed", "failure", null))));
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenThrow(new RuntimeException("Not Found, status code 404"));
+        when(checkRunClient.getBranchRules(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq("main")))
+            .thenReturn(requiredStatusCheckRuleset("build"));
+
+        orchestrator.review(request());
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+      }
+    }
+
+    @Test
+    void reviewShouldDowngradeWhenRulesetRequiresAMissingCheck() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        // The ruleset requires "integration", which never reported on the head SHA — it is
+        // therefore
+        // pending, so a would-be APPROVE must downgrade to neutral.
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenThrow(new RuntimeException("Not Found, status code 404"));
+        when(checkRunClient.getBranchRules(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq("main")))
+            .thenReturn(requiredStatusCheckRuleset("integration"));
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+            .thenReturn("## Summary\nRequired check **integration** has not reported yet.");
+
+        orchestrator.review(request());
+
+        var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(), anyString(), anyString(), anyString(), anyLong(), captor.capture());
+        assertEquals("neutral", captor.getValue().conclusion());
+      }
+    }
+
+    private List<GitHubCheckRunClient.BranchRule> requiredStatusCheckRuleset(String... contexts) {
+      var checks =
+          new java.util.ArrayList<GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck>();
+      for (String context : contexts) {
+        checks.add(new GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck(context, null));
+      }
+      return List.of(
+          // A non-status-check rule (pull_request) is included to prove it is skipped.
+          new GitHubCheckRunClient.BranchRule("pull_request", null),
+          new GitHubCheckRunClient.BranchRule(
+              "required_status_checks", new GitHubCheckRunClient.BranchRule.Parameters(checks)));
+    }
   }
 
   @Nested
