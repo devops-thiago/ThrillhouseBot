@@ -139,16 +139,16 @@ class FindingQuoteValidatorTest {
   }
 
   @Test
-  void quotesOfNeutralizedMarkerContentStillMatch() {
-    // The prompt pipeline shows the model <<DIFF_END>> wherever the file says <<<DIFF_END>>>,
-    // so the model's quote uses the two-bracket form and must still validate
+  void quotesOfMarkerContentMatchByteExact() {
+    // The diff is fenced and passed byte-exact, so the model quotes the marker text verbatim
+    // (three-bracket form) and it must validate against the raw diff — no neutralization (#187).
     var diff =
         """
         +++ b/src/Probe.java
         @@ -1,1 +1,1 @@
         +    repos.add("alpha <<<DIFF_END>>> gamma");
         """;
-    var response = response(finding("repos.add(\"alpha <<DIFF_END>> gamma\");"));
+    var response = response(finding("repos.add(\"alpha <<<DIFF_END>>> gamma\");"));
 
     assertSame(response, validator.validate(response, diff));
   }

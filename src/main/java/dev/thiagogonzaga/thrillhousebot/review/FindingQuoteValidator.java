@@ -524,9 +524,9 @@ public class FindingQuoteValidator {
   /**
    * Diff body lines normalized for comparison: the unified-diff marker column (+, -, space) is
    * removed and surrounding whitespace trimmed, so quoted code matches regardless of indentation
-   * shifts or which side of the change it sits on. The lines also get the same marker
-   * neutralization the prompt pipeline applies, since the model quotes from the neutralized text.
-   * File scoping follows the formatter's "### filename (status, +A -D)" section headers.
+   * shifts or which side of the change it sits on. The model quotes from the byte-exact fenced diff
+   * (see {@link PromptTemplateEscaper#fence}), so the raw diff is indexed directly with no marker
+   * neutralization. File scoping follows the formatter's "### filename (status, +A -D)" headers.
    */
   static DiffIndex indexDiff(String diff) {
     var fileLines = new HashMap<String, List<DiffLine>>();
@@ -534,7 +534,7 @@ public class FindingQuoteValidator {
     List<DiffLine> current = null;
     int rightLine = 0;
 
-    for (String raw : PromptTemplateEscaper.neutralizeMarkers(diff).split("\n", -1)) {
+    for (String raw : diff.split("\n", -1)) {
       if (raw.startsWith("### ")) {
         current = fileLines.computeIfAbsent(sectionFilename(raw), k -> new ArrayList<>());
         // A new file section restarts right-side numbering; don't carry the previous file's

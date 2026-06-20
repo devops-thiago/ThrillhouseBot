@@ -271,7 +271,10 @@ public class ReviewOrchestrator {
       // model's suggestions in the prompt and are reused to reconcile its output afterwards.
       var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
 
-      String escapedDiff = PromptTemplateEscaper.escape(diff);
+      // The diff carries the code under review, so it is enclosed in a per-review random fence and
+      // passed byte-exact (no marker rewriting that would corrupt marker-handling code, #187). The
+      // smaller prose slots keep the lightweight marker neutralization as defense-in-depth.
+      String fencedDiff = PromptTemplateEscaper.fence(diff);
       String escapedStack = PromptTemplateEscaper.escape(resolveProjectStack(req));
       // The label guidance and the repo-instructions file share the prompt's trailing
       // {{repoInstructions}} slot; the label section is escaped (it carries repo label names),
@@ -283,7 +286,7 @@ public class ReviewOrchestrator {
               buildInstructionsSection(instructions));
       var promptInputs =
           new AiReviewService.PromptInputs(
-              escapedDiff,
+              fencedDiff,
               PromptTemplateEscaper.escape(buildPrContext(req.prTitle(), req.prDescription())),
               PromptTemplateEscaper.escape(baseComparison),
               escapedStack,
@@ -298,10 +301,7 @@ public class ReviewOrchestrator {
       aiResponse = deduplicator.dedupe(aiResponse);
       aiResponse =
           findingVerificationService.verify(
-              aiResponse,
-              escapedDiff,
-              escapedStack,
-              PromptTemplateEscaper.escape(previousFindings));
+              aiResponse, fencedDiff, escapedStack, PromptTemplateEscaper.escape(previousFindings));
       aiResponse =
           followUpAnalyzer.dropRepliedDuplicates(
               aiResponse, priorAiResponseJsons, inlineComments, BOT_LOGIN);

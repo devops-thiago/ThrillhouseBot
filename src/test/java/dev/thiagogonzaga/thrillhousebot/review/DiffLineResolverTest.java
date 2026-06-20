@@ -314,15 +314,15 @@ class DiffLineResolverTest {
              }
             """,
             "return null;"),
-        // suggestion_old is quoted from the neutralized diff (<<DIFF_START>>), but the raw GitHub
-        // patch still carries the triple-bracket sentinel; the patch side must be neutralized too.
+        // suggestion_old is quoted from the byte-exact fenced diff, so the triple-bracket sentinel
+        // is matched verbatim against the raw patch — no neutralization (#187).
         arguments(
-            "diff markers are neutralized before matching",
+            "diff markers match byte-exact",
             """
             @@ -1,0 +1,1 @@
             +String s = "<<<DIFF_START>>>";
             """,
-            "String s = \"<<DIFF_START>>\";"),
+            "String s = \"<<<DIFF_START>>>\";"),
         // Blank lines in the anchor must not be required against the right-side text.
         arguments(
             "blank anchor lines are ignored",
