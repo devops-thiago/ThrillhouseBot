@@ -526,6 +526,19 @@ class PrSummaryGeneratorTest {
     assertFalse(summary.contains("Control-Flow Diagram"));
   }
 
+  @Test
+  void shouldDropDiagramThatIsOnlyAFenceTag() {
+    // An empty ```mermaid fence collapses to a bare "mermaid" tag with nothing after it; stripping
+    // the tag leaves an empty string, which must be dropped rather than rendered.
+    var aiSummary = summaryWithDiagram("```mermaid```");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+  }
+
   private static ReviewResponse.Summary summaryWithDiagram(String diagram) {
     return new ReviewResponse.Summary(
         0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(), diagram);
