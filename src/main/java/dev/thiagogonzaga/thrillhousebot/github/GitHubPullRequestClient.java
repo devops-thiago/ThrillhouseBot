@@ -18,11 +18,19 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import java.util.ArrayList;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 @RegisterRestClient(configKey = "github-api")
 public interface GitHubPullRequestClient {
+
+  // GitHub serves 30 PR files per page by default; request the 100 max and walk a bounded number of
+  // pages so a large PR's diff is not silently truncated. GitHub caps PR file listings at 3000
+  // files (≈ 30 pages of 100).
+  int FILES_PER_PAGE = 100;
+  int MAX_FILE_PAGES = 30;
+
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}")
   @Produces(MediaType.APPLICATION_JSON)
@@ -36,12 +44,34 @@ public interface GitHubPullRequestClient {
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/files")
   @Produces(MediaType.APPLICATION_JSON)
-  List<FileDiff> getPullRequestFiles(
+  List<FileDiff> getPullRequestFilesPage(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
-      @PathParam("pullNumber") int pullNumber);
+      @PathParam("pullNumber") int pullNumber,
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
+
+  /**
+   * Every changed file in the PR, walking pages of {@value #FILES_PER_PAGE} up to {@value
+   * #MAX_FILE_PAGES} pages. Without pagination GitHub returns only the first 30 files, silently
+   * truncating the diff (and therefore the review) for larger PRs (#190).
+   */
+  default List<FileDiff> getPullRequestFiles(
+      String auth, String accept, String owner, String repo, int pullNumber) {
+    var all = new ArrayList<FileDiff>();
+    List<FileDiff> batch;
+    int page = 1;
+    do {
+      batch = getPullRequestFilesPage(auth, accept, owner, repo, pullNumber, FILES_PER_PAGE, page);
+      if (batch != null) {
+        all.addAll(batch);
+      }
+      page++;
+    } while (batch != null && batch.size() == FILES_PER_PAGE && page <= MAX_FILE_PAGES);
+    return all;
+  }
 
   @GET
   @Path("/repos/{owner}/{repo}/compare/{base}...{head}")
