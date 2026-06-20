@@ -170,6 +170,13 @@ public final class PrReviewPrompts {
               mismatches between what the author claims and what the code does (claimed changes
               that are missing, significant changes the description never mentions). Empty array
               when there is no description or no mismatch.
+            - file_summaries: an array of {path, summary} objects, one per changed file, that gives
+              reviewers a file-by-file walkthrough. "path" must match the file path exactly as it
+              appears in the diff; "summary" is a single line (max ~100 chars) describing what
+              changed in that file and why, derived from the diff — not the file name. Cover the
+              most significant files first and cap the array at 15 entries; for a larger PR,
+              summarize the 15 most impactful files and omit purely mechanical ones (generated
+              code, lockfiles, bulk renames). Empty array when nothing is worth calling out.
             - suggested_labels: ONLY when an "Available Repository Labels" section is provided,
               a JSON array of label names that best categorize this PR — area, change type, risk.
               Follow that section's guidance on which labels you may use, pick the few most
