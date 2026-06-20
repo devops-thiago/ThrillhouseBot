@@ -142,4 +142,67 @@ class PrDescriptionGeneratorTest {
     assertTrue(diffArg.getValue().startsWith("{|"));
     assertFalse(diffArg.getValue().contains("<<<DIFF_END>>>"));
   }
+
+  @Test
+  void returnsNullWhenDiffFetchFails() {
+    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenThrow(new RuntimeException("boom"));
+
+    // A failed diff fetch degrades to no suggestion, not a crash.
+    assertNull(generate());
+    verifyNoInteractions(describeAssistant);
+  }
+
+  @Test
+  void returnsNullWhenDiffIsBlank() {
+    diffReturns("   ");
+
+    assertNull(generate());
+    verifyNoInteractions(describeAssistant);
+  }
+
+  @Test
+  void returnsNullWhenAssistantReturnsNull() {
+    diffReturns("## Overview\ndiff");
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    when(describeAssistant.describe(any(), any(), any(), any())).thenReturn(null);
+
+    assertNull(generate());
+  }
+
+  @Test
+  void treatsNullTitleAndBodyAsEmptyContext() {
+    diffReturns("## Overview\ndiff");
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails(null, null, null, null));
+    when(describeAssistant.describe(any(), any(), any(), any())).thenReturn("ok");
+
+    generate();
+
+    var title = ArgumentCaptor.forClass(String.class);
+    var desc = ArgumentCaptor.forClass(String.class);
+    verify(describeAssistant).describe(any(), title.capture(), desc.capture(), any());
+    // A PR with no title/body yet degrades to empty context rather than passing "null" through.
+    assertEquals("", title.getValue());
+    assertEquals("", desc.getValue());
+  }
+
+  @Test
+  void stillDescribesWhenInstructionsResolutionFails() {
+    diffReturns("## Overview\ndiff");
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenThrow(new RuntimeException("github down"));
+    when(describeAssistant.describe(any(), any(), any(), any())).thenReturn("ok");
+
+    String body = generate();
+
+    assertNotNull(body);
+    var instructions = ArgumentCaptor.forClass(String.class);
+    verify(describeAssistant).describe(any(), any(), any(), instructions.capture());
+    // A failed instructions lookup degrades to no instructions, not a crash. escape("") -> "".
+    assertEquals("", instructions.getValue());
+  }
 }
