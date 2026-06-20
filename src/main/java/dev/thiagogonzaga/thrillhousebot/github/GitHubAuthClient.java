@@ -71,7 +71,10 @@ public class GitHubAuthClient {
       // the same way as its Date-based builder methods — this keeps java.util.Date out
       var claims =
           new JWTClaimsSet.Builder()
-              .issuer(config.github().appId())
+              // Strip surrounding whitespace to match StartupConfigValidator, which accepts a
+              // padded-but-numeric app id; without this an id that passes boot validation would
+              // still yield an "iss" GitHub rejects on the first call.
+              .issuer(config.github().appId().strip())
               .claim("iat", now.getEpochSecond())
               .claim("exp", now.plus(10, ChronoUnit.MINUTES).getEpochSecond())
               .build();
