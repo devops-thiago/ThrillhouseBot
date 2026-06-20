@@ -27,9 +27,13 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 @RegisterAiService
 public interface ReplyAssistant {
 
+  // @UserMessage MUST stay on the method, not on a parameter: on a parameter quarkus-langchain4j
+  // uses that parameter's raw value as the whole user message and never renders this template, so
+  // every other @V (prContext, finding, codeContext, thread) is silently dropped.
   @SystemMessage(ReplyAssistantPrompts.SYSTEM)
+  @UserMessage(ReplyAssistantPrompts.USER)
   String reply(
-      @UserMessage(ReplyAssistantPrompts.USER) @V("question") String question,
+      @V("question") String question,
       @V("prContext") String prContext,
       @V("finding") String finding,
       @V("codeContext") String codeContext,
