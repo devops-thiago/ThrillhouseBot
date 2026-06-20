@@ -1583,7 +1583,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         // ... but the bot already posted its summary comment on an earlier round.
         when(commentClient.listComments(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
                     new GitHubCommentClient.IssueComment(
@@ -3461,8 +3461,7 @@ class ReviewOrchestratorTest {
     }
 
     private void stubComments(GitHubCommentClient.IssueComment... comments) {
-      when(commentClient.listComments(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(comments));
     }
 
@@ -3530,14 +3529,12 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldBeBestEffortWhenFetchFailsOrReturnsNull() {
-      when(commentClient.listComments(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
-          .thenReturn(null)
+    void shouldBeBestEffortWhenTheFetchThrows() {
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("boom"));
 
-      // A null page and a thrown fetch both fall back to "no summary seen" rather than blocking.
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+      // A thrown fetch falls back to "no summary seen" rather than blocking the review.
+      // (listComments paginates internally and never returns null, so that case can't arise.)
       assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
       assertTrue(orchestrator.fetchIssueComments("auth", "owner", "repo", 1).isEmpty());
     }
