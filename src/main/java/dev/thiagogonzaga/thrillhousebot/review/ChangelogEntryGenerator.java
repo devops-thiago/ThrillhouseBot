@@ -30,14 +30,15 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * a Changelog format (Added/Changed/Fixed/Security…), posted as a comment the author may copy into
  * {@code CHANGELOG.md}. It never edits any file, so the changelog is never overwritten.
  *
- * <p>Loads the PR's diff and current title/body, the repository instructions, and asks the {@link
- * ChangelogAssistant} for an entry, then wraps it in a bot comment. Every step fails soft — a
- * failure simply yields {@code null} (post nothing) rather than a noisy error on the PR.
+ * <p>Loads the PR's diff and current title/body and the repository instructions (via {@link
+ * AbstractPrSuggestionGenerator}), asks the {@link ChangelogAssistant} for an entry, then wraps it
+ * in a bot comment. Every step fails soft — a failure simply yields {@code null} (post nothing)
+ * rather than a noisy error on the PR.
  */
 @ApplicationScoped
-public class ChangelogEntryGenerator {
+public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
 
-  private static final String ACCEPT = "application/vnd.github+json";
+  private static final String COMMAND = "/changelog";
 
   /** The assistant returns this sentinel when nothing in the diff warrants a CHANGELOG entry. */
   private static final String NONE = "NONE";
@@ -48,9 +49,6 @@ public class ChangelogEntryGenerator {
       "\n\n---\n*Suggestion only — nothing was committed. Copy whatever fits into `CHANGELOG.md` "
           + "under the `[Unreleased]` section. Re-run with `/changelog`.*\n";
 
-  private final GitHubPullRequestClient prClient;
-  private final ReviewDiffFormatter diffFormatter;
-  private final InstructionsResolver instructionsResolver;
   private final ChangelogAssistant changelogAssistant;
 
   @Inject
@@ -59,9 +57,7 @@ public class ChangelogEntryGenerator {
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       ChangelogAssistant changelogAssistant) {
-    this.prClient = prClient;
-    this.diffFormatter = diffFormatter;
-    this.instructionsResolver = instructionsResolver;
+    super(prClient, diffFormatter, instructionsResolver);
     this.changelogAssistant = changelogAssistant;
   }
 
@@ -81,40 +77,26 @@ public class ChangelogEntryGenerator {
       String defaultBranch,
       long installationId,
       String auth) {
-    String diff = fetchDiff(auth, owner, repo, prNumber);
-    if (diff == null || diff.isBlank() || "(no changes detected)".equals(diff)) {
-      Log.debugf(
-          "No diff to draft a changelog for on %s/%s #%d — posting nothing", owner, repo, prNumber);
+    var inputs = loadInputs(owner, repo, prNumber, defaultBranch, installationId, auth, COMMAND);
+    if (inputs == null) {
       return null;
     }
-
-    var details = fetchDetails(auth, owner, repo, prNumber);
-    String currentTitle = details != null && details.title() != null ? details.title() : "";
-    String currentBody = details != null && details.body() != null ? details.body() : "";
-    String instructions = resolveInstructions(owner, repo, defaultBranch, installationId);
-
-    String entry = callAssistant(diff, prNumber, currentTitle, currentBody, instructions);
-    if (entry == null) {
-      return null;
-    }
-    return HEADER + entry + FOOTER;
+    String entry = callAssistant(inputs, prNumber);
+    return entry == null ? null : HEADER + entry + FOOTER;
   }
 
-  /** Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. */
-  private String callAssistant(
-      String diff,
-      int prNumber,
-      String currentTitle,
-      String currentDescription,
-      String instructions) {
+  /**
+   * Calls the assistant with already-loaded inputs, escaping each for templating. Null on failure.
+   */
+  private String callAssistant(Inputs inputs, int prNumber) {
     try {
       String entry =
           changelogAssistant.draft(
-              PromptTemplateEscaper.escape(diff),
+              PromptTemplateEscaper.escape(inputs.diff()),
               String.valueOf(prNumber),
-              PromptTemplateEscaper.escape(currentTitle),
-              PromptTemplateEscaper.escape(currentDescription),
-              PromptTemplateEscaper.escape(instructions));
+              PromptTemplateEscaper.escape(inputs.title()),
+              PromptTemplateEscaper.escape(inputs.body()),
+              PromptTemplateEscaper.escape(inputs.instructions()));
       if (entry == null || entry.isBlank()) {
         Log.debug("Changelog assistant produced an empty entry — posting nothing");
         return null;
@@ -128,37 +110,6 @@ public class ChangelogEntryGenerator {
     } catch (RuntimeException e) {
       Log.warn("Changelog assistant call failed — posting nothing", e);
       return null;
-    }
-  }
-
-  private String fetchDiff(String auth, String owner, String repo, int prNumber) {
-    try {
-      var files = prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
-      return diffFormatter.buildDiffString(files);
-    } catch (RuntimeException e) {
-      Log.warnf(e, "Failed to fetch diff for /changelog on %s/%s #%d", owner, repo, prNumber);
-      return null;
-    }
-  }
-
-  private GitHubPullRequestClient.PullRequestDetails fetchDetails(
-      String auth, String owner, String repo, int prNumber) {
-    try {
-      return prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      // The current title/body are best-effort context; the entry still works from the diff alone.
-      Log.warnf(e, "Failed to fetch PR details for /changelog on %s/%s #%d", owner, repo, prNumber);
-      return null;
-    }
-  }
-
-  private String resolveInstructions(
-      String owner, String repo, String defaultBranch, long installationId) {
-    try {
-      return instructionsResolver.resolve(owner, repo, defaultBranch, installationId).content();
-    } catch (RuntimeException e) {
-      Log.warnf(e, "Failed to resolve instructions for /changelog on %s/%s", owner, repo);
-      return "";
     }
   }
 }

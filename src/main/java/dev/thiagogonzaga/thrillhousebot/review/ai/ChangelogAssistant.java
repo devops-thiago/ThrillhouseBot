@@ -30,7 +30,7 @@ public interface ChangelogAssistant {
 
   @SystemMessage(ChangelogAssistantPrompts.SYSTEM)
   String draft(
-      @UserMessage(ChangelogAssistantPrompts.USER) @V("diff") String diff,
+      @UserMessage(PrSuggestionPrompts.USER) @V("diff") String diff,
       @V("prNumber") String prNumber,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,

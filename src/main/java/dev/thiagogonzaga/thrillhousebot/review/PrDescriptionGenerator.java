@@ -29,14 +29,15 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * diff, posted as a comment the author may copy in. It never edits the pull request, so the
  * author's own title and body are never overwritten.
  *
- * <p>Loads the PR's current title/body and diff, the repository instructions, and asks the {@link
- * PrDescribeAssistant} for a suggestion, then wraps it in a bot comment. Every step fails soft — a
- * failure simply yields {@code null} (post nothing) rather than a noisy error on the PR.
+ * <p>Loads the PR's current title/body and diff and the repository instructions (via {@link
+ * AbstractPrSuggestionGenerator}), asks the {@link PrDescribeAssistant} for a suggestion, then
+ * wraps it in a bot comment. Every step fails soft — a failure simply yields {@code null} (post
+ * nothing) rather than a noisy error on the PR.
  */
 @ApplicationScoped
-public class PrDescriptionGenerator {
+public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
 
-  private static final String ACCEPT = "application/vnd.github+json";
+  private static final String COMMAND = "/describe";
 
   static final String HEADER = "## 🤖 ThrillhouseBot — suggested title & description\n\n";
 
@@ -44,9 +45,6 @@ public class PrDescriptionGenerator {
       "\n\n---\n*Suggestion only — your PR was not modified. Copy whatever is useful into the "
           + "title and description. Re-run with `/describe`.*\n";
 
-  private final GitHubPullRequestClient prClient;
-  private final ReviewDiffFormatter diffFormatter;
-  private final InstructionsResolver instructionsResolver;
   private final PrDescribeAssistant describeAssistant;
 
   @Inject
@@ -55,9 +53,7 @@ public class PrDescriptionGenerator {
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       PrDescribeAssistant describeAssistant) {
-    this.prClient = prClient;
-    this.diffFormatter = diffFormatter;
-    this.instructionsResolver = instructionsResolver;
+    super(prClient, diffFormatter, instructionsResolver);
     this.describeAssistant = describeAssistant;
   }
 
@@ -77,34 +73,25 @@ public class PrDescriptionGenerator {
       String defaultBranch,
       long installationId,
       String auth) {
-    String diff = fetchDiff(auth, owner, repo, prNumber);
-    if (diff == null || diff.isBlank() || "(no changes detected)".equals(diff)) {
-      Log.debugf("No diff to describe on %s/%s #%d — posting nothing", owner, repo, prNumber);
+    var inputs = loadInputs(owner, repo, prNumber, defaultBranch, installationId, auth, COMMAND);
+    if (inputs == null) {
       return null;
     }
-
-    var details = fetchDetails(auth, owner, repo, prNumber);
-    String currentTitle = details != null && details.title() != null ? details.title() : "";
-    String currentBody = details != null && details.body() != null ? details.body() : "";
-    String instructions = resolveInstructions(owner, repo, defaultBranch, installationId);
-
-    String suggestion = callAssistant(diff, currentTitle, currentBody, instructions);
-    if (suggestion == null) {
-      return null;
-    }
-    return HEADER + suggestion + FOOTER;
+    String suggestion = callAssistant(inputs);
+    return suggestion == null ? null : HEADER + suggestion + FOOTER;
   }
 
-  /** Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. */
-  private String callAssistant(
-      String diff, String currentTitle, String currentDescription, String instructions) {
+  /**
+   * Calls the assistant with already-loaded inputs, escaping each for templating. Null on failure.
+   */
+  private String callAssistant(Inputs inputs) {
     try {
       String suggestion =
           describeAssistant.describe(
-              PromptTemplateEscaper.escape(diff),
-              PromptTemplateEscaper.escape(currentTitle),
-              PromptTemplateEscaper.escape(currentDescription),
-              PromptTemplateEscaper.escape(instructions));
+              PromptTemplateEscaper.escape(inputs.diff()),
+              PromptTemplateEscaper.escape(inputs.title()),
+              PromptTemplateEscaper.escape(inputs.body()),
+              PromptTemplateEscaper.escape(inputs.instructions()));
       if (suggestion == null || suggestion.isBlank()) {
         Log.debug("Describe assistant produced an empty suggestion — posting nothing");
         return null;
@@ -113,37 +100,6 @@ public class PrDescriptionGenerator {
     } catch (RuntimeException e) {
       Log.warn("Describe assistant call failed — posting nothing", e);
       return null;
-    }
-  }
-
-  private String fetchDiff(String auth, String owner, String repo, int prNumber) {
-    try {
-      var files = prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
-      return diffFormatter.buildDiffString(files);
-    } catch (RuntimeException e) {
-      Log.warnf(e, "Failed to fetch diff for /describe on %s/%s #%d", owner, repo, prNumber);
-      return null;
-    }
-  }
-
-  private GitHubPullRequestClient.PullRequestDetails fetchDetails(
-      String auth, String owner, String repo, int prNumber) {
-    try {
-      return prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      // The current title/body are best-effort context; describe still works from the diff alone.
-      Log.warnf(e, "Failed to fetch PR details for /describe on %s/%s #%d", owner, repo, prNumber);
-      return null;
-    }
-  }
-
-  private String resolveInstructions(
-      String owner, String repo, String defaultBranch, long installationId) {
-    try {
-      return instructionsResolver.resolve(owner, repo, defaultBranch, installationId).content();
-    } catch (RuntimeException e) {
-      Log.warnf(e, "Failed to resolve instructions for /describe on %s/%s", owner, repo);
-      return "";
     }
   }
 }

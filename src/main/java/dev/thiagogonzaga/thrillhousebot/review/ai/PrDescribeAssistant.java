@@ -29,7 +29,7 @@ public interface PrDescribeAssistant {
 
   @SystemMessage(PrDescribeAssistantPrompts.SYSTEM)
   String describe(
-      @UserMessage(PrDescribeAssistantPrompts.USER) @V("diff") String diff,
+      @UserMessage(PrSuggestionPrompts.USER) @V("diff") String diff,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,
       @V("repoInstructions") String repoInstructions);
