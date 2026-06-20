@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
@@ -57,6 +58,22 @@ public interface GitHubCheckRunClient {
       @PathParam("repo") String repo,
       @PathParam("branch") String branch);
 
+  /**
+   * Effective rules for a branch, aggregating both repository and organization rulesets. Unlike
+   * {@link #getRequiredStatusChecks}, this surfaces required checks configured via the modern
+   * rulesets feature and needs only read access (not admin). Returns an empty list when no ruleset
+   * governs the branch.
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}/rules/branches/{branch}")
+  @Produces(MediaType.APPLICATION_JSON)
+  List<BranchRule> getBranchRules(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("branch") String branch);
+
   @GET
   @Path("/repos/{owner}/{repo}/commits/{ref}/check-runs")
   @Produces(MediaType.APPLICATION_JSON)
@@ -93,6 +110,32 @@ public interface GitHubCheckRunClient {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Check(String context, @JsonProperty("app_id") Long appId) {}
+  }
+
+  /**
+   * One rule returned by {@link #getBranchRules}. Each ruleset rule type carries a different {@code
+   * parameters} shape; we model only the {@code required_status_checks} variant and let unknown
+   * fields (and other rule types' parameters) be ignored.
+   */
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  record BranchRule(String type, Parameters parameters) {
+    private static final String REQUIRED_STATUS_CHECKS = "required_status_checks";
+
+    public boolean isRequiredStatusChecks() {
+      return REQUIRED_STATUS_CHECKS.equals(type);
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Parameters(
+        @JsonProperty("required_status_checks") List<RequiredCheck> requiredStatusChecks) {
+      public List<RequiredCheck> requiredStatusChecks() {
+        return requiredStatusChecks == null ? List.of() : List.copyOf(requiredStatusChecks);
+      }
+
+      @JsonIgnoreProperties(ignoreUnknown = true)
+      public record RequiredCheck(
+          String context, @JsonProperty("integration_id") Long integrationId) {}
+    }
   }
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
