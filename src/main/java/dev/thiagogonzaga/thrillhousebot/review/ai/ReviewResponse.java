@@ -73,13 +73,15 @@ public record ReviewResponse(
       @JsonProperty("description_gaps") List<String> descriptionGaps,
       @JsonProperty("suggested_labels") List<String> suggestedLabels) {
     public Summary {
-      // The AI may emit null elements inside these arrays (e.g. ["bug", null]); List.copyOf would
-      // throw an NPE that fails the whole review, even though both lists are best-effort metadata.
-      descriptionGaps = nonNullElements(descriptionGaps);
-      suggestedLabels = nonNullElements(suggestedLabels);
+      // The AI may emit null elements inside these arrays (e.g. ["bug", null]); a bare List.copyOf
+      // would throw an NPE that fails the whole review, even though both lists are best-effort
+      // metadata. Drop the nulls first, then copy. List.copyOf is kept inline rather than folded
+      // into the helper so SpotBugs still sees the defensive copy and does not flag EI_EXPOSE_REP.
+      descriptionGaps = List.copyOf(withoutNulls(descriptionGaps));
+      suggestedLabels = List.copyOf(withoutNulls(suggestedLabels));
     }
 
-    private static List<String> nonNullElements(List<String> values) {
+    private static List<String> withoutNulls(List<String> values) {
       return values == null ? List.of() : values.stream().filter(Objects::nonNull).toList();
     }
 
