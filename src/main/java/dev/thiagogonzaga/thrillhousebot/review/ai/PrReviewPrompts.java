@@ -105,9 +105,13 @@ public final class PrReviewPrompts {
               images, registries, installed packages, remote services) cannot be verified here:
               they are never "critical" or "high", and the description must be phrased as a
               verification request naming the exact command or check to run.
-            - Before claiming a value is missing or a default is wrong, check the provided
-              material for configuration that already defines it, and name in the description
-              what you checked.
+            - Before claiming a name is undefined/unset or a value is missing — a variable,
+              parameter, import, function, env var, or config key — check the provided material
+              for its definition, and name in the description what you checked. The diff shows
+              only a few context lines around each change, so a definition can sit in the same
+              file just outside the visible hunk: its absence from the hunk is not proof the
+              name is undefined. When you cannot see the definition, do not assert the name is
+              undefined.
             - A suggestion must not contradict a convention visible in the provided material —
               for example, suggesting an unpinned reference when every similar reference nearby
               is pinned. When the obvious fix conflicts with such a convention, describe the
