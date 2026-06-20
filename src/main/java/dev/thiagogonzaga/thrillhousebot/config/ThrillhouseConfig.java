@@ -193,6 +193,20 @@ public interface ThrillhouseConfig {
     Duration manualTriggerAuthTimeout();
 
     LabelsConfig labels();
+
+    DiagramConfig diagram();
+  }
+
+  /**
+   * Opt-in Mermaid control-flow diagram in the PR summary. When {@link #enabled()} the model is
+   * asked to emit a small Mermaid diagram of the affected control flow for non-trivial changes,
+   * which the summary comment renders as a collapsible block (GitHub renders Mermaid natively). It
+   * rides the existing review call, so it costs only a few extra output tokens.
+   */
+  interface DiagramConfig {
+    /** Master switch — no diagram is requested or rendered unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
   }
 
   /**

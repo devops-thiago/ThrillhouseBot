@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -266,9 +267,15 @@ public class ReviewOrchestrator {
       // {{repoInstructions}} slot; the label section is escaped (it carries repo label names),
       // the instructions section escapes its own maintainer content.
       String labelGuidance = PrLabeler.buildLabelGuidance(repoLabels, labeler.allowNewLabels());
+      // The diagram request is fixed guidance (no repo content), so it needs no escaping; its
+      // presence is what gates the model's walkthrough_diagram field.
+      String diagramGuidance =
+          config.review().diagram().enabled() ? PrReviewPrompts.DIAGRAM_REQUEST : "";
       String trailingGuidance =
           combineSections(
-              labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
+              combineSections(
+                  labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
+                  diagramGuidance),
               buildInstructionsSection(instructions));
       var promptInputs =
           new AiReviewService.PromptInputs(

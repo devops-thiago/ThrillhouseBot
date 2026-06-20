@@ -39,6 +39,29 @@ public class PrSummaryGenerator {
   /** One changed file in the walkthrough: its path and the diff's authoritative change type. */
   public record ChangedFile(String path, String changeType) {}
 
+  /**
+   * Upper bound on the rendered Mermaid source. A diagram larger than this is dropped rather than
+   * posted: it is likely runaway or truncated output, and GitHub silently fails to render oversized
+   * Mermaid blocks anyway. Comfortably fits the ~12-node diagrams the prompt asks for.
+   */
+  static final int MAX_DIAGRAM_CHARS = 4000;
+
+  /**
+   * Mermaid diagram-type keywords the first source line may start with. The model is asked for a
+   * flowchart or sequence diagram; the wider set is accepted so a valid diagram is never dropped on
+   * a technicality, while arbitrary prose (which would render as a broken block) still is.
+   */
+  private static final List<String> MERMAID_PREFIXES =
+      List.of(
+          "graph",
+          "flowchart",
+          "sequencediagram",
+          "classdiagram",
+          "statediagram",
+          "erdiagram",
+          "journey",
+          "gantt");
+
   public String generate(
       int filesChanged,
       int additions,
@@ -51,6 +74,7 @@ public class PrSummaryGenerator {
 
     appendPrPurpose(sb, aiSummary);
     appendDescriptionGaps(sb, aiSummary);
+    appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
     sb.append("- **Files changed:** ").append(filesChanged).append("\n");
@@ -249,6 +273,55 @@ public class PrSummaryGenerator {
       case "changed", "modified" -> "Modified";
       default -> escapeTableCell(status);
     };
+  }
+
+  /**
+   * Renders the optional Mermaid control-flow diagram as a collapsible block. The model supplies
+   * raw Mermaid source (no fences); this validates it is a real diagram, neutralizes any stray code
+   * fences so it cannot break out of the block, and drops anything oversized or unrecognized.
+   */
+  private static void appendWalkthroughDiagram(StringBuilder sb, ReviewResponse.Summary aiSummary) {
+    if (aiSummary == null) {
+      return;
+    }
+    String diagram = sanitizeDiagram(aiSummary.walkthroughDiagram());
+    if (diagram == null) {
+      return;
+    }
+    sb.append("### Control-Flow Diagram\n");
+    sb.append("<details>\n");
+    sb.append("<summary>🔀 Show diagram</summary>\n\n");
+    sb.append("```mermaid\n");
+    sb.append(diagram).append("\n");
+    sb.append("```\n\n");
+    sb.append("</details>\n\n");
+  }
+
+  /**
+   * Returns render-ready Mermaid source, or {@code null} when there is nothing safe to render.
+   * Strips any backtick fences the model may have wrapped around the source (which would otherwise
+   * let it escape the ```mermaid block), then accepts the result only if it opens with a known
+   * Mermaid diagram keyword and stays within the size bound.
+   */
+  private static String sanitizeDiagram(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return null;
+    }
+    // Drop every backtick run: Mermaid source never contains one, and removing them both unwraps an
+    // accidental ```mermaid ... ``` and prevents a stray ``` from closing our fence early.
+    String cleaned = raw.replace("`", "").strip();
+    // Unwrapping a ```mermaid fence leaves a bare "mermaid" language tag as the first line; drop it
+    // so the diagram keyword underneath is what gets validated.
+    if (cleaned.regionMatches(true, 0, "mermaid", 0, "mermaid".length())) {
+      int firstBreak = cleaned.indexOf('\n');
+      cleaned = firstBreak < 0 ? "" : cleaned.substring(firstBreak + 1).strip();
+    }
+    if (cleaned.isEmpty() || cleaned.length() > MAX_DIAGRAM_CHARS) {
+      return null;
+    }
+    String firstLine = cleaned.lines().findFirst().orElse("").strip().toLowerCase(Locale.ROOT);
+    boolean recognized = MERMAID_PREFIXES.stream().anyMatch(firstLine::startsWith);
+    return recognized ? cleaned : null;
   }
 
   /** Renders a signed line count, avoiding the awkward "+0"/"-0". */

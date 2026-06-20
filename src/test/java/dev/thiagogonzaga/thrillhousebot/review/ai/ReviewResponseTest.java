@@ -87,14 +87,17 @@ class ReviewResponseTest {
   }
 
   @Test
-  void summaryConvenienceConstructorsDefaultFileSummariesToEmpty() {
-    // Callers (and older AI responses) that predate file summaries must still construct cleanly.
+  void summaryConvenienceConstructorsDefaultNewFieldsToEmpty() {
+    // Callers (and older AI responses) that predate file summaries and the walkthrough diagram
+    // must still construct cleanly.
     var noLabels = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "purpose", List.of());
     var withLabels =
         new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "purpose", List.of(), List.of("bug"));
 
     assertTrue(noLabels.fileSummaries().isEmpty());
     assertTrue(withLabels.fileSummaries().isEmpty());
+    assertNull(noLabels.walkthroughDiagram());
+    assertNull(withLabels.walkthroughDiagram());
   }
 
   @Test
@@ -130,5 +133,18 @@ class ReviewResponseTest {
     assertEquals(1, response.summary().fileSummaries().size());
     assertEquals("src/A.java", response.summary().fileSummaries().get(0).path());
     assertEquals("adds guard", response.summary().fileSummaries().get(0).summary());
+  }
+
+  @Test
+  void shouldDeserializeWalkthroughDiagramFromJson() throws Exception {
+    var json =
+        """
+        {"summary": {"total_findings": 0, "overall_assessment": "ok",
+         "walkthrough_diagram": "flowchart TD\\n A-->B"}}
+        """;
+
+    var response = new ObjectMapper().readValue(json, ReviewResponse.class);
+
+    assertEquals("flowchart TD\n A-->B", response.summary().walkthroughDiagram());
   }
 }
