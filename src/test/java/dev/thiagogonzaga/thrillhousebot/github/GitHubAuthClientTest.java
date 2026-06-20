@@ -99,6 +99,18 @@ class GitHubAuthClientTest {
   }
 
   @Test
+  void shouldStripWhitespaceFromAppIdInIssuer() throws Exception {
+    // StartupConfigValidator accepts a padded-but-numeric app id; the minted JWT must carry the
+    // stripped value as "iss" so GitHub does not reject it on the first call.
+    when(githubConfig.appId()).thenReturn("  123456  ");
+
+    var jwt = authClient.generateAppJwt();
+
+    var issuer = com.nimbusds.jwt.SignedJWT.parse(jwt).getJWTClaimsSet().getIssuer();
+    assertEquals("123456", issuer);
+  }
+
+  @Test
   void shouldParsePrivateKeyWithNewlineEscapes() {
     // The private key contains \\n escape sequences — generateAppJwt() must parse them
     var jwt = authClient.generateAppJwt();
