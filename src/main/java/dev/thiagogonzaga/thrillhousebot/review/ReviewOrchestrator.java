@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
@@ -50,7 +51,6 @@ public class ReviewOrchestrator {
 
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String CHECK_NAME = "ThrillhouseBot Review";
-  private static final String BOT_LOGIN = "thrillhousebot[bot]";
   private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
   private static final String SUMMARY_HEADING = PrSummaryGenerator.SUMMARY_HEADING;
 
@@ -78,6 +78,10 @@ public class ReviewOrchestrator {
   static final int CI_MAX_PAGES = 50;
 
   private final ThrillhouseConfig config;
+  // The login(s) the bot posts under, resolved once from config so that summary dedup, first-review
+  // detection, and follow-up matching all recognize the bot's own activity regardless of which
+  // <app-slug>[bot] this deployment runs under (#165).
+  private final BotIdentity botIdentity;
   private final GitHubAuthClient authClient;
   private final GitHubCheckRunClient checkRunClient;
 
@@ -157,6 +161,7 @@ public class ReviewOrchestrator {
       PrLabeler labeler,
       ObjectMapper mapper) {
     this.config = config;
+    this.botIdentity = BotIdentity.from(config.github().botLogins());
     this.authClient = authClient;
     this.checkRunClient = checkRunClient;
     this.reviewClient = reviewClient;
@@ -237,7 +242,7 @@ public class ReviewOrchestrator {
       List<String> priorAiResponseJsons =
           sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
       var isFirstVisibleReview =
-          priorReviews.stream().noneMatch(r -> BOT_LOGIN.equals(r.user().login()))
+          priorReviews.stream().noneMatch(r -> botIdentity.matches(r.user().login()))
               && !botSummaryCommentExists(auth, req.owner(), req.repo(), req.prNumber());
       var hasContext = !priorAiResponseJsons.isEmpty();
       String previousAiResponseJson =
@@ -257,7 +262,7 @@ public class ReviewOrchestrator {
                   priorReviews,
                   inlineComments,
                   olderAiResponseJsons,
-                  BOT_LOGIN)
+                  botIdentity)
               : "";
 
       var instructions =
@@ -301,7 +306,7 @@ public class ReviewOrchestrator {
               aiResponse, fencedDiff, escapedStack, PromptTemplateEscaper.escape(previousFindings));
       aiResponse =
           followUpAnalyzer.dropRepliedDuplicates(
-              aiResponse, priorAiResponseJsons, inlineComments, BOT_LOGIN);
+              aiResponse, priorAiResponseJsons, inlineComments, botIdentity);
       var lineResolver = new DiffLineResolver(patchesByFile(files));
       aiResponse = populateMissingAnchors(aiResponse, lineResolver);
       persistAiResponse(session, aiResponse);
@@ -327,7 +332,7 @@ public class ReviewOrchestrator {
                   aiResponse.previousFindingsStatus(),
                   inlineComments,
                   lineResolver,
-                  BOT_LOGIN)
+                  botIdentity)
               : List.<ReviewResult.PreviousFindingStatus>of();
       var result =
           buildResult(
@@ -631,7 +636,7 @@ public class ReviewOrchestrator {
       var user = comment.user();
       var body = comment.body();
       if (user != null
-          && BOT_LOGIN.equals(user.login())
+          && botIdentity.matches(user.login())
           && body != null
           && body.stripLeading().startsWith(SUMMARY_HEADING)) {
         return true;
@@ -687,7 +692,7 @@ public class ReviewOrchestrator {
         return;
       }
       var rootByFinding =
-          followUpAnalyzer.matchFindingThreads(previousAiResponseJson, inlineComments, BOT_LOGIN);
+          followUpAnalyzer.matchFindingThreads(previousAiResponseJson, inlineComments, botIdentity);
       var threads =
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;
@@ -1168,7 +1173,7 @@ public class ReviewOrchestrator {
   void dismissPendingBotReviews(String auth, String owner, String repo, int prNumber) {
     try {
       for (var review : reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber)) {
-        if ("PENDING".equals(review.state()) && BOT_LOGIN.equals(review.user().login())) {
+        if ("PENDING".equals(review.state()) && botIdentity.matches(review.user().login())) {
           reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
           Log.debugf(
               "Dismissed pending review %d on %s/%s #%d", review.id(), owner, repo, prNumber);

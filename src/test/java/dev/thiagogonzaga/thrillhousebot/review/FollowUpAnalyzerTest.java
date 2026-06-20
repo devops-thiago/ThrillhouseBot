@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
@@ -34,6 +35,10 @@ class FollowUpAnalyzerTest {
   private final FollowUpAnalyzer analyzer = new FollowUpAnalyzer(new ObjectMapper());
 
   private static final String BOT = "thrillhousebot";
+
+  // The bot's identity for analyzer calls; comment(...) authors keep using the raw BOT login
+  // string.
+  private static final BotIdentity BOT_ID = BotIdentity.of(BOT);
 
   private static final String PREVIOUS_JSON =
       """
@@ -59,7 +64,7 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "Fixed in abc123", "maintainer"),
             comment(102L, 100L, "src/A.java", "Confirmed", BOT));
 
-    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT);
+    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT_ID);
 
     assertTrue(context.contains("Thread replies:"));
     assertTrue(context.contains("- @maintainer: Fixed in abc123"));
@@ -70,7 +75,7 @@ class FollowUpAnalyzerTest {
   void contextShouldOmitRepliesSectionWhenThreadHasNone() {
     var comments = List.of(comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT));
 
-    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT);
+    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT_ID);
 
     assertFalse(context.contains("Thread replies:"));
   }
@@ -84,7 +89,7 @@ class FollowUpAnalyzerTest {
             comment(300L, null, "src/A.java", "unrelated comment", BOT),
             comment(301L, 300L, "src/A.java", "reply to unrelated", "maintainer"));
 
-    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT);
+    var context = analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), comments, BOT_ID);
 
     assertFalse(context.contains("Thread replies:"));
   }
@@ -109,7 +114,7 @@ class FollowUpAnalyzerTest {
             new GitHubReviewClient.PullRequestComment(
                 101L, 100L, "src/A.java", "anonymous reply", null));
 
-    var context = analyzer.buildPreviousFindingsContext(json, List.of(), comments, BOT);
+    var context = analyzer.buildPreviousFindingsContext(json, List.of(), comments, BOT_ID);
 
     // Null bodies and null users never match as roots; null-user replies render as @unknown
     assertTrue(context.contains("- @unknown: anonymous reply"));
@@ -123,7 +128,7 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "a reply", "maintainer"),
             comment(200L, null, "src/B.java", "**MEDIUM — Missing null check**", BOT));
 
-    var threads = analyzer.matchFindingThreads(PREVIOUS_JSON, comments, BOT);
+    var threads = analyzer.matchFindingThreads(PREVIOUS_JSON, comments, BOT_ID);
 
     assertEquals(100L, threads.get(1));
     assertEquals(200L, threads.get(2));
@@ -156,7 +161,7 @@ class FollowUpAnalyzerTest {
                 "**MEDIUM — Missing null check**\n<!-- thrillhousebot:finding=2 -->",
                 BOT));
 
-    var threads = analyzer.matchFindingThreads(json, comments, BOT);
+    var threads = analyzer.matchFindingThreads(json, comments, BOT_ID);
 
     assertEquals(100L, threads.get(1));
     assertEquals(200L, threads.get(2));
@@ -173,7 +178,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    assertSame(withFinding, analyzer.dropRepliedDuplicates(withFinding, null, comments, BOT));
+    assertSame(withFinding, analyzer.dropRepliedDuplicates(withFinding, null, comments, BOT_ID));
   }
 
   @Test
@@ -193,7 +198,7 @@ class FollowUpAnalyzerTest {
                 "**LOW — No file**\n<!-- thrillhousebot:finding=1 -->",
                 BOT));
 
-    var threads = analyzer.matchFindingThreads(json, comments, BOT);
+    var threads = analyzer.matchFindingThreads(json, comments, BOT_ID);
 
     assertEquals(100L, threads.get(1));
   }
@@ -213,7 +218,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT);
+    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -258,7 +263,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(paraphrased, List.of(priorJson), comments, BOT);
+    var result = analyzer.dropRepliedDuplicates(paraphrased, List.of(priorJson), comments, BOT_ID);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -302,7 +307,7 @@ class FollowUpAnalyzerTest {
             null);
 
     assertSame(
-        distinct, analyzer.dropRepliedDuplicates(distinct, List.of(priorJson), comments, BOT));
+        distinct, analyzer.dropRepliedDuplicates(distinct, List.of(priorJson), comments, BOT_ID));
   }
 
   @Test
@@ -323,7 +328,7 @@ class FollowUpAnalyzerTest {
                 "**LOW — Unrelated thing**\n<!-- thrillhousebot:finding=1 -->",
                 BOT));
 
-    var threads = analyzer.matchFindingThreads(json, comments, BOT);
+    var threads = analyzer.matchFindingThreads(json, comments, BOT_ID);
 
     assertTrue(threads.isEmpty());
   }
@@ -344,7 +349,7 @@ class FollowUpAnalyzerTest {
             comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
             comment(200L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT));
 
-    var threads = analyzer.matchFindingThreads(json, comments, BOT);
+    var threads = analyzer.matchFindingThreads(json, comments, BOT_ID);
 
     assertEquals(200L, threads.get(1));
   }
@@ -366,7 +371,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT);
+    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -375,7 +380,7 @@ class FollowUpAnalyzerTest {
   void matchFindingThreadsShouldSkipFindingsWithoutMatchingComment() {
     var comments = List.of(comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT));
 
-    var threads = analyzer.matchFindingThreads(PREVIOUS_JSON, comments, BOT);
+    var threads = analyzer.matchFindingThreads(PREVIOUS_JSON, comments, BOT_ID);
 
     assertEquals(1, threads.size());
     assertFalse(threads.containsKey(2));
@@ -397,7 +402,7 @@ class FollowUpAnalyzerTest {
             List.of(),
             new ReviewResponse.Summary(2, 0, 1, 1, 0, "assessment", "purpose", List.of()));
 
-    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT);
+    var result = analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID);
 
     assertEquals(1, result.findings().size());
     assertEquals("Genuinely new bug", result.findings().get(0).title());
@@ -423,7 +428,8 @@ class FollowUpAnalyzerTest {
             null);
 
     assertSame(
-        reRaised, analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT));
+        reRaised,
+        analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID));
   }
 
   @Test
@@ -450,7 +456,8 @@ class FollowUpAnalyzerTest {
             List.of(),
             null);
 
-    var result = analyzer.dropRepliedDuplicates(escalated, List.of(PREVIOUS_JSON), comments, BOT);
+    var result =
+        analyzer.dropRepliedDuplicates(escalated, List.of(PREVIOUS_JSON), comments, BOT_ID);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -477,7 +484,7 @@ class FollowUpAnalyzerTest {
 
     var result =
         analyzer.dropRepliedDuplicates(
-            reRaised, List.of(latestRoundJson, PREVIOUS_JSON), comments, BOT);
+            reRaised, List.of(latestRoundJson, PREVIOUS_JSON), comments, BOT_ID);
 
     assertTrue(result.findings().isEmpty());
   }
@@ -507,7 +514,7 @@ class FollowUpAnalyzerTest {
     // The same round passed twice must not duplicate entries
     var context =
         analyzer.buildPreviousFindingsContext(
-            PREVIOUS_JSON, List.of(), comments, List.of(olderJson, olderJson), BOT);
+            PREVIOUS_JSON, List.of(), comments, List.of(olderJson, olderJson), BOT_ID);
 
     assertTrue(context.contains("Answered in earlier rounds"));
     assertTrue(context.contains("src/C.java:7 — Scan does not gate"));
@@ -521,12 +528,13 @@ class FollowUpAnalyzerTest {
   @Test
   void contextWithoutOlderRoundsHasNoAnsweredSection() {
     var context =
-        analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), List.of(), List.of(), BOT);
+        analyzer.buildPreviousFindingsContext(
+            PREVIOUS_JSON, List.of(), List.of(), List.of(), BOT_ID);
 
     assertFalse(context.contains("Answered in earlier rounds"));
 
     var nullOlder =
-        analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), List.of(), null, BOT);
+        analyzer.buildPreviousFindingsContext(PREVIOUS_JSON, List.of(), List.of(), null, BOT_ID);
     assertFalse(nullOlder.contains("Answered in earlier rounds"));
   }
 
@@ -546,7 +554,8 @@ class FollowUpAnalyzerTest {
 
     // No structured previous response and no prior reviews: only the answered list renders
     var context =
-        analyzer.buildPreviousFindingsContext(null, List.of(), comments, List.of(olderJson), BOT);
+        analyzer.buildPreviousFindingsContext(
+            null, List.of(), comments, List.of(olderJson), BOT_ID);
 
     assertTrue(context.contains("Answered in earlier rounds"));
     assertTrue(context.contains("src/C.java:7 — Scan does not gate"));
@@ -568,7 +577,7 @@ class FollowUpAnalyzerTest {
 
     var context =
         analyzer.buildPreviousFindingsContext(
-            PREVIOUS_JSON, List.of(), comments, List.of(olderJson), BOT);
+            PREVIOUS_JSON, List.of(), comments, List.of(olderJson), BOT_ID);
 
     assertFalse(context.contains("Answered in earlier rounds"));
   }
@@ -588,7 +597,8 @@ class FollowUpAnalyzerTest {
             null);
 
     assertSame(
-        fileless, analyzer.dropRepliedDuplicates(fileless, List.of(PREVIOUS_JSON), comments, BOT));
+        fileless,
+        analyzer.dropRepliedDuplicates(fileless, List.of(PREVIOUS_JSON), comments, BOT_ID));
   }
 
   @Test
@@ -614,7 +624,7 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         different,
-        analyzer.dropRepliedDuplicates(different, List.of(PREVIOUS_JSON), comments, BOT));
+        analyzer.dropRepliedDuplicates(different, List.of(PREVIOUS_JSON), comments, BOT_ID));
   }
 
   @Test
@@ -639,7 +649,8 @@ class FollowUpAnalyzerTest {
             null);
 
     assertSame(
-        response, analyzer.dropRepliedDuplicates(response, List.of(PREVIOUS_JSON), comments, BOT));
+        response,
+        analyzer.dropRepliedDuplicates(response, List.of(PREVIOUS_JSON), comments, BOT_ID));
   }
 
   @Test
@@ -651,11 +662,12 @@ class FollowUpAnalyzerTest {
 
     assertSame(
         noFindings,
-        analyzer.dropRepliedDuplicates(noFindings, List.of(PREVIOUS_JSON), comments, BOT));
+        analyzer.dropRepliedDuplicates(noFindings, List.of(PREVIOUS_JSON), comments, BOT_ID));
     assertSame(
         withFinding,
-        analyzer.dropRepliedDuplicates(withFinding, List.of(PREVIOUS_JSON), List.of(), BOT));
-    assertSame(withFinding, analyzer.dropRepliedDuplicates(withFinding, List.of(), comments, BOT));
+        analyzer.dropRepliedDuplicates(withFinding, List.of(PREVIOUS_JSON), List.of(), BOT_ID));
+    assertSame(
+        withFinding, analyzer.dropRepliedDuplicates(withFinding, List.of(), comments, BOT_ID));
   }
 
   @Test
@@ -731,7 +743,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT);
+            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(List.of(1, 2), heldIds(held));
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -751,7 +763,7 @@ class FollowUpAnalyzerTest {
                     new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional")),
                 List.of(),
                 resolver,
-                BOT)
+                BOT_ID)
             .isEmpty());
 
     // Finding one is reported and the existing gate already holds it; finding two is omitted, so
@@ -762,7 +774,7 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
             List.of(),
             resolver,
-            BOT);
+            BOT_ID);
     assertEquals(List.of(2), heldIds(held));
   }
 
@@ -783,7 +795,7 @@ class FollowUpAnalyzerTest {
                   new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed")),
               List.of(),
               resolver,
-              BOT);
+              BOT_ID);
       // #2 carries a recognized status and is accounted for; only #1 (junk status) is held.
       assertEquals(
           List.of(1), heldIds(held), "status \"" + junk + "\" must not suppress the backstop");
@@ -806,7 +818,7 @@ class FollowUpAnalyzerTest {
                     new ReviewResponse.PreviousFindingStatus(2, "Justified", "intentional")),
                 List.of(),
                 resolver,
-                BOT)
+                BOT_ID)
             .isEmpty());
   }
 
@@ -820,7 +832,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT);
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
 
     // Finding #1's thread carries a maintainer reply → defer to the human; only #2 is held.
     assertEquals(List.of(2), heldIds(held));
@@ -852,7 +864,7 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "intentional, won't fix", "maintainer"));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
 
     assertTrue(
         held.isEmpty(),
@@ -988,7 +1000,7 @@ class FollowUpAnalyzerTest {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1025,7 +1037,7 @@ class FollowUpAnalyzerTest {
             comment(201L, 200L, "src/A.java", "intentional", "maintainer"));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1057,7 +1069,7 @@ class FollowUpAnalyzerTest {
             comment(101L, 100L, "src/A.java", "tracking this", BOT));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), comments, resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1078,7 +1090,8 @@ class FollowUpAnalyzerTest {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1090,7 +1103,7 @@ class FollowUpAnalyzerTest {
     // src/B.java is absent from this round's diff → finding #2's code is gone; only #1 is held.
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT);
+            List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1100,24 +1113,28 @@ class FollowUpAnalyzerTest {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
     assertTrue(
-        analyzer.unreportedUnresolvedStatuses(null, List.of(), List.of(), resolver, BOT).isEmpty());
-    assertTrue(
         analyzer
-            .unreportedUnresolvedStatuses(List.of(), List.of(), List.of(), resolver, BOT)
+            .unreportedUnresolvedStatuses(null, List.of(), List.of(), resolver, BOT_ID)
             .isEmpty());
     assertTrue(
         analyzer
-            .unreportedUnresolvedStatuses(List.of("not json"), List.of(), List.of(), resolver, BOT)
+            .unreportedUnresolvedStatuses(List.of(), List.of(), List.of(), resolver, BOT_ID)
             .isEmpty());
     assertTrue(
         analyzer
-            .unreportedUnresolvedStatuses(List.of(PREVIOUS_JSON), List.of(), List.of(), null, BOT)
+            .unreportedUnresolvedStatuses(
+                List.of("not json"), List.of(), List.of(), resolver, BOT_ID)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatuses(
+                List.of(PREVIOUS_JSON), List.of(), List.of(), null, BOT_ID)
             .isEmpty());
     // Null statuses ⇒ the model reported nothing ⇒ every present finding is a silent drop.
     assertEquals(
         2,
         analyzer
-            .unreportedUnresolvedStatuses(List.of(PREVIOUS_JSON), null, List.of(), resolver, BOT)
+            .unreportedUnresolvedStatuses(List.of(PREVIOUS_JSON), null, List.of(), resolver, BOT_ID)
             .size());
   }
 
@@ -1135,7 +1152,7 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed B")),
             List.of(),
             resolver,
-            BOT);
+            BOT_ID);
 
     // B is cleared by the current round; only the older, silently dropped A is held.
     assertEquals(1, held.size());
@@ -1152,7 +1169,7 @@ class FollowUpAnalyzerTest {
             roundJson("src/B.java", 5, "B finding", "resolved"), roundJson("src/A.java", 10, "A"));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT);
+    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(1, held.size());
   }
@@ -1192,7 +1209,7 @@ class FollowUpAnalyzerTest {
     // finding.
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round3, round2, round1), List.of(), List.of(), resolver, BOT);
+            List.of(round3, round2, round1), List.of(), List.of(), resolver, BOT_ID);
 
     // Re-raised and the flagged code still present → held (safe, downgrade-only).
     assertEquals(1, held.size());
@@ -1207,7 +1224,7 @@ class FollowUpAnalyzerTest {
             roundJson("src/B.java", 5, "B finding", "justified"), roundJson("src/A.java", 10, "A"));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT);
+    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(1, held.size());
   }
@@ -1229,7 +1246,7 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed B")),
             List.of(),
             resolver,
-            BOT);
+            BOT_ID);
 
     assertEquals(1, held.size());
   }
@@ -1240,7 +1257,7 @@ class FollowUpAnalyzerTest {
     var prior = List.of(roundJson("src/A.java", 10, "A"), roundJson("src/A.java", 10, "A"));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
 
-    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT);
+    var held = analyzer.unreportedUnresolvedStatuses(prior, List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(1, held.size());
   }
@@ -1262,7 +1279,8 @@ class FollowUpAnalyzerTest {
             Map.of("src/A.java", "@@ -10,1 +10,1 @@\n-o\n+n\n@@ -80,1 +80,1 @@\n-o\n+n"));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(2, held.size());
   }
@@ -1299,7 +1317,7 @@ class FollowUpAnalyzerTest {
     // not.
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(SHARED_ANCHOR_PAIR_JSON), List.of(), List.of(), sharedAnchorResolver(), BOT);
+            List.of(SHARED_ANCHOR_PAIR_JSON), List.of(), List.of(), sharedAnchorResolver(), BOT_ID);
 
     assertEquals(List.of(1, 2), heldIds(held));
     assertTrue(held.stream().allMatch(s -> "unresolved".equals(s.status())));
@@ -1318,7 +1336,7 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed #1")),
             List.of(),
             sharedAnchorResolver(),
-            BOT);
+            BOT_ID);
 
     assertEquals(List.of(2), heldIds(held));
   }
@@ -1350,7 +1368,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round2, round1), List.of(), List.of(), resolver, BOT);
+            List.of(round2, round1), List.of(), List.of(), resolver, BOT_ID);
 
     // A's deleted anchor is gone from the right side → not held; only the still-present B is held.
     assertEquals(1, held.size());
@@ -1369,7 +1387,7 @@ class FollowUpAnalyzerTest {
             List.of(new ReviewResponse.PreviousFindingStatus(1, "pending", "in progress")),
             List.of(),
             resolver,
-            BOT);
+            BOT_ID);
 
     // Finding #1 carries an unrecognized verdict and is still held alongside the unreported #2.
     assertEquals(List.of(1, 2), heldIds(held));
@@ -1400,7 +1418,7 @@ class FollowUpAnalyzerTest {
                 new ReviewResponse.PreviousFindingStatus(99, "resolved", "out of range")),
             List.of(),
             resolver,
-            BOT);
+            BOT_ID);
 
     // Only the null-title (C) and titled (D) findings survive; the null-file one is dropped.
     assertEquals(2, held.size());
@@ -1430,7 +1448,8 @@ class FollowUpAnalyzerTest {
 
     assertFalse(resolver.isLineInDiff("src/A.java", 10, 3)); // old line drifted out of range
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
@@ -1464,7 +1483,8 @@ class FollowUpAnalyzerTest {
     // Stale line 42 is within ±3 of the surviving context line now at right-line 41.
     assertTrue(resolver.isLineInDiff("src/A.java", 42, 3)); // raw proxy would over-block here
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), List.of(), resolver, BOT_ID);
 
     assertTrue(held.isEmpty());
   }
@@ -1499,14 +1519,15 @@ class FollowUpAnalyzerTest {
             Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", variantWithAnchor));
 
     var held =
-        analyzer.unreportedUnresolvedStatuses(List.of(json), List.of(), List.of(), resolver, BOT);
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(json), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
   }
 
   @Test
   void buildPreviousFindingsContextShouldReturnEmptyForNull() {
-    assertEquals("", analyzer.buildPreviousFindingsContext(null, "thrillhousebot"));
+    assertEquals("", analyzer.buildPreviousFindingsContext(null, BOT_ID));
   }
 
   @Test
@@ -1514,18 +1535,14 @@ class FollowUpAnalyzerTest {
     var reviews =
         List.of(
             new GitHubReviewClient.ReviewResponse(
-                1L,
-                null,
-                "COMMENTED",
-                "abc",
-                new GitHubReviewClient.ReviewResponse.User("thrillhousebot")));
+                1L, null, "COMMENTED", "abc", new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, "thrillhousebot"));
+    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID));
   }
 
   @Test
   void buildPreviousFindingsContextShouldReturnEmptyForEmptyList() {
-    assertEquals("", analyzer.buildPreviousFindingsContext(List.of(), "thrillhousebot"));
+    assertEquals("", analyzer.buildPreviousFindingsContext(List.of(), BOT_ID));
   }
 
   @Test
@@ -1539,7 +1556,7 @@ class FollowUpAnalyzerTest {
                 "abc",
                 new GitHubReviewClient.ReviewResponse.User("other-user")));
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, "thrillhousebot"));
+    assertEquals("", analyzer.buildPreviousFindingsContext(reviews, BOT_ID));
   }
 
   @Test
@@ -1551,15 +1568,15 @@ class FollowUpAnalyzerTest {
                 "first review",
                 "COMMENTED",
                 "abc",
-                new GitHubReviewClient.ReviewResponse.User("thrillhousebot")),
+                new GitHubReviewClient.ReviewResponse.User(BOT)),
             new GitHubReviewClient.ReviewResponse(
                 2L,
                 "second review body",
                 "REQUEST_CHANGES",
                 "def",
-                new GitHubReviewClient.ReviewResponse.User("thrillhousebot")));
+                new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    var context = analyzer.buildPreviousFindingsContext(reviews, "thrillhousebot");
+    var context = analyzer.buildPreviousFindingsContext(reviews, BOT_ID);
 
     assertTrue(context.contains("second review body"));
     assertFalse(context.contains("first review"));
@@ -1577,7 +1594,7 @@ class FollowUpAnalyzerTest {
         ], "previous_findings_status": [], "summary": null}
         """;
 
-    var context = analyzer.buildPreviousFindingsContext(json, List.of(), "thrillhousebot");
+    var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
 
     assertTrue(context.contains("1. [HIGH] src/A.java:10 — SQL injection"));
     assertTrue(context.contains("Concatenated query"));
@@ -1593,7 +1610,7 @@ class FollowUpAnalyzerTest {
         ], "previous_findings_status": [], "summary": null}
         """;
 
-    var context = analyzer.buildPreviousFindingsContext(json, List.of(), "thrillhousebot");
+    var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
 
     assertTrue(context.contains("1. [UNKNOWN] src/C.java:3 — Mystery issue"));
     // No description line is emitted when the finding has none
@@ -1609,16 +1626,12 @@ class FollowUpAnalyzerTest {
                 "body findings",
                 "COMMENTED",
                 "abc",
-                new GitHubReviewClient.ReviewResponse.User("thrillhousebot")));
+                new GitHubReviewClient.ReviewResponse.User(BOT)));
 
     assertTrue(
-        analyzer
-            .buildPreviousFindingsContext(null, reviews, "thrillhousebot")
-            .contains("body findings"));
+        analyzer.buildPreviousFindingsContext(null, reviews, BOT_ID).contains("body findings"));
     assertTrue(
-        analyzer
-            .buildPreviousFindingsContext("  ", reviews, "thrillhousebot")
-            .contains("body findings"));
+        analyzer.buildPreviousFindingsContext("  ", reviews, BOT_ID).contains("body findings"));
   }
 
   @Test
@@ -1630,9 +1643,9 @@ class FollowUpAnalyzerTest {
                 "body findings",
                 "COMMENTED",
                 "abc",
-                new GitHubReviewClient.ReviewResponse.User("thrillhousebot")));
+                new GitHubReviewClient.ReviewResponse.User(BOT)));
 
-    var context = analyzer.buildPreviousFindingsContext("{not json", reviews, "thrillhousebot");
+    var context = analyzer.buildPreviousFindingsContext("{not json", reviews, BOT_ID);
 
     assertTrue(context.contains("body findings"));
   }
@@ -1644,7 +1657,7 @@ class FollowUpAnalyzerTest {
         {"findings": [], "previous_findings_status": [], "summary": null}
         """;
 
-    assertEquals("", analyzer.buildPreviousFindingsContext(json, List.of(), "thrillhousebot"));
+    assertEquals("", analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID));
   }
 
   @Test
@@ -1746,7 +1759,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round2, round1), List.of(), List.of(), resolver, BOT);
+            List.of(round2, round1), List.of(), List.of(), resolver, BOT_ID);
 
     // Only one status is held (deduplicated).
     assertEquals(1, held.size());
@@ -1786,7 +1799,7 @@ class FollowUpAnalyzerTest {
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
-            List.of(round2, round1), List.of(), comments, resolver, BOT);
+            List.of(round2, round1), List.of(), comments, resolver, BOT_ID);
 
     // One of the cluster members has a reply → entire cluster is considered replied → empty held
     // list.

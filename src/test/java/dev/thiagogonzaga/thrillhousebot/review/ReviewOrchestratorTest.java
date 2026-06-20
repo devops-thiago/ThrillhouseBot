@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
@@ -48,6 +49,10 @@ import org.mockito.MockitoAnnotations;
 class ReviewOrchestratorTest {
 
   private static final String SESSION_URL = "https://bot.example/session/test-public-id";
+
+  // The bot login this test deployment runs under; the orchestrator resolves it from config.
+  private static final String BOT_LOGIN = "thrillhousebot[bot]";
+  private static final BotIdentity BOT_ID = BotIdentity.of(BOT_LOGIN);
 
   @Mock private ThrillhouseConfig config;
 
@@ -98,6 +103,11 @@ class ReviewOrchestratorTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    // The orchestrator resolves its BotIdentity from config in the constructor, so stub github()
+    // before building it.
+    ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
     diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
     orchestrator = newOrchestrator(mapper);
     when(config.review()).thenReturn(reviewConfig);
@@ -124,7 +134,7 @@ class ReviewOrchestratorTest {
     // The verifier and dedup pass findings through untouched unless a test overrides them
     when(findingVerificationService.verify(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
-    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), anyString()))
+    when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
     when(reviewClient.createPullRequestComment(
             anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
@@ -1498,8 +1508,7 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(followUpAnalyzer.buildPreviousFindingsContext(
-                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("Previous finding context");
         // Two prior rounds: the newest becomes the numbered context, the rest the history
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
@@ -1533,17 +1542,10 @@ class ReviewOrchestratorTest {
         // The newest prior round feeds the numbered context; the older ones the answered list
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
-                eq("{\"round\":2}"),
-                any(),
-                any(),
-                eq(List.of("{\"round\":1}")),
-                eq("thrillhousebot[bot]"));
+                eq("{\"round\":2}"), any(), any(), eq(List.of("{\"round\":1}")), eq(BOT_ID));
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
-                any(),
-                eq(List.of("{\"round\":2}", "{\"round\":1}")),
-                any(),
-                eq("thrillhousebot[bot]"));
+                any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -1837,17 +1839,18 @@ class ReviewOrchestratorTest {
     void shouldDismissPendingBotReviews() {
       var pending =
           new GitHubReviewClient.ReviewResponse(
-              99L,
-              "",
-              "PENDING",
-              "sha",
-              new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"));
+              99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
       var approved =
           new GitHubReviewClient.ReviewResponse(
               1L, "", "APPROVED", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
+      // A pending review by a human must be left alone: state is PENDING but the author is not the
+      // bot, so only the bot-identity check (not the state check) keeps it.
+      var pendingHuman =
+          new GitHubReviewClient.ReviewResponse(
+              2L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
 
       when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(List.of(pending, approved));
+          .thenReturn(List.of(pending, approved, pendingHuman));
 
       orchestrator.dismissPendingBotReviews("Bearer tok", "owner", "repo", 7);
 
@@ -1857,6 +1860,9 @@ class ReviewOrchestratorTest {
       verify(reviewClient, never())
           .deletePendingReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), eq(1L));
+      verify(reviewClient, never())
+          .deletePendingReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L));
     }
 
     @Test
@@ -3216,15 +3222,13 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(
-                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         // The model silently drops the still-open prior finding: no new findings, empty status.
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         // The deterministic backstop reconstructs it as unresolved from persistence.
-        when(followUpAnalyzer.unreportedUnresolvedStatuses(
-                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+        when(followUpAnalyzer.unreportedUnresolvedStatuses(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn(
                 List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
@@ -3250,8 +3254,7 @@ class ReviewOrchestratorTest {
         // its findings — context must still be reconstructed for follow-up analysis. (#118)
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(
-                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -3260,7 +3263,7 @@ class ReviewOrchestratorTest {
 
         // Previous-findings context IS reconstructed without any formal bot review
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(any(), any(), any(), any(), eq("thrillhousebot[bot]"));
+            .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
       }
     }
 
@@ -3275,8 +3278,7 @@ class ReviewOrchestratorTest {
         // The summary must still be posted: isFirstVisibleReview is true. (#134)
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(
-                any(), any(), any(), any(), eq("thrillhousebot[bot]")))
+        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -3296,7 +3298,7 @@ class ReviewOrchestratorTest {
                 argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
         // Context IS still loaded from persistence
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(any(), any(), any(), any(), eq("thrillhousebot[bot]"));
+            .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
       }
     }
 
@@ -3362,7 +3364,7 @@ class ReviewOrchestratorTest {
               new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional"),
               new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still"),
               new ReviewResponse.PreviousFindingStatus(4, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), anyString()))
+      when(followUpAnalyzer.matchFindingThreads(any(), any(), any()))
           .thenReturn(Map.of(1, 100L, 2, 200L, 3, 300L, 4, 400L));
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
           .thenReturn(
@@ -3387,7 +3389,7 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSkipFindingsWithoutAMatchedThread() {
       var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), anyString())).thenReturn(Map.of());
+      when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of());
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5)).thenReturn(Map.of());
 
       orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(rootComment()), statuses);
@@ -3411,8 +3413,7 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSwallowThreadResolutionFailures() {
       var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), anyString()))
-          .thenReturn(Map.of(1, 100L));
+      when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of(1, 100L));
       when(reviewThreadService.threadsByRootComment(
               anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("graphql down"));

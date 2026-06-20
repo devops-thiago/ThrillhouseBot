@@ -64,9 +64,11 @@ public interface ThrillhouseConfig {
     String webhookSecret();
 
     /**
-     * GitHub login(s) of this App's bot account, used to skip the bot's own comments and avoid
-     * infinite reply loops. Defaults to the names this project ships under; override when the App
-     * is deployed under a different slug (its bot login is {@code <app-slug>[bot]}).
+     * GitHub login(s) of this App's bot account. Used everywhere the bot must recognize its own
+     * activity — skipping its own comments to avoid infinite reply loops, summary-comment dedup,
+     * prior-review detection, and follow-up thread matching (resolved via {@link BotIdentity}).
+     * Defaults to the names this project ships under; override when the App is deployed under a
+     * different slug (its bot login is {@code <app-slug>[bot]}).
      */
     @WithName("bot-logins")
     @WithDefault("thrillhousebot[bot],thrillhouse-bot[bot]")
