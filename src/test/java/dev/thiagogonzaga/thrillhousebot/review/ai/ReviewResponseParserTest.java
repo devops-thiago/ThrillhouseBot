@@ -85,6 +85,20 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void shouldFilterNullElementsFromSummaryLabelArrays() {
+    // A null element inside a best-effort label/gap array must not crash the review.
+    var response =
+        parser.parse(
+            "{\"findings\":[],\"summary\":{\"total_findings\":0,"
+                + "\"suggested_labels\":[\"bug\",null,\"area/api\"],"
+                + "\"description_gaps\":[null,\"missing tests\"]}}");
+
+    assertNotNull(response.summary());
+    assertEquals(java.util.List.of("bug", "area/api"), response.summary().suggestedLabels());
+    assertEquals(java.util.List.of("missing tests"), response.summary().descriptionGaps());
+  }
+
+  @Test
   void shouldParseFindingConfidence() {
     var response =
         parser.parse(

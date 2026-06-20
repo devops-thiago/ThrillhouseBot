@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.List;
+import java.util.Objects;
 
 @RegisterForReflection
 public record ReviewResponse(
@@ -72,8 +73,14 @@ public record ReviewResponse(
       @JsonProperty("description_gaps") List<String> descriptionGaps,
       @JsonProperty("suggested_labels") List<String> suggestedLabels) {
     public Summary {
-      descriptionGaps = List.copyOf(descriptionGaps != null ? descriptionGaps : List.of());
-      suggestedLabels = List.copyOf(suggestedLabels != null ? suggestedLabels : List.of());
+      // The AI may emit null elements inside these arrays (e.g. ["bug", null]); List.copyOf would
+      // throw an NPE that fails the whole review, even though both lists are best-effort metadata.
+      descriptionGaps = nonNullElements(descriptionGaps);
+      suggestedLabels = nonNullElements(suggestedLabels);
+    }
+
+    private static List<String> nonNullElements(List<String> values) {
+      return values == null ? List.of() : values.stream().filter(Objects::nonNull).toList();
     }
 
     /** Convenience constructor for callers (and responses) that predate label suggestions. */
