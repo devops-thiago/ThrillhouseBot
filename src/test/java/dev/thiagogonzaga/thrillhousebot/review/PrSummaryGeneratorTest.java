@@ -397,11 +397,15 @@ class PrSummaryGeneratorTest {
             new PrSummaryGenerator.ChangedFile("c", "renamed"),
             new PrSummaryGenerator.ChangedFile("d", "modified"),
             new PrSummaryGenerator.ChangedFile("e", null),
-            new PrSummaryGenerator.ChangedFile("f", "unmerged"));
+            new PrSummaryGenerator.ChangedFile("f", "unmerged"),
+            new PrSummaryGenerator.ChangedFile("g", ""),
+            new PrSummaryGenerator.ChangedFile("h", "deleted"),
+            new PrSummaryGenerator.ChangedFile("i", "copied"),
+            new PrSummaryGenerator.ChangedFile("j", "CHANGED"));
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-    var summary = generator.generate(6, 0, 0, changedFiles, null, result);
+    var summary = generator.generate(10, 0, 0, changedFiles, null, result);
 
     assertTrue(summary.contains("| `a` | Added |"));
     assertTrue(summary.contains("| `b` | Removed |"));
@@ -409,6 +413,46 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("| `d` | Modified |"));
     assertTrue(summary.contains("| `e` | Changed |")); // null status falls back to "Changed"
     assertTrue(summary.contains("| `f` | unmerged |")); // unknown status passes through verbatim
+    assertTrue(summary.contains("| `g` | Changed |")); // blank status falls back to "Changed"
+    assertTrue(summary.contains("| `h` | Removed |")); // "deleted" aliases to "Removed"
+    assertTrue(summary.contains("| `i` | Copied |"));
+    assertTrue(summary.contains("| `j` | Modified |")); // matching is case-insensitive
+  }
+
+  @Test
+  void shouldOmitChangedFilesSectionWhenChangedFilesNull() {
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(0, 0, 0, null, null, result);
+
+    assertFalse(summary.contains("Changed Files"));
+  }
+
+  @Test
+  void shouldDropMalformedFileSummariesAndKeepFirstOnDuplicatePath() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("src/A.java", "modified"),
+            new PrSummaryGenerator.ChangedFile("src/B.java", "added"));
+    // Malformed entries (null/blank path, null summary) are dropped; a duplicate path keeps the
+    // first usable note rather than throwing from Collectors.toMap.
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary(null, "no path"),
+            new ReviewResponse.FileSummary("  ", "blank path"),
+            new ReviewResponse.FileSummary("src/A.java", null),
+            new ReviewResponse.FileSummary("src/A.java", "first wins"),
+            new ReviewResponse.FileSummary("src/A.java", "second ignored"),
+            new ReviewResponse.FileSummary("src/B.java", "b note"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(2, 1, 0, changedFiles, aiSummary, result);
+
+    assertTrue(summary.contains("| `src/A.java` | Modified | first wins |"));
+    assertFalse(summary.contains("second ignored"));
+    assertTrue(summary.contains("| `src/B.java` | Added | b note |"));
   }
 
   private static ReviewResponse.Summary summaryWithFiles(ReviewResponse.FileSummary... files) {
