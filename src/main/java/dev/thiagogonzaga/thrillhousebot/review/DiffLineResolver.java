@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.TreeSet;
 import java.util.function.Predicate;
@@ -37,17 +38,20 @@ public final class DiffLineResolver {
 
   private final Map<String, TreeSet<Integer>> rightSideLinesByFile;
   private final Map<String, List<String>> rightSideTextByFile;
+  private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
   private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
     this.rightSideLinesByFile = new HashMap<>();
     this.rightSideTextByFile = new HashMap<>();
+    this.rightSideTextLineNumbersByFile = new HashMap<>();
     this.rightSideLineTextByFile = new HashMap<>();
     patchesByFile.forEach(
         (file, patch) -> {
           RightSide rightSide = parseRightSide(patch);
           rightSideLinesByFile.put(file, rightSide.lines());
           rightSideTextByFile.put(file, rightSide.text());
+          rightSideTextLineNumbersByFile.put(file, rightSide.textLineNumbers());
           rightSideLineTextByFile.put(file, rightSide.lineText());
         });
   }
@@ -261,6 +265,77 @@ public final class DiffLineResolver {
     return OptionalInt.of(floorDistance <= ceilingDistance ? floor : ceiling);
   }
 
+  /** An inclusive right-side line range whose endpoints are both lines that exist in the diff. */
+  public record LineRange(int startLine, int endLine) {}
+
+  /**
+   * Resolves the right-side line range a finding's {@code suggestion_old} (the verbatim code it
+   * replaces) occupies in the diff, so a multi-line replacement can be posted as a multi-line
+   * GitHub suggestion that overwrites the whole range rather than a single anchor line (#71).
+   *
+   * <p>The anchor's trimmed, non-blank lines must appear as a contiguous, in-order run of
+   * right-side lines (the same matching {@link #isFindingPresent} uses); the range spans the first
+   * to the last matched line. Returns empty — so the caller falls back to a single-line comment —
+   * when the anchor is blank or single-line, the file is not in the diff, the run cannot be
+   * located, or the same run appears more than once (ambiguous, so guessing a range is unsafe).
+   */
+  public Optional<LineRange> resolveSuggestionRange(String file, String suggestionOld) {
+    if (file == null) {
+      return Optional.empty();
+    }
+    List<String> anchorLines = normalizedAnchorLines(suggestionOld);
+    if (anchorLines.size() < 2) {
+      return Optional.empty();
+    }
+    String key = resolveTextKeyForFileOrVariant(file);
+    if (key == null) {
+      return Optional.empty();
+    }
+    List<String> text = rightSideTextByFile.get(key);
+    List<Integer> lineNumbers = rightSideTextLineNumbersByFile.get(key);
+    int matchOffset = -1;
+    for (int i = 0; i + anchorLines.size() <= text.size(); i++) {
+      if (matchesAt(text, i, anchorLines)) {
+        if (matchOffset != -1) {
+          // The same block appears twice — no single range is correct, so fall back.
+          return Optional.empty();
+        }
+        matchOffset = i;
+      }
+    }
+    if (matchOffset == -1) {
+      return Optional.empty();
+    }
+    int startLine = lineNumbers.get(matchOffset);
+    int endLine = lineNumbers.get(matchOffset + anchorLines.size() - 1);
+    return endLine > startLine ? Optional.of(new LineRange(startLine, endLine)) : Optional.empty();
+  }
+
+  /**
+   * Resolves {@code file} to the diff key holding its right-side text — the exact key when its text
+   * is non-empty, else the unique {@link FilePaths#same} variant. Returns {@code null} on absence
+   * or genuine ambiguity (two suffix-colliding keys), mirroring {@link
+   * #resolveRightSideLinesForFileOrVariant} so a multi-line range is never bound to the wrong file.
+   */
+  private String resolveTextKeyForFileOrVariant(String file) {
+    List<String> exact = rightSideTextByFile.get(file);
+    if (exact != null && !exact.isEmpty()) {
+      return file;
+    }
+    String resolved = null;
+    for (var entry : rightSideTextByFile.entrySet()) {
+      if (!entry.getKey().equals(file)
+          && !entry.getValue().isEmpty()
+          && FilePaths.same(file, entry.getKey())) {
+        if (resolved != null) {
+          return null;
+        }
+        resolved = entry.getKey();
+      }
+    }
+    return resolved;
+  }
+
   static TreeSet<Integer> parseRightSideLines(String patch) {
     return parseRightSide(patch).lines();
   }
@@ -269,10 +344,15 @@ public final class DiffLineResolver {
    * The right-side line numbers and the right-side code text parsed from one file's patch. The text
    * is the trimmed, non-blank right-side lines in diff order, so {@link #containsContiguous} can
    * test the anchor as a contiguous run; blank lines are dropped from both sides so a blank line
-   * inside a block never breaks an otherwise-adjacent match.
+   * inside a block never breaks an otherwise-adjacent match. {@code textLineNumbers} runs parallel
+   * to {@code text}, carrying the right-side line number of each retained line so a matched anchor
+   * run can be mapped back to a concrete line range (#71).
    */
   private record RightSide(
-      TreeSet<Integer> lines, List<String> text, Map<Integer, String> lineText) {}
+      TreeSet<Integer> lines,
+      List<String> text,
+      List<Integer> textLineNumbers,
+      Map<Integer, String> lineText) {}
 
   /**
    * Walks a unified-diff patch once, collecting the right-side line numbers and the trimmed text of
@@ -287,9 +367,10 @@ public final class DiffLineResolver {
   private static RightSide parseRightSide(String patch) {
     var lines = new TreeSet<Integer>();
     var text = new ArrayList<String>();
+    var textLineNumbers = new ArrayList<Integer>();
     var lineText = new HashMap<Integer, String>();
     if (patch == null || patch.isBlank()) {
-      return new RightSide(lines, text, lineText);
+      return new RightSide(lines, text, textLineNumbers, lineText);
     }
 
     var newLine = 0;
@@ -302,11 +383,11 @@ public final class DiffLineResolver {
         continue;
       }
       if (inHunk && isRightSideLine(rawLine)) {
-        appendRightSide(lines, text, lineText, newLine, rawLine);
+        appendRightSide(lines, text, textLineNumbers, lineText, newLine, rawLine);
         newLine++;
       }
     }
-    return new RightSide(lines, text, lineText);
+    return new RightSide(lines, text, textLineNumbers, lineText);
   }
 
   /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */
@@ -333,6 +414,7 @@ public final class DiffLineResolver {
   private static void appendRightSide(
       TreeSet<Integer> lines,
       List<String> text,
+      List<Integer> textLineNumbers,
       Map<Integer, String> lineText,
       int newLine,
       String rawLine) {
@@ -341,6 +423,7 @@ public final class DiffLineResolver {
     String stripped = content.strip();
     if (!stripped.isEmpty()) {
       text.add(stripped);
+      textLineNumbers.add(newLine);
     }
     lineText.put(newLine, content);
   }

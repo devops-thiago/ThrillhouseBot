@@ -689,4 +689,119 @@ class DiffLineResolverTest {
     assertNull(emptyResolver.getLineText("dir/Main.java", 11));
     assertNull(emptyResolver.getLineText("Main.java", 11));
   }
+
+  @Test
+  void resolveSuggestionRangeShouldSpanContiguousOldLines() {
+    var patch =
+        """
+        @@ -10,4 +10,4 @@
+         keep()
+        +first_new()
+        +second_new()
+        +third_new()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    var range = resolver.resolveSuggestionRange("A.java", "first_new()\nsecond_new()\nthird_new()");
+
+    assertTrue(range.isPresent());
+    assertEquals(11, range.get().startLine());
+    assertEquals(13, range.get().endLine());
+  }
+
+  @Test
+  void resolveSuggestionRangeShouldSpanAcrossADroppedBlankLine() {
+    // A blank line between the two flagged lines advances the line counter but is excluded from the
+    // text, so the contiguous match still holds and the range covers the blank line in between.
+    var patch =
+        """
+        @@ -1,0 +1,3 @@
+        +first();
+        +
+        +third();
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    var range = resolver.resolveSuggestionRange("A.java", "first();\nthird();");
+
+    assertTrue(range.isPresent());
+    assertEquals(1, range.get().startLine());
+    assertEquals(3, range.get().endLine());
+  }
+
+  @Test
+  void resolveSuggestionRangeShouldReturnEmptyForSingleLineOrBlankAnchor() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    assertTrue(resolver.resolveSuggestionRange("main.py", "    new_line()").isEmpty());
+    assertTrue(resolver.resolveSuggestionRange("main.py", null).isEmpty());
+    assertTrue(resolver.resolveSuggestionRange("main.py", "   ").isEmpty());
+    assertTrue(resolver.resolveSuggestionRange(null, "a()\nb()").isEmpty());
+  }
+
+  @Test
+  void resolveSuggestionRangeShouldReturnEmptyWhenAnchorNotContiguous() {
+    var patch =
+        """
+        @@ -1,3 +1,3 @@
+         alpha()
+         beta()
+         gamma()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    // Out of order / non-adjacent runs do not resolve to a range.
+    assertTrue(resolver.resolveSuggestionRange("A.java", "alpha()\ngamma()").isEmpty());
+    assertTrue(resolver.resolveSuggestionRange("A.java", "gamma()\nbeta()").isEmpty());
+    // A line changed away breaks the block.
+    assertTrue(resolver.resolveSuggestionRange("A.java", "alpha()\ndelta()").isEmpty());
+  }
+
+  @Test
+  void resolveSuggestionRangeShouldReturnEmptyWhenBlockAppearsTwice() {
+    // The same two-line block occurs twice — no single range is correct, so fall back to single
+    // line rather than guess.
+    var patch =
+        """
+        @@ -1,4 +1,4 @@
+        +open()
+        +close()
+        +open()
+        +close()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertTrue(resolver.resolveSuggestionRange("A.java", "open()\nclose()").isEmpty());
+  }
+
+  @Test
+  void resolveSuggestionRangeShouldMatchAcrossPathVariants() {
+    var patch =
+        """
+        @@ -10,3 +10,3 @@
+        +alpha()
+        +beta()
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/dir/Main.java", patch));
+
+    var range = resolver.resolveSuggestionRange("dir/Main.java", "alpha()\nbeta()");
+
+    assertTrue(range.isPresent());
+    assertEquals(10, range.get().startLine());
+    assertEquals(11, range.get().endLine());
+  }
+
+  @Test
+  void resolveSuggestionRangeShouldReturnEmptyOnAmbiguousPathVariants() {
+    var patch =
+        """
+        @@ -1,2 +1,2 @@
+        +alpha()
+        +beta()
+        """;
+    // Two suffix-colliding keys both carry the block — ambiguous, so no range is bound.
+    var resolver = new DiffLineResolver(Map.of("a/dir/Main.java", patch, "b/dir/Main.java", patch));
+
+    assertTrue(resolver.resolveSuggestionRange("dir/Main.java", "alpha()\nbeta()").isEmpty());
+  }
 }
