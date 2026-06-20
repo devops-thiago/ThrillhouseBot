@@ -130,7 +130,8 @@ class ReviewOrchestratorTest {
     when(dashboardConfig.url()).thenReturn("https://bot.example");
     doNothing().when(sessionPersistence).update(anyLong(), any());
     when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
-    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any())).thenReturn("");
+    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        .thenReturn("");
     // The verifier and dedup pass findings through untouched unless a test overrides them
     when(findingVerificationService.verify(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
@@ -682,7 +683,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldGenerateSummaryForFirstReviewWithFindings() {
-      when(summaryGenerator.generate(eq(4), eq(120), eq(45), any(), any()))
+      when(summaryGenerator.generate(eq(4), eq(120), eq(45), any(), any(), any()))
           .thenReturn("## Summary\n\nTest summary content");
 
       var aiResponse =
@@ -698,13 +699,13 @@ class ReviewOrchestratorTest {
               aiResponse, true, new ReviewOrchestrator.DiffStats(4, 120, 45), List.of());
 
       assertTrue(result.summaryMarkdown().contains("Test summary content"));
-      verify(summaryGenerator).generate(eq(4), eq(120), eq(45), any(), any());
+      verify(summaryGenerator).generate(eq(4), eq(120), eq(45), any(), any(), any());
     }
 
     @Test
     void shouldGenerateSummaryEvenWhenNoFindings() {
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
-      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
           .thenReturn("Clean summary with celebration");
 
       var result =
@@ -712,7 +713,7 @@ class ReviewOrchestratorTest {
               aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
 
       assertEquals("Clean summary with celebration", result.summaryMarkdown());
-      verify(summaryGenerator).generate(eq(0), eq(0), eq(0), any(), any());
+      verify(summaryGenerator).generate(eq(0), eq(0), eq(0), any(), any(), any());
     }
 
     @Test
@@ -1195,7 +1196,7 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
             .thenReturn("## Summary\nEverything's coming up Thrillhouse! 🎉");
 
         orchestrator.review(
@@ -1601,7 +1602,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any()))
+        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any(), any()))
             .thenReturn("## 🤖 ThrillhouseBot PR Summary");
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -2693,6 +2694,22 @@ class ReviewOrchestratorTest {
       assertEquals(0, stats.omittedFiles());
       assertFalse(stats.truncated());
     }
+
+    @Test
+    void toChangedFilesShouldProjectPathAndStatusInOrder() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff("a.java", "added", 3, 0, 3, "patch"),
+              new GitHubPullRequestClient.FileDiff("b.java", "renamed", 0, 0, 0, null));
+
+      var changed = ReviewOrchestrator.toChangedFiles(files);
+
+      assertEquals(2, changed.size());
+      assertEquals("a.java", changed.get(0).path());
+      assertEquals("added", changed.get(0).changeType());
+      assertEquals("b.java", changed.get(1).path());
+      assertEquals("renamed", changed.get(1).changeType());
+    }
   }
 
   @Nested
@@ -3295,6 +3312,7 @@ class ReviewOrchestratorTest {
           new ReviewResponse(List.of(), List.of(), null),
           false,
           new ReviewOrchestrator.DiffStats(0, 0, 0),
+          List.of(), // changedFiles
           List.of(),
           List.of(),
           backstop);
@@ -3460,7 +3478,7 @@ class ReviewOrchestratorTest {
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
             .thenReturn("ThrillhouseBot PR Summary\n\nAll clear!");
 
         orchestrator.review(followUpRequest());
@@ -4218,7 +4236,7 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "failure", null))));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
             .thenReturn("## Summary\nNo new issues, but required check **build** failed.");
 
         orchestrator.review(request());
