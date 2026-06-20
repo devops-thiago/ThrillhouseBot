@@ -127,13 +127,8 @@ public class DocGenerationService {
         return;
       }
 
-      DocGenerationResponse response;
-      try {
-        response = generate(task, files, pr);
-      } catch (RuntimeException e) {
-        Log.warnf(
-            e, "Doc generation failed for %s/%s #%d", task.owner(), task.repo(), task.prNumber());
-        postComment(auth, task, GENERATION_FAILED);
+      var response = generateOrReportFailure(auth, task, files, pr);
+      if (response == null) {
         return;
       }
 
@@ -145,6 +140,25 @@ public class DocGenerationService {
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Failed to handle /add-docs on %s/%s #%d", task.owner(), task.repo(), task.prNumber());
+    }
+  }
+
+  /**
+   * Runs generation, posting the failure notice and returning {@code null} when the model call or
+   * parse throws — so the caller can bail without a nested try.
+   */
+  private DocGenerationResponse generateOrReportFailure(
+      String auth,
+      DocTask task,
+      List<GitHubPullRequestClient.FileDiff> files,
+      GitHubPullRequestClient.PullRequestDetails pr) {
+    try {
+      return generate(task, files, pr);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e, "Doc generation failed for %s/%s #%d", task.owner(), task.repo(), task.prNumber());
+      postComment(auth, task, GENERATION_FAILED);
+      return null;
     }
   }
 

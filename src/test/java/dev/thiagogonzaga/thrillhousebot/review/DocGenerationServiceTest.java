@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -33,8 +34,12 @@ import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -46,13 +51,14 @@ class DocGenerationServiceTest {
 
   // A two-method diff: bar() on right-side line 1, baz() on right-side line 4.
   private static final String PATCH =
-      "@@ -0,0 +1,6 @@\n"
-          + "+public int bar(int x) {\n"
-          + "+  return x * 2;\n"
-          + "+}\n"
-          + "+public int baz(int y) {\n"
-          + "+  return y + 1;\n"
-          + "+}";
+      """
+      @@ -0,0 +1,6 @@
+      +public int bar(int x) {
+      +  return x * 2;
+      +}
+      +public int baz(int y) {
+      +  return y + 1;
+      +}""";
 
   @Mock private GitHubAuthClient authClient;
   @Mock private GitHubPullRequestClient prClient;
@@ -171,15 +177,11 @@ class DocGenerationServiceTest {
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
   }
 
-  @Test
-  void skipsSuggestionWhenDeclarationLineIsNotInDiff() {
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("unpostableSuggestions")
+  void doesNotPostSuggestionThatCannotAnchorCleanly(String reason, String docsJson) {
     prWithFiles(fooWithPatch());
-    when(docGenerator.generate(any(), any(), any(), any()))
-        .thenReturn(
-            """
-            {"docs":[{"file":"src/Foo.java","line":99,"symbol":"ghost",
-            "suggestion_old":"whatever","suggestion_new":"/** x */\\nwhatever"}]}
-            """);
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(docsJson);
 
     service.handle(task());
 
@@ -188,23 +190,40 @@ class DocGenerationServiceTest {
     assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
   }
 
-  @Test
-  void skipsSuggestionThatWouldDropTheExistingLine() {
-    prWithFiles(fooWithPatch());
-    // suggestion_new is ONLY a docstring — committing it would delete the declaration line.
-    when(docGenerator.generate(any(), any(), any(), any()))
-        .thenReturn(
+  static Stream<Arguments> unpostableSuggestions() {
+    return Stream.of(
+        arguments(
+            "declaration line is not in the diff",
+            """
+            {"docs":[{"file":"src/Foo.java","line":99,"symbol":"ghost",
+            "suggestion_old":"whatever","suggestion_new":"/** x */\\nwhatever"}]}
+            """),
+        arguments(
+            "replacement would drop the existing declaration line",
             """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** just a docstring, no code */"}]}
-            """);
-
-    service.handle(task());
-
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+            """),
+        arguments(
+            "suggestion_new is blank (not postable)",
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
+            """),
+        arguments(
+            "suggestion_old is omitted (no anchor to verify against)",
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"","suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """),
+        arguments(
+            "file is not part of the diff",
+            """
+            {"docs":[{"file":"src/Other.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """));
   }
 
   @Test
@@ -391,23 +410,6 @@ class DocGenerationServiceTest {
   }
 
   @Test
-  void skipsNonPostableSuggestion() {
-    prWithFiles(fooWithPatch());
-    when(docGenerator.generate(any(), any(), any(), any()))
-        .thenReturn(
-            """
-            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
-            "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
-            """);
-
-    service.handle(task());
-
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
-  }
-
-  @Test
   void skipsSuggestionRejectedByGitHub() {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
@@ -437,25 +439,6 @@ class DocGenerationServiceTest {
 
     // Blank title/description collapse to an empty PR-context slot.
     verify(docGenerator).generate(any(), eq(""), any(), any());
-  }
-
-  @Test
-  void skipsSuggestionWhenModelOmitsTheOriginalLine() {
-    // Without suggestion_old there is no anchor to verify the replacement against, so the
-    // suggestion is not postable and nothing is posted.
-    prWithFiles(fooWithPatch());
-    when(docGenerator.generate(any(), any(), any(), any()))
-        .thenReturn(
-            """
-            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
-            "suggestion_old":"","suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
-
-    service.handle(task());
-
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
   }
 
   @Test
@@ -489,23 +472,5 @@ class DocGenerationServiceTest {
 
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     assertTrue(postedSummary().contains("**1**"));
-  }
-
-  @Test
-  void skipsSuggestionForFileNotInDiff() {
-    prWithFiles(fooWithPatch());
-    when(docGenerator.generate(any(), any(), any(), any()))
-        .thenReturn(
-            """
-            {"docs":[{"file":"src/Other.java","line":1,"symbol":"bar",
-            "suggestion_old":"public int bar(int x) {",
-            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
-
-    service.handle(task());
-
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
   }
 }
