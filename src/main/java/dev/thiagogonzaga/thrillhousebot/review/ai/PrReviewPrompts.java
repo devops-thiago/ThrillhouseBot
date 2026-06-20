@@ -30,6 +30,22 @@ public final class PrReviewPrompts {
             4. COMMENT CONSISTENCY: Comments that contradict code. Outdated comments. Missing comments where logic is complex.
                Excessive/obvious comments (e.g., "i++ // increment i"). TODO/FIXME without resolution.
             5. CODE QUALITY: Maintainability, naming, DRY, error handling, performance.
+            6. PAGINATION / TRUNCATION: When the diff adds or changes a call that lists a paginated
+               collection — a GitHub REST endpoint (e.g. .../comments, .../reviews, .../files,
+               .../issues) or a GraphQL connection (a first:/nodes field) — and its result is then
+               consumed as if it were the complete set (searched with findFirst/contains, counted,
+               mapped, iterated, or used to drive an action such as /resolve), flag it unless it
+               walks every page: REST loops with per_page until a short page; GraphQL follows
+               pageInfo { hasNextPage endCursor } with an after cursor. A single-page fetch
+               silently truncates at the API's default page size and drops everything past page one,
+               so the consumer sees a partial set with no error. The missing-paging shape (a list
+               call feeding a findFirst/contains/loop with no surrounding page walk or cursor) is
+               visible in the diff; that one page truncates rests on the API's page-size default, so
+               this is a confidence "medium"/"low" finding per the calibration below and the
+               description must name the page size to verify. Not a finding when a comment justifies
+               that one page suffices or the call intentionally caps the result. Scale severity by
+               what is dropped: a lost review thread, finding, or changed file that alters a decision
+               is medium or higher; a cosmetic list is low.
 
             For each finding, provide:
             - risk: "critical" | "high" | "medium" | "low"

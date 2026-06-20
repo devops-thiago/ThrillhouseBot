@@ -15,6 +15,7 @@ This release makes the bot interactive and controllable from the PR — conversa
 - **Review on ready-for-review**: a draft PR marked "Ready for review" is reviewed immediately, pairing with `WEBHOOK_SKIP_DRAFTS` so drafts can be skipped until they are ready (#72)
 - **Fail-fast configuration validation**: required configuration (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `AI_API_KEY`) is validated at startup, and the app refuses to boot with a single message naming every missing or malformed value — including a non-numeric App id or a private key that is not valid PEM RSA — instead of failing later on the first webhook (#27)
 - **Configurable bot identity**: the bot's own account login(s) are configurable via `GITHUB_BOT_LOGINS`, so loop protection and `/resolve` keep working when the App is deployed under a different slug (#165)
+- **Reviewer flags single-page collection fetches**: the review prompt now has a pagination/truncation dimension, so a diff that lists a paginated collection (a GitHub REST endpoint or a GraphQL connection) and then consumes the result as if complete — searched, counted, iterated, or used to drive an action like `/resolve` — without walking every page is reported as a silent-truncation finding. The bot had been catching one such case while missing analogous REST and GraphQL ones (including in the same PR) because no dimension prompted the pattern; severity scales with what is dropped and confidence stays calibrated for the page-size assumption (#166)
 
 ### Changed
 
