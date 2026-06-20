@@ -58,7 +58,5 @@ public interface GitHubCommentClient {
   record CommentResponse(long id, @JsonProperty("html_url") String htmlUrl) {}
 
   /** A PR conversation comment, carrying just the body and author needed to spot the bot's own. */
-  record IssueComment(String body, User user) {
-    public record User(String login) {}
-  }
+  record IssueComment(String body, GitHubReviewClient.ReviewResponse.User user) {}
 }
