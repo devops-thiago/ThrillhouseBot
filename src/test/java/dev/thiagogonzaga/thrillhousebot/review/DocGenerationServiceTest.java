@@ -440,21 +440,39 @@ class DocGenerationServiceTest {
   }
 
   @Test
-  void postsWhenAnchorLineHasNoDeclarationTextToPreserve() {
-    // Defensive path: the anchored line is blank in the diff and suggestion_old is empty, so there
-    // is no existing declaration text to require in the replacement — the suggestion still posts.
-    var blankAnchorPatch = "@@ -0,0 +1,2 @@\n+\n+public int bar(int x) {";
-    prWithFiles(new FileDiff("src/Foo.java", "modified", 2, 0, 2, blankAnchorPatch));
+  void skipsSuggestionWhenModelOmitsTheOriginalLine() {
+    // Without suggestion_old there is no anchor to verify the replacement against, so the
+    // suggestion is not postable and nothing is posted.
+    prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
             """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
-            "suggestion_old":"","suggestion_new":"/** Doc inserted on the blank line. */"}]}
+            "suggestion_old":"","suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
             """);
 
     service.handle(task());
 
-    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertTrue(postedSummary().contains("**1**"));
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+  }
+
+  @Test
+  void skipsSuggestionForFileNotInDiff() {
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Other.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
   }
 }

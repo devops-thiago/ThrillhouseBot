@@ -42,11 +42,17 @@ public record DocGenerationResponse(List<DocSuggestion> docs) {
       @JsonProperty("suggestion_old") String suggestionOld,
       @JsonProperty("suggestion_new") String suggestionNew) {
 
-    /** Whether this suggestion carries the data needed to post a committable suggestion block. */
+    /**
+     * Whether this suggestion carries the data needed to post a committable suggestion block: a
+     * file, a positive line, the original declaration line ({@code suggestion_old}, the anchor the
+     * replacement is verified against), and the documented replacement ({@code suggestion_new}).
+     */
     public boolean isPostable() {
       return file != null
           && !file.isBlank()
           && line > 0
+          && suggestionOld != null
+          && !suggestionOld.isBlank()
           && suggestionNew != null
           && !suggestionNew.isBlank();
     }

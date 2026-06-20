@@ -205,7 +205,7 @@ public class DocGenerationService {
           doc.file(), doc.line());
       return false;
     }
-    if (!preservesExistingCode(doc, lineResolver)) {
+    if (!preservesExistingCode(doc)) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — replacement would not keep the existing line",
           doc.file(), doc.line());
@@ -234,19 +234,13 @@ public class DocGenerationService {
 
   /**
    * Guards against a suggestion that documents a symbol but drops its declaration: the replacement
-   * must still contain the existing line, so committing it only inserts documentation.
+   * ({@code suggestion_new}) must still contain the original declaration line ({@code
+   * suggestion_old}, which {@link DocGenerationResponse.DocSuggestion#isPostable()} guarantees is
+   * present), so committing it only inserts documentation. Mirrors the trust the review path places
+   * in the model's verbatim quote, paired here with the exact-line anchoring done by the caller.
    */
-  private static boolean preservesExistingCode(
-      DocGenerationResponse.DocSuggestion doc, DiffLineResolver lineResolver) {
-    String existing = lineResolver.getLineText(doc.file(), doc.line());
-    String anchor =
-        existing != null && !existing.isBlank() ? existing.strip() : strip(doc.suggestionOld());
-    if (anchor.isBlank()) {
-      // No declaration text to preserve (e.g. blank suggestion_old) — let it through; the exact
-      // line check already confirmed the anchor is real.
-      return true;
-    }
-    return doc.suggestionNew().contains(anchor);
+  private static boolean preservesExistingCode(DocGenerationResponse.DocSuggestion doc) {
+    return doc.suggestionNew().contains(doc.suggestionOld().strip());
   }
 
   private String summaryMessage(DocGenerationResponse response, int posted) {
@@ -354,10 +348,6 @@ public class DocGenerationService {
 
   private static boolean isBlank(String value) {
     return value == null || value.isBlank();
-  }
-
-  private static String strip(String value) {
-    return value == null ? "" : value.strip();
   }
 
   private static int num(DocTask task) {
