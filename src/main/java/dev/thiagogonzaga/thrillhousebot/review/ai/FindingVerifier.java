@@ -24,9 +24,13 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 @RegisterAiService
 public interface FindingVerifier {
 
+  // @UserMessage MUST stay on the method, not on a parameter: on a parameter quarkus-langchain4j
+  // uses that parameter's raw value (the findings) as the whole user message and never renders this
+  // template, silently dropping the diff, projectStack and previousFindings the audit needs.
   @SystemMessage(FindingVerifierPrompts.SYSTEM)
+  @UserMessage(FindingVerifierPrompts.USER)
   String verify(
-      @UserMessage(FindingVerifierPrompts.USER) @V("findings") String findings,
+      @V("findings") String findings,
       @V("diff") String diff,
       @V("projectStack") String projectStack,
       @V("previousFindings") String previousFindings);

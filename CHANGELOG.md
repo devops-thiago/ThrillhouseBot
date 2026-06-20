@@ -23,6 +23,10 @@ This release makes the bot interactive and controllable from the PR — conversa
 - **CI — faster pipeline**: SpotBugs moved off the test job's critical path into the parallel lint job, the test job collapsed into a single Maven reactor, and the native build + image publish skipped for docs-only pushes to `main` (#170)
 - **CI — SonarCloud scoping**: the Sonar scan runs only on `main` and same-repo pull requests (matching the SonarCloud community plan), and a `.dockerignore` keeps the Docker build context small (#165)
 
+### Fixed
+
+- **AI prompts dropped every context variable but the first**: each AI service (`PrReviewer`, `ReplyAssistant`, `FindingVerifier`) declared `@UserMessage` on a method *parameter*, which makes quarkus-langchain4j send only that parameter's raw value as the user message and never render the prompt template. So reviews ran on the diff alone — silently ignoring the repository instructions (`.github/thrillhousebot.md`), project stack, PR title/description, base comparison, related tests, and previous findings — the finding verifier audited candidates without the diff, and conversational replies saw only the maintainer's question with no diff, finding, or thread. Moved `@UserMessage` to the method so every `@V` variable is interpolated, and reduced `PromptTemplateEscaper` to marker-neutralization (its Qute unparsed-section wrapper was never stripped for data-bound values and corrupted any content containing `|}`). Added end-to-end and structural regression tests that pin the rendered prompt (#186)
+
 ### Documentation
 
 - **Repository review guidance**: added a dogfooded `.github/thrillhousebot.md` with GitHub platform facts and review heuristics for this codebase, so the bot stops repeating known false positives and primes recurring misses (#168)

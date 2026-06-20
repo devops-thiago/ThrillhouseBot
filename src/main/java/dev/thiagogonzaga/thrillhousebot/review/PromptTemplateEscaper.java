@@ -15,23 +15,30 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-/** Escapes user-provided prompt fragments before LangChain4j/Qute template rendering. */
+/** Escapes user-provided prompt fragments before they are bound into a LangChain4j prompt. */
 public final class PromptTemplateEscaper {
 
   private PromptTemplateEscaper() {}
 
   /**
-   * Wraps user-provided content in a Qute unparsed section ({@code {|...|}}) so the model receives
-   * it byte-exact after LangChain4j substitutes it into the prompt template and Qute renders the
-   * result. Also neutralizes spoofed copies of the section delimiters the prompts wrap the diff in
-   * — PR content must never be able to fake the end of the diff section and inject instructions.
+   * Prepares untrusted content (a diff, a PR description, a maintainer's question, a prior finding)
+   * for a prompt. The AI-service templates reference it through a Qute {@code @V} variable, and
+   * quarkus-langchain4j binds {@code @V} values as <em>template data</em>: their string value is
+   * inserted as-is and is <strong>not</strong> re-parsed as Qute. So the content already reaches
+   * the model byte-exact — braces, backslashes, {@code {#if}} / {@code {config:x}} expression
+   * syntax, everything renders verbatim and is never interpreted. (Verified end-to-end against the
+   * real engine by AiServicePromptRenderingTest.)
    *
-   * <p>Character escaping is unsalvageable here: Qute consumes one backslash before a brace but
-   * passes other backslashes through verbatim, so the previous brace-and-backslash escaping showed
-   * the model {@code "\\n"} wherever the source said {@code "\n"} (it kept "correcting" it), and
-   * odd-length backslash runs before a brace cannot be represented at all. Unparsed sections
-   * round-trip everything; internal {@code |}} terminators are emitted as plain text between two
-   * sections. Pinned against the real Qute engine by PromptTemplateEscaperQuteTest.
+   * <p>The one transformation still required is neutralizing spoofed copies of the {@code
+   * <<<DIFF_START>>>} / {@code <<<DIFF_END>>>} delimiters the prompts wrap the diff in, so PR
+   * content can never fake the end of the diff section and smuggle in instructions after it.
+   *
+   * <p>This used to additionally wrap the value in a Qute unparsed section ({@code {|...|}}) to
+   * survive a second Qute pass. That pass does not happen for data-bound variables — the wrapper
+   * leaked into the prompt literally and corrupted any content containing {@code |}} — so it was
+   * removed once the templates moved their {@code @UserMessage} to the method (where {@code @V}
+   * variables are interpolated rather than the first parameter being rendered as a template
+   * itself).
    *
    * <p>Self-referential edge: code that itself contains the three-bracket marker strings — this
    * class, its tests, the prompt templates — necessarily renders with them neutralized, so the
@@ -43,7 +50,7 @@ public final class PromptTemplateEscaper {
     if (value == null || value.isEmpty()) {
       return value;
     }
-    return "{|" + neutralizeMarkers(value).replace("|}", "|}|}{|") + "|}";
+    return neutralizeMarkers(value);
   }
 
   /**
