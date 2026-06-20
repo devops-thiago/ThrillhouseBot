@@ -261,6 +261,71 @@ class PrLabelerTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
       assertEquals(List.of("bug"), captor.getValue().labels());
     }
+
+    @Test
+    void shouldNotAddLabelsWhenPrIsAlreadyAtMax() {
+      when(labelsConfig.maxLabels()).thenReturn(3);
+      // The PR already carries max labels from earlier reviews — adding more would exceed the cap.
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+          .thenReturn(List.of(label("a"), label("b"), label("c")));
+
+      labeler.applyOrSuggest(request(false, List.of("d"), List.of(label("d"))));
+
+      verify(labelClient, never())
+          .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldOnlyTopUpToMaxAgainstLabelsAlreadyOnThePr() {
+      when(labelsConfig.maxLabels()).thenReturn(3);
+      // Two labels already present, so only one more may be added regardless of how many match.
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+          .thenReturn(List.of(label("a"), label("b")));
+
+      labeler.applyOrSuggest(request(false, List.of("c", "d"), List.of(label("c"), label("d"))));
+
+      var captor = ArgumentCaptor.forClass(GitHubLabelClient.AddLabelsRequest.class);
+      verify(labelClient)
+          .addLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      assertEquals(List.of("c"), captor.getValue().labels());
+    }
+
+    @Test
+    void shouldSkipLabelsAlreadyOnThePrWithoutSpendingBudget() {
+      when(labelsConfig.maxLabels()).thenReturn(3);
+      // "bug" is already on the PR; re-adding it is a no-op, so its budget slot frees up for
+      // "docs".
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+          .thenReturn(List.of(label("bug")));
+
+      labeler.applyOrSuggest(
+          request(false, List.of("bug", "docs"), List.of(label("bug"), label("docs"))));
+
+      var captor = ArgumentCaptor.forClass(GitHubLabelClient.AddLabelsRequest.class);
+      verify(labelClient)
+          .addLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      assertEquals(List.of("docs"), captor.getValue().labels());
+    }
+
+    @Test
+    void shouldStillApplyWhenCurrentLabelLookupFails() {
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+          .thenThrow(new RuntimeException("rate limited"));
+
+      labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
+
+      var captor = ArgumentCaptor.forClass(GitHubLabelClient.AddLabelsRequest.class);
+      verify(labelClient)
+          .addLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      assertEquals(List.of("bug"), captor.getValue().labels());
+    }
   }
 
   @Nested

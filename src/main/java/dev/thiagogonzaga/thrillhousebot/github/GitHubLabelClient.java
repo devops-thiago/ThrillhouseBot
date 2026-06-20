@@ -36,6 +36,19 @@ public interface GitHubLabelClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
+  /** Lists the labels currently on a PR (PRs are issues for the labels API). */
+  @GET
+  @Path("/repos/{owner}/{repo}/issues/{issueNumber}/labels")
+  @Produces(MediaType.APPLICATION_JSON)
+  List<Label> listIssueLabels(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("issueNumber") int issueNumber,
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
+
   /**
    * Adds labels to a PR (PRs are issues for the labels API). Idempotent — labels already present
    * are left untouched. Names must already exist in the repo or GitHub rejects the request.
