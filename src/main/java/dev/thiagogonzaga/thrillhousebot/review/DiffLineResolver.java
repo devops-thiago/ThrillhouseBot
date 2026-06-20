@@ -306,9 +306,11 @@ public final class DiffLineResolver {
     if (matchOffset == -1) {
       return Optional.empty();
     }
+    // Right-side line numbers are walked in ascending diff order, so a run of two or more matched
+    // lines always yields endLine > startLine — no degenerate single-line range to guard against.
     int startLine = lineNumbers.get(matchOffset);
     int endLine = lineNumbers.get(matchOffset + anchorLines.size() - 1);
-    return endLine > startLine ? Optional.of(new LineRange(startLine, endLine)) : Optional.empty();
+    return Optional.of(new LineRange(startLine, endLine));
   }
 
   /**

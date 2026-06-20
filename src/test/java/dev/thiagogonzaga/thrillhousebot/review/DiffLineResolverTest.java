@@ -804,4 +804,50 @@ class DiffLineResolverTest {
 
     assertTrue(resolver.resolveSuggestionRange("dir/Main.java", "alpha()\nbeta()").isEmpty());
   }
+
+  @Test
+  void resolveSuggestionRangeShouldReturnEmptyWhenFileNotInDiff() {
+    var patch =
+        """
+        @@ -1,2 +1,2 @@
+        +alpha()
+        +beta()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    // A multi-line anchor whose file is absent from the diff (no exact key, no path variant)
+    // resolves to no key and so to no range.
+    assertTrue(resolver.resolveSuggestionRange("other/Z.java", "alpha()\nbeta()").isEmpty());
+  }
+
+  @Test
+  void resolveSuggestionRangeFallsBackToVariantWhenExactEntryIsEmpty() {
+    // The exact path is present but deletion-only (empty right side), and an unrelated file is also
+    // deletion-only. Neither the empty exact entry nor the empty unrelated entry may short-circuit
+    // the fallback to the path variant that actually carries the lines (#132a).
+    var deletionOnly =
+        """
+        @@ -1,2 +1,0 @@
+        -alpha()
+        -beta()
+        """;
+    var withContent =
+        """
+        @@ -10,2 +10,2 @@
+        +alpha()
+        +beta()
+        """;
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                "dir/Main.java", deletionOnly,
+                "unrelated/Other.java", deletionOnly,
+                "src/dir/Main.java", withContent));
+
+    var range = resolver.resolveSuggestionRange("dir/Main.java", "alpha()\nbeta()");
+
+    assertTrue(range.isPresent());
+    assertEquals(10, range.get().startLine());
+    assertEquals(11, range.get().endLine());
+  }
 }
