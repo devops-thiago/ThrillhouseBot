@@ -662,6 +662,28 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldSkipConversationalMentionOnPausedPr() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("@thrillhousebot is this thread-safe?"))
+        .thenReturn(CommentCommand.NONE);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot is this thread-safe?"))
+        .thenReturn(true);
+    when(prPauseService.isPaused("owner", "repo", 77)).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload(
+                "created", 77, "owner/repo", "octocat", "@thrillhousebot is this thread-safe?")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // /pause silences the bot, so a mention must not spend a paid conversational reply.
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
   void shouldNotDispatchReplyForMentionWhenRepliesDisabled() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(reviewConfig.conversationalRepliesEnabled()).thenReturn(false);
@@ -749,6 +771,27 @@ class WebhookControllerTest {
                 2000L,
                 true,
                 "@@ -1 +1 @@"));
+  }
+
+  @Test
+  void shouldSkipReviewCommentReplyOnPausedPr() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("Why is this flagged?")).thenReturn(false);
+    when(prPauseService.isPaused("owner", "repo", 42)).thenReturn(true);
+
+    var body =
+        buildReviewCommentPayload(
+                "created", 42, "owner/repo", "octocat", "Why is this flagged?", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // /pause silences the bot, so a review-thread reply must not spend a paid conversational reply.
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
   }
 
   @ParameterizedTest
