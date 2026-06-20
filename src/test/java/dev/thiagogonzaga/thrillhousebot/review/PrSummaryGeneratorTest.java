@@ -36,7 +36,7 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             findings, 0, 1, 1, 0, RiskLevel.HIGH, ReviewState.REQUEST_CHANGES, true, "", List.of());
 
-    var summary = generator.generate(3, 120, 45, null, result);
+    var summary = generator.generate(3, 120, 45, List.of(), null, result);
 
     assertTrue(summary.contains("🤖 ThrillhouseBot PR Summary"));
     assertFalse(summary.contains("Repository:"));
@@ -62,7 +62,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-    var summary = generator.generate(1, 5, 0, aiSummary, result);
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
     assertTrue(summary.contains("### What this PR does"));
     assertTrue(summary.contains("Adds a user update endpoint with validation."));
@@ -84,10 +84,10 @@ class PrSummaryGeneratorTest {
 
     for (var summary :
         List.of(
-            generator.generate(1, 0, 0, null, result),
-            generator.generate(1, 0, 0, blankSummary, result),
-            generator.generate(1, 0, 0, nullPurposeSummary, result),
-            generator.generate(1, 0, 0, blankGapsSummary, result))) {
+            generator.generate(1, 0, 0, List.of(), null, result),
+            generator.generate(1, 0, 0, List.of(), blankSummary, result),
+            generator.generate(1, 0, 0, List.of(), nullPurposeSummary, result),
+            generator.generate(1, 0, 0, List.of(), blankGapsSummary, result))) {
       assertFalse(summary.contains("What this PR does"));
       assertFalse(summary.contains("Description vs. Implementation"));
     }
@@ -98,12 +98,12 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-    var summary = generator.generate(3, 169, 0, null, result);
+    var summary = generator.generate(3, 169, 0, List.of(), null, result);
 
     assertTrue(summary.contains("**Lines added:** +169"));
     assertTrue(summary.contains("**Lines removed:** 0"));
     assertFalse(summary.contains("-0"));
-    assertTrue(generator.generate(3, 0, 7, null, result).contains("**Lines added:** 0"));
+    assertTrue(generator.generate(3, 0, 7, List.of(), null, result).contains("**Lines added:** 0"));
   }
 
   @Test
@@ -112,7 +112,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-    assertFalse(generator.generate(1, 0, 0, null, result).contains("View in dashboard"));
+    assertFalse(generator.generate(1, 0, 0, List.of(), null, result).contains("View in dashboard"));
   }
 
   @Test
@@ -120,7 +120,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertTrue(summary.contains("Critical | 0"));
     assertTrue(summary.contains("High | 0"));
@@ -131,7 +131,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertTrue(summary.contains("Everything's coming up Thrillhouse"));
     assertTrue(summary.contains("No issues found in this PR."));
@@ -143,7 +143,8 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
 
-    assertFalse(generator.generate(1, 10, 2, null, result).contains("coming up Thrillhouse"));
+    assertFalse(
+        generator.generate(1, 10, 2, List.of(), null, result).contains("coming up Thrillhouse"));
   }
 
   @Test
@@ -152,7 +153,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertFalse(summary.contains("Everything's coming up Thrillhouse"));
   }
@@ -164,7 +165,7 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of());
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertFalse(summary.contains("Everything's coming up Thrillhouse"));
     assertTrue(summary.contains("Key Findings"));
@@ -180,7 +181,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
 
-    var summary = generator.generate(1, 0, 0, null, result);
+    var summary = generator.generate(1, 0, 0, List.of(), null, result);
 
     assertTrue(summary.contains("Previous Findings Status"));
     assertTrue(summary.contains("✅ Resolved"));
@@ -200,7 +201,7 @@ class PrSummaryGeneratorTest {
     var result =
         new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
 
-    var summary = generator.generate(1, 0, 0, null, result);
+    var summary = generator.generate(1, 0, 0, List.of(), null, result);
 
     assertTrue(summary.contains("✅ Resolved | 1"), summary);
     assertTrue(summary.contains("⚠️ Still present | 1"), summary);
@@ -231,7 +232,7 @@ class PrSummaryGeneratorTest {
             "",
             List.of());
 
-    var summary = generator.generate(6, 0, 0, null, result);
+    var summary = generator.generate(6, 0, 0, List.of(), null, result);
 
     // Should only show 5 findings
     assertTrue(summary.contains("C1"));
@@ -252,7 +253,7 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertFalse(summary.contains("Everything's coming up Thrillhouse"));
     assertTrue(
@@ -272,7 +273,7 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of(), checks);
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertFalse(summary.contains("Everything's coming up Thrillhouse"));
     assertTrue(summary.contains("Key Findings"));
@@ -290,7 +291,7 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     assertTrue(summary.contains("build \\| strict"));
     assertFalse(summary.contains("build | strict"));
@@ -303,10 +304,159 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
 
-    var summary = generator.generate(1, 10, 2, null, result);
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
     // A null name/conclusion renders as "-" rather than throwing.
     assertTrue(summary.contains("Required CI Checks Status"));
     assertTrue(summary.contains("⏳ Pending"));
+  }
+
+  @Test
+  void shouldRenderChangedFilesTableWithPerFileSummaries() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("src/A.java", "modified"),
+            new PrSummaryGenerator.ChangedFile("src/B.java", "added"));
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary("src/A.java", "Adds null guard to parse()"),
+            new ReviewResponse.FileSummary("src/B.java", "New cache wrapper"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(2, 10, 1, changedFiles, aiSummary, result);
+
+    assertTrue(summary.contains("### Changed Files"));
+    assertTrue(summary.contains("| File | Change | Summary |"));
+    assertTrue(summary.contains("| `src/A.java` | Modified | Adds null guard to parse() |"));
+    assertTrue(summary.contains("| `src/B.java` | Added | New cache wrapper |"));
+  }
+
+  @Test
+  void shouldRenderDashWhenFileHasNoMatchingSummary() {
+    var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/A.java", "modified"));
+    // AI summarized a different file; the changed file still appears, with "-" for its summary.
+    var aiSummary = summaryWithFiles(new ReviewResponse.FileSummary("src/Other.java", "unrelated"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
+
+    assertTrue(summary.contains("| `src/A.java` | Modified | - |"));
+  }
+
+  @Test
+  void shouldOmitChangedFilesSectionWhenNoFiles() {
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(0, 0, 0, List.of(), summaryWithFiles(), result);
+
+    assertFalse(summary.contains("Changed Files"));
+  }
+
+  @Test
+  void shouldBoundChangedFilesTableAndReportOverflow() {
+    var changedFiles = new java.util.ArrayList<PrSummaryGenerator.ChangedFile>();
+    int total = PrSummaryGenerator.MAX_FILE_ROWS + 3;
+    for (int i = 0; i < total; i++) {
+      changedFiles.add(new PrSummaryGenerator.ChangedFile("src/F" + i + ".java", "modified"));
+    }
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(total, 0, 0, changedFiles, null, result);
+
+    // Only MAX_FILE_ROWS rows render; the first is present, the (MAX+1)th is rolled into the note.
+    assertTrue(summary.contains("`src/F0.java`"));
+    assertTrue(summary.contains("`src/F" + (PrSummaryGenerator.MAX_FILE_ROWS - 1) + ".java`"));
+    assertFalse(summary.contains("`src/F" + PrSummaryGenerator.MAX_FILE_ROWS + ".java`"));
+    assertTrue(summary.contains("…and 3 more file(s)."));
+  }
+
+  @Test
+  void shouldEscapePipesInChangedFilesTable() {
+    var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/a|b.java", "modified"));
+    var aiSummary =
+        summaryWithFiles(new ReviewResponse.FileSummary("src/a|b.java", "handles a | b case"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
+
+    assertTrue(summary.contains("src/a\\|b.java"));
+    assertTrue(summary.contains("handles a \\| b case"));
+  }
+
+  @Test
+  void shouldLabelKnownChangeTypesAndFallBackForUnknown() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("a", "added"),
+            new PrSummaryGenerator.ChangedFile("b", "removed"),
+            new PrSummaryGenerator.ChangedFile("c", "renamed"),
+            new PrSummaryGenerator.ChangedFile("d", "modified"),
+            new PrSummaryGenerator.ChangedFile("e", null),
+            new PrSummaryGenerator.ChangedFile("f", "unmerged"),
+            new PrSummaryGenerator.ChangedFile("g", ""),
+            new PrSummaryGenerator.ChangedFile("h", "deleted"),
+            new PrSummaryGenerator.ChangedFile("i", "copied"),
+            new PrSummaryGenerator.ChangedFile("j", "CHANGED"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(10, 0, 0, changedFiles, null, result);
+
+    assertTrue(summary.contains("| `a` | Added |"));
+    assertTrue(summary.contains("| `b` | Removed |"));
+    assertTrue(summary.contains("| `c` | Renamed |"));
+    assertTrue(summary.contains("| `d` | Modified |"));
+    assertTrue(summary.contains("| `e` | Changed |")); // null status falls back to "Changed"
+    assertTrue(summary.contains("| `f` | unmerged |")); // unknown status passes through verbatim
+    assertTrue(summary.contains("| `g` | Changed |")); // blank status falls back to "Changed"
+    assertTrue(summary.contains("| `h` | Removed |")); // "deleted" aliases to "Removed"
+    assertTrue(summary.contains("| `i` | Copied |"));
+    assertTrue(summary.contains("| `j` | Modified |")); // matching is case-insensitive
+  }
+
+  @Test
+  void shouldOmitChangedFilesSectionWhenChangedFilesNull() {
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(0, 0, 0, null, null, result);
+
+    assertFalse(summary.contains("Changed Files"));
+  }
+
+  @Test
+  void shouldDropMalformedFileSummariesAndKeepFirstOnDuplicatePath() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("src/A.java", "modified"),
+            new PrSummaryGenerator.ChangedFile("src/B.java", "added"));
+    // Malformed entries (null/blank path, null summary) are dropped; a duplicate path keeps the
+    // first usable note rather than throwing from Collectors.toMap.
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary(null, "no path"),
+            new ReviewResponse.FileSummary("  ", "blank path"),
+            new ReviewResponse.FileSummary("src/A.java", null),
+            new ReviewResponse.FileSummary("src/A.java", "first wins"),
+            new ReviewResponse.FileSummary("src/A.java", "second ignored"),
+            new ReviewResponse.FileSummary("src/B.java", "b note"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(2, 1, 0, changedFiles, aiSummary, result);
+
+    assertTrue(summary.contains("| `src/A.java` | Modified | first wins |"));
+    assertFalse(summary.contains("second ignored"));
+    assertTrue(summary.contains("| `src/B.java` | Added | b note |"));
+  }
+
+  private static ReviewResponse.Summary summaryWithFiles(ReviewResponse.FileSummary... files) {
+    return new ReviewResponse.Summary(
+        0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(files));
   }
 }
