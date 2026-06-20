@@ -120,10 +120,13 @@ class SuggestionFormatterTest {
 
   @Test
   void shouldFormatDocCommentWithoutSymbol() {
-    var comment = formatter.formatDocComment(" ", "old", "/** doc */\nold");
+    var blank = formatter.formatDocComment(" ", "old", "/** doc */\nold");
+    var nullSymbol = formatter.formatDocComment(null, "old", "/** doc */\nold");
 
-    assertTrue(comment.contains("📝 Documentation**"));
-    assertFalse(comment.contains("for ``"));
-    assertTrue(comment.contains("```suggestion"));
+    for (var comment : new String[] {blank, nullSymbol}) {
+      assertTrue(comment.contains("📝 Documentation**"), comment);
+      assertFalse(comment.contains("for `"), comment);
+      assertTrue(comment.contains("```suggestion"), comment);
+    }
   }
 }

@@ -70,7 +70,8 @@ class DocGenerationParserTest {
   }
 
   @Test
-  void throwsOnEmptyOrInvalidJson() {
+  void throwsOnNullEmptyOrInvalidJson() {
+    assertThrows(IllegalArgumentException.class, () -> parser.parse(null));
     assertThrows(IllegalArgumentException.class, () -> parser.parse(""));
     assertThrows(IllegalArgumentException.class, () -> parser.parse("not json at all"));
   }

@@ -262,4 +262,199 @@ class DocGenerationServiceTest {
     assertDoesNotThrow(() -> service.handle(task()));
     verifyNoInteractions(commentClient);
   }
+
+  @Test
+  void feedsRepositoryInstructionsAndProjectStackIntoThePrompt() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(
+            new PullRequestDetails(
+                "Add cache", "Speeds up reads", new Ref(HEAD_SHA), new Ref("b")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(fooWithPatch()));
+    when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(
+            new InstructionsResolver.ResolvedInstructions(
+                "Use British spelling.", ".github/thrillhousebot.md"));
+    when(projectStackResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn("Maven artifacts: quarkus-core");
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+
+    service.handle(task());
+
+    // prContext carries the PR title/description; stack and the rendered instructions section flow
+    // through their own prompt slots.
+    verify(docGenerator)
+        .generate(
+            any(),
+            contains("Add cache"),
+            contains("Maven artifacts: quarkus-core"),
+            contains("Project-Specific Instructions"));
+  }
+
+  @Test
+  void continuesWhenProjectStackResolutionFails() {
+    prWithFiles(fooWithPatch());
+    when(projectStackResolver.resolve(any(), any(), any(), anyLong()))
+        .thenThrow(new RuntimeException("stack down"));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("**1**"));
+  }
+
+  @Test
+  void continuesWhenInstructionsResolutionFails() {
+    prWithFiles(fooWithPatch());
+    when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenThrow(new RuntimeException("instructions down"));
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+
+    service.handle(task());
+
+    // Best-effort enrichment failing must not fail the command — the empty result still posts.
+    assertEquals(DocGenerationService.NOTHING_TO_DOCUMENT, postedSummary());
+  }
+
+  @Test
+  void handlesPullRequestWithNoTitleOrBody() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails(null, null, new Ref(HEAD_SHA), new Ref("base")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(fooWithPatch()));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+
+    service.handle(task());
+
+    verify(docGenerator).generate(any(), eq(""), any(), any());
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void reportsWhenHeadIsMissing() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("T", "B", null, new Ref("base")));
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.NO_PR_DETAILS, postedSummary());
+    verifyNoInteractions(docGenerator);
+  }
+
+  @Test
+  void reportsWhenHeadShaIsBlank() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("T", "B", new Ref(" "), new Ref("base")));
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.NO_PR_DETAILS, postedSummary());
+    verifyNoInteractions(docGenerator);
+  }
+
+  @Test
+  void reportsNoFilesWhenFileFetchFails() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("T", "B", new Ref(HEAD_SHA), new Ref("base")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenThrow(new RuntimeException("files down"));
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.NO_FILES, postedSummary());
+    verifyNoInteractions(docGenerator);
+  }
+
+  @Test
+  void reportsNoFilesWhenFileListIsNull() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("T", "B", new Ref(HEAD_SHA), new Ref("base")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(null);
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.NO_FILES, postedSummary());
+  }
+
+  @Test
+  void skipsNonPostableSuggestion() {
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+  }
+
+  @Test
+  void skipsSuggestionRejectedByGitHub() {
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+    when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
+        .thenThrow(new RuntimeException("422 line outside diff"));
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+  }
+
+  @Test
+  void handlesBlankTitleAndBody() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("  ", "  ", new Ref(HEAD_SHA), new Ref("base")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(fooWithPatch()));
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+
+    service.handle(task());
+
+    // Blank title/description collapse to an empty PR-context slot.
+    verify(docGenerator).generate(any(), eq(""), any(), any());
+  }
+
+  @Test
+  void postsWhenAnchorLineHasNoDeclarationTextToPreserve() {
+    // Defensive path: the anchored line is blank in the diff and suggestion_old is empty, so there
+    // is no existing declaration text to require in the replacement — the suggestion still posts.
+    var blankAnchorPatch = "@@ -0,0 +1,2 @@\n+\n+public int bar(int x) {";
+    prWithFiles(new FileDiff("src/Foo.java", "modified", 2, 0, 2, blankAnchorPatch));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"","suggestion_new":"/** Doc inserted on the blank line. */"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("**1**"));
+  }
 }
