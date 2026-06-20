@@ -459,6 +459,39 @@ class DocGenerationServiceTest {
   }
 
   @Test
+  void reportsWhenHeadShaIsNull() {
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("T", "B", new Ref((String) null), new Ref("base")));
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.NO_PR_DETAILS, postedSummary());
+    verifyNoInteractions(docGenerator);
+  }
+
+  @Test
+  void ignoresChangedFilesThatCarryNoPatch() {
+    // A file with a null or blank patch (e.g. a binary or too-large file) contributes no lines to
+    // anchor against and must simply be skipped while the patched file is still documented.
+    prWithFiles(
+        fooWithPatch(),
+        new FileDiff("src/Binary.bin", "modified", 0, 0, 0, null),
+        new FileDiff("src/Empty.java", "modified", 0, 0, 0, "  "));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("**1**"));
+  }
+
+  @Test
   void skipsSuggestionForFileNotInDiff() {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
