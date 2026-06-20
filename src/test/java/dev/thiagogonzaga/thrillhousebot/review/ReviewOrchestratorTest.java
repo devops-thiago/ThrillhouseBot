@@ -1588,7 +1588,7 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCommentClient.IssueComment(
                         PrSummaryGenerator.SUMMARY_HEADING + "\n\nAlready posted earlier",
-                        new GitHubCommentClient.IssueComment.User("thrillhousebot[bot]"))));
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any()))
@@ -3457,7 +3457,7 @@ class ReviewOrchestratorTest {
 
     private GitHubCommentClient.IssueComment comment(String body, String login) {
       return new GitHubCommentClient.IssueComment(
-          body, login == null ? null : new GitHubCommentClient.IssueComment.User(login));
+          body, login == null ? null : new GitHubReviewClient.ReviewResponse.User(login));
     }
 
     private void stubComments(GitHubCommentClient.IssueComment... comments) {
