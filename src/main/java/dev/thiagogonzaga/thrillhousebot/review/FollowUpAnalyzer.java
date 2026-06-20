@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -69,8 +70,9 @@ public class FollowUpAnalyzer {
   public String buildPreviousFindingsContext(
       String previousAiResponseJson,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
-      String botLogin) {
-    return buildPreviousFindingsContext(previousAiResponseJson, priorReviews, List.of(), botLogin);
+      BotIdentity botIdentity) {
+    return buildPreviousFindingsContext(
+        previousAiResponseJson, priorReviews, List.of(), botIdentity);
   }
 
   /**
@@ -81,9 +83,9 @@ public class FollowUpAnalyzer {
       String previousAiResponseJson,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     return buildPreviousFindingsContext(
-        previousAiResponseJson, priorReviews, inlineComments, List.of(), botLogin);
+        previousAiResponseJson, priorReviews, inlineComments, List.of(), botIdentity);
   }
 
   /**
@@ -98,13 +100,13 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<String> olderAiResponseJsons,
-      String botLogin) {
-    var structured = formatStructuredFindings(previousAiResponseJson, inlineComments, botLogin);
-    var answered = formatAnsweredEarlier(olderAiResponseJsons, inlineComments, botLogin);
+      BotIdentity botIdentity) {
+    var structured = formatStructuredFindings(previousAiResponseJson, inlineComments, botIdentity);
+    var answered = formatAnsweredEarlier(olderAiResponseJsons, inlineComments, botIdentity);
     if (!structured.isEmpty()) {
       return structured + answered;
     }
-    var fallback = buildPreviousFindingsContext(priorReviews, botLogin);
+    var fallback = buildPreviousFindingsContext(priorReviews, botIdentity);
     return fallback + answered;
   }
 
@@ -116,7 +118,7 @@ public class FollowUpAnalyzer {
   private String formatAnsweredEarlier(
       List<String> olderAiResponseJsons,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     if (olderAiResponseJsons == null || olderAiResponseJsons.isEmpty()) {
       return "";
     }
@@ -124,7 +126,7 @@ public class FollowUpAnalyzer {
     var seen = new HashSet<String>();
     for (String json : olderAiResponseJsons) {
       for (var finding : parsePreviousFindings(json)) {
-        appendAnsweredEntry(sb, seen, finding, inlineComments, botLogin);
+        appendAnsweredEntry(sb, seen, finding, inlineComments, botIdentity);
       }
     }
     return sb.toString();
@@ -140,14 +142,14 @@ public class FollowUpAnalyzer {
       Set<String> seen,
       ReviewResponse.Finding finding,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     if (finding.file() == null || finding.title() == null) {
       return;
     }
     if (!seen.add(finding.file() + "#" + finding.title())) {
       return;
     }
-    Long rootId = answeredRootComment(finding, inlineComments, botLogin);
+    Long rootId = answeredRootComment(finding, inlineComments, botIdentity);
     if (rootId == null) {
       return;
     }
@@ -172,7 +174,7 @@ public class FollowUpAnalyzer {
   private String formatStructuredFindings(
       String aiResponseJson,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     var previous = parsePreviousFindings(aiResponseJson);
     if (previous.isEmpty()) {
       return "";
@@ -194,7 +196,7 @@ public class FollowUpAnalyzer {
       if (finding.description() != null && !finding.description().isBlank()) {
         sb.append("   ").append(finding.description()).append("\n");
       }
-      appendThreadReplies(sb, finding, id, inlineComments, botLogin);
+      appendThreadReplies(sb, finding, id, inlineComments, botIdentity);
       id++;
     }
     return sb.toString();
@@ -205,8 +207,8 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
-    Long rootId = rootCommentId(finding, findingId, inlineComments, botLogin);
+      BotIdentity botIdentity) {
+    Long rootId = rootCommentId(finding, findingId, inlineComments, botIdentity);
     if (rootId == null) {
       return;
     }
@@ -236,12 +238,12 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
-    Long markerRoot = markerRootComment(finding, findingId, false, inlineComments, botLogin);
+      BotIdentity botIdentity) {
+    Long markerRoot = markerRootComment(finding, findingId, false, inlineComments, botIdentity);
     if (markerRoot != null) {
       return markerRoot;
     }
-    return rootCommentByTitle(finding, inlineComments, botLogin);
+    return rootCommentByTitle(finding, inlineComments, botIdentity);
   }
 
   /**
@@ -267,10 +269,10 @@ public class FollowUpAnalyzer {
       int findingId,
       boolean requireOwnContent,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     String marker = SuggestionFormatter.findingMarker(findingId);
     var markerMatches =
-        botRootComments(inlineComments, botLogin)
+        botRootComments(inlineComments, botIdentity)
             .filter(c -> c.body() != null && c.body().contains(marker))
             .filter(c -> finding.file() == null || FilePaths.same(finding.file(), c.path()))
             .filter(c -> !requireOwnContent || bodyCarriesOwnContent(finding, c.body()))
@@ -309,8 +311,8 @@ public class FollowUpAnalyzer {
   private static Long rootCommentByTitle(
       ReviewResponse.Finding finding,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
-    List<Long> matches = rootCommentsByTitle(finding, inlineComments, botLogin);
+      BotIdentity botIdentity) {
+    List<Long> matches = rootCommentsByTitle(finding, inlineComments, botIdentity);
     return matches.isEmpty() ? null : matches.get(matches.size() - 1);
   }
 
@@ -322,9 +324,9 @@ public class FollowUpAnalyzer {
   private static Long answeredRootComment(
       ReviewResponse.Finding finding,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
-    for (Long rootId : rootCommentsByTitle(finding, inlineComments, botLogin)) {
-      if (hasHumanReply(rootId, inlineComments, botLogin)) {
+      BotIdentity botIdentity) {
+    for (Long rootId : rootCommentsByTitle(finding, inlineComments, botIdentity)) {
+      if (hasHumanReply(rootId, inlineComments, botIdentity)) {
         return rootId;
       }
     }
@@ -336,7 +338,7 @@ public class FollowUpAnalyzer {
    * backstop's newest-prior-round case. The finding's own {@code thrillhousebot:finding=N} marked
    * thread is authoritative: when one exists, only a reply on <em>it</em> clears the hold. The
    * marker is title-independent, so a {@code null}-title finding's thread is seen — the title-only
-   * {@link #answeredRootComment(ReviewResponse.Finding, List, String)} consults {@link
+   * {@link #answeredRootComment(ReviewResponse.Finding, List, BotIdentity)} consults {@link
    * #rootCommentsByTitle}, which returns {@code List.of()} for a null title and can never find the
    * reply, leaving the backstop to hold the finding every round with no human escape (#133b). It
    * also keeps a reply on a same-title sibling's thread (a different index) from clearing this
@@ -360,26 +362,26 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
-    Long own = markerRootComment(finding, findingId, true, inlineComments, botLogin);
+      BotIdentity botIdentity) {
+    Long own = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
     if (own != null) {
-      return hasHumanReply(own, inlineComments, botLogin) ? own : null;
+      return hasHumanReply(own, inlineComments, botIdentity) ? own : null;
     }
-    if (markerRootComment(finding, findingId, false, inlineComments, botLogin) != null) {
+    if (markerRootComment(finding, findingId, false, inlineComments, botIdentity) != null) {
       return null;
     }
-    return answeredRootComment(finding, inlineComments, botLogin);
+    return answeredRootComment(finding, inlineComments, botIdentity);
   }
 
   /** All bot root comments matching the finding's file and title, oldest first. */
   private static List<Long> rootCommentsByTitle(
       ReviewResponse.Finding finding,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     if (finding.title() == null || finding.file() == null) {
       return List.of();
     }
-    return botRootComments(inlineComments, botLogin)
+    return botRootComments(inlineComments, botIdentity)
         .filter(c -> FilePaths.same(finding.file(), c.path()))
         .filter(c -> c.body() != null && c.body().contains(finding.title()))
         .map(GitHubReviewClient.PullRequestComment::id)
@@ -387,10 +389,10 @@ public class FollowUpAnalyzer {
   }
 
   private static Stream<GitHubReviewClient.PullRequestComment> botRootComments(
-      List<GitHubReviewClient.PullRequestComment> inlineComments, String botLogin) {
+      List<GitHubReviewClient.PullRequestComment> inlineComments, BotIdentity botIdentity) {
     return inlineComments.stream()
         .filter(c -> c.inReplyToId() == null)
-        .filter(c -> c.user() != null && botLogin.equals(c.user().login()));
+        .filter(c -> c.user() != null && botIdentity.matches(c.user().login()));
   }
 
   /** Lines a finding may drift between revisions and still count as the same location. */
@@ -409,7 +411,7 @@ public class FollowUpAnalyzer {
       ReviewResponse response,
       List<String> priorAiResponseJsons,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     if (response.findings().isEmpty() || inlineComments.isEmpty()) {
       return response;
     }
@@ -422,7 +424,7 @@ public class FollowUpAnalyzer {
     var dropped = false;
     for (ReviewResponse.Finding finding : response.findings()) {
       ReviewResponse.Finding duplicateOf =
-          findRepliedDuplicate(finding, priorRounds, inlineComments, botLogin);
+          findRepliedDuplicate(finding, priorRounds, inlineComments, botIdentity);
       if (duplicateOf == null) {
         kept.add(finding);
         continue;
@@ -460,7 +462,7 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       List<List<ReviewResponse.Finding>> priorRounds,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     for (List<ReviewResponse.Finding> previous : priorRounds) {
       for (var prior : previous) {
         if (!isSameFinding(finding, prior)) {
@@ -468,7 +470,7 @@ public class FollowUpAnalyzer {
         }
         // Marker indices are only meaningful within their own round; across rounds the same
         // index names unrelated findings, so the thread is located by file and title instead
-        if (answeredRootComment(prior, inlineComments, botLogin) != null) {
+        if (answeredRootComment(prior, inlineComments, botIdentity) != null) {
           return prior;
         }
       }
@@ -496,24 +498,26 @@ public class FollowUpAnalyzer {
   }
 
   private static boolean hasHumanReply(
-      Long rootId, List<GitHubReviewClient.PullRequestComment> inlineComments, String botLogin) {
+      Long rootId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
     return inlineComments.stream()
         .anyMatch(
             c ->
                 rootId.equals(c.inReplyToId())
                     && c.user() != null
-                    && !botLogin.equals(c.user().login()));
+                    && !botIdentity.matches(c.user().login()));
   }
 
   /** Maps each previous finding's prompt id to its bot root comment, for thread resolution. */
   public Map<Integer, Long> matchFindingThreads(
       String previousAiResponseJson,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      String botLogin) {
+      BotIdentity botIdentity) {
     var previous = parsePreviousFindings(previousAiResponseJson);
     var threads = new HashMap<Integer, Long>();
     for (var i = 0; i < previous.size(); i++) {
-      Long rootId = rootCommentId(previous.get(i), i + 1, inlineComments, botLogin);
+      Long rootId = rootCommentId(previous.get(i), i + 1, inlineComments, botIdentity);
       if (rootId != null) {
         threads.put(i + 1, rootId);
       }
@@ -605,14 +609,14 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> currentStatuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      String botLogin) {
+      BotIdentity botIdentity) {
     if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty() || lineResolver == null) {
       return List.of();
     }
     var chrono = toChronological(priorAiResponseJsons);
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
-    return heldFromClusters(clusters, inlineComments, lineResolver, botLogin);
+    return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity);
   }
 
   /**
@@ -673,10 +677,10 @@ public class FollowUpAnalyzer {
       List<List<OpenFinding>> clusters,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      String botLogin) {
+      BotIdentity botIdentity) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var cluster : clusters) {
-      OpenFinding target = holdableTarget(cluster, inlineComments, lineResolver, botLogin);
+      OpenFinding target = holdableTarget(cluster, inlineComments, lineResolver, botIdentity);
       if (target != null) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
@@ -699,7 +703,7 @@ public class FollowUpAnalyzer {
       List<OpenFinding> cluster,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      String botLogin) {
+      BotIdentity botIdentity) {
     OpenFinding target = null;
     boolean anyReplied = false;
     for (var member : cluster) {
@@ -708,7 +712,7 @@ public class FollowUpAnalyzer {
           && lineResolver.isFindingPresent(finding.file(), finding.suggestionOld())) {
         target = member;
       }
-      if (answeredRootComment(finding, member.id(), inlineComments, botLogin) != null) {
+      if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null) {
         anyReplied = true;
       }
     }
@@ -849,12 +853,12 @@ public class FollowUpAnalyzer {
    * response. The body carries no structured findings, so this is best-effort only.
    */
   public String buildPreviousFindingsContext(
-      List<GitHubReviewClient.ReviewResponse> priorReviews, String botLogin) {
+      List<GitHubReviewClient.ReviewResponse> priorReviews, BotIdentity botIdentity) {
     if (priorReviews == null || priorReviews.isEmpty()) return "";
 
     var lastBotReview =
         priorReviews.stream()
-            .filter(r -> botLogin.equals(r.user().login()))
+            .filter(r -> botIdentity.matches(r.user().login()))
             .reduce((first, second) -> second); // get last
 
     if (lastBotReview.isEmpty()) return "";
