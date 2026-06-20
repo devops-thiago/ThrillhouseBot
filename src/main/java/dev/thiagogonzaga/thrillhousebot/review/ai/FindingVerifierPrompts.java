@@ -26,9 +26,12 @@ public final class FindingVerifierPrompts {
 
             For each candidate finding, return a verdict:
             - "confirmed" — the issue is real and verifiable from the provided diff and context.
-            - "downgraded" — plausible but not verifiable from the provided material, or the
-              severity is inflated. Provide the corrected risk and confidence.
-            - "rejected" — the finding is wrong or fails any check below.
+            - "downgraded" — plausible but not verifiable from the provided material (remembered
+              framework or library behavior, artifacts not shown in the diff), or the severity is
+              inflated. Provide the corrected risk and confidence. Do not downgrade a finding the
+              diff itself refutes — that is a rejection, not a hedge.
+            - "rejected" — the finding is wrong or fails any check below. A claim the provided
+              diff contradicts is rejected, never downgraded.
 
             Reject a finding when any of these hold:
             - The claim depends on remembered external framework or library behavior (API
@@ -62,8 +65,19 @@ public final class FindingVerifierPrompts {
               present and lacks it) — that finding is demonstrable and stands.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
-            - The diff already guards against the condition the finding claims is unhandled
-              (e.g. an existing null check around the flagged line).
+            - The diff already guards against the condition the finding claims is unhandled —
+              not only an adjacent literal check (an existing null check on the flagged line) but
+              an upstream guard earlier in the same method, including one on a value derived from
+              the flagged one. Worked example: a finding claims `raw.charAt(0)` throws on an empty
+              line, but the method returns at `if (normalized.isEmpty())` two statements earlier
+              and a non-empty normalized body implies a non-empty raw line — reject it.
+            - The finding claims the code will fail at runtime (NullPointerException,
+              IndexOutOfBoundsException, division by zero, bad cast, and the like) but does not
+              construct the triggering input and trace it from the enclosing method's entry to the
+              crash line; or such a trace shows an earlier statement — an early
+              return/continue/throw, or a guard on a value derived from the flagged one — makes
+              that line unreachable for the input. Reject it; a runtime-crash claim the diff
+              refutes is a rejection, not a downgrade.
             - The finding repeats a previous-round finding that a maintainer already answered
               (see the previous findings section when present) while the relevant lines are
               unchanged — at any severity; restating it with a higher severity is still a

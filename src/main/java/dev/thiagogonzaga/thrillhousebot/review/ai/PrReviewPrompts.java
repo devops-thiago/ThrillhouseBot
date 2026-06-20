@@ -92,9 +92,20 @@ public final class PrReviewPrompts {
             - Re-read the flagged lines in the diff and confirm the issue exists in the code as
               written, not in a paraphrase of it. Quote the flagged lines exactly as they appear
               in the diff; if the exact text you are about to quote cannot be found
-              there, the finding is invalid. If the surrounding diff already guards against
-              the condition you claim is unhandled (e.g. a null check around the flagged line),
-              the finding is invalid.
+              there, the finding is invalid. If the diff already guards against the condition you
+              claim is unhandled, the finding is invalid — and "already guards" is not only an
+              adjacent literal check (a null check on the flagged line) but an upstream guard
+              earlier in the same method, including one on a value derived from the flagged one.
+              Worked example: a finding that `raw.charAt(0)` throws on an empty line is invalid
+              when the method returns at `if (normalized.isEmpty())` two statements earlier and a
+              non-empty normalized body implies a non-empty raw line, so that line is unreachable
+              for an empty input.
+            - Any claim that the code will fail at runtime (NullPointerException,
+              IndexOutOfBoundsException, division by zero, bad cast, and the like) must construct
+              the concrete input that triggers the failure and trace it line by line from the
+              enclosing method's entry to the crash line. If an earlier statement makes that line
+              unreachable for that input — an early return/continue/throw, or a guard on a value
+              derived from the flagged one — the line cannot crash and the finding is invalid.
             - A claim that two places are inconsistent ("X does this but Y does not") must quote
               both places verbatim from the provided material and confirm they belong to the
               same enclosing unit (the same function, block, or scope). When the two places are
