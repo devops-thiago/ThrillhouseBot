@@ -3529,13 +3529,12 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldBeBestEffortWhenFetchFailsOrReturnsNull() {
+    void shouldBeBestEffortWhenTheFetchThrows() {
       when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(null)
           .thenThrow(new RuntimeException("boom"));
 
-      // A null page and a thrown fetch both fall back to "no summary seen" rather than blocking.
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+      // A thrown fetch falls back to "no summary seen" rather than blocking the review.
+      // (listComments paginates internally and never returns null, so that case can't arise.)
       assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
       assertTrue(orchestrator.fetchIssueComments("auth", "owner", "repo", 1).isEmpty());
     }
