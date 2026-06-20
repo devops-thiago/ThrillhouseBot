@@ -1583,7 +1583,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         // ... but the bot already posted its summary comment on an earlier round.
         when(commentClient.listComments(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
                     new GitHubCommentClient.IssueComment(
@@ -3461,8 +3461,7 @@ class ReviewOrchestratorTest {
     }
 
     private void stubComments(GitHubCommentClient.IssueComment... comments) {
-      when(commentClient.listComments(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(comments));
     }
 
@@ -3531,8 +3530,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldBeBestEffortWhenFetchFailsOrReturnsNull() {
-      when(commentClient.listComments(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(null)
           .thenThrow(new RuntimeException("boom"));
 

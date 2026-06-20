@@ -53,9 +53,6 @@ public class ReviewOrchestrator {
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
   private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
   private static final String SUMMARY_HEADING = PrSummaryGenerator.SUMMARY_HEADING;
-  // One page comfortably covers the bot's summary: it is posted on the first review, so it sits
-  // among the earliest issue comments returned oldest-first.
-  private static final int ISSUE_COMMENTS_PER_PAGE = 100;
 
   // Check run status constants
   private static final String CHECK_STATUS_COMPLETED = "completed";
@@ -646,8 +643,7 @@ public class ReviewOrchestrator {
   List<GitHubCommentClient.IssueComment> fetchIssueComments(
       String auth, String owner, String repo, int prNumber) {
     try {
-      var comments =
-          commentClient.listComments(auth, ACCEPT, owner, repo, prNumber, ISSUE_COMMENTS_PER_PAGE);
+      var comments = commentClient.listComments(auth, ACCEPT, owner, repo, prNumber);
       return comments != null ? comments : List.of();
     } catch (RuntimeException e) {
       Log.debug("Could not fetch PR issue comments (continuing as if none exist)", e);
