@@ -2962,6 +2962,57 @@ class ReviewOrchestratorTest {
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       assertEquals("REQUEST_CHANGES", captor.getValue().event());
     }
+
+    @Test
+    void postReviewShouldSkipDuplicateCommentReviewOnFirstReviewWhenOnlyCiPending() {
+      // First review, no findings, but a required check is still pending: the summary comment
+      // already conveys this, so postReview must not add a COMMENT review that duplicates it
+      // (#173).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldStillPostCommentReviewOnFollowUpWhenCiPending() {
+      // A follow-up review posts no summary comment, so the COMMENT review remains its only signal.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("**build**"));
+    }
   }
 
   @Nested
@@ -3777,7 +3828,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void reviewShouldDowngradeToCommentWhenRequiredCheckFails() {
+    void reviewShouldDowngradeToNeutralAndPostOnlySummaryWhenRequiredCheckFails() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -3788,24 +3839,37 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        // The required check ("build") is failing — a would-be APPROVE must become COMMENT.
+        // The required check ("build") is failing — a would-be APPROVE must downgrade so the check
+        // run is neutral rather than green.
         stubCommonReviewMocks(
             new GitHubCheckRunClient.CheckRunsResponse(
                 1,
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "failure", null))));
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+            .thenReturn("## Summary\nNo new issues, but required check **build** failed.");
 
         orchestrator.review(request());
 
-        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
-        verify(reviewClient)
-            .createReview(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
-        var req = captor.getValue();
-        assertEquals("COMMENT", req.event());
-        assertTrue(req.body().contains("**build**"));
-        assertTrue(req.body().contains("failed"));
+        // No new findings: the summary comment already lists the pending/failed checks, so the bot
+        // must NOT also post a COMMENT review that merely restates it (regression guard for #173).
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("**build**")));
+        // The downgrade is still enforced where it matters — on the bot's own check run.
+        var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(), anyString(), anyString(), anyString(), anyLong(), captor.capture());
+        assertEquals("neutral", captor.getValue().conclusion());
       }
     }
 

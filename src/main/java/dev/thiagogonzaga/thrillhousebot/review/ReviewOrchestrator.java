@@ -987,6 +987,17 @@ public class ReviewOrchestrator {
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
+    // A COMMENT held back only by pending/failed CI (no findings, nothing unresolved) merely
+    // restates the summary comment the first review already posts, so emitting it too would
+    // duplicate that message. Skip it on the first review and let the summary stand alone.
+    // Unresolved previous findings are excluded — their COMMENT carries distinct "reply on the
+    // thread" guidance the summary lacks, so it still posts. Follow-ups post no summary, so the
+    // COMMENT is their only signal; REQUEST_CHANGES always posts; the merge gate is the check run.
+    if (result.reviewState() == ReviewState.COMMENT
+        && result.isFirstReview()
+        && unresolvedPreviousCount(result) == 0) {
+      return;
+    }
     // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
     // never claim a clean review.
     var req =
