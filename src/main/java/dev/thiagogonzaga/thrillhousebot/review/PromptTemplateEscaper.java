@@ -15,10 +15,46 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.security.SecureRandom;
+import java.util.HexFormat;
+
 /** Escapes user-provided prompt fragments before they are bound into a LangChain4j prompt. */
 public final class PromptTemplateEscaper {
 
+  // Per-review random fence around the diff. Because the token is unguessable, PR content cannot
+  // forge the boundary, so the diff is passed byte-exact — no rewriting that would corrupt
+  // marker-handling code under review (#187). The prefix is fixed (the prompt names it); only the
+  // random suffix makes the full line unforgeable.
+  private static final String FENCE_PREFIX = "[[THRILLHOUSEBOT-UNTRUSTED-DATA-";
+  private static final String FENCE_SUFFIX = "]]";
+  private static final SecureRandom RANDOM = new SecureRandom();
+
   private PromptTemplateEscaper() {}
+
+  /** The fixed prefix of a diff fence line, named in the prompts so the model recognizes it. */
+  public static String fencePrefix() {
+    return FENCE_PREFIX;
+  }
+
+  /**
+   * Wraps untrusted code (the diff) between two identical, per-call random fence lines so the model
+   * can separate data from instructions. The fence token is drawn from a CSPRNG, so PR content
+   * cannot reproduce the boundary; this is why the content between the fences is passed <em>byte
+   * exact</em> rather than run through {@link #neutralizeMarkers} — that rewriting corrupted
+   * marker-handling code under review and produced false findings (the dogfooding bug #187). This
+   * is the "random sequence enclosure" / Microsoft "spotlighting" delimiting defense.
+   *
+   * <p>Empty content is returned unchanged so a {@code {#if}} section around it stays falsy.
+   */
+  public static String fence(String content) {
+    if (content == null || content.isEmpty()) {
+      return content;
+    }
+    var bytes = new byte[16];
+    RANDOM.nextBytes(bytes);
+    String fenceLine = FENCE_PREFIX + HexFormat.of().formatHex(bytes) + FENCE_SUFFIX;
+    return fenceLine + "\n" + content + "\n" + fenceLine;
+  }
 
   /**
    * Prepares untrusted content (a diff, a PR description, a maintainer's question, a prior finding)

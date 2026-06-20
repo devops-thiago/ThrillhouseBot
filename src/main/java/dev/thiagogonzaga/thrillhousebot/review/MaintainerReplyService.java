@@ -220,7 +220,8 @@ public class MaintainerReplyService {
               PromptTemplateEscaper.escape(question),
               PromptTemplateEscaper.escape(prContext),
               PromptTemplateEscaper.escape(finding),
-              PromptTemplateEscaper.escape(codeContext),
+              // codeContext is the diff/hunk under discussion: fence it byte-exact (#187).
+              PromptTemplateEscaper.fence(codeContext),
               PromptTemplateEscaper.escape(thread));
       if (reply == null || reply.isBlank()) {
         Log.debug("Reply assistant produced an empty reply — posting nothing");

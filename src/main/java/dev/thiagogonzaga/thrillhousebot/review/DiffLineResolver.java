@@ -280,9 +280,9 @@ public final class DiffLineResolver {
    * RIGHT side and advance its counter; deletions ({@code '-'}) exist only on the LEFT side and are
    * skipped — which is exactly why content matched against this text distinguishes still-present
    * code from code that was replaced (the replacement's old text survives only as a deletion). The
-   * patch is run through {@link PromptTemplateEscaper#neutralizeMarkers} first, because the model's
-   * persisted {@code suggestion_old} was quoted from the already-neutralized diff, so the raw side
-   * must be neutralized to compare equal (mirrors {@code FindingQuoteValidator}).
+   * model now quotes {@code suggestion_old} from the byte-exact fenced diff (see {@link
+   * PromptTemplateEscaper#fence}), so the raw patch is parsed directly with no neutralization
+   * (mirrors {@code FindingQuoteValidator}).
    */
   private static RightSide parseRightSide(String patch) {
     var lines = new TreeSet<Integer>();
@@ -294,7 +294,7 @@ public final class DiffLineResolver {
 
     var newLine = 0;
     var inHunk = false;
-    for (String rawLine : PromptTemplateEscaper.neutralizeMarkers(patch).split("\n", -1)) {
+    for (String rawLine : patch.split("\n", -1)) {
       OptionalInt hunkStart = hunkStart(rawLine);
       if (hunkStart.isPresent()) {
         newLine = hunkStart.getAsInt();
