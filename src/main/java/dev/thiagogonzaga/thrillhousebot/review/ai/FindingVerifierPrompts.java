@@ -49,14 +49,17 @@ public final class FindingVerifierPrompts {
               locations belong to different enclosing units (different functions, blocks, or
               scopes) without the finding acknowledging it.
             - The finding claims a symbol is undefined, unset, missing, or never declared — a
-              variable, parameter, import, function, or config/env key — but that symbol's
-              definition is not present in the provided material. Its absence from the diff is
-              not proof it is undefined: the definition can sit in the same file just outside
-              the few context lines GitHub shows around each hunk (for example, a finding that
-              NEXT/TAG are undefined in a workflow run step when the step's env: block — a few
-              unchanged lines above the change, outside the hunk window — defines them). Reject
-              such a finding unless the definition IS in the material and shown to be missing or
-              misspelled.
+              variable, parameter, import, function, or config/env key — and the place its
+              definition would live (the file's import block, the enclosing scope, the config
+              or env section) is NOT shown in the provided material. The diff carries only a few
+              context lines around each change, so absence from it is not proof the symbol is
+              undefined: the definition can sit in the same file just outside the hunk (for
+              example, a finding that NEXT/TAG are undefined in a workflow run step when the
+              step's env: block — a few unchanged lines above the change, outside the hunk
+              window — defines them). Such a claim is unverifiable here, so reject it. Do NOT
+              reject when the material does show that scope and the symbol is genuinely absent
+              or misspelled there (e.g. the diff removes the definition, or the full block is
+              present and lacks it) — that finding is demonstrable and stands.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
             - The diff already guards against the condition the finding claims is unhandled
@@ -71,9 +74,10 @@ public final class FindingVerifierPrompts {
             "medium" risk with "low" confidence. Claims about the contents or behavior of
             artifacts not shown in the diff (base images, registries, installed packages,
             remote services) are not demonstrable here: downgrade any such finding above
-            "medium". An "undefined / unset / missing symbol" claim is at most "low" confidence
-            unless the symbol's definition is in the provided material; when the definition is
-            absent it is unconfirmed, so reject the finding (per above) rather than post it.
+            "medium". An "undefined / unset / missing symbol" claim is demonstrable only when
+            the provided material includes the scope a definition would occupy; when that scope
+            is outside the shown context the claim is unconfirmed (the definition may sit just
+            outside the hunk), so reject the finding (per above) rather than post it.
 
             Also audit each finding's suggested fix: when the underlying issue is real but
             suggestion_new is incorrect, incomplete, or would introduce a new defect, return
