@@ -119,6 +119,21 @@ class ReviewTriggerFilterTest {
   }
 
   @Test
+  void shouldTreatStarAsSegmentBoundButDoubleStarAsCrossingSlashes() {
+    // Documented gitignore-style contract: '*' does not cross '/', so an operator who sets the
+    // allowlist to "*" expecting "every branch" silently excludes nested bases like feature/foo.
+    var singleStar = filter(false, List.of(), List.of(), List.of("*"), List.of());
+    assertTrue(singleStar.skipReason(pr("main", false)).isEmpty());
+    assertTrue(
+        singleStar.skipReason(pr("feature/foo", false)).isPresent(), "'*' must not cross '/'");
+
+    // '**' is the way to match every branch, including nested ones.
+    var doubleStar = filter(false, List.of(), List.of(), List.of("**"), List.of());
+    assertTrue(doubleStar.skipReason(pr("main", false)).isEmpty());
+    assertTrue(doubleStar.skipReason(pr("feature/foo", false)).isEmpty(), "'**' spans '/'");
+  }
+
+  @Test
   void shouldSkipIgnoredBaseBranches() {
     var filter = filter(false, List.of(), List.of(), List.of(), List.of("dependabot/**"));
 
