@@ -130,6 +130,13 @@ public class ReviewTriggerFilter {
     return names;
   }
 
+  /**
+   * Compiles gitignore-style glob patterns. These follow {@link FileSystems#getPathMatcher}
+   * semantics: {@code *} matches within a single path segment and does <em>not</em> cross {@code
+   * /}, so operators must use {@code **} to span slashes (e.g. {@code dependabot/**}, or {@code **}
+   * alone to match every branch). Unparseable patterns are logged and dropped rather than failing
+   * the whole filter.
+   */
   private static List<PathMatcher> compileGlobs(List<String> patterns, String settingName) {
     if (patterns == null || patterns.isEmpty()) {
       return List.of();
