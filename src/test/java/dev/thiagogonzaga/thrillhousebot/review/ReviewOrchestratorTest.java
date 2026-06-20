@@ -1549,6 +1549,85 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldSkipSummaryWhenABotSummaryCommentAlreadyExistsButNoReviewDoes() {
+      // Regression for the duplicate-summary bug: a first round held back only by pending CI posts
+      // the summary issue-comment but leaves no review (#175). On the next round no bot review
+      // exists, yet the summary must not be re-posted — the prior summary comment is the signal.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        // No bot review on the PR ...
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        // ... but the bot already posted its summary comment on an earlier round.
+        when(commentClient.listComments(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubCommentClient.IssueComment(
+                        PrSummaryGenerator.SUMMARY_HEADING + "\n\nAlready posted earlier",
+                        new GitHubCommentClient.IssueComment.User("thrillhousebot[bot]"))));
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any()))
+            .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+        when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(
+                        new ReviewResponse.Finding(
+                            "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
+                    List.of(),
+                    null));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // The summary issue-comment is NOT posted a second time ...
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        // ... but the rest of the review still runs: the finding is posted inline.
+        verify(reviewClient)
+            .createPullRequestComment(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
     void shouldContinueReviewWhenFetchPrFilesThrows() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -3370,6 +3449,97 @@ class ReviewOrchestratorTest {
 
       assertEquals(
           List.of(comment), orchestrator.fetchPullRequestComments("auth", "owner", "repo", 1));
+    }
+  }
+
+  @Nested
+  class BotSummaryCommentDetection {
+
+    private GitHubCommentClient.IssueComment comment(String body, String login) {
+      return new GitHubCommentClient.IssueComment(
+          body, login == null ? null : new GitHubCommentClient.IssueComment.User(login));
+    }
+
+    private void stubComments(GitHubCommentClient.IssueComment... comments) {
+      when(commentClient.listComments(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+          .thenReturn(List.of(comments));
+    }
+
+    @Test
+    void shouldDetectABotSummaryComment() {
+      stubComments(
+          comment("@thrillhousebot please review", "someuser"),
+          comment(PrSummaryGenerator.SUMMARY_HEADING + "\n\nbody", "thrillhousebot[bot]"));
+
+      assertTrue(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldTolerateLeadingWhitespaceBeforeTheHeading() {
+      stubComments(
+          comment("\n  " + PrSummaryGenerator.SUMMARY_HEADING + "\n", "thrillhousebot[bot]"));
+
+      assertTrue(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldIgnoreASummaryHeadingPostedBySomeoneElse() {
+      // A human (or another bot) quoting the heading must not be mistaken for the bot's own
+      // summary.
+      stubComments(comment(PrSummaryGenerator.SUMMARY_HEADING + "\n\nspoof", "impersonator"));
+
+      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldIgnoreBotCommentsThatAreNotTheSummary() {
+      // The bot also posts conversational replies (e.g. answering /review questions); only the
+      // summary heading counts.
+      stubComments(comment("I don't have enough context to answer that.", "thrillhousebot[bot]"));
+
+      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldReturnFalseForEmptyComments() {
+      stubComments();
+
+      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldNotMatchTheHeadingMidComment() {
+      // Only a comment that *starts* with the heading is the bot's summary; an embedded mention is
+      // a
+      // quote in a discussion, not the summary artifact.
+      stubComments(
+          comment("As noted in the " + PrSummaryGenerator.SUMMARY_HEADING, "thrillhousebot[bot]"));
+
+      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldTolerateNullUserAndNullBody() {
+      stubComments(
+          comment("body without user", null),
+          comment(null, "thrillhousebot[bot]"),
+          comment(PrSummaryGenerator.SUMMARY_HEADING, "thrillhousebot[bot]"));
+
+      assertTrue(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldBeBestEffortWhenFetchFailsOrReturnsNull() {
+      when(commentClient.listComments(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt()))
+          .thenReturn(null)
+          .thenThrow(new RuntimeException("boom"));
+
+      // A null page and a thrown fetch both fall back to "no summary seen" rather than blocking.
+      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
+      assertTrue(orchestrator.fetchIssueComments("auth", "owner", "repo", 1).isEmpty());
     }
   }
 
