@@ -344,6 +344,22 @@ class PrLabelerTest {
     }
 
     @Test
+    void shouldApplyWhenCurrentLabelLookupReturnsNull() {
+      // GitHub may deserialize an empty body to null; treat it as "no labels yet" and apply.
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+          .thenReturn(null);
+
+      labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
+
+      var captor = ArgumentCaptor.forClass(GitHubLabelClient.AddLabelsRequest.class);
+      verify(labelClient)
+          .addLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      assertEquals(List.of("bug"), captor.getValue().labels());
+    }
+
+    @Test
     void shouldStillApplyWhenCurrentLabelLookupFails() {
       when(labelClient.listIssueLabels(
               anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
