@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -56,6 +57,7 @@ public class CommentCommandService {
       |---------|--------------|
       | `/review` | Run a fresh review of this PR |
       | `/summary` | Post the PR summary if one has not been generated yet |
+      | `/describe` | Suggest an improved PR title and description from the diff |
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
       | `/resume` | Re-enable the bot on a paused PR |
@@ -74,6 +76,7 @@ public class CommentCommandService {
   private final PrPauseService prPauseService;
   private final ManualReviewAuthorizer authorizer;
   private final TriggerDetector triggerDetector;
+  private final PrDescriptionGenerator descriptionGenerator;
 
   @Inject
   public CommentCommandService(
@@ -86,7 +89,8 @@ public class CommentCommandService {
       ReviewSessionPersistence sessionPersistence,
       PrPauseService prPauseService,
       ManualReviewAuthorizer authorizer,
-      TriggerDetector triggerDetector) {
+      TriggerDetector triggerDetector,
+      PrDescriptionGenerator descriptionGenerator) {
     this.executor = executor;
     this.authClient = authClient;
     this.commentClient = commentClient;
@@ -97,6 +101,7 @@ public class CommentCommandService {
     this.prPauseService = prPauseService;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
+    this.descriptionGenerator = descriptionGenerator;
   }
 
   /** PR coordinates and commenter identity for one command. */
@@ -135,6 +140,7 @@ public class CommentCommandService {
       switch (ctx.command()) {
         case HELP -> postComment(auth, ctx, HELP_TEXT);
         case SUMMARY -> handleSummary(ctx, auth);
+        case DESCRIBE -> handleDescribe(ctx, auth);
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
         case RESUME -> handleResume(ctx, auth);
@@ -187,6 +193,36 @@ public class CommentCommandService {
             ctx.defaultBranch(),
             ctx.installationId(),
             true));
+  }
+
+  private void handleDescribe(CommandContext ctx, String auth) {
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized /describe from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      postComment(auth, ctx, PAUSED_NOTICE);
+      return;
+    }
+    log.info(
+        "Generating title/description suggestion for {}/{} #{} (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    var suggestion =
+        descriptionGenerator.generate(
+            ctx.owner(),
+            ctx.repo(),
+            ctx.prNumber(),
+            ctx.defaultBranch(),
+            ctx.installationId(),
+            auth);
+    if (suggestion == null) {
+      // Nothing to suggest (no diff) or the model produced no usable answer — already logged.
+      return;
+    }
+    postComment(auth, ctx, suggestion);
   }
 
   private void handleResolve(CommandContext ctx, String auth) {
