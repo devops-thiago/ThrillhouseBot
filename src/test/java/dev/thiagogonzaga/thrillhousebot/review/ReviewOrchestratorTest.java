@@ -1839,17 +1839,18 @@ class ReviewOrchestratorTest {
     void shouldDismissPendingBotReviews() {
       var pending =
           new GitHubReviewClient.ReviewResponse(
-              99L,
-              "",
-              "PENDING",
-              "sha",
-              new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"));
+              99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
       var approved =
           new GitHubReviewClient.ReviewResponse(
               1L, "", "APPROVED", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
+      // A pending review by a human must be left alone: state is PENDING but the author is not the
+      // bot, so only the bot-identity check (not the state check) keeps it.
+      var pendingHuman =
+          new GitHubReviewClient.ReviewResponse(
+              2L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
 
       when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(List.of(pending, approved));
+          .thenReturn(List.of(pending, approved, pendingHuman));
 
       orchestrator.dismissPendingBotReviews("Bearer tok", "owner", "repo", 7);
 
@@ -1859,6 +1860,9 @@ class ReviewOrchestratorTest {
       verify(reviewClient, never())
           .deletePendingReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), eq(1L));
+      verify(reviewClient, never())
+          .deletePendingReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), eq(2L));
     }
 
     @Test
