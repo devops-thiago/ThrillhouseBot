@@ -54,7 +54,7 @@ runs:
         severity: ${{ inputs.severity }}
         exit-code: ${{ inputs.exit-code }}
         trivyignores: ${{ inputs.trivyignores }}
-        version: v0.70.0
+        version: v0.71.2
         format: sarif
         limit-severities-for-sarif: true
         output: ${{ inputs.category }}.sarif
