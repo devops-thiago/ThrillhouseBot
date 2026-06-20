@@ -4093,6 +4093,146 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
+  class ResolveRequiredContexts {
+
+    private ReviewOrchestrator.ReviewRequest req() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 42, "sha", "Test PR", "", "base", "main", 123L, false);
+    }
+
+    private void stubBaseRef(String ref) {
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Test PR",
+                  "",
+                  new GitHubPullRequestClient.Ref("head", "feature"),
+                  new GitHubPullRequestClient.Ref("base", ref)));
+    }
+
+    private GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck check(String context) {
+      return new GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck(context, null);
+    }
+
+    private GitHubCheckRunClient.BranchRule statusCheckRule(
+        GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck... checks) {
+      return new GitHubCheckRunClient.BranchRule(
+          "required_status_checks",
+          new GitHubCheckRunClient.BranchRule.Parameters(List.of(checks)));
+    }
+
+    private void stubClassic(GitHubCheckRunClient.RequiredStatusChecks protection) {
+      when(checkRunClient.getRequiredStatusChecks(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(protection);
+    }
+
+    @Test
+    void returnsEmptyWhenPullRequestLookupThrows() {
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenThrow(new RuntimeException("boom"));
+
+      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
+      verifyNoInteractions(checkRunClient);
+    }
+
+    @Test
+    void returnsEmptyWhenPullRequestDetailsAreNull() {
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42))).thenReturn(null);
+
+      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
+    }
+
+    @Test
+    void returnsEmptyWhenBaseRefIsNull() {
+      stubBaseRef(null);
+
+      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
+      verify(checkRunClient, never())
+          .getBranchRules(anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void fallsBackToClassicWhenRulesetLookupThrows() {
+      stubBaseRef("main");
+      when(checkRunClient.getBranchRules(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenThrow(new RuntimeException("rules boom"));
+      stubClassic(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
+
+      assertEquals(
+          List.of("build"), orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
+    }
+
+    @Test
+    void fallsBackToClassicWhenNoRulesetGovernsBranch() {
+      stubBaseRef("main");
+      when(checkRunClient.getBranchRules(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(List.of());
+      stubClassic(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
+
+      assertEquals(
+          List.of("build"), orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
+    }
+
+    @Test
+    void skipsRequiredStatusChecksRuleWithNullParameters() {
+      stubBaseRef("main");
+      when(checkRunClient.getBranchRules(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(List.of(new GitHubCheckRunClient.BranchRule("required_status_checks", null)));
+      // Classic 404s — a ruleset governs the branch but contributes no required contexts.
+      when(checkRunClient.getRequiredStatusChecks(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenThrow(new RuntimeException("Not Found, status code 404"));
+
+      var result = orchestrator.resolveRequiredContexts("auth", req());
+      assertTrue(result.isPresent());
+      assertTrue(result.orElseThrow().isEmpty());
+    }
+
+    @Test
+    void skipsRequiredCheckWithNullContext() {
+      stubBaseRef("main");
+      when(checkRunClient.getBranchRules(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(List.of(statusCheckRule(check(null), check("build"))));
+      when(checkRunClient.getRequiredStatusChecks(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenThrow(new RuntimeException("Not Found, status code 404"));
+
+      assertEquals(
+          List.of("build"), orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
+    }
+
+    @Test
+    void unionsRulesetAndClassicContextsWithoutDuplicates() {
+      stubBaseRef("main");
+      when(checkRunClient.getBranchRules(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(List.of(statusCheckRule(check("build"), check("lint"))));
+      stubClassic(
+          new GitHubCheckRunClient.RequiredStatusChecks(List.of("lint", "deploy"), List.of()));
+
+      assertEquals(
+          List.of("build", "lint", "deploy"),
+          orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
+    }
+
+    @Test
+    void returnsEmptyWhenNeitherMechanismGovernsBranch() {
+      stubBaseRef("main");
+      when(checkRunClient.getBranchRules(
+              anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(null);
+      stubClassic(null);
+
+      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
+    }
+  }
+
+  @Nested
   class CiChecksGating {
 
     @Test

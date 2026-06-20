@@ -1177,7 +1177,8 @@ public class ReviewOrchestrator {
    * {@link Optional} — which the caller maps to {@code null}, gating on every check — only when
    * neither mechanism governs the branch or both lookups fail.
    */
-  private Optional<List<String>> resolveRequiredContexts(String auth, ReviewRequest req) {
+  // Package-private so each resolution branch can be exercised directly in tests.
+  Optional<List<String>> resolveRequiredContexts(String auth, ReviewRequest req) {
     String branch;
     try {
       var prDetails =
