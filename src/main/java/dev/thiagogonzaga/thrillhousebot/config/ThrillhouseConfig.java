@@ -170,6 +170,16 @@ public interface ThrillhouseConfig {
     @WithName("conversational-replies-enabled")
     boolean conversationalRepliesEnabled();
 
+    /**
+     * Whether the {@code /add-docs} command is available. When a write-access holder runs it, the
+     * model generates docstrings/inline docs for the symbols changed in the diff and posts them as
+     * committable suggestions. Each invocation spends the operator's AI budget, so this is the
+     * operator's kill switch; the command is otherwise on-demand only (never automatic).
+     */
+    @WithDefault("true")
+    @WithName("add-docs-enabled")
+    boolean addDocsEnabled();
+
     @WithDefault("**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**")
     @WithName("ignored-files")
     List<String> ignoredFiles();

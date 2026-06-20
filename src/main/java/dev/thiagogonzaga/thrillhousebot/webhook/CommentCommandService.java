@@ -16,11 +16,13 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
@@ -63,6 +65,7 @@ public class CommentCommandService {
       | `/review` | Run a fresh review of this PR |
       | `/summary` | Post the PR summary if one has not been generated yet |
       | `/describe` | Suggest an improved PR title and description from the diff |
+      | `/add-docs` | Suggest docstrings for the symbols changed in this PR |
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
       | `/resume` | Re-enable the bot on a paused PR |
@@ -82,6 +85,8 @@ public class CommentCommandService {
   private final ManualReviewAuthorizer authorizer;
   private final TriggerDetector triggerDetector;
   private final PrDescriptionGenerator descriptionGenerator;
+  private final DocGenerationService docGenerationService;
+  private final ThrillhouseConfig config;
 
   @Inject
   public CommentCommandService(
@@ -95,7 +100,9 @@ public class CommentCommandService {
       PrPauseService prPauseService,
       ManualReviewAuthorizer authorizer,
       TriggerDetector triggerDetector,
-      PrDescriptionGenerator descriptionGenerator) {
+      PrDescriptionGenerator descriptionGenerator,
+      DocGenerationService docGenerationService,
+      ThrillhouseConfig config) {
     this.executor = executor;
     this.authClient = authClient;
     this.commentClient = commentClient;
@@ -107,6 +114,8 @@ public class CommentCommandService {
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
     this.descriptionGenerator = descriptionGenerator;
+    this.docGenerationService = docGenerationService;
+    this.config = config;
   }
 
   /** PR coordinates and commenter identity for one command. */
@@ -146,6 +155,7 @@ public class CommentCommandService {
         case HELP -> postComment(auth, ctx, HELP_TEXT);
         case SUMMARY -> handleSummary(ctx, auth);
         case DESCRIBE -> handleDescribe(ctx, auth);
+        case ADD_DOCS -> handleAddDocs(ctx, auth);
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
         case RESUME -> handleResume(ctx, auth);
@@ -228,6 +238,32 @@ public class CommentCommandService {
       return;
     }
     postComment(auth, ctx, suggestion);
+  }
+
+  private void handleAddDocs(CommandContext ctx, String auth) {
+    if (!config.review().addDocsEnabled()) {
+      log.info("Ignoring /add-docs on PR #{} — the command is disabled", num(ctx));
+      return;
+    }
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized /add-docs from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      postComment(auth, ctx, PAUSED_NOTICE);
+      return;
+    }
+    log.info(
+        "Generating docs for {}/{} #{} (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    // Already on the review executor; the AI call + GitHub round trips run here. The service is
+    // @ActivateRequestContext so the LangChain4j AI call has an active request scope.
+    docGenerationService.handle(
+        new DocGenerationService.DocTask(
+            ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.defaultBranch(), ctx.installationId()));
   }
 
   private void handleResolve(CommandContext ctx, String auth) {

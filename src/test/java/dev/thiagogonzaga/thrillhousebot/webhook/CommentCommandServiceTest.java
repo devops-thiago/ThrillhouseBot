@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -26,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
@@ -51,6 +53,9 @@ class CommentCommandServiceTest {
   @Mock private PrPauseService prPauseService;
   @Mock private ManualReviewAuthorizer authorizer;
   @Mock private PrDescriptionGenerator descriptionGenerator;
+  @Mock private DocGenerationService docGenerationService;
+  @Mock private ThrillhouseConfig config;
+  @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
   private CommentCommandService service;
 
@@ -58,6 +63,8 @@ class CommentCommandServiceTest {
   void setUp() {
     MockitoAnnotations.openMocks(this);
     when(authClient.getAuthHeader(anyLong())).thenReturn("token");
+    when(config.review()).thenReturn(reviewConfig);
+    when(reviewConfig.addDocsEnabled()).thenReturn(true);
     // Run submitted work inline so the async handoff is exercised synchronously in tests.
     doAnswer(
             inv -> {
@@ -78,7 +85,9 @@ class CommentCommandServiceTest {
             prPauseService,
             authorizer,
             new TriggerDetector(),
-            descriptionGenerator);
+            descriptionGenerator,
+            docGenerationService,
+            config);
   }
 
   private CommentCommandService.CommandContext ctx(CommentCommand command) {
@@ -200,6 +209,51 @@ class CommentCommandServiceTest {
     verifyNoInteractions(descriptionGenerator);
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
     verifyNoInteractions(prPauseService);
+  }
+
+  @Test
+  void addDocsDelegatesToDocServiceWhenAuthorized() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.ADD_DOCS));
+
+    verify(docGenerationService)
+        .handle(new DocGenerationService.DocTask("owner", "repo", 7, "main", 12345L));
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void addDocsPostsPausedNoticeWhenPaused() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.ADD_DOCS));
+
+    assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
+    verifyNoInteractions(docGenerationService);
+  }
+
+  @Test
+  void addDocsIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.ADD_DOCS));
+
+    verifyNoInteractions(docGenerationService);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(prPauseService);
+  }
+
+  @Test
+  void addDocsIgnoredWhenDisabled() {
+    when(reviewConfig.addDocsEnabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.ADD_DOCS));
+
+    verifyNoInteractions(docGenerationService);
+    verifyNoInteractions(authorizer);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
