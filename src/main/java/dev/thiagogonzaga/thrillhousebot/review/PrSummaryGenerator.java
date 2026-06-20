@@ -18,6 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /** Generates the PR summary comment posted on the first review. */
 @ApplicationScoped
@@ -27,10 +30,20 @@ public class PrSummaryGenerator {
   public static final String ZERO_ISSUES_MESSAGE =
       "Everything's coming up Thrillhouse! 🎉\n\nNo issues found in this PR.";
 
+  /**
+   * Upper bound on rows in the changed-files walkthrough. Keeps the comment within GitHub's size
+   * budget on large PRs; any files beyond this are rolled up into a trailing "… and N more" note.
+   */
+  static final int MAX_FILE_ROWS = 20;
+
+  /** One changed file in the walkthrough: its path and the diff's authoritative change type. */
+  public record ChangedFile(String path, String changeType) {}
+
   public String generate(
       int filesChanged,
       int additions,
       int deletions,
+      List<ChangedFile> changedFiles,
       ReviewResponse.Summary aiSummary,
       ReviewResult result) {
     var sb = new StringBuilder();
@@ -43,6 +56,8 @@ public class PrSummaryGenerator {
     sb.append("- **Files changed:** ").append(filesChanged).append("\n");
     sb.append("- **Lines added:** ").append(signed('+', additions)).append("\n");
     sb.append("- **Lines removed:** ").append(signed('-', deletions)).append("\n\n");
+
+    appendChangedFiles(sb, changedFiles, aiSummary);
 
     sb.append("### Risk Assessment\n");
     sb.append("| Risk | Count |\n");
@@ -171,6 +186,69 @@ public class PrSummaryGenerator {
       sb.append("- ").append(gap.strip()).append("\n");
     }
     sb.append("\n");
+  }
+
+  /**
+   * Renders the file-by-file walkthrough as a table of (file, change type, one-line summary). The
+   * change type comes from the diff (authoritative); the summary is the model's per-file note,
+   * matched by path. Files without a model summary still appear, so the table always mirrors the
+   * actual change set. Bounded to {@link #MAX_FILE_ROWS} rows to respect the comment-size budget.
+   */
+  private static void appendChangedFiles(
+      StringBuilder sb, List<ChangedFile> changedFiles, ReviewResponse.Summary aiSummary) {
+    if (changedFiles == null || changedFiles.isEmpty()) {
+      return;
+    }
+    Map<String, String> summaryByPath = summariesByPath(aiSummary);
+
+    sb.append("### Changed Files\n");
+    sb.append("| File | Change | Summary |\n");
+    sb.append("|------|--------|---------|\n");
+    for (ChangedFile file : changedFiles.stream().limit(MAX_FILE_ROWS).toList()) {
+      String summary = summaryByPath.getOrDefault(file.path(), "");
+      sb.append("| `")
+          .append(escapeTableCell(file.path()))
+          .append("` | ")
+          .append(changeTypeLabel(file.changeType()))
+          .append(" | ")
+          .append(summary.isBlank() ? "-" : escapeTableCell(summary.strip()))
+          .append(" |\n");
+    }
+    int overflow = changedFiles.size() - MAX_FILE_ROWS;
+    if (overflow > 0) {
+      sb.append("\n_…and ").append(overflow).append(" more file(s)._\n");
+    }
+    sb.append("\n");
+  }
+
+  /** Indexes the model's per-file notes by path; a duplicate path keeps the first note. */
+  private static Map<String, String> summariesByPath(ReviewResponse.Summary aiSummary) {
+    if (aiSummary == null) {
+      return Map.of();
+    }
+    // List.copyOf in the Summary constructor guarantees no null elements.
+    return aiSummary.fileSummaries().stream()
+        .filter(fs -> fs.path() != null && !fs.path().isBlank() && fs.summary() != null)
+        .collect(
+            Collectors.toMap(
+                fs -> fs.path().strip(),
+                ReviewResponse.FileSummary::summary,
+                (first, dup) -> first));
+  }
+
+  /** Maps a GitHub file status to a display label, falling back to the raw value when unknown. */
+  private static String changeTypeLabel(String status) {
+    if (status == null || status.isBlank()) {
+      return "Changed";
+    }
+    return switch (status.toLowerCase(Locale.ROOT)) {
+      case "added" -> "Added";
+      case "removed", "deleted" -> "Removed";
+      case "renamed" -> "Renamed";
+      case "copied" -> "Copied";
+      case "changed", "modified" -> "Modified";
+      default -> escapeTableCell(status);
+    };
   }
 
   /** Renders a signed line count, avoiding the awkward "+0"/"-0". */
