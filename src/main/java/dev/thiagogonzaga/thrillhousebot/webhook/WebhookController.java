@@ -292,6 +292,15 @@ public class WebhookController {
       log.debug("Ignoring bot mention with missing repository or installation");
       return true;
     }
+    // A /pause silences the bot on this PR — stay quiet rather than spend a paid reply, honoring
+    // the command's "silence the bot" contract just like the automatic-review path.
+    if (prPauseService.isPaused(repo.owner().login(), repo.name(), payload.issue().number())) {
+      log.info(
+          "Skipping conversational mention on paused PR #{} in {}",
+          payload.issue().number(),
+          repo.fullName());
+      return true;
+    }
     log.info(
         "Conversational mention from @{} on PR #{}",
         payload.comment().user().login(),
@@ -355,6 +364,16 @@ public class WebhookController {
     // addressed to the bot; a brand-new inline comment from a human is not.
     if (!mentioned && !isReply) {
       log.debug("Ignoring review comment that neither replies to a thread nor mentions the bot");
+      return true;
+    }
+
+    // A /pause silences the bot on this PR — stay quiet rather than spend a paid reply, honoring
+    // the command's "silence the bot" contract just like the automatic-review path.
+    if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
+      log.info(
+          "Skipping conversational review-thread reply on paused PR #{} in {}",
+          pr.number(),
+          repo.fullName());
       return true;
     }
 
