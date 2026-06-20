@@ -250,10 +250,33 @@ public class PrLabeler {
   }
 
   private void applyLabels(LabelRequest request, List<String> resolved) {
+    // GitHub's add-labels endpoint is additive, so without this guard a re-review with shifting
+    // suggestions would keep piling labels onto the PR — pushing it well past max-labels over time
+    // (max-labels is documented as a per-PR bound). Bound the additions against the labels already
+    // on the PR: skip ones already present and only top the PR up to max-labels in total.
+    var current = currentLabelKeys(request);
+    int max = Math.max(0, config.review().labels().maxLabels());
+    int budget = Math.max(0, max - current.size());
+    if (budget == 0) {
+      return;
+    }
+    var toAdd = new ArrayList<String>();
+    for (var name : resolved) {
+      if (current.contains(name.toLowerCase(Locale.ROOT))) {
+        continue; // already on the PR — adding again is a no-op that wastes the budget
+      }
+      toAdd.add(name);
+      if (toAdd.size() >= budget) {
+        break;
+      }
+    }
+    if (toAdd.isEmpty()) {
+      return;
+    }
     // In allow-create mode, drop any label whose creation failed — GitHub 422s the whole
     // add-labels request if a single name doesn't exist, which would apply nothing at all.
     List<String> applicable =
-        config.review().labels().allowCreate() ? ensureLabelsExist(request, resolved) : resolved;
+        config.review().labels().allowCreate() ? ensureLabelsExist(request, toAdd) : toAdd;
     if (applicable.isEmpty()) {
       return;
     }
@@ -267,6 +290,44 @@ public class PrLabeler {
     Log.infof(
         "Applied %d label(s) to %s/%s #%d: %s",
         applicable.size(), request.owner(), request.repo(), request.prNumber(), applicable);
+  }
+
+  /**
+   * Lower-cased names of the labels currently on the PR, used to keep additive re-reviews from
+   * exceeding max-labels. Best-effort: if the lookup fails we return an empty set, which simply
+   * falls back to applying the reconciled suggestions for this review.
+   */
+  private Set<String> currentLabelKeys(LabelRequest request) {
+    try {
+      var labels =
+          labelClient.listIssueLabels(
+              request.auth(),
+              ACCEPT,
+              request.owner(),
+              request.repo(),
+              request.prNumber(),
+              LABELS_PER_PAGE,
+              1);
+      if (labels == null) {
+        return Set.of();
+      }
+      var keys = new HashSet<String>();
+      for (var label : labels) {
+        var name = label.name();
+        if (name != null && !name.isBlank()) {
+          keys.add(name.strip().toLowerCase(Locale.ROOT));
+        }
+      }
+      return keys;
+    } catch (RuntimeException e) {
+      Log.debugf(
+          e,
+          "Could not read current labels for %s/%s #%d; applying suggestions without a cap check",
+          request.owner(),
+          request.repo(),
+          request.prNumber());
+      return Set.of();
+    }
   }
 
   /**
