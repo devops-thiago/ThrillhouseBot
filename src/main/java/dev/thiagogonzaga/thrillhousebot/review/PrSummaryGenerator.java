@@ -27,6 +27,12 @@ public class PrSummaryGenerator {
   public static final String ZERO_ISSUES_MESSAGE =
       "Everything's coming up Thrillhouse! 🎉\n\nNo issues found in this PR.";
 
+  /**
+   * The first line of every generated summary. Doubles as the marker used to recognize a summary
+   * comment the bot already posted on a PR, so a re-review never duplicates it.
+   */
+  public static final String SUMMARY_HEADING = "## 🤖 ThrillhouseBot PR Summary";
+
   public String generate(
       int filesChanged,
       int additions,
@@ -34,7 +40,7 @@ public class PrSummaryGenerator {
       ReviewResponse.Summary aiSummary,
       ReviewResult result) {
     var sb = new StringBuilder();
-    sb.append("## 🤖 ThrillhouseBot PR Summary\n\n");
+    sb.append(SUMMARY_HEADING).append("\n\n");
 
     appendPrPurpose(sb, aiSummary);
     appendDescriptionGaps(sb, aiSummary);

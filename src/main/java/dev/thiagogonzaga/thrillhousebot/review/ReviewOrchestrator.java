@@ -52,6 +52,10 @@ public class ReviewOrchestrator {
   private static final String CHECK_NAME = "ThrillhouseBot Review";
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
   private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
+  private static final String SUMMARY_HEADING = PrSummaryGenerator.SUMMARY_HEADING;
+  // One page comfortably covers the bot's summary: it is posted on the first review, so it sits
+  // among the earliest issue comments returned oldest-first.
+  private static final int ISSUE_COMMENTS_PER_PAGE = 100;
 
   // Check run status constants
   private static final String CHECK_STATUS_COMPLETED = "completed";
@@ -221,8 +225,13 @@ public class ReviewOrchestrator {
 
       var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
       // Two independent flags decouple UX presentation from context loading (#134):
-      //  • isFirstVisibleReview — true when no bot-authored review exists on the PR.
-      //    Gates the first-review summary issue-comment and the APPROVE celebration body.
+      //  • isFirstVisibleReview — true when the bot has posted nothing user-visible on the PR yet:
+      //    neither a review nor a summary comment. Gates the first-review summary issue-comment and
+      //    the APPROVE celebration body. A review alone is not a reliable proxy: a first round held
+      //    back only by pending CI posts the summary comment but no review (#175), so keying off
+      // the
+      //    review would re-post the summary every round until one finally creates a review. The
+      //    summary comment is the artifact we must not duplicate, so we look for it directly.
       //  • hasContext — true when persistence holds prior AI responses (surviving force-push/
       //    rebase). Gates previous-findings context loading, inline comment fetching, and the
       //    deterministic backstop. A persisted-but-unreviewed prior round (e.g. createReview
@@ -231,7 +240,8 @@ public class ReviewOrchestrator {
       List<String> priorAiResponseJsons =
           sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
       var isFirstVisibleReview =
-          priorReviews.stream().noneMatch(r -> BOT_LOGIN.equals(r.user().login()));
+          priorReviews.stream().noneMatch(r -> BOT_LOGIN.equals(r.user().login()))
+              && !botSummaryCommentExists(auth, req.owner(), req.repo(), req.prNumber());
       var hasContext = !priorAiResponseJsons.isEmpty();
       String previousAiResponseJson =
           priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(0);
@@ -609,6 +619,38 @@ public class ReviewOrchestrator {
       return reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.debug("No prior reviews found (this is normal for first review)", e);
+      return List.of();
+    }
+  }
+
+  /**
+   * Whether the bot has already posted its PR summary comment on this PR. Used to suppress a
+   * duplicate summary on a re-review when a prior round left a summary comment but no review (e.g.
+   * a first round held back only by pending CI). Best-effort: on a fetch failure it returns {@code
+   * false}, falling back to the review-based signal rather than blocking the summary.
+   */
+  boolean botSummaryCommentExists(String auth, String owner, String repo, int prNumber) {
+    for (var comment : fetchIssueComments(auth, owner, repo, prNumber)) {
+      var user = comment.user();
+      var body = comment.body();
+      if (user != null
+          && BOT_LOGIN.equals(user.login())
+          && body != null
+          && body.stripLeading().startsWith(SUMMARY_HEADING)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<GitHubCommentClient.IssueComment> fetchIssueComments(
+      String auth, String owner, String repo, int prNumber) {
+    try {
+      var comments =
+          commentClient.listComments(auth, ACCEPT, owner, repo, prNumber, ISSUE_COMMENTS_PER_PAGE);
+      return comments != null ? comments : List.of();
+    } catch (RuntimeException e) {
+      Log.debug("Could not fetch PR issue comments (continuing as if none exist)", e);
       return List.of();
     }
   }
