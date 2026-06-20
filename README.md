@@ -40,7 +40,7 @@ code review.
 - Follow-up reviews track whether earlier findings were addressed or justified
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown
-- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/resolve`, `/pause`, `/resume`
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
@@ -72,6 +72,7 @@ mention form, e.g. `@Thrillhousebot review`.
 | `/help` | List the available commands | anyone |
 | `/review` | Run (or re-run) a full review of the PR | write |
 | `/summary` | Post the PR summary, but only if one has not been generated yet (otherwise no-op) | write |
+| `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |

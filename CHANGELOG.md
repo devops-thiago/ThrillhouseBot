@@ -2,6 +2,13 @@
 
 All notable changes to ThrillhouseBot.
 
+## [0.3.0] — unreleased
+
+
+### Added
+
+- **`/describe` command**: ask the bot to generate or improve the PR title and description from the diff. It posts a suggestion comment the author can copy in — it never edits the pull request, so the author's own title and body are never overwritten. Respects the repository instructions file, is write-gated like the other paid commands, and honors a `/pause` (#35)
+
 ## [0.2.0] — 2026-06-21
 
 This release makes the bot interactive and controllable from the PR — conversational replies, comment commands, context-aware labels, and configurable triggers — and hardens startup and the manual-review path.
