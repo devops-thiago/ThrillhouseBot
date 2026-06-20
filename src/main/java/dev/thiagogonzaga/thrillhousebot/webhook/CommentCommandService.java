@@ -259,8 +259,9 @@ public class CommentCommandService {
         ctx.repo(),
         num(ctx),
         ctx.login());
-    // Already on the review executor; the AI call + GitHub round trips run here. The service is
-    // @ActivateRequestContext so the LangChain4j AI call has an active request scope.
+    // This already runs on the review executor (handle() submitted execute() to it), off the
+    // webhook ack thread, so the blocking AI call + GitHub round trips run here safely. The service
+    // is @ActivateRequestContext, so the LangChain4j AI call has an active request scope.
     docGenerationService.handle(
         new DocGenerationService.DocTask(
             ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.defaultBranch(), ctx.installationId()));
