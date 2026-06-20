@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import java.util.List;
@@ -48,6 +49,7 @@ class CommentCommandServiceTest {
   @Mock private ReviewSessionPersistence sessionPersistence;
   @Mock private PrPauseService prPauseService;
   @Mock private ManualReviewAuthorizer authorizer;
+  @Mock private PrDescriptionGenerator descriptionGenerator;
 
   private CommentCommandService service;
 
@@ -74,7 +76,8 @@ class CommentCommandServiceTest {
             sessionPersistence,
             prPauseService,
             authorizer,
-            new TriggerDetector());
+            new TriggerDetector(),
+            descriptionGenerator);
   }
 
   private CommentCommandService.CommandContext ctx(CommentCommand command) {
@@ -148,6 +151,52 @@ class CommentCommandServiceTest {
     service.handle(ctx(CommentCommand.SUMMARY));
 
     verify(reviewDispatcher, never()).dispatch(any());
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(prPauseService);
+  }
+
+  @Test
+  void describePostsTheGeneratedSuggestion() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(descriptionGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn("## suggestion body");
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    assertEquals("## suggestion body", postedBody());
+  }
+
+  @Test
+  void describePostsNothingWhenGeneratorReturnsNull() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(descriptionGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn(null);
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void describePostsPausedNoticeWhenPaused() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
+    verifyNoInteractions(descriptionGenerator);
+  }
+
+  @Test
+  void describeIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    verifyNoInteractions(descriptionGenerator);
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
     verifyNoInteractions(prPauseService);
   }

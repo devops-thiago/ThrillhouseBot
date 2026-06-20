@@ -29,6 +29,8 @@ public enum CommentCommand {
   HELP,
   /** Regenerate the PR summary (only when none has been posted yet). */
   SUMMARY,
+  /** Suggest an improved PR title and description generated from the diff. */
+  DESCRIBE,
   /** Resolve the bot's outstanding finding threads on the PR. */
   RESOLVE,
   /** Silence the bot on the PR until {@link #RESUME}. */
