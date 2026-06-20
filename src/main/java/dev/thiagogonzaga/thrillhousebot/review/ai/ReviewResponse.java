@@ -61,6 +61,10 @@ public record ReviewResponse(
       String status, // resolved, unresolved, justified
       String note) {}
 
+  /** One changed file the model summarized: its path and a one-line description of the change. */
+  @RegisterForReflection
+  public record FileSummary(String path, String summary) {}
+
   @RegisterForReflection
   public record Summary(
       @JsonProperty("total_findings") int totalFindings,
@@ -71,7 +75,8 @@ public record ReviewResponse(
       @JsonProperty("overall_assessment") String overallAssessment,
       @JsonProperty("pr_purpose") String prPurpose,
       @JsonProperty("description_gaps") List<String> descriptionGaps,
-      @JsonProperty("suggested_labels") List<String> suggestedLabels) {
+      @JsonProperty("suggested_labels") List<String> suggestedLabels,
+      @JsonProperty("file_summaries") List<FileSummary> fileSummaries) {
     public Summary {
       // The AI may emit null elements inside these arrays (e.g. ["bug", null]); a bare List.copyOf
       // would throw an NPE that fails the whole review, even though both lists are best-effort
@@ -79,9 +84,10 @@ public record ReviewResponse(
       // into the helper so SpotBugs still sees the defensive copy and does not flag EI_EXPOSE_REP.
       descriptionGaps = List.copyOf(withoutNulls(descriptionGaps));
       suggestedLabels = List.copyOf(withoutNulls(suggestedLabels));
+      fileSummaries = List.copyOf(withoutNulls(fileSummaries));
     }
 
-    private static List<String> withoutNulls(List<String> values) {
+    private static <T> List<T> withoutNulls(List<T> values) {
       return values == null ? List.of() : values.stream().filter(Objects::nonNull).toList();
     }
 
@@ -104,6 +110,30 @@ public record ReviewResponse(
           overallAssessment,
           prPurpose,
           descriptionGaps,
+          List.of());
+    }
+
+    /** Convenience constructor for callers (and responses) that predate per-file summaries. */
+    public Summary(
+        int totalFindings,
+        int critical,
+        int high,
+        int medium,
+        int low,
+        String overallAssessment,
+        String prPurpose,
+        List<String> descriptionGaps,
+        List<String> suggestedLabels) {
+      this(
+          totalFindings,
+          critical,
+          high,
+          medium,
+          low,
+          overallAssessment,
+          prPurpose,
+          descriptionGaps,
+          suggestedLabels,
           List.of());
     }
   }

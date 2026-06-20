@@ -17,7 +17,9 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -82,5 +84,51 @@ class ReviewResponseTest {
     assertEquals(1, response.previousFindingsStatus().size());
     assertEquals("resolved", response.previousFindingsStatus().get(0).status());
     assertEquals("needs fix", response.summary().overallAssessment());
+  }
+
+  @Test
+  void summaryConvenienceConstructorsDefaultFileSummariesToEmpty() {
+    // Callers (and older AI responses) that predate file summaries must still construct cleanly.
+    var noLabels = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "purpose", List.of());
+    var withLabels =
+        new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "purpose", List.of(), List.of("bug"));
+
+    assertTrue(noLabels.fileSummaries().isEmpty());
+    assertTrue(withLabels.fileSummaries().isEmpty());
+  }
+
+  @Test
+  void summaryShouldDropNullFileSummaryElements() {
+    // The AI may emit a null array element; the defensive copy must drop it, not throw.
+    var summary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            null,
+            List.of(),
+            List.of(),
+            Arrays.asList(new ReviewResponse.FileSummary("a.java", "changed"), null));
+
+    assertEquals(1, summary.fileSummaries().size());
+    assertEquals("a.java", summary.fileSummaries().get(0).path());
+  }
+
+  @Test
+  void shouldDeserializeFileSummariesFromJson() throws Exception {
+    var json =
+        """
+        {"summary": {"total_findings": 0, "overall_assessment": "ok",
+         "file_summaries": [{"path": "src/A.java", "summary": "adds guard"}]}}
+        """;
+
+    var response = new ObjectMapper().readValue(json, ReviewResponse.class);
+
+    assertEquals(1, response.summary().fileSummaries().size());
+    assertEquals("src/A.java", response.summary().fileSummaries().get(0).path());
+    assertEquals("adds guard", response.summary().fileSummaries().get(0).summary());
   }
 }
