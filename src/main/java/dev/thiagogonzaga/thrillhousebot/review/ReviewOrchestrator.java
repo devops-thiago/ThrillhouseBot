@@ -317,7 +317,9 @@ public class ReviewOrchestrator {
       List<ReviewResult.CiCheck> offendingCiChecks =
           evaluateCiChecks(auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
-      DiffStats diffStats = DiffStats.fromFiles(diffFormatter.reviewableFiles(files));
+      var reviewableFiles = diffFormatter.reviewableFiles(files);
+      DiffStats diffStats = DiffStats.fromFiles(reviewableFiles);
+      List<PrSummaryGenerator.ChangedFile> changedFiles = toChangedFiles(reviewableFiles);
       var unresolvedPrevious =
           followUpAnalyzer.unresolvedFindings(
               previousAiResponseJson, aiResponse.previousFindingsStatus());
@@ -339,6 +341,7 @@ public class ReviewOrchestrator {
               aiResponse,
               isFirstVisibleReview,
               diffStats,
+              changedFiles,
               unresolvedPrevious,
               offendingCiChecks,
               backstopUnresolved);
@@ -872,10 +875,21 @@ public class ReviewOrchestrator {
     }
   }
 
+  /**
+   * Projects the reviewed diff onto the (path, change type) rows the summary walkthrough renders.
+   */
+  static List<PrSummaryGenerator.ChangedFile> toChangedFiles(
+      List<GitHubPullRequestClient.FileDiff> files) {
+    return files.stream()
+        .map(f -> new PrSummaryGenerator.ChangedFile(f.filename(), f.status()))
+        .toList();
+  }
+
   ReviewResult buildResult(
       ReviewResponse aiResponse,
       boolean isFirstReview,
       DiffStats diffStats,
+      List<PrSummaryGenerator.ChangedFile> changedFiles,
       List<Finding> unresolvedPrevious,
       List<ReviewResult.CiCheck> offendingCiChecks,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
@@ -934,6 +948,7 @@ public class ReviewOrchestrator {
             diffStats.filesChanged(),
             diffStats.additions(),
             diffStats.deletions(),
+            changedFiles,
             aiResponse.summary(),
             new ReviewResult(
                 findings,
@@ -969,7 +984,13 @@ public class ReviewOrchestrator {
       List<Finding> unresolvedPrevious,
       List<ReviewResult.CiCheck> offendingCiChecks) {
     return buildResult(
-        aiResponse, isFirstReview, diffStats, unresolvedPrevious, offendingCiChecks, List.of());
+        aiResponse,
+        isFirstReview,
+        diffStats,
+        List.of(),
+        unresolvedPrevious,
+        offendingCiChecks,
+        List.of());
   }
 
   ReviewResult buildResult(
