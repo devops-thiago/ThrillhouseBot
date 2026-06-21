@@ -121,22 +121,10 @@ public class MaintainerReplyService {
   @ActivateRequestContext
   public void handle(ReplyTask task) {
     try {
-      if (!authorizer.isAuthorized(
-          task.owner(),
-          task.repo(),
-          task.installationId(),
-          task.commenterLogin(),
-          task.authorAssociation())) {
-        Log.infof(
-            "Ignoring conversational reply request from @%s on %s/%s #%d — not authorized",
-            task.commenterLogin(), task.owner(), task.repo(), task.prNumber());
-        return;
-      }
-      var auth = authClient.getAuthHeader(task.installationId());
       if (task.reviewThread()) {
-        handleReviewThreadReply(auth, task);
+        handleReviewThreadReply(task);
       } else {
-        handleMention(auth, task);
+        handleMention(task);
       }
     } catch (RuntimeException e) {
       Log.warnf(
@@ -148,25 +136,33 @@ public class MaintainerReplyService {
     }
   }
 
-  private void handleReviewThreadReply(String auth, ReplyTask task) {
-    var comments = listReviewComments(auth, task);
-    var root = findRoot(comments, task.rootCommentId());
-    boolean rootIsBot =
-        root != null && root.user() != null && triggerDetector.isBotComment(root.user().login());
+  private void handleReviewThreadReply(ReplyTask task) {
+    if (task.rootCommentId() == null) {
+      Log.debugf("Skipping review-thread reply with no resolvable root comment");
+      return;
+    }
+    var auth = authClient.getAuthHeader(task.installationId());
+
     // Only answer when the maintainer is actually addressing the bot: a reply on the bot's own
     // finding thread, or an explicit mention. A reply between two humans on a human-started thread
-    // must not pull the bot in.
-    if (!task.mentioned() && !rootIsBot) {
+    // must not pull the bot in. For the no-mention case, resolve "is this the bot's thread?" with a
+    // single GET on the root comment and bail here — before the authorizer round-trip and the
+    // paginated comment list — so human-to-human replies on busy PRs don't amplify GitHub API
+    // traffic.
+    if (!task.mentioned() && !rootCommentIsBot(auth, task)) {
       Log.debugf(
           "Skipping review-thread reply on %s/%s #%d — not a bot thread and no mention",
           task.owner(), task.repo(), task.prNumber());
       return;
     }
-    if (task.rootCommentId() == null) {
-      Log.debugf("Skipping review-thread reply with no resolvable root comment");
+    if (!authorized(task)) {
       return;
     }
 
+    var comments = listReviewComments(auth, task);
+    var root = findRoot(comments, task.rootCommentId());
+    boolean rootIsBot =
+        root != null && root.user() != null && triggerDetector.isBotComment(root.user().login());
     String finding = rootIsBot ? root.body() : "";
     String thread = renderThread(comments, task.rootCommentId(), task.triggeringCommentId());
 
@@ -193,7 +189,11 @@ public class MaintainerReplyService {
         task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
   }
 
-  private void handleMention(String auth, ReplyTask task) {
+  private void handleMention(ReplyTask task) {
+    if (!authorized(task)) {
+      return;
+    }
+    var auth = authClient.getAuthHeader(task.installationId());
     String reply =
         generateReply(task.question(), buildPrContext(task), "", fetchDiff(auth, task), "");
     if (reply == null) {
@@ -209,6 +209,44 @@ public class MaintainerReplyService {
     Log.infof(
         "Posted conversational reply to mention on %s/%s #%d",
         task.owner(), task.repo(), task.prNumber());
+  }
+
+  /**
+   * Confirms the commenter may spend the operator's API/AI budget on a reply, logging a rejection.
+   * A bot-thread reply still has to clear this gate before the bot posts anything back.
+   */
+  private boolean authorized(ReplyTask task) {
+    if (authorizer.isAuthorized(
+        task.owner(),
+        task.repo(),
+        task.installationId(),
+        task.commenterLogin(),
+        task.authorAssociation())) {
+      return true;
+    }
+    Log.infof(
+        "Ignoring conversational reply request from @%s on %s/%s #%d — not authorized",
+        task.commenterLogin(), task.owner(), task.repo(), task.prNumber());
+    return false;
+  }
+
+  /**
+   * Cheap pre-filter: fetches only the thread's root comment to decide whether it is one of the
+   * bot's own findings, instead of paging the entire review-comment list. Fails soft — a root that
+   * cannot be fetched is treated as not the bot's, so an unmentioned reply on it is left alone.
+   */
+  private boolean rootCommentIsBot(String auth, ReplyTask task) {
+    GitHubReviewClient.PullRequestComment root;
+    try {
+      root =
+          reviewClient.getReviewComment(
+              auth, ACCEPT, task.owner(), task.repo(), task.rootCommentId());
+    } catch (RuntimeException e) {
+      Log.warn(
+          "Failed to fetch review-thread root comment for pre-filter — treating as non-bot", e);
+      return false;
+    }
+    return root != null && root.user() != null && triggerDetector.isBotComment(root.user().login());
   }
 
   /** Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. */

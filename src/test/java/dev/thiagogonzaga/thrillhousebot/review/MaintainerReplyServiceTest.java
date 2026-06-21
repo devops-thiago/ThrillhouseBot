@@ -80,6 +80,16 @@ class MaintainerReplyServiceTest {
     return new GitHubReviewClient.PullRequestComment(id, inReplyToId, "src/Foo.java", body, null);
   }
 
+  /**
+   * Stubs the cheap single-GET pre-filter to return {@code root} as the thread's root comment, so
+   * an unmentioned review-thread reply gets past the bot-thread check and on to the heavier work.
+   */
+  private void stubRootComment(GitHubReviewClient.PullRequestComment root) {
+    when(reviewClient.getReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(root.id())))
+        .thenReturn(root);
+  }
+
   private MaintainerReplyService.ReplyTask reviewThreadTask(boolean mentioned) {
     return new MaintainerReplyService.ReplyTask(
         "owner",
@@ -121,18 +131,68 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
-  void unauthorizedRequestPostsNothing() {
+  void unauthorizedMentionPostsNothing() {
     when(authorizer.isAuthorized(any(), any(), anyLong(), any(), any())).thenReturn(false);
 
-    service.handle(reviewThreadTask(false));
+    service.handle(mentionTask());
 
+    // The mention path rejects before minting a token or touching any GitHub client.
     verifyNoInteractions(reviewClient, commentClient, replyAssistant);
     verify(authClient, never()).getAuthHeader(anyLong());
   }
 
   @Test
+  void unauthorizedMentionedReviewReplyPostsNothing() {
+    when(authorizer.isAuthorized(any(), any(), anyLong(), any(), any())).thenReturn(false);
+
+    // An explicit mention skips the bot-thread pre-filter, so the authorizer is the gate; once it
+    // denies, the bot must not list comments or post anything.
+    service.handle(reviewThreadTask(true));
+
+    verifyNoInteractions(replyAssistant, commentClient);
+    verify(reviewClient, never())
+        .listPullRequestComments(any(), any(), any(), any(), anyInt(), anyInt(), anyInt());
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void unmentionedReplyOnHumanThreadSkipsBeforeListingAndAuthorizing() {
+    // The cheap single-GET pre-filter sees a human-authored root and bails before the authorizer
+    // round-trip and the paginated comment list — a human-to-human reply must not amplify API
+    // traffic.
+    stubRootComment(comment(99L, null, "someone", "I think this is wrong"));
+
+    service.handle(reviewThreadTask(false));
+
+    verify(reviewClient).getReviewComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(99L));
+    verify(reviewClient, never())
+        .listPullRequestComments(any(), any(), any(), any(), anyInt(), anyInt(), anyInt());
+    verifyNoInteractions(authorizer, replyAssistant, commentClient);
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void preFilterFailSoftSkipsWhenRootFetchThrows() {
+    // If the single-GET root lookup fails, an unmentioned reply is treated as not-the-bot's thread
+    // and left alone rather than falling through to the expensive list.
+    when(reviewClient.getReviewComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(99L)))
+        .thenThrow(new RuntimeException("GitHub 503"));
+
+    service.handle(reviewThreadTask(false));
+
+    verify(reviewClient, never())
+        .listPullRequestComments(any(), any(), any(), any(), anyInt(), anyInt(), anyInt());
+    verifyNoInteractions(replyAssistant);
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
   void replyOnBotThreadPostsAnswerWithFindingAndPriorRepliesAsContext() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**CRITICAL — possible NPE** on user lookup"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(
@@ -179,6 +239,7 @@ class MaintainerReplyServiceTest {
   @Test
   void walksAllCommentPagesToFindARootBeyondTheFirstPage() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**finding** on page two"));
     // Page 1 is full (100 comments) so a second page is fetched; the bot finding root is on page 2.
     var firstPage = new ArrayList<GitHubReviewClient.PullRequestComment>();
     for (int i = 0; i < 100; i++) {
@@ -204,23 +265,25 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
-  void nullCommentPageIsTreatedAsEmptyAndPostsNothing() {
+  void unmentionedReplyWithUnresolvableRootPostsNothing() {
     authorize();
-    when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
+    // The single-GET pre-filter returns null (e.g. the root was deleted), so a non-mention reply is
+    // treated as not the bot's thread and the bot stays silent without paging the comment list.
+    when(reviewClient.getReviewComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(99L)))
         .thenReturn(null);
 
     service.handle(reviewThreadTask(false));
 
-    // No comments resolve a root, and the reply was not an explicit mention, so the bot stays
-    // silent.
     verifyNoInteractions(replyAssistant);
+    verify(reviewClient, never())
+        .listPullRequestComments(any(), any(), any(), any(), anyInt(), anyInt(), anyInt());
   }
 
   @Test
   void stopsAtTheCommentPageBoundOnAVeryLongThread() {
     authorize();
-    // Every page is full, so only the page bound can stop the walk.
+    // Every page is full, so only the page bound can stop the walk. Use an explicit mention so the
+    // bot-thread pre-filter is bypassed and the full paginated walk is exercised.
     var fullPage = new ArrayList<GitHubReviewClient.PullRequestComment>();
     for (int i = 0; i < 100; i++) {
       fullPage.add(comment(3000L + i, 88L, "octocat", "noise " + i));
@@ -229,7 +292,7 @@ class MaintainerReplyServiceTest {
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(fullPage);
 
-    service.handle(reviewThreadTask(false));
+    service.handle(reviewThreadTask(true));
 
     verify(reviewClient, times(10))
         .listPullRequestComments(
@@ -239,12 +302,8 @@ class MaintainerReplyServiceTest {
   @Test
   void replyOnHumanThreadWithoutMentionPostsNothing() {
     authorize();
-    when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
-        .thenReturn(
-            List.of(
-                comment(99L, null, "someone", "I think this is wrong"),
-                comment(1000L, 99L, "octocat", "Why is this flagged?")));
+    // The thread root is human-authored, so the pre-filter leaves an unmentioned reply alone.
+    stubRootComment(comment(99L, null, "someone", "I think this is wrong"));
 
     service.handle(reviewThreadTask(false));
 
@@ -298,6 +357,7 @@ class MaintainerReplyServiceTest {
   @Test
   void blankAssistantReplyPostsNothing() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**HIGH — bug**"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
@@ -312,6 +372,7 @@ class MaintainerReplyServiceTest {
   @Test
   void assistantFailureIsSwallowed() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**HIGH — bug**"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
@@ -405,6 +466,7 @@ class MaintainerReplyServiceTest {
   @Test
   void postFailureIsSwallowedByOuterHandler() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**HIGH — bug**"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
@@ -433,6 +495,7 @@ class MaintainerReplyServiceTest {
   @Test
   void botThreadReplyWithNullDiffHunkSendsEmptyCodeContext() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**HIGH — bug**"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
@@ -455,6 +518,7 @@ class MaintainerReplyServiceTest {
   @Test
   void threadRenderingSkipsOtherThreadsAndHandlesAnonymousReplies() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**finding**"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(
@@ -483,10 +547,8 @@ class MaintainerReplyServiceTest {
   void rootWithNullAuthorIsNotTreatedAsBotThread() {
     authorize();
     // The root exists but its author is unknown (e.g. deleted account): it must not count as the
-    // bot's thread, so an unmentioned reply on it is left alone.
-    when(reviewClient.listPullRequestComments(
-            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
-        .thenReturn(List.of(commentNoUser(99L, null, "author is null")));
+    // bot's thread, so an unmentioned reply on it is left alone by the pre-filter.
+    stubRootComment(commentNoUser(99L, null, "author is null"));
 
     service.handle(reviewThreadTask(false));
 
@@ -498,6 +560,7 @@ class MaintainerReplyServiceTest {
   @Test
   void nullAssistantReplyPostsNothing() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**HIGH — bug**"));
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
@@ -529,6 +592,7 @@ class MaintainerReplyServiceTest {
   @Test
   void findRootScansPastNonMatchingComments() {
     authorize();
+    stubRootComment(comment(99L, null, BOT, "**finding**"));
     // The root is not first in the list, so the id filter must skip a non-matching comment first.
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))

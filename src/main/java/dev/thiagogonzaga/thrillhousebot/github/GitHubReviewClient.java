@@ -72,6 +72,21 @@ public interface GitHubReviewClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
+  /**
+   * Fetches a single review comment by id. A cheap one-call alternative to paging the whole
+   * review-comment list when a caller only needs the one comment (e.g. resolving a thread's root
+   * author before deciding whether heavier work is warranted).
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}")
+  @Produces(MediaType.APPLICATION_JSON)
+  PullRequestComment getReviewComment(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("commentId") long commentId);
+
   @POST
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)
