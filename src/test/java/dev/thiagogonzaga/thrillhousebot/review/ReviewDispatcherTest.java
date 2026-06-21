@@ -285,7 +285,7 @@ class ReviewDispatcherTest {
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
     dispatcher = new ReviewDispatcher(executor, orchestrator);
 
-    // A rejected task means no review will run, so callers can roll back dedup state. (#89)
+    // A rejected task means no review will run, so callers can roll back dedup state.
     assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
   }
 

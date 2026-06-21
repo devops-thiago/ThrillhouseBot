@@ -49,8 +49,6 @@ class DashboardWebSocketTest {
     webSocket = new DashboardWebSocket(broadcaster, sessionValidator);
   }
 
-  // ── onOpen adds session to broadcaster ──────────────────────────────────
-
   static Stream<Arguments> validCookieHeaders() {
     return Stream.of(
         Arguments.of("ws-session-1", "thrillhouse_session=valid-token; other=value"),
@@ -87,8 +85,6 @@ class DashboardWebSocketTest {
     assertEquals(1, broadcaster.getConnectedCount());
   }
 
-  // ── onClose removes session ─────────────────────────────────────────────
-
   @Test
   void onCloseShouldRemoveSession() {
     var session = mock(Session.class);
@@ -115,8 +111,6 @@ class DashboardWebSocketTest {
     assertEquals(0, broadcaster.getConnectedCount());
   }
 
-  // ── onOpen with no valid cookie → session is closed ─────────────────────
-
   static Stream<Arguments> missingCookieArgs() {
     return Stream.of(
         Arguments.of(Map.of(), Map.of()),
@@ -141,8 +135,6 @@ class DashboardWebSocketTest {
             argThat((CloseReason r) -> r.getCloseCode() == CloseReason.CloseCodes.VIOLATED_POLICY));
     assertEquals(0, broadcaster.getConnectedCount());
   }
-
-  // ── Edge case: Session close throws exception ───────────────────────────
 
   @Test
   void onOpenShouldNotThrowWhenSessionCloseFails() throws Exception {

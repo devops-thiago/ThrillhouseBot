@@ -26,8 +26,6 @@ import org.junit.jupiter.api.Test;
 
 class ReviewTriggerFilterTest {
 
-  // ── defaults preserve original behavior ─────────────────────────────────
-
   @Test
   void shouldReviewEveryPrWithDefaultConfig() {
     var filter = filter(false, List.of(), List.of(), List.of(), List.of());
@@ -52,8 +50,6 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(null).isEmpty());
   }
 
-  // ── skip-drafts ─────────────────────────────────────────────────────────
-
   @Test
   void shouldSkipDraftWhenConfigured() {
     var filter = filter(true, List.of(), List.of(), List.of(), List.of());
@@ -61,8 +57,6 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("main", true)).isPresent());
     assertTrue(filter.skipReason(pr("main", false)).isEmpty());
   }
-
-  // ── label gating ────────────────────────────────────────────────────────
 
   @Test
   void shouldRequireAtLeastOneRequiredLabel() {
@@ -106,8 +100,6 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("main", false, "ai-review", null, "  ")).isEmpty());
     assertTrue(filter.skipReason(pr("main", false, null, "  ")).isPresent());
   }
-
-  // ── base-branch filters ─────────────────────────────────────────────────
 
   @Test
   void shouldAllowOnlyMatchingBaseBranches() {
@@ -166,8 +158,6 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("x" + ((char) 0) + "y", false)).isPresent());
   }
 
-  // ── robustness: blank/invalid/null config entries are ignored ───────────
-
   @Test
   void shouldIgnoreBlankConfigEntries() {
     // Mirrors the empty-string default that comes from an unset env var.
@@ -202,8 +192,6 @@ class ReviewTriggerFilterTest {
     assertTrue(filter.skipReason(pr("anything", false, "whatever")).isEmpty());
   }
 
-  // ── config-backed constructor (the @Inject path) ────────────────────────
-
   @Test
   void shouldApplyFiltersFromConfig() {
     var filter =
@@ -223,8 +211,6 @@ class ReviewTriggerFilterTest {
 
     assertTrue(filter.skipReason(pr("anything", true, "wip")).isEmpty());
   }
-
-  // ── helpers ─────────────────────────────────────────────────────────────
 
   /** Builds a config; null list args become {@link Optional#empty()} (the unset-env case). */
   private static ThrillhouseConfig config(

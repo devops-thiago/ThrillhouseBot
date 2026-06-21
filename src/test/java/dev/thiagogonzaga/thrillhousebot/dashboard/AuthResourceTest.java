@@ -35,8 +35,6 @@ import org.junit.jupiter.api.Test;
 @TestHTTPEndpoint(AuthResource.class)
 class AuthResourceTest {
 
-  // ── login() ────────────────────────────────────────────────────────────
-
   @Test
   void loginShouldRedirectToGitHubWhenClientIdConfigured() {
     given()
@@ -49,8 +47,6 @@ class AuthResourceTest {
         .header("Location", containsString("https://github.com/login/oauth/authorize"))
         .header("Location", containsString("scope=read:user,read:org"));
   }
-
-  // ── callback() ─────────────────────────────────────────────────────────
 
   @Test
   void callbackShouldReturn400WhenCodeIsNull() {
@@ -99,8 +95,6 @@ class AuthResourceTest {
         .body("error", equalTo("Invalid state parameter"));
   }
 
-  // ── me() ───────────────────────────────────────────────────────────────
-
   @Test
   void meShouldReturn401WhenSessionCookieIsMissing() {
     given().when().get("/me").then().statusCode(401).body("error", equalTo("Not authenticated"));
@@ -138,8 +132,6 @@ class AuthResourceTest {
         .statusCode(204)
         .header("Set-Cookie", containsString("thrillhouse_session="));
   }
-
-  // ── me() success/expired via session store ──────────────────────────
 
   @Nested
   class LoginEndpoint {

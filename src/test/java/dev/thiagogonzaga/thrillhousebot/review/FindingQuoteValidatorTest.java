@@ -141,7 +141,7 @@ class FindingQuoteValidatorTest {
   @Test
   void quotesOfMarkerContentMatchByteExact() {
     // The diff is fenced and passed byte-exact, so the model quotes the marker text verbatim
-    // (three-bracket form) and it must validate against the raw diff — no neutralization (#187).
+    // (three-bracket form) and it must validate against the raw diff — no neutralization.
     var diff =
         """
         +++ b/src/Probe.java
@@ -536,9 +536,9 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * The PR #101 dogfood case: {@code suggestion_old} quotes the real changed line (a FULL match)
-   * but the description's supporting mechanism is a chained call that exists nowhere. The finding
-   * is kept but demoted — suggestion stripped, confidence capped — exactly like a partial quote.
+   * The dogfood case: {@code suggestion_old} quotes the real changed line (a FULL match) but the
+   * description's supporting mechanism is a chained call that exists nowhere. The finding is kept
+   * but demoted — suggestion stripped, confidence capped — exactly like a partial quote.
    */
   @Test
   void demotesFindingWhenDescriptionCitesPhantomChainedCall() {
@@ -562,7 +562,7 @@ class FindingQuoteValidatorTest {
   /**
    * A description that cites no absent chained call leaves the finding untouched: an absent (null
    * or blank) description, a chained call genuinely in the diff, a bare method name, or a dotted
-   * field access without a call all pass through unchanged. This also covers #120 face (b): a full
+   * field access without a call all pass through unchanged. This also covers face (b): a full
    * nested lambda chain present in the diff is one whole citation (its inner predicate is not
    * surfaced separately), and malformed candidates — unbalanced parentheses or an unterminated
    * string literal — consume no argument list and are never flagged.
@@ -635,8 +635,8 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * #120 face (a): a citation whose argument is itself a call or a lambda (nested parentheses) used
-   * to be either truncated to a paren-less fragment and dropped unchecked, or split so the chain's
+   * face (a): a citation whose argument is itself a call or a lambda (nested parentheses) used to
+   * be either truncated to a paren-less fragment and dropped unchecked, or split so the chain's
    * fabricated tail was never seen — in both cases the phantom escaped at full confidence. The
    * whole chain is now extracted as one citation and, being absent from the diff, is demoted.
    * Covers a nested-call argument, a lambda chain sharing a real prefix but ending in an invented
@@ -715,12 +715,12 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * Mechanism (a), #121: a chain the description cites that is also the finding's own {@code
+   * Mechanism (a): a chain the description cites that is also the finding's own {@code
    * suggestion_new} is the proposed fix — a hypothetical, absent from the diff by definition. The
    * chain is still extracted, but since it is absent from {@code DESCRIPTION_DIFF} and restated in
    * {@code suggestion_new}, it is not counted as a fabricated mechanism (the deterministic form of
-   * #106's "existing code, not the suggested fix"), so a finding that describes its own fix is not
-   * demoted. Its absence from the diff is what makes the {@code suggestion_new} restatement the
+   * that case's "existing code, not the suggested fix"), so a finding that describes its own fix is
+   * not demoted. Its absence from the diff is what makes the {@code suggestion_new} restatement the
    * only thing keeping it.
    */
   @ParameterizedTest
@@ -747,9 +747,9 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * Mechanism (b), #121: a description that cites a present core mechanism keeps its suggestion
-   * even when an incidental off-diff helper is cited <em>first</em> — the guard must not
-   * short-circuit to a demotion on the first absent chain.
+   * Mechanism (b): a description that cites a present core mechanism keeps its suggestion even when
+   * an incidental off-diff helper is cited <em>first</em> — the guard must not short-circuit to a
+   * demotion on the first absent chain.
    */
   @Test
   void keepsFindingWhenCoreCitedChainIsPresentDespiteOffDiffHelper() {
@@ -765,8 +765,8 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * Mechanism (b), #121: when EVERY cited chain is absent the finding is still demoted — the
-   * all-absent semantics must not be inverted into "keep if any chain is absent".
+   * Mechanism (b): when EVERY cited chain is absent the finding is still demoted — the all-absent
+   * semantics must not be inverted into "keep if any chain is absent".
    */
   @Test
   void demotesFindingWhenEveryCitedChainIsAbsent() {
@@ -787,10 +787,10 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * Mechanism (a)+(b) interaction, #121: a chain that is BOTH verbatim-present in the diff AND
-   * restated in {@code suggestion_new} (the common "the fix wraps the existing call" shape) must
-   * not be subtracted as the proposed fix — its diff presence grounds the finding. Naming a
-   * separate off-diff helper alongside it must not demote. Diff presence wins over fix-restatement.
+   * Mechanism (a)+(b) interaction: a chain that is BOTH verbatim-present in the diff AND restated
+   * in {@code suggestion_new} (the common "the fix wraps the existing call" shape) must not be
+   * subtracted as the proposed fix — its diff presence grounds the finding. Naming a separate
+   * off-diff helper alongside it must not demote. Diff presence wins over fix-restatement.
    */
   @Test
   void keepsFindingWhenPresentChainIsAlsoRestatedInSuggestionNew() {
@@ -812,9 +812,9 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * Mechanism (a), #121: a finding with no {@code suggestion_new} to subtract still demotes when
-   * its only cited chain is a phantom. The null-suggestion path must be a no-op (nothing to
-   * subtract), not an accidental keep — covering the {@code suggestionNew == null} branch.
+   * Mechanism (a): a finding with no {@code suggestion_new} to subtract still demotes when its only
+   * cited chain is a phantom. The null-suggestion path must be a no-op (nothing to subtract), not
+   * an accidental keep — covering the {@code suggestionNew == null} branch.
    */
   @Test
   void demotesPhantomCitationWhenFindingHasNoSuggestionNew() {
@@ -907,11 +907,11 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * The conservative trade for issue #122: a description that cites a string/char literal differing
-   * from the real code only by spacing <em>inside</em> the literal ({@code cache.put("a b")} vs the
-   * source's {@code cache.put("ab")}) is kept, not demoted. Distinguishing a genuine literal
-   * interior from an incidental quote can't be done reliably on diff text alone, so the guard never
-   * demotes on intra-literal spacing — a deliberate false negative in the safe direction.
+   * The conservative trade: a description that cites a string/char literal differing from the real
+   * code only by spacing <em>inside</em> the literal ({@code cache.put("a b")} vs the source's
+   * {@code cache.put("ab")}) is kept, not demoted. Distinguishing a genuine literal interior from
+   * an incidental quote can't be done reliably on diff text alone, so the guard never demotes on
+   * intra-literal spacing — a deliberate false negative in the safe direction.
    */
   @Test
   void keepsFindingWhoseCitedLiteralDiffersOnlyByIntraLiteralSpacing() {

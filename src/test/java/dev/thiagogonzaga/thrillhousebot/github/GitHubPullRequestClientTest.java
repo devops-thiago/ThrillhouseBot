@@ -30,8 +30,8 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Covers the {@code getPullRequestFiles} default pagination loop (#190): GitHub returns only 30
- * files per page by default, so the diff must be assembled by walking pages of {@value
+ * Covers the {@code getPullRequestFiles} default pagination loop: GitHub returns only 30 files per
+ * page by default, so the diff must be assembled by walking pages of {@value
  * GitHubPullRequestClient#FILES_PER_PAGE}, bounded by {@value
  * GitHubPullRequestClient#MAX_FILE_PAGES}.
  */

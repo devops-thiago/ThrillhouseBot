@@ -30,10 +30,10 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Covers the {@code listComments} default pagination loop (#183): GitHub returns only 30 issue
- * comments per page by default, so the bot's summary can fall past page 1 on a busy PR and a
- * single-page fetch would miss it and re-post a duplicate. Comments are assembled by walking pages
- * of {@value GitHubCommentClient#COMMENTS_PER_PAGE}, bounded by {@value
+ * Covers the {@code listComments} default pagination loop: GitHub returns only 30 issue comments
+ * per page by default, so the bot's summary can fall past page 1 on a busy PR and a single-page
+ * fetch would miss it and re-post a duplicate. Comments are assembled by walking pages of {@value
+ * GitHubCommentClient#COMMENTS_PER_PAGE}, bounded by {@value
  * GitHubCommentClient#MAX_COMMENT_PAGES}.
  */
 class GitHubCommentClientTest {

@@ -41,8 +41,6 @@ class SessionEventBroadcasterTest {
     broadcaster = new SessionEventBroadcaster(mapper);
   }
 
-  // ── addSession / removeSession ─────────────────────────────────────────
-
   @Test
   void shouldAddAndRemoveSessions() {
     var session1 = mock(jakarta.websocket.Session.class);
@@ -62,8 +60,6 @@ class SessionEventBroadcasterTest {
     broadcaster.removeSession(session2);
     assertEquals(0, broadcaster.getConnectedCount());
   }
-
-  // ── broadcast with no sessions ─────────────────────────────────────────
 
   @Test
   void shouldBufferEventWhenNoSessionsConnected() {
@@ -436,14 +432,10 @@ class SessionEventBroadcasterTest {
     assertEquals(1, broadcaster.getConnectedCount());
   }
 
-  // ── getConnectedCount ──────────────────────────────────────────────────
-
   @Test
   void shouldReturnZeroForInitialConnectedCount() {
     assertEquals(0, broadcaster.getConnectedCount());
   }
-
-  // ── SessionEvent factory: started ──────────────────────────────────────
 
   @Test
   void shouldCreateSessionEventStarted() {
@@ -467,8 +459,6 @@ class SessionEventBroadcasterTest {
     assertEquals("in_progress", event.data().get("status"));
   }
 
-  // ── SessionEvent factory: progress ─────────────────────────────────────
-
   @Test
   void shouldCreateSessionEventProgress() {
     var session = createReviewSession();
@@ -482,8 +472,6 @@ class SessionEventBroadcasterTest {
     assertEquals(1500L, event.data().get("tokensUsed"));
     assertEquals("in_progress", event.data().get("status"));
   }
-
-  // ── SessionEvent factory: stream / retry / streamFailed ──────────────────
 
   @Test
   void shouldCreateSessionEventStream() {
@@ -533,8 +521,6 @@ class SessionEventBroadcasterTest {
     assertEquals("stream_failed", event.data().get("status"));
   }
 
-  // ── SessionEvent factory: completed ────────────────────────────────────
-
   @Test
   void shouldCreateSessionEventCompleted() {
     var session = createReviewSession();
@@ -563,8 +549,6 @@ class SessionEventBroadcasterTest {
     assertEquals(30000L, event.data().get("durationMs"));
     assertEquals("completed", event.data().get("status"));
   }
-
-  // ── SessionEvent factory: failed ───────────────────────────────────────
 
   @Test
   void shouldCreateSessionEventFailed() {
@@ -596,8 +580,6 @@ class SessionEventBroadcasterTest {
     assertEquals("failed", event.data().get("status"));
   }
 
-  // ── SessionEvent immutability ──────────────────────────────────────────
-
   @Test
   void sessionEventDataShouldBeUnmodifiable() {
     var session = createReviewSession();
@@ -606,8 +588,6 @@ class SessionEventBroadcasterTest {
     var data = event.data();
     assertThrows(UnsupportedOperationException.class, () -> data.put("key", "value"));
   }
-
-  // ── Broadcast with JsonProcessingException ─────────────────────────────
 
   @Test
   void shouldHandleJsonProcessingException() throws Exception {
@@ -642,8 +622,6 @@ class SessionEventBroadcasterTest {
     assertTrue(json.contains("\"type\":\"review.started\""));
     assertTrue(json.contains("\"sessionId\":42"));
   }
-
-  // ── Helper ─────────────────────────────────────────────────────────────
 
   private void injectBufferedEvent(long sessionId, String latestType, String json) {
     broadcaster.seedReplayState(sessionId, latestType, FIXED_NOW, java.util.List.of(json), null);

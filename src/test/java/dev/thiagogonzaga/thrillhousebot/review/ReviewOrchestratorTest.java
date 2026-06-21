@@ -173,10 +173,6 @@ class ReviewOrchestratorTest {
     return new GitHubPullRequestClient.FileDiff(filename, "modified", 1, 1, 2, patch);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // buildDiffString
-  // ─────────────────────────────────────────────────────────────
-
   @Nested
   class BuildDiffString {
 
@@ -252,10 +248,6 @@ class ReviewOrchestratorTest {
       assertTrue(result.contains("renamed-only.txt (renamed, +0 -0)"));
     }
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // buildBaseComparison
-  // ─────────────────────────────────────────────────────────────
 
   @Nested
   class BuildBaseComparison {
@@ -371,10 +363,6 @@ class ReviewOrchestratorTest {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // fetchPrFiles (error handling)
-  // ─────────────────────────────────────────────────────────────
-
   @Nested
   class FetchPrFiles {
 
@@ -414,10 +402,6 @@ class ReviewOrchestratorTest {
       assertEquals(1, result.size());
     }
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // fetchPriorReviews (error handling)
-  // ─────────────────────────────────────────────────────────────
 
   @Nested
   class FetchPriorReviews {
@@ -463,10 +447,6 @@ class ReviewOrchestratorTest {
       assertEquals("Looks good", result.get(0).body());
     }
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // buildResult
-  // ─────────────────────────────────────────────────────────────
 
   @Nested
   class BuildResult {
@@ -746,10 +726,6 @@ class ReviewOrchestratorTest {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // checkSummaryForResult / checkTitleForResult
-  // ─────────────────────────────────────────────────────────────
-
   @Nested
   class CheckRunPresentation {
 
@@ -809,10 +785,6 @@ class ReviewOrchestratorTest {
       assertTrue(summary.contains("required CI check(s) are still pending or failing"));
     }
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // ReviewErrorPaths — error-path tests for review()
-  // ─────────────────────────────────────────────────────────────
 
   @Nested
   class ReviewErrorPaths {
@@ -1553,7 +1525,7 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSkipSummaryWhenABotSummaryCommentAlreadyExistsButNoReviewDoes() {
       // Regression for the duplicate-summary bug: a first round held back only by pending CI posts
-      // the summary issue-comment but leaves no review (#175). On the next round no bot review
+      // the summary issue-comment but leaves no review. On the next round no bot review
       // exists, yet the summary must not be re-posted — the prior summary comment is the signal.
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -1739,10 +1711,6 @@ class ReviewOrchestratorTest {
       }
     }
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // updateCheckRun / createCheckRun
-  // ─────────────────────────────────────────────────────────────
 
   @Nested
   class CheckRunUpdates {
@@ -2700,10 +2668,6 @@ class ReviewOrchestratorTest {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // resolveMissingPrDetails
-  // ─────────────────────────────────────────────────────────────
-
   @Nested
   class ResolveMissingPrDetails {
 
@@ -3051,8 +3015,7 @@ class ReviewOrchestratorTest {
     @Test
     void postReviewShouldSkipDuplicateCommentReviewOnFirstReviewWhenOnlyCiPending() {
       // First review, no findings, but a required check is still pending: the summary comment
-      // already conveys this, so postReview must not add a COMMENT review that duplicates it
-      // (#173).
+      // already conveys this, so postReview must not add a COMMENT review that duplicates it.
       var result =
           new ReviewResult(
               List.of(),
@@ -3251,7 +3214,7 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
         // No formal bot review exists (listReviews defaults to empty), but a prior round persisted
-        // its findings — context must still be reconstructed for follow-up analysis. (#118)
+        // its findings — context must still be reconstructed for follow-up analysis.
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
@@ -3275,7 +3238,7 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
         // No formal bot review exists, but persistence holds a prior round's AI response.
-        // The summary must still be posted: isFirstVisibleReview is true. (#134)
+        // The summary must still be posted: isFirstVisibleReview is true.
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
@@ -4021,7 +3984,7 @@ class ReviewOrchestratorTest {
         orchestrator.review(request());
 
         // No new findings: the summary comment already lists the pending/failed checks, so the bot
-        // must NOT also post a COMMENT review that merely restates it (regression guard for #173).
+        // must NOT also post a COMMENT review that merely restates it (regression guard for).
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(commentClient)

@@ -44,8 +44,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
   }
 
-  // ── GET /api/dashboard/sessions/{id} ──────────────────────────────────
-
   @Test
   void shouldReturnUnauthorizedForGetSessionWithoutCookie() {
     given().when().get("/sessions/99999").then().statusCode(401);
@@ -79,8 +77,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .statusCode(404)
         .body("error", equalTo("Session not found"));
   }
-
-  // ── GET /api/dashboard/sessions (list) ─────────────────────────────────
 
   @Test
   void shouldReturnUnauthorizedForListSessionsWithoutCookie() {
@@ -174,8 +170,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .body("total", equalTo(1));
   }
 
-  // ── GET /api/dashboard/costs ──────────────────────────────────────────
-
   @Test
   void shouldReturnUnauthorizedForCostsWithoutCookie() {
     given().when().get("/costs").then().statusCode(401);
@@ -242,8 +236,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .body("totalCost", instanceOf(Number.class));
   }
 
-  // ── GET /api/dashboard/tokens ─────────────────────────────────────────
-
   @Test
   void shouldReturnUnauthorizedForTokensWithoutCookie() {
     given().when().get("/tokens").then().statusCode(401);
@@ -294,8 +286,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .body("period", equalTo("month"))
         .body("totalTokens", instanceOf(Number.class));
   }
-
-  // ── GET /api/dashboard/summary ────────────────────────────────────────
 
   @Test
   void shouldReturnUnauthorizedForSummaryWithoutCookie() {
@@ -351,8 +341,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .body("topModel", anyOf(equalTo("deepseek-chat"), equalTo("gpt-4")));
   }
 
-  // ── Edge cases ─────────────────────────────────────────────────────────
-
   @Test
   void shouldRejectBlankCookieForListSessions() {
     given().cookie(COOKIE_NAME, "").when().get("/sessions").then().statusCode(401);
@@ -362,8 +350,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void shouldRejectBlankCookieForCosts() {
     given().cookie(COOKIE_NAME, "   ").when().get("/costs").then().statusCode(401);
   }
-
-  // ── Helpers ───────────────────────────────────────────────────────────
 
   private ReviewSession createPersistedSession(String repo, int prNumber, String title, String sha)
       throws Exception {

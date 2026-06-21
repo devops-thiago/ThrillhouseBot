@@ -54,25 +54,25 @@ public final class DiffLineResolver {
 
   /**
    * Whether the prior finding's flagged code is still present on the right side (additions and
-   * surviving context) of the current diff — the predicate the issue #118 approve backstop relies
-   * on to tell a still-open finding from one whose code has been changed away.
+   * surviving context) of the current diff — the predicate the approve backstop relies on to tell a
+   * still-open finding from one whose code has been changed away.
    *
    * <p>When the finding carries an {@code anchor} (its persisted {@code suggestion_old}, the
    * verbatim code it flagged), presence is judged by <em>content</em>: the anchor's non-blank lines
    * must appear, in order and adjacent, as a contiguous run of right-side lines. This is immune to
-   * the two failure modes of a raw line-number test (#129): a force-push/rebase that drifts the
-   * still-open code by more than {@code tolerance} lines no longer reads as "gone" (under-block,
-   * re-opening #118), and code that was deleted or replaced no longer reads as "present" just
-   * because a surviving context line sits near the stale line number (over-block) — the replaced
-   * text exists only on the diff's left side. Requiring a contiguous run, rather than mere
-   * set-membership of each line, also stops a multi-line block whose lines happen to survive
-   * scattered in unrelated places from reading as still-present.
+   * the two failure modes of a raw line-number test: a force-push/rebase that drifts the still-open
+   * code by more than {@code tolerance} lines no longer reads as "gone" (under-block), and code
+   * that was deleted or replaced no longer reads as "present" just because a surviving context line
+   * sits near the stale line number (over-block) — the replaced text exists only on the diff's left
+   * side. Requiring a contiguous run, rather than mere set-membership of each line, also stops a
+   * multi-line block whose lines happen to survive scattered in unrelated places from reading as
+   * still-present.
    *
    * <p>One residual the content test cannot resolve: a single generic anchor line (e.g. {@code
    * return null;}) that was changed away at the finding's location but recurs verbatim elsewhere in
    * the same file still reads as present. The stale prior-revision line cannot disambiguate it
    * (that is the drift the check exists to tolerate), so this errs toward holding — a needless
-   * APPROVE→COMMENT, the safe direction for a downgrade-only backstop, never the #118 under-block.
+   * APPROVE→COMMENT, the safe direction for a downgrade-only backstop, never the under-block.
    *
    * <p>When the finding has no anchor (a suggestion-less finding, or one whose suggestion was
    * stripped), it falls back to checking whether the file has any changes in the diff. This leans
@@ -167,9 +167,9 @@ public final class DiffLineResolver {
    *
    * <p>The fallback inspects <em>every</em> matching variant rather than the first the backing
    * {@link HashMap} happens to iterate, so an ambiguous shortened path — two changed files sharing
-   * a suffix — yields the same answer regardless of map order (#132b, no more flaky wrong-file
-   * binding) and leans toward "present in any candidate". That lean is the safe direction for the
-   * downgrade-only #118 approve backstop, which prefers a needless APPROVE→COMMENT over silently
+   * a suffix — yields the same answer regardless of map order (no more flaky wrong-file binding)
+   * and leans toward "present in any candidate". That lean is the safe direction for the
+   * downgrade-only approve backstop, which prefers a needless APPROVE→COMMENT over silently
    * approving over a still-open finding.
    */
   private static <V extends Collection<?>> boolean presentInFileOrVariant(
