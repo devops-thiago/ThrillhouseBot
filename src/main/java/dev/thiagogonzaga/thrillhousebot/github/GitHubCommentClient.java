@@ -42,7 +42,7 @@ public interface GitHubCommentClient {
   // oldest-first and the summary is posted on the first review, so it normally sits among the
   // earliest comments — but on a PR that already had many comments before that first review the
   // summary can fall past page 1, and a single-page fetch would miss it and re-post a duplicate
-  // summary (#183).
+  // summary.
   int COMMENTS_PER_PAGE = 100;
   int MAX_COMMENT_PAGES = 10;
 
@@ -63,7 +63,7 @@ public interface GitHubCommentClient {
    * first, walking pages of {@value #COMMENTS_PER_PAGE} up to {@value #MAX_COMMENT_PAGES} pages so
    * a busy PR's comments are not silently truncated. Used to detect a summary comment the bot
    * already posted so a re-review never duplicates it; a single-page fetch could miss the summary
-   * on a busy PR and re-post it (#183). Stops at the first short/empty page.
+   * on a busy PR and re-post it. Stops at the first short/empty page.
    */
   default List<IssueComment> listComments(
       String auth, String accept, String owner, String repo, int issueNumber) {

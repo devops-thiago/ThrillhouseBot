@@ -69,13 +69,6 @@ public final class PromptTemplateEscaper {
    * <<<DIFF_START>>>} / {@code <<<DIFF_END>>>} delimiters the prompts wrap the diff in, so PR
    * content can never fake the end of the diff section and smuggle in instructions after it.
    *
-   * <p>This used to additionally wrap the value in a Qute unparsed section ({@code {|...|}}) to
-   * survive a second Qute pass. That pass does not happen for data-bound variables — the wrapper
-   * leaked into the prompt literally and corrupted any content containing {@code |}} — so it was
-   * removed once the templates moved their {@code @UserMessage} to the method (where {@code @V}
-   * variables are interpolated rather than the first parameter being rendered as a template
-   * itself).
-   *
    * <p>Self-referential edge: code that itself contains the three-bracket marker strings — this
    * class, its tests, the prompt templates — necessarily renders with them neutralized, so the
    * model reviews a slightly altered copy of exactly this one pattern and may misread the

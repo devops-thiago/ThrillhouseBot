@@ -49,9 +49,8 @@ public class ReviewResponseParser {
 
   /**
    * Models sometimes emit {@code previous_findings_status} as an object — a single status, or a map
-   * keyed by finding id — instead of the array the schema asks for. A whole review used to be lost
-   * (and retried at full token cost) over that shape mismatch, so normalize to the array form
-   * instead of failing.
+   * keyed by finding id — instead of the array the schema asks for. Normalize it to the array form
+   * so the shape mismatch does not fail the whole review (and force a full-cost retry).
    */
   private void normalizePreviousFindingsStatus(JsonNode root) {
     if (!(root instanceof ObjectNode rootObject)) {

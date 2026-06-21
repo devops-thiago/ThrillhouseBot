@@ -56,7 +56,7 @@ public interface GitHubPullRequestClient {
   /**
    * Every changed file in the PR, walking pages of {@value #FILES_PER_PAGE} up to {@value
    * #MAX_FILE_PAGES} pages. Without pagination GitHub returns only the first 30 files, silently
-   * truncating the diff (and therefore the review) for larger PRs (#190).
+   * truncating the diff (and therefore the review) for larger PRs.
    */
   default List<FileDiff> getPullRequestFiles(
       String auth, String accept, String owner, String repo, int pullNumber) {
