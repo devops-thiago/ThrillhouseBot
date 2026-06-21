@@ -361,7 +361,18 @@ jobs:
           git checkout -b "$BRANCH"
           git commit -am "chore: bump version to ${NEXT} after ${TAG}"
           git push -f origin "$BRANCH"
-          gh pr create --base main --head "$BRANCH" \
+          # Branch on the outcome instead of masking every failure: success or an
+          # already-existing PR is fine; anything else (e.g. the "Allow GitHub
+          # Actions to create and approve pull requests" repo setting being off)
+          # fails loudly so the bump is never silently lost. The branch is already
+          # pushed, so the PR can still be opened by hand. See docs/RELEASING.md.
+          if out=$(gh pr create --base main --head "$BRANCH" \
             --title "chore: bump version to ${NEXT}" \
-            --body "Moves main to ${NEXT} after ${TAG}." \
-            || echo "PR already exists"
+            --body "Moves main to ${NEXT} after ${TAG}." 2>&1); then
+            echo "Opened bump PR: ${out}"
+          elif printf '%s\n' "${out}" | grep -qi 'already exists'; then
+            echo "Bump PR for ${BRANCH} already exists; nothing to do"
+          else
+            echo "::error::Failed to open bump PR: ${out}"
+            exit 1
+          fi
