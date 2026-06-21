@@ -80,9 +80,10 @@ the repository (or to be named in
 `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`), since reviews spend the operator's
 AI budget.
 
-**Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits and
-ignores `/review` and `/summary` (it replies once to say it is paused). `/resume` lifts the
-pause. `/help` and `/resolve` keep working while paused.
+**Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
+ignores `/review` and `/summary`, and does not answer `@thrillhousebot` mentions (it replies
+once to say it is paused). `/resume` lifts the pause. `/help` and `/resolve` keep working while
+paused.
 
 ## Quick start
 
@@ -162,7 +163,7 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
 | Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read |
-| Subscribe to Events | Pull Request, Issue comment |
+| Subscribe to Events | Pull Request, Issue comment, Pull request review comment |
 | Identifying & authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
 
@@ -314,8 +315,9 @@ This is still an early-stage project; the current constraints are:
 
 - **GitHub only** — no GitLab or Bitbucket integration.
 - **Large diffs** — the model sees at most `thrillhousebot.review.max-diff-lines` diff
-  lines (default 5000). Later files are dropped; the last included file may be cut
-  mid-hunk.
+  lines (default 5000). Later files are dropped; the last included file is cut at a hunk
+  boundary with its code fence re-closed (only cut mid-hunk if a single hunk alone exceeds
+  the budget).
 - **Single process** — OAuth login sessions and the live WebSocket replay buffer are
   in-memory (lost on restart). Review history and cost totals persist in PostgreSQL.
   Multiple replicas are unsupported.
