@@ -558,6 +558,27 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
+  void mentionWhereListRootHasNullAuthorCitesNoFinding() {
+    authorize();
+    // A mention bypasses the pre-filter, so the listed root is consulted for the finding. Its
+    // author is unknown (e.g. deleted account), so it is not treated as a bot finding — the reply
+    // still posts, but with no finding text.
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), anyInt(), anyInt()))
+        .thenReturn(List.of(commentNoUser(99L, null, "author is null")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+
+    service.handle(reviewThreadTask(true));
+
+    var finding = ArgumentCaptor.forClass(String.class);
+    verify(replyAssistant).reply(any(), any(), finding.capture(), any(), any());
+    assertTrue(finding.getValue() == null || finding.getValue().isEmpty());
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
   void nullAssistantReplyPostsNothing() {
     authorize();
     stubRootComment(comment(99L, null, BOT, "**HIGH — bug**"));
