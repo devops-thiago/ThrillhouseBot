@@ -913,9 +913,9 @@ class FollowUpAnalyzerTest {
                     "**LOW — Naming nit**\n\nrename the local for clarity\n<!-- thrillhousebot:finding=1 -->",
                     BOT),
                 comment(101L, 100L, "src/A.java", "fine as-is", "maintainer"))),
-        // #133 over-clear guard: a thread-less finding (summary-only that round) is still present;
-        // an earlier round reused marker index 1 for a different answered finding. Requiring the
-        // marked comment to carry this finding's own title keeps the hold.
+        // #133 over-clear guard. The thread-less finding, summary-only that round, is still
+        // present, but an earlier round reused marker index 1 for a different answered finding, so
+        // requiring the marked comment to carry this finding's own title keeps the hold.
         arguments(
             "thread-less finding, earlier round reused its marker index",
             """

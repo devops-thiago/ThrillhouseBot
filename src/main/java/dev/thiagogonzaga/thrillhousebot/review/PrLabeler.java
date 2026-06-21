@@ -260,16 +260,13 @@ public class PrLabeler {
     if (budget == 0) {
       return;
     }
-    var toAdd = new ArrayList<String>();
-    for (var name : resolved) {
-      if (current.contains(name.toLowerCase(Locale.ROOT))) {
-        continue; // already on the PR — adding again is a no-op that wastes the budget
-      }
-      toAdd.add(name);
-      if (toAdd.size() >= budget) {
-        break;
-      }
-    }
+    // Skip labels already on the PR (re-adding is a no-op that wastes budget) and take only enough
+    // new ones to reach max-labels.
+    var toAdd =
+        resolved.stream()
+            .filter(name -> !current.contains(name.toLowerCase(Locale.ROOT)))
+            .limit(budget)
+            .toList();
     if (toAdd.isEmpty()) {
       return;
     }

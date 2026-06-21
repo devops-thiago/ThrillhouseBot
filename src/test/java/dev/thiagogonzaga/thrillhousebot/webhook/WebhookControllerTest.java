@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -27,10 +28,13 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -904,71 +908,55 @@ class WebhookControllerTest {
     verifyNoInteractions(triggerDetector);
   }
 
-  @Test
-  void shouldIgnoreReviewCommentWithMissingAuthor() {
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("reviewCommentsWithMissingFields")
+  void shouldIgnoreReviewCommentWithMissingFields(String name, String body) {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    // A present author reaches the bot-loop guard; the null-author/null-comment cases short-circuit
+    // before it, so this stub is simply unused for them.
+    when(triggerDetector.isBotComment(anyString())).thenReturn(false);
 
-    var body =
-        ("{"
+    var response =
+        controller.handleWebhook(
+            "sha256=valid",
+            "pull_request_review_comment",
+            null,
+            DELIVERY,
+            body.getBytes(StandardCharsets.UTF_8));
+    assertEquals(200, response.getStatus(), name);
+
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  private static Stream<Arguments> reviewCommentsWithMissingFields() {
+    return Stream.of(
+        arguments(
+            "missing comment author",
+            "{"
                 + "\"action\":\"created\","
                 + "\"comment\":{\"id\":1,\"body\":\"reply\",\"in_reply_to_id\":99,\"user\":null},"
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
                 + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}"
-                + "}")
-            .getBytes(StandardCharsets.UTF_8);
-
-    var response =
-        controller.handleWebhook(
-            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
-    assertEquals(200, response.getStatus());
-
-    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
-  }
-
-  @Test
-  void shouldIgnoreReviewCommentWithMissingPullRequest() {
-    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-
-    var body =
-        ("{"
+                + "}"),
+        arguments(
+            "missing pull_request",
+            "{"
                 + "\"action\":\"created\","
                 + "\"comment\":{\"id\":1,\"body\":\"reply\",\"author_association\":\"OWNER\",\"in_reply_to_id\":99,\"user\":{\"login\":\"octocat\",\"id\":1}},"
                 + "\"pull_request\":null,"
                 + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}"
-                + "}")
-            .getBytes(StandardCharsets.UTF_8);
-
-    var response =
-        controller.handleWebhook(
-            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
-    assertEquals(200, response.getStatus());
-
-    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
-  }
-
-  @Test
-  void shouldIgnoreReviewCommentWithMissingComment() {
-    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-
-    var body =
-        ("{"
+                + "}"),
+        arguments(
+            "missing comment",
+            "{"
                 + "\"action\":\"created\","
                 + "\"comment\":null,"
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
                 + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}"
-                + "}")
-            .getBytes(StandardCharsets.UTF_8);
-
-    var response =
-        controller.handleWebhook(
-            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
-    assertEquals(200, response.getStatus());
-
-    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+                + "}"));
   }
 
   @Test
