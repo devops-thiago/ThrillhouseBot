@@ -50,11 +50,9 @@ void main(String[] args) throws Exception {
       AI_BASE_URL=https://api.deepseek.com/v1
       AI_MODEL=deepseek-chat
 
-      # --- Database ---
+      # --- Database (single source of truth; compose derives QUARKUS_DATASOURCE_* from these) ---
       DB_USER=thrillhouse
       DB_PASSWORD=
-      QUARKUS_DATASOURCE_USERNAME=thrillhouse
-      QUARKUS_DATASOURCE_PASSWORD=
       DATABASE_URL=jdbc:postgresql://db:5432/thrillhouse
 
       # --- Dashboard OAuth (GitHub) ---
@@ -87,7 +85,7 @@ void main(String[] args) throws Exception {
     IO.println("   Host        : ⚠️ no --host given — replace <your-host> in DASHBOARD_URL");
   }
   IO.println("");
-  IO.println("👉 Still needed: AI_API_KEY, DB_PASSWORD, QUARKUS_DATASOURCE_PASSWORD");
+  IO.println("👉 Still needed: AI_API_KEY, DB_PASSWORD");
 }
 
 /// First numeric value for the key (the conversion response has the app id first).
