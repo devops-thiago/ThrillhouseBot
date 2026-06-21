@@ -162,8 +162,8 @@ public final class DiffLineResolver {
    * that name, so the result is decided from it alone and no variant is consulted — a same-suffix
    * file that merely shares the path must never resurrect a finding whose code changed away in its
    * own file. The variant fallback runs only when the exact entry is absent <em>or empty</em>: a
-   * deletion-only patch stores an empty right side under its exact key, which previously
-   * short-circuited the fallback and masked a variant that held the real data (#132a).
+   * deletion-only patch stores an empty right side under its exact key, so the fallback must still
+   * consult the variants that may hold the real data.
    *
    * <p>The fallback inspects <em>every</em> matching variant rather than the first the backing
    * {@link HashMap} happens to iterate, so an ambiguous shortened path — two changed files sharing

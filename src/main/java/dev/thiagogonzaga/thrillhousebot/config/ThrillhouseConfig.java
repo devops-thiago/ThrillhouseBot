@@ -96,7 +96,7 @@ public interface ThrillhouseConfig {
     interface TriggerFilters {
       /**
        * Skip auto-review while a PR is a draft. Pairs with the {@code ready_for_review} trigger so
-       * a draft is reviewed once it is marked ready (#72).
+       * a draft is reviewed once it is marked ready.
        */
       @WithDefault("false")
       @WithName("skip-drafts")
