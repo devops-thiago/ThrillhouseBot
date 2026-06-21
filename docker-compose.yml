@@ -7,7 +7,8 @@
 # https://<your-host>/api/webhook (see README "GitHub App Setup").
 services:
   thrillhousebot:
-    image: ghcr.io/devops-thiago/thrillhousebot:latest
+    image: ghcr.io/devops-thiago/thrillhousebot:${IMAGE_TAG:-latest}
+    container_name: thrillhousebot
     ports:
       - "8080:8080"
     env_file: .env
@@ -15,8 +16,11 @@ services:
       DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:8080}
       DATASOURCE_DB_KIND: postgresql
       DATABASE_URL: ${DATABASE_URL:-jdbc:postgresql://db:5432/thrillhouse}
-      QUARKUS_DATASOURCE_USERNAME: ${POSTGRES_USER:-thrillhouse}
-      QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-thrillhouse}
+      # Single source of truth for DB creds: set DB_USER / DB_PASSWORD in .env and
+      # both the bot's datasource (here) and the postgres container (below) derive
+      # from them — no need to also set QUARKUS_DATASOURCE_* in .env.
+      QUARKUS_DATASOURCE_USERNAME: ${DB_USER:-thrillhouse}
+      QUARKUS_DATASOURCE_PASSWORD: ${DB_PASSWORD:-thrillhouse}
     depends_on:
       db:
         condition: service_healthy
@@ -24,14 +28,15 @@ services:
 
   db:
     image: postgres:16-alpine
+    container_name: thrillhousebot-db
     environment:
       POSTGRES_DB: thrillhouse
-      POSTGRES_USER: ${POSTGRES_USER:-thrillhouse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-thrillhouse}
+      POSTGRES_USER: ${DB_USER:-thrillhouse}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-thrillhouse}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thrillhouse}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-thrillhouse} -d thrillhouse"]
       interval: 5s
       timeout: 5s
       retries: 12
