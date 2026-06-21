@@ -32,7 +32,7 @@ import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
- * Opt-in context-aware PR labelling (#61). Reconciles the labels the model suggested against the
+ * Opt-in context-aware PR labelling. Reconciles the labels the model suggested against the
  * repository's existing label set and either applies them to the PR or posts them as a suggestion,
  * depending on configuration. Every step is best-effort: a labelling failure never fails a review.
  */

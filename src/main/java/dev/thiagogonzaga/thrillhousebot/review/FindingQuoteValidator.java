@@ -152,11 +152,11 @@ public class FindingQuoteValidator {
    * found verbatim in the diff grounds the finding and keeps it immediately, before any
    * fix-restatement is considered — so a {@code suggestion_new} that wraps the existing code it
    * modifies can never strip the grounding chain, and naming an off-diff helper alongside a present
-   * one never demotes (#121, mechanism b). <b>The proposed fix is not a citation:</b> among chains
+   * one never demotes (mechanism b). <b>The proposed fix is not a citation:</b> among chains
    * <em>absent</em> from the diff, one whose compacted form the compacted {@code suggestion_new}
    * restates is the hypothetical fix — absent by definition — and is not counted as fabrication
-   * (#121, mechanism a). The match ignores all whitespace — Unicode-aware, and over a scope joined
-   * across diff lines — so reformatting or a wrapped citation can't hide a real one (see {@link
+   * (mechanism a). The match ignores all whitespace — Unicode-aware, and over a scope joined across
+   * diff lines — so reformatting or a wrapped citation can't hide a real one (see {@link
    * #stripWhitespace}).
    */
   private static boolean descriptionCitesAbsentCode(
@@ -379,7 +379,7 @@ public class FindingQuoteValidator {
    * interior from an incidental quote (a comment apostrophe, a string the source splits across diff
    * lines) can't be done reliably on diff text alone, and demoting on a misread would drop a
    * genuinely present finding — the costly direction this guard exists to avoid. Catching that
-   * phantom needs the cross-file context tracked separately in #55.
+   * phantom needs the cross-file context tracked separately.
    */
   private static String stripWhitespace(String text) {
     var out = new StringBuilder(text.length());

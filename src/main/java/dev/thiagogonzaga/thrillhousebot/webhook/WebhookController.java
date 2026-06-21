@@ -138,7 +138,7 @@ public class WebhookController {
           };
       if (!handled) {
         // The executor rejected the review (e.g. it is saturated), so nothing ran. Roll back the
-        // dedup slot so a manual redelivery of this id can retry. (#89)
+        // dedup slot so a manual redelivery of this id can retry.
         deduplicator.forget(deliveryId);
       }
     } catch (RuntimeException e) {
@@ -160,7 +160,7 @@ public class WebhookController {
 
     return switch (action) {
       // ready_for_review fires when a draft PR is marked ready; it is not followed by a
-      // synchronize, so without this the PR stays unreviewed until the next push. (#72)
+      // synchronize, so without this the PR stays unreviewed until the next push.
       case "opened", "reopened", "synchronize", "ready_for_review" -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
@@ -254,7 +254,7 @@ public class WebhookController {
   /**
    * Builds the command context and routes a recognized comment command. {@code /review} keeps its
    * synchronous authorize-then-dispatch path so the dispatch outcome can roll back the webhook
-   * dedup slot (#89); every other command runs asynchronously off the ack thread.
+   * dedup slot; every other command runs asynchronously off the ack thread.
    */
   private boolean handleCommentCommand(WebhookPayload payload, CommentCommand command) {
     var repo = payload.repository();

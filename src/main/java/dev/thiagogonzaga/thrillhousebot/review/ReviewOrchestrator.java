@@ -80,7 +80,7 @@ public class ReviewOrchestrator {
   private final ThrillhouseConfig config;
   // The login(s) the bot posts under, resolved once from config so that summary dedup, first-review
   // detection, and follow-up matching all recognize the bot's own activity regardless of which
-  // <app-slug>[bot] this deployment runs under (#165).
+  // <app-slug>[bot] this deployment runs under.
   private final BotIdentity botIdentity;
   private final GitHubAuthClient authClient;
   private final GitHubCheckRunClient checkRunClient;
@@ -226,11 +226,11 @@ public class ReviewOrchestrator {
           buildBaseComparison(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
 
       var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
-      // Two independent flags decouple UX presentation from context loading (#134):
+      // Two independent flags decouple UX presentation from context loading:
       //  • isFirstVisibleReview — true when the bot has posted nothing user-visible on the PR yet:
       //    neither a review nor a summary comment. Gates the first-review summary issue-comment and
       //    the APPROVE celebration body. A review alone is not a reliable proxy: a first round held
-      //    back only by pending CI posts the summary comment but no review (#175), so keying off
+      //    back only by pending CI posts the summary comment but no review, so keying off
       // the
       //    review would re-post the summary every round until one finally creates a review. The
       //    summary comment is the artifact we must not duplicate, so we look for it directly.
@@ -238,7 +238,7 @@ public class ReviewOrchestrator {
       //    rebase). Gates previous-findings context loading, inline comment fetching, and the
       //    deterministic backstop. A persisted-but-unreviewed prior round (e.g. createReview
       //    failed after persistAiResponse) must still reconstruct context without suppressing
-      //    the first user-visible summary. (#118, #134)
+      //    the first user-visible summary.
       List<String> priorAiResponseJsons =
           sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
       var isFirstVisibleReview =
@@ -274,7 +274,7 @@ public class ReviewOrchestrator {
       var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
 
       // The diff carries the code under review, so it is enclosed in a per-review random fence and
-      // passed byte-exact (no marker rewriting that would corrupt marker-handling code, #187). The
+      // passed byte-exact (no marker rewriting that would corrupt marker-handling code). The
       // smaller prose slots keep the lightweight marker neutralization as defense-in-depth.
       String fencedDiff = PromptTemplateEscaper.fence(diff);
       String escapedStack = PromptTemplateEscaper.escape(resolveProjectStack(req));
@@ -324,7 +324,7 @@ public class ReviewOrchestrator {
       // Deterministic backstop: reconstruct the bot's own prior findings the model silently dropped
       // from previous_findings_status but that are still present in this diff, as unresolved
       // statuses, so an APPROVE can never sail over them. Spans every prior round, not just the
-      // newest, so a finding dropped rounds after it was raised is still caught. (#118, #130)
+      // newest, so a finding dropped rounds after it was raised is still caught.
       var backstopUnresolved =
           hasContext
               ? followUpAnalyzer.unreportedUnresolvedStatuses(
@@ -396,8 +396,6 @@ public class ReviewOrchestrator {
       handleReviewFailure(auth, req, session, checkRunId, e);
     }
   }
-
-  // ─── Private helpers ──────────────────────────────────────────
 
   /**
    * Manual /review triggers arrive from issue_comment webhooks, which carry no PR head/base or
@@ -850,7 +848,7 @@ public class ReviewOrchestrator {
   }
 
   // A backstop-held finding can be summary-only — its flagged line was outside the diff when first
-  // raised, so it was never posted as an inline comment and has no thread to reply on (#133a).
+  // raised, so it was never posted as an inline comment and has no thread to reply on.
   // The guidance therefore qualifies the reply path ("where one exists") instead of promising a
   // thread that may not be there; fixing the code, or a model resolved/justified verdict, still
   // clears such a finding.
@@ -910,7 +908,7 @@ public class ReviewOrchestrator {
     outstanding.addAll(unresolvedPrevious);
     ReviewState state = ReviewState.fromFindings(outstanding);
     // Merge the model's previous-findings statuses with the backstop's reconstructed unresolved
-    // ones (#118): the silently dropped findings then flow through the same gate, counts, and
+    // ones: the silently dropped findings then flow through the same gate, counts, and
     // messages as any unresolved status, so no separate path is needed. Backstop statuses reach the
     // gate but never `outstanding`, keeping the hold downgrade-only (APPROVE → COMMENT, never
     // REQUEST_CHANGES).

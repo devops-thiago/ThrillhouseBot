@@ -220,7 +220,7 @@ public class MaintainerReplyService {
               PromptTemplateEscaper.escape(question),
               PromptTemplateEscaper.escape(prContext),
               PromptTemplateEscaper.escape(finding),
-              // codeContext is the diff/hunk under discussion: fence it byte-exact (#187).
+              // codeContext is the diff/hunk under discussion: fence it byte-exact.
               PromptTemplateEscaper.fence(codeContext),
               PromptTemplateEscaper.escape(thread));
       if (reply == null || reply.isBlank()) {

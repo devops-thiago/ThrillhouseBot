@@ -234,7 +234,7 @@ class DiffLineResolverTest {
 
   @Test
   void isFindingPresentShouldNotHoldDeletedCodeWhenOnlyNearbyContextSurvives() {
-    // #129(b), literal mechanism: the flagged line 42 is deleted outright; the bug-block survives
+    // literal mechanism: the flagged line 42 is deleted outright; the bug-block survives
     // only as left-side deletions, while context lines 38-39 / 44-45 remain on the right side.
     var patch =
         """
@@ -272,7 +272,7 @@ class DiffLineResolverTest {
     assertTrue(resolver.isFindingPresent("A.java", "beta()\ngamma()"));
     // A line changed away breaks the block.
     assertFalse(resolver.isFindingPresent("A.java", "alpha()\ndelta()"));
-    // Lines that survive only non-adjacently or out of order are not a contiguous run (#129(b)).
+    // Lines that survive only non-adjacently or out of order are not a contiguous run.
     assertFalse(resolver.isFindingPresent("A.java", "alpha()\ngamma()"));
     assertFalse(resolver.isFindingPresent("A.java", "gamma()\nbeta()"));
   }
@@ -280,7 +280,7 @@ class DiffLineResolverTest {
   @Test
   void isFindingPresentShouldNotHoldMultiLineAnchorSurvivingScattered() {
     // The flagged two-line block was replaced, but each of its lines coincidentally survives in an
-    // unrelated place; they never appear adjacent, so the block counts as gone (#129(b)).
+    // unrelated place; they never appear adjacent, so the block counts as gone.
     var patch =
         """
         @@ -1,5 +1,5 @@
@@ -299,7 +299,7 @@ class DiffLineResolverTest {
     return Stream.of(
         // Accepted residual: a generic single-line anchor that recurs verbatim reads as present
         // even when the flagged occurrence changed away. The stale prior-revision line cannot
-        // disambiguate it, so the downgrade-only backstop errs toward holding (the #118 drop is
+        // disambiguate it, so the downgrade-only backstop errs toward holding (the drop is
         // worse than a needless hold).
         arguments(
             "recurring single-line anchor leans toward holding",
@@ -315,7 +315,7 @@ class DiffLineResolverTest {
             """,
             "return null;"),
         // suggestion_old is quoted from the byte-exact fenced diff, so the triple-bracket sentinel
-        // is matched verbatim against the raw patch — no neutralization (#187).
+        // is matched verbatim against the raw patch — no neutralization.
         arguments(
             "diff markers match byte-exact",
             """
@@ -337,7 +337,7 @@ class DiffLineResolverTest {
   /**
    * A finding's anchor that survives on the diff's right side reads as present — whether the anchor
    * is a recurring single line, carries neutralized diff markers, or contains blank lines — so the
-   * #118 approve backstop holds it.
+   * approve backstop holds it.
    */
   @ParameterizedTest(name = "{0}")
   @MethodSource("findingPresentByContentCases")
@@ -413,7 +413,7 @@ class DiffLineResolverTest {
 
   @Test
   void isLineInDiffFallsBackToVariantWhenExactEntryIsEmpty() {
-    // #132(a): a deletion-only file stores its exact-path key with an empty right side, while a
+    // a deletion-only file stores its exact-path key with an empty right side, while a
     // longer path variant holds the real right-side lines. The empty exact entry must not
     // short-circuit the variant fallback and drop a still-open finding.
     var deletionOnly =
@@ -430,7 +430,7 @@ class DiffLineResolverTest {
 
   @Test
   void isFindingPresentFallsBackToVariantWhenExactEntryIsEmpty() {
-    // #132(a), content path: the deletion-only exact entry is empty, so the anchor must be matched
+    // content path: the deletion-only exact entry is empty, so the anchor must be matched
     // against the variant that actually carries the flagged code.
     var deletionOnly =
         """
@@ -469,7 +469,7 @@ class DiffLineResolverTest {
 
   @Test
   void isFindingPresentHoldsWhicheverSuffixVariantCarriesTheSurvivingCode() {
-    // #132(b): two changed files share the suffix "util/Helper.java", so the ambiguous shortened
+    // two changed files share the suffix "util/Helper.java", so the ambiguous shortened
     // model path FilePaths.same-matches both. The flagged code survives in only one of them. The
     // old first-match-wins lookup would test presence against whichever variant the map yielded
     // first and silently drop the finding when that was the wrong one; the scan now checks EVERY
@@ -500,7 +500,7 @@ class DiffLineResolverTest {
 
   @Test
   void isFindingPresentDoesNotHoldWhenAnchorSurvivesInNoVariant() {
-    // #132(b): genuinely ambiguous path, but the flagged code survives in neither candidate — the
+    // genuinely ambiguous path, but the flagged code survives in neither candidate — the
     // finding is not held.
     var withoutAnchor =
         """
@@ -516,7 +516,7 @@ class DiffLineResolverTest {
 
   @Test
   void isLineInDiffChecksEveryMatchingVariantNotJustTheFirstCandidate() {
-    // #132(b): suffix-colliding files both FilePaths.same-match the shortened path, but only one
+    // suffix-colliding files both FilePaths.same-match the shortened path, but only one
     // carries the target line. The scan checks every matching variant, so a decoy variant whose
     // lines are elsewhere cannot shadow the one that holds the line — the old first-match lookup
     // could have tested the decoy and dropped the match.

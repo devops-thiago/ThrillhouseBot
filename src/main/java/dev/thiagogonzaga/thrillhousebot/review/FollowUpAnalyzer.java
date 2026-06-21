@@ -46,7 +46,7 @@ public class FollowUpAnalyzer {
   /**
    * The only statuses the prompt contract defines for {@code previous_findings_status} ("resolved"
    * | "unresolved" | "justified"). A value outside this set does not count as the model accounting
-   * for a finding — see {@link #isRecognizedStatus} and #131.
+   * for a finding — see {@link #isRecognizedStatus}.
    */
   private static final Set<String> RECOGNIZED_STATUSES =
       Set.of(STATUS_RESOLVED, STATUS_JUSTIFIED, STATUS_UNRESOLVED);
@@ -288,7 +288,7 @@ public class FollowUpAnalyzer {
    *
    * <p>A titled finding is matched on the header framing {@code " — {title}**"}, not a bare title
    * substring, so a short title does not match an unrelated comment that merely mentions the word
-   * and a title does not match a longer title that contains it as a prefix (dogfood #133). A
+   * and a title does not match a longer title that contains it as a prefix (a dogfooded case). A
    * null-title finding has no usable header title — the bot renders the literal {@code "null"},
    * which is too generic — so it falls back to its description, which the bot prints verbatim in
    * the body. A finding with neither matches nothing, so the caller holds rather than risk an
@@ -340,17 +340,15 @@ public class FollowUpAnalyzer {
    * marker is title-independent, so a {@code null}-title finding's thread is seen — the title-only
    * {@link #answeredRootComment(ReviewResponse.Finding, List, BotIdentity)} consults {@link
    * #rootCommentsByTitle}, which returns {@code List.of()} for a null title and can never find the
-   * reply, leaving the backstop to hold the finding every round with no human escape (#133b). It
-   * also keeps a reply on a same-title sibling's thread (a different index) from clearing this
-   * finding.
+   * reply, leaving the backstop to hold the finding every round with no human escape. It also keeps
+   * a reply on a same-title sibling's thread (a different index) from clearing this finding.
    *
-   * <p>Because clearing the hold is the dangerous direction (over-clearing re-introduces the #118
-   * silent approve-over-open), the marked thread is resolved with {@code requireOwnContent}: a
-   * thread-less finding (no inline comment that round) must not bind to an earlier round's
-   * <em>different</em> finding that merely reuses index {@code N} on the same file and was
-   * answered. The content key is the finding's title in the comment header, or its description when
-   * it has no title — so a null-title finding is matched by its own description rather than the
-   * recurring marker alone.
+   * <p>Because clearing the hold is the dangerous direction (over-clearing re-introduces the silent
+   * approve-over-open), the marked thread is resolved with {@code requireOwnContent}: a thread-less
+   * finding (no inline comment that round) must not bind to an earlier round's <em>different</em>
+   * finding that merely reuses index {@code N} on the same file and was answered. The content key
+   * is the finding's title in the comment header, or its description when it has no title — so a
+   * null-title finding is matched by its own description rather than the recurring marker alone.
    *
    * <p>When no own-content match is found but a {@code finding=N} comment <em>does</em> exist on
    * the file, that comment belongs to a different finding (the index recurs across rounds), so the
@@ -554,19 +552,19 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * Deterministic approve backstop for issues #118 and #130. The bot's own prior findings the model
-   * silently dropped — still present in the current diff, carrying no maintainer reply, and not
-   * closed by any round — surfaced as synthetic {@code "unresolved"} statuses. Merging these into
-   * the result's previous-findings statuses makes the existing APPROVE → COMMENT gate hold over a
-   * silently dropped finding and keeps every downstream count and message truthful, without a
-   * separate code path.
+   * Deterministic approve backstop. The bot's own prior findings the model silently dropped — still
+   * present in the current diff, carrying no maintainer reply, and not closed by any round —
+   * surfaced as synthetic {@code "unresolved"} statuses. Merging these into the result's
+   * previous-findings statuses makes the existing APPROVE → COMMENT gate hold over a silently
+   * dropped finding and keeps every downstream count and message truthful, without a separate code
+   * path.
    *
    * <p>The findings are reconstructed from the persisted prior responses (keyed by repo+PR, so they
    * survive a force-push/rebase), which means the backstop fires even when the model received the
-   * previous-findings context but ignored it — the exact PR #99 dogfood symptom.
+   * previous-findings context but ignored it — the exact dogfood symptom.
    *
-   * <p>It considers <em>all</em> prior rounds, not just the newest (#130). Each round persists only
-   * its own new findings; a finding raised in round 1 is referenced in later rounds only via their
+   * <p>It considers <em>all</em> prior rounds, not just the newest. Each round persists only its
+   * own new findings; a finding raised in round 1 is referenced in later rounds only via their
    * {@code previous_findings_status}, so a still-open finding the model drops several rounds after
    * raising it would otherwise never be re-checked. The rounds are replayed oldest → newest:
    *
@@ -576,7 +574,7 @@ public class FollowUpAnalyzer {
    *       justified} verdict there closes the referenced finding, so it is removed from the open
    *       set — this is what keeps the widened scope from re-holding a finding that was
    *       legitimately addressed in an intermediate round (the "block any prior finding"
-   *       over-strictness #118 explicitly rejected).
+   *       over-strictness explicitly rejected).
    *   <li>Findings carried across rounds are deduplicated by content (file + line + title), so the
    *       same finding raised at one location is held at most once, while two distinct findings at
    *       different lines are never collapsed into one.
@@ -586,10 +584,10 @@ public class FollowUpAnalyzer {
    *       {@code unresolved} is already held by the model gate ({@link #unresolvedFindings} +
    *       {@link #hasUnresolved}), so reconstructing it here would double-count. An
    *       <em>unrecognized</em> verdict is not an accounting, so the backstop still holds it — a
-   *       malformed status string must not sneak a still-open finding past the APPROVE gate (#131).
+   *       malformed status string must not sneak a still-open finding past the APPROVE gate.
    *   <li>Presence is judged by {@link DiffLineResolver#isFindingPresent} against each finding's
    *       persisted {@code suggestion_old} anchor, so a still-open finding survives line drift and
-   *       a fixed one is not kept alive by surviving context (#129).
+   *       a fixed one is not kept alive by surviving context.
    * </ul>
    *
    * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
@@ -697,7 +695,7 @@ public class FollowUpAnalyzer {
    * a maintainer has replied on it. The reply is located by the round-relative marker ({@link
    * OpenFinding#id()}) plus the finding's own content rather than by title, so a null-title
    * finding's thread is still seen and a thread-less finding cannot bind to a different finding
-   * that reused the same marker index in another round (#133).
+   * that reused the same marker index in another round.
    */
   private OpenFinding holdableTarget(
       List<OpenFinding> cluster,
@@ -797,8 +795,8 @@ public class FollowUpAnalyzer {
    * the line distinguishes two genuinely-distinct findings that share a file and title but sit at
    * different lines — e.g. a generic anchor like {@code return null;} flagged under one title at
    * two sites — so neither evicts the other from the open set; collapsing them would drop a
-   * still-open silent finding and let APPROVE sail over it (the #118 missed hold). The cost is that
-   * one finding re-raised at a <em>drifted</em> line is keyed twice and held twice — a duplicate,
+   * still-open silent finding and let APPROVE sail over it (the missed hold). The cost is that one
+   * finding re-raised at a <em>drifted</em> line is keyed twice and held twice — a duplicate,
    * downgrade-only over-count in the "Still present" summary. That is accepted on purpose: a
    * drifted re-raise and two distinct same-anchor findings present the identical signal (same
    * file+title, different line), so any key that deduplicates the former necessarily collapses the
@@ -821,7 +819,7 @@ public class FollowUpAnalyzer {
    * BOTH the backstop (its id is present in {@code reportedIds}) AND the {@link #hasUnresolved}
    * gate (its value is not {@code "unresolved"}), re-introducing the silent approve-over-open the
    * backstop exists to stop. {@code unresolved} stays in the set so the backstop never
-   * double-counts an item the gate already holds via the model's own status. (#131)
+   * double-counts an item the gate already holds via the model's own status.
    */
   private static boolean isRecognizedStatus(String status) {
     return status != null && RECOGNIZED_STATUSES.contains(status.toLowerCase(Locale.ROOT));
@@ -874,7 +872,7 @@ public class FollowUpAnalyzer {
    * noise that no count or gate acts on, and for a still-open finding the backstop already emits a
    * synthetic {@code "unresolved"} for that id — passing the raw value through too would leave two
    * entries with the same id in the result. Dropping it keeps {@code previousStatuses} one-per-id
-   * and matches the backstop's recognized-status contract (#131).
+   * and matches the backstop's recognized-status contract.
    */
   public List<ReviewResult.PreviousFindingStatus> toStatuses(
       List<ReviewResponse.PreviousFindingStatus> aiStatuses) {

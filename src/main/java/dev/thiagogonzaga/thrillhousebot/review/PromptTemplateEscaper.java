@@ -23,7 +23,7 @@ public final class PromptTemplateEscaper {
 
   // Per-review random fence around the diff. Because the token is unguessable, PR content cannot
   // forge the boundary, so the diff is passed byte-exact — no rewriting that would corrupt
-  // marker-handling code under review (#187). The prefix is fixed (the prompt names it); only the
+  // marker-handling code under review. The prefix is fixed (the prompt names it); only the
   // random suffix makes the full line unforgeable.
   private static final String FENCE_PREFIX = "[[THRILLHOUSEBOT-UNTRUSTED-DATA-";
   private static final String FENCE_SUFFIX = "]]";
@@ -41,8 +41,8 @@ public final class PromptTemplateEscaper {
    * can separate data from instructions. The fence token is drawn from a CSPRNG, so PR content
    * cannot reproduce the boundary; this is why the content between the fences is passed <em>byte
    * exact</em> rather than run through {@link #neutralizeMarkers} — that rewriting corrupted
-   * marker-handling code under review and produced false findings (the dogfooding bug #187). This
-   * is the "random sequence enclosure" / Microsoft "spotlighting" delimiting defense.
+   * marker-handling code under review and produced false findings (the dogfooding bug). This is the
+   * "random sequence enclosure" / Microsoft "spotlighting" delimiting defense.
    *
    * <p>Empty content is returned unchanged so a {@code {#if}} section around it stays falsy.
    */
