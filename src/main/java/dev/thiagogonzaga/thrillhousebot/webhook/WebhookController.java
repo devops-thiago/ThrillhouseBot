@@ -324,9 +324,9 @@ public class WebhookController {
   }
 
   /**
-   * Handles {@code pull_request_review_comment} events — a maintainer replying inside an inline
-   * review thread, or mentioning the bot on a diff line. A reply on the bot's own finding thread
-   * (or any inline comment mentioning the bot) gets a contextual answer.
+   * Handles {@code pull_request_review_comment} events — a maintainer mentioning the bot on a diff
+   * line or inside an inline review thread. Only an explicit {@code @}-mention gets a contextual
+   * answer; a bare reply (even on the bot's own finding thread) is ignored.
    *
    * @return {@code false} only when a reply was attempted but the dispatcher rejected it (so the
    *     dedup slot should be rolled back); {@code true} when the event was handled or ignored.
@@ -358,12 +358,10 @@ public class WebhookController {
       return true;
     }
 
-    boolean mentioned = triggerDetector.containsBotMention(comment.body());
-    boolean isReply = comment.inReplyToId() != null;
-    // Only a reply (possibly to the bot's finding — confirmed downstream) or an explicit mention is
-    // addressed to the bot; a brand-new inline comment from a human is not.
-    if (!mentioned && !isReply) {
-      log.debug("Ignoring review comment that neither replies to a thread nor mentions the bot");
+    // Only an explicit @-mention addresses the bot; a bare reply on a thread (even the bot's own
+    // finding) must not pull it in.
+    if (!triggerDetector.containsBotMention(comment.body())) {
+      log.debug("Ignoring review comment that does not mention the bot");
       return true;
     }
 
@@ -377,8 +375,9 @@ public class WebhookController {
       return true;
     }
 
-    // The thread root is the reply target; a top-level comment that mentions the bot is its own
-    // root.
+    // The thread root is the reply target; a mention that is itself a reply targets the thread it
+    // replies to, otherwise the mention comment is its own root.
+    boolean isReply = comment.inReplyToId() != null;
     Long rootCommentId = isReply ? comment.inReplyToId() : comment.id();
     log.info(
         "Conversational review-thread reply from @{} on PR #{}",
@@ -398,7 +397,7 @@ public class WebhookController {
             true,
             rootCommentId,
             comment.id(),
-            mentioned,
+            true,
             comment.diffHunk()));
   }
 

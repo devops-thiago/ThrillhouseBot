@@ -701,15 +701,24 @@ class WebhookControllerTest {
   }
 
   @Test
-  void shouldDispatchReplyForReviewCommentReply() {
+  void shouldDispatchReplyForReviewCommentMentionInReply() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-    when(triggerDetector.containsBotMention("Why is this flagged?")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot why is this flagged?"))
+        .thenReturn(true);
     when(replyDispatcher.dispatch(any(MaintainerReplyService.ReplyTask.class))).thenReturn(true);
 
+    // A mention that is itself a reply targets the thread root it replies to (in_reply_to_id 99),
+    // not the mention comment.
     var body =
         buildReviewCommentPayload(
-                "created", 42, "owner/repo", "octocat", "Why is this flagged?", 99L, 1000L)
+                "created",
+                42,
+                "owner/repo",
+                "octocat",
+                "@thrillhousebot why is this flagged?",
+                99L,
+                1000L)
             .getBytes(StandardCharsets.UTF_8);
 
     var response =
@@ -726,13 +735,13 @@ class WebhookControllerTest {
                 12345L,
                 "octocat",
                 "OWNER",
-                "Why is this flagged?",
+                "@thrillhousebot why is this flagged?",
                 "PR Title",
                 "PR body",
                 true,
                 99L,
                 1000L,
-                false,
+                true,
                 "@@ -1 +1 @@"));
   }
 
@@ -777,12 +786,20 @@ class WebhookControllerTest {
   void shouldSkipReviewCommentReplyOnPausedPr() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-    when(triggerDetector.containsBotMention("Why is this flagged?")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot why is this flagged?"))
+        .thenReturn(true);
     when(prPauseService.isPaused("owner", "repo", 42)).thenReturn(true);
 
+    // A mention clears the trigger gate; the pause check is what must suppress the reply here.
     var body =
         buildReviewCommentPayload(
-                "created", 42, "owner/repo", "octocat", "Why is this flagged?", 99L, 1000L)
+                "created",
+                42,
+                "owner/repo",
+                "octocat",
+                "@thrillhousebot why is this flagged?",
+                99L,
+                1000L)
             .getBytes(StandardCharsets.UTF_8);
 
     var response =
@@ -827,6 +844,15 @@ class WebhookControllerTest {
           TriggerDetector triggerDetector, ThrillhouseConfig.ReviewConfig reviewConfig) {
         when(triggerDetector.isBotComment("octocat")).thenReturn(false);
         when(triggerDetector.containsBotMention("looks good")).thenReturn(false);
+      }
+    },
+    // A bare reply (even on the bot's finding thread) without a mention must not pull the bot in.
+    REPLY_WITHOUT_MENTION("octocat", "Why is this flagged?", 99L, 1000L) {
+      @Override
+      void applySetup(
+          TriggerDetector triggerDetector, ThrillhouseConfig.ReviewConfig reviewConfig) {
+        when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+        when(triggerDetector.containsBotMention("Why is this flagged?")).thenReturn(false);
       }
     },
     OWN_COMMENT("thrillhousebot[bot]", "follow-up", 99L, 4000L) {

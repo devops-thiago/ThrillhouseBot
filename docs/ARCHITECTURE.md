@@ -150,7 +150,7 @@ sequenceDiagram
     Note over TB: Full re-review even if this SHA was already reviewed
 ```
 
-### Conversational reply (reply to a finding or `@thrillhousebot` mention)
+### Conversational reply (`@thrillhousebot` mention)
 
 ```mermaid
 sequenceDiagram
@@ -158,10 +158,10 @@ sequenceDiagram
     participant GH as GitHub
     participant TB as ThrillhouseBot
 
-    Dev->>GH: Replies to a finding / mentions @thrillhousebot
+    Dev->>GH: Mentions @thrillhousebot (in a PR thread or finding reply)
     GH->>TB: POST /api/webhook (pull_request_review_comment or issue_comment: created)
 
-    Note over TB: Bot-loop guard → mention/reply detected → ACK 200
+    Note over TB: Bot-loop guard → mention detected → ACK 200
     Note over TB: Async on review executor: authorize (write access)
     Note over TB: Build threaded prompt (finding + diff hunk + thread)
     TB->>GH: POST reply in the review thread (or a PR comment)
