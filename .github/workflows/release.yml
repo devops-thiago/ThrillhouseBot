@@ -248,9 +248,12 @@ jobs:
           (cd dist && sha256sum ./*.tar.gz > checksums.txt)
           ls -la dist/
       - name: Attest binary provenance
+        id: attest
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: dist/*.tar.gz
+      - name: Stage provenance as a release asset
+        run: cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.intoto.jsonl
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign artifacts
         run: |
@@ -277,7 +280,7 @@ jobs:
           UPDATE_LATEST: ${{ needs.promote.outputs.update_latest }}
         run: |
           shopt -s nullglob
-          artifacts=( dist/*.tar.gz dist/checksums.txt dist/*.sigstore )
+          artifacts=( dist/*.tar.gz dist/checksums.txt dist/*.sigstore dist/*.intoto.jsonl )
           if [ "${#artifacts[@]}" -eq 0 ]; then
             echo "::error::No release artifacts found in dist/"
             exit 1
