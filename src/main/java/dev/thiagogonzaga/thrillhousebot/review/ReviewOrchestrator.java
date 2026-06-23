@@ -1047,8 +1047,7 @@ public class ReviewOrchestrator {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(result.findings().size())
-        .append(result.findings().size() == 1 ? " issue" : " issues")
-        .append(" that could not be anchored to the current diff:\n\n");
+        .append(" issue(s) that could not be anchored to the current diff:\n\n");
     for (Finding f : result.findings()) {
       sb.append("- **")
           .append(f.risk().name())
