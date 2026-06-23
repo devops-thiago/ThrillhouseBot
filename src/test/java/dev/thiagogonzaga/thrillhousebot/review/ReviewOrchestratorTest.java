@@ -367,25 +367,24 @@ class ReviewOrchestratorTest {
   class FetchPrFiles {
 
     @Test
-    void shouldReturnEmptyListOnException() {
+    void shouldPropagateExceptionSoTheReviewFailsInsteadOfApproving() {
       when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("GitHub API error"));
 
-      var result = orchestrator.fetchPrFiles("auth", "owner", "repo", 42);
-
-      assertNotNull(result);
-      assertTrue(result.isEmpty());
+      // Swallowing the failure into an empty list would yield an empty diff and a false APPROVE on
+      // unreviewed code (#211); it must propagate so review() takes the failure path.
+      assertThrows(
+          RuntimeException.class, () -> orchestrator.fetchPrFiles("auth", "owner", "repo", 42));
     }
 
     @Test
-    void shouldReturnEmptyListOnNotAuthorized() {
+    void shouldPropagateNotAuthorizedRatherThanReturnEmpty() {
       when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(123)))
           .thenThrow(new jakarta.ws.rs.NotAuthorizedException("Bad credentials"));
 
-      var result = orchestrator.fetchPrFiles("auth", "owner", "repo", 123);
-
-      assertNotNull(result);
-      assertTrue(result.isEmpty());
+      assertThrows(
+          jakarta.ws.rs.NotAuthorizedException.class,
+          () -> orchestrator.fetchPrFiles("auth", "owner", "repo", 123));
     }
 
     @Test
@@ -1092,6 +1091,57 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldNotApproveWhenPrFilesFetchFails() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        // A transient files-fetch failure must not be swallowed into an empty diff + false APPROVE.
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenThrow(new RuntimeException("500 Server Error"));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // No review event of any kind (no APPROVE); the review takes the failure path instead.
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_FAILED);
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("could not be completed")));
+      }
+    }
+
+    @Test
     void shouldApproveWithBodylessReviewAndPostCelebrationInsideSummaryWhenNoFindings() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -1597,60 +1647,6 @@ class ReviewOrchestratorTest {
         verify(reviewClient)
             .createPullRequestComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
-      }
-    }
-
-    @Test
-    void shouldContinueReviewWhenFetchPrFilesThrows() {
-      try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = mock(ReviewSession.class);
-        session.id = 1L;
-        when(session.getRepository()).thenReturn("owner/repo");
-        when(session.getPrNumber()).thenReturn(42);
-        when(session.getPrTitle()).thenReturn("Test PR");
-        when(session.getCommitSha()).thenReturn("abcdefgh");
-        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-        mockedStatic
-            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
-
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(checkRunClient.createCheckRun(
-                anyString(), anyString(), anyString(), anyString(), any()))
-            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        doNothing()
-            .when(checkRunClient)
-            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenThrow(new RuntimeException("GitHub API error"));
-        when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
-        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
-            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-
-        orchestrator.review(
-            new ReviewOrchestrator.ReviewRequest(
-                "owner",
-                "repo",
-                42,
-                "abcdefgh",
-                "Test PR",
-                "",
-                "base1234567",
-                "main",
-                123L,
-                false));
-
-        verify(aiReviewService).review(any(ReviewSession.class), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }

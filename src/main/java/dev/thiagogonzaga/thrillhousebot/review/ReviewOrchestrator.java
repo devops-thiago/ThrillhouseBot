@@ -588,12 +588,11 @@ public class ReviewOrchestrator {
 
   List<GitHubPullRequestClient.FileDiff> fetchPrFiles(
       String auth, String owner, String repo, int prNumber) {
-    try {
-      return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      Log.warn("Failed to fetch PR files, continuing with empty diff", e);
-      return List.of();
-    }
+    // A fetch failure must propagate to review()'s handler (failed check + "could not complete"
+    // notice). Swallowing it into an empty list is indistinguishable from a PR with no changes and
+    // produces a false APPROVE + green check on code that was never read (#211). A genuinely empty
+    // PR returns an empty list with no exception and still takes the normal path.
+    return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
   }
 
   String buildDiffString(List<GitHubPullRequestClient.FileDiff> files) {
