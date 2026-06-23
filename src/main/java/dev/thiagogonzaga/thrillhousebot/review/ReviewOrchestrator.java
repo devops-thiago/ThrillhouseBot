@@ -385,6 +385,9 @@ public class ReviewOrchestrator {
             new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
       }
 
+      // Dismiss any stale pending review this bot left before posting the new one, reusing the
+      // reviews already fetched for this run rather than re-listing them (#74).
+      dismissPendingBotReviews(auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       postReview(auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, files);
 
       resolveAddressedThreads(
@@ -1013,8 +1016,6 @@ public class ReviewOrchestrator {
       String commitSha,
       ReviewResult result,
       List<GitHubPullRequestClient.FileDiff> files) {
-    dismissPendingBotReviews(auth, owner, repo, prNumber);
-
     if (!result.hasIssues()) {
       postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
       return;
@@ -1245,10 +1246,18 @@ public class ReviewOrchestrator {
 
   /**
    * Deletes any pending review left by this bot — GitHub allows only one pending review per user.
+   * Reuses the reviews already fetched for this run instead of re-listing: no review is created
+   * between that fetch and here, so a second {@code listReviews} would only spend extra rate-limit
+   * budget (#74).
    */
-  void dismissPendingBotReviews(String auth, String owner, String repo, int prNumber) {
+  void dismissPendingBotReviews(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      List<GitHubReviewClient.ReviewResponse> priorReviews) {
     try {
-      for (var review : reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber)) {
+      for (var review : priorReviews) {
         if ("PENDING".equals(review.state()) && botIdentity.matches(review.user().login())) {
           reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
           Log.debugf(
