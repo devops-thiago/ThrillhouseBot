@@ -108,6 +108,24 @@ class FindingQuoteValidatorTest {
   }
 
   @Test
+  void stripsSuggestionWhenMultiLineQuoteIsScatteredNotContiguous() {
+    // Both lines exist in the diff ("}" last, "public class Main {" first) but never as a
+    // contiguous in-order run — a recombination of real lines that matchQuote's per-line set
+    // membership wrongly accepts as FULL. It must be demoted so the fabricated suggestion is
+    // not kept (#216).
+    var response = response(finding("}\npublic class Main {"));
+
+    var result = validator.validate(response, DIFF);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+    assertEquals("critical", kept.risk());
+  }
+
+  @Test
   void skipsTriviallyEmptyInputs() {
     var noFindings = response();
     assertSame(noFindings, validator.validate(noFindings, DIFF));

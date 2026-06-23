@@ -70,6 +70,15 @@ public class FindingQuoteValidator {
     for (ReviewResponse.Finding finding : response.findings()) {
       List<String> quoted = normalizedLines(finding.suggestionOld());
       QuoteMatch match = matchQuote(quoted, index.linesFor(finding.file()));
+      // matchQuote judges presence per line by set membership, which cannot tell a genuine
+      // multi-line block from a recombination of real-but-scattered lines. Require a contiguous
+      // in-order run for a multi-line FULL verdict, demoting a scattered quote so a fabricated
+      // suggestion is not kept (#216). Single-line quotes are trivially contiguous and unaffected.
+      if (match == QuoteMatch.FULL
+          && quoted.size() >= 2
+          && !appearsContiguous(index.diffLinesFor(finding.file()), quoted)) {
+        match = QuoteMatch.PARTIAL;
+      }
       if (match == QuoteMatch.FULL) {
         match = checkAmbiguity(quoted, finding.line(), index.diffLinesFor(finding.file()));
       }
@@ -434,13 +443,31 @@ public class FindingQuoteValidator {
    * The diff lines that {@code suggestion_old} can match: context and deletions, never additions.
    */
   private static List<DiffLine> retainedLines(List<DiffLine> diffLines) {
+    return linesExcludingMarker(diffLines, '+');
+  }
+
+  /** Diff lines keeping every marker except {@code excluded}, preserving order. */
+  private static List<DiffLine> linesExcludingMarker(List<DiffLine> diffLines, char excluded) {
     var filtered = new ArrayList<DiffLine>();
     for (DiffLine dl : diffLines) {
-      if (dl.marker() != '+') {
+      if (dl.marker() != excluded) {
         filtered.add(dl);
       }
     }
     return filtered;
+  }
+
+  /**
+   * Whether {@code quoted} appears as a contiguous in-order run on at least one side of the diff:
+   * the original side (context + deletions) for replaced code, or the new side (context +
+   * additions) for code this PR added. A quote contiguous on neither side is a recombination of
+   * real-but- scattered lines, not a genuine block — additions interleaved between two original
+   * lines (or deletions between two added lines) do not break a genuine block because each side is
+   * checked with the other's marker filtered out.
+   */
+  private static boolean appearsContiguous(List<DiffLine> diffLines, List<String> quoted) {
+    return !contiguousMatchStarts(linesExcludingMarker(diffLines, '+'), quoted).isEmpty()
+        || !contiguousMatchStarts(linesExcludingMarker(diffLines, '-'), quoted).isEmpty();
   }
 
   /** Start indices where {@code quoted} appears as a contiguous run in {@code lines}. */
