@@ -108,6 +108,24 @@ class FindingQuoteValidatorTest {
   }
 
   @Test
+  void stripsSuggestionWhenMultiLineQuoteIsScatteredNotContiguous() {
+    // Both lines exist in the diff ("}" last, "public class Main {" first) but never as a
+    // contiguous in-order run — a recombination of real lines that matchQuote's per-line set
+    // membership wrongly accepts as FULL. It must be demoted so the fabricated suggestion is
+    // not kept (#216).
+    var response = response(finding("}\npublic class Main {"));
+
+    var result = validator.validate(response, DIFF);
+
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+    assertEquals("critical", kept.risk());
+  }
+
+  @Test
   void skipsTriviallyEmptyInputs() {
     var noFindings = response();
     assertSame(noFindings, validator.validate(noFindings, DIFF));
@@ -422,6 +440,33 @@ class FindingQuoteValidatorTest {
     var kept = result.findings().get(0);
     assertEquals(quote, kept.suggestionOld());
     assertEquals("high", kept.confidence());
+  }
+
+  @Test
+  void multiLineQuoteOfContiguousAddedCodeIsKept() {
+    // suggestion_old may quote code this PR added (to replace a just-added bug). Those lines are
+    // contiguous on the new side (context + additions) but absent from the original side (context +
+    // deletions), so the multi-line contiguity gate must still keep them (#216).
+    var diff =
+        """
+        ### src/New.java (modified, +2 -0)
+        ```diff
+        @@ -1,1 +1,3 @@
+         existing();
+        +    addedOne();
+        +    addedTwo();
+        ```
+        """;
+    var quote = "addedOne();\naddedTwo();";
+    var finding =
+        new ReviewResponse.Finding(
+            "critical", "high", "src/New.java", 2, "Title", "Description", quote, "replacement");
+
+    var result = validator.validate(response(finding), diff);
+
+    assertEquals(1, result.findings().size());
+    assertEquals(quote, result.findings().get(0).suggestionOld());
+    assertEquals("high", result.findings().get(0).confidence());
   }
 
   @Test
