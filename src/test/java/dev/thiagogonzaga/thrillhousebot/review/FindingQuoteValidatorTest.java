@@ -443,6 +443,33 @@ class FindingQuoteValidatorTest {
   }
 
   @Test
+  void multiLineQuoteOfContiguousAddedCodeIsKept() {
+    // suggestion_old may quote code this PR added (to replace a just-added bug). Those lines are
+    // contiguous on the new side (context + additions) but absent from the original side (context +
+    // deletions), so the multi-line contiguity gate must still keep them (#216).
+    var diff =
+        """
+        ### src/New.java (modified, +2 -0)
+        ```diff
+        @@ -1,1 +1,3 @@
+         existing();
+        +    addedOne();
+        +    addedTwo();
+        ```
+        """;
+    var quote = "addedOne();\naddedTwo();";
+    var finding =
+        new ReviewResponse.Finding(
+            "critical", "high", "src/New.java", 2, "Title", "Description", quote, "replacement");
+
+    var result = validator.validate(response(finding), diff);
+
+    assertEquals(1, result.findings().size());
+    assertEquals(quote, result.findings().get(0).suggestionOld());
+    assertEquals("high", result.findings().get(0).confidence());
+  }
+
+  @Test
   void ambiguousAcrossFilesWhenFindingFileUnresolved() {
     var diff =
         """
