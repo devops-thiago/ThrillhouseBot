@@ -748,6 +748,31 @@ class DiffLineResolverTest {
   }
 
   @Test
+  void resolveSuggestionRangeShouldReturnEmptyWhenRunStraddlesAHunkBoundary() {
+    // Two hunks: the trimmed-text list is flat across both, so "shared_a()" (end of hunk 1) and
+    // "shared_b()" (start of hunk 2) read as adjacent. The span between them (lines 12-29) is not
+    // in
+    // the diff, so no valid GitHub range exists — fall back to single-line rather than post 11..30.
+    var patch =
+        """
+        @@ -10,2 +10,2 @@
+         keep10()
+        +shared_a()
+        @@ -30,2 +30,2 @@
+        +shared_b()
+         keep31()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertTrue(resolver.resolveSuggestionRange("A.java", "shared_a()\nshared_b()").isEmpty());
+    // A genuine within-hunk run still resolves.
+    var range = resolver.resolveSuggestionRange("A.java", "keep10()\nshared_a()");
+    assertTrue(range.isPresent());
+    assertEquals(10, range.get().startLine());
+    assertEquals(11, range.get().endLine());
+  }
+
+  @Test
   void resolveSuggestionRangeShouldReturnEmptyForSingleLineOrBlankAnchor() {
     var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
 
