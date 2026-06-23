@@ -311,6 +311,43 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void dropRepliedDuplicatesShouldKeepDistinctNearbyFindingOfTheSameSeverity() {
+    // Regression (#214): severity must not be part of finding identity. A different defect a couple
+    // of lines from a replied prior finding of the same severity must still post — not be dropped
+    // as
+    // a re-raise just because the severities match.
+    var priorJson =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/B.java", "line": 40,
+           "title": "SQL injection in query builder",
+           "description": "User input is concatenated directly into the SQL string"}
+        ]}
+        """;
+    var comments =
+        List.of(
+            comment(100L, null, "src/B.java", "**MEDIUM — SQL injection in query builder**", BOT),
+            comment(101L, 100L, "src/B.java", "Declining for now.", "maintainer"));
+    var distinct =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium",
+                    "high",
+                    "src/B.java",
+                    42,
+                    "Missing null check on the response",
+                    "The response object may be null when the upstream call times out",
+                    null,
+                    null)),
+            List.of(),
+            null);
+
+    assertSame(
+        distinct, analyzer.dropRepliedDuplicates(distinct, List.of(priorJson), comments, BOT_ID));
+  }
+
+  @Test
   void markerOnADifferentFileDoesNotBind() {
     var json =
         """
@@ -396,7 +433,7 @@ class FollowUpAnalyzerTest {
         new ReviewResponse(
             List.of(
                 new ReviewResponse.Finding(
-                    "medium", "high", "src/B.java", 7, "Null check still absent", "d", null, null),
+                    "medium", "high", "src/B.java", 7, "Missing null check", "d", null, null),
                 new ReviewResponse.Finding(
                     "high", "high", "src/C.java", 30, "Genuinely new bug", "d", null, null)),
             List.of(),
@@ -602,7 +639,7 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
-  void dropRepliedDuplicatesShouldRequireSameLocationAndSeverity() {
+  void dropRepliedDuplicatesShouldRequireSameLocationAndTitle() {
     var comments =
         List.of(
             comment(100L, null, "src/B.java", "**MEDIUM — Missing null check**", BOT),
@@ -610,13 +647,13 @@ class FollowUpAnalyzerTest {
     var different =
         new ReviewResponse(
             List.of(
-                // Same spot but different severity — a genuinely worse issue must post
+                // Same spot but an unrelated title — a different defect must post
                 new ReviewResponse.Finding(
                     "critical", "high", "src/B.java", 5, "Injection here", "d", null, null),
-                // Same severity but far away
+                // Same title but far away
                 new ReviewResponse.Finding(
                     "medium", "high", "src/B.java", 50, "Missing null check", "d", null, null),
-                // Same severity and line but different file
+                // Same title and line but different file
                 new ReviewResponse.Finding(
                     "medium", "high", "src/Z.java", 5, "Missing null check", "d", null, null)),
             List.of(),
