@@ -105,4 +105,28 @@ class SuggestionFormatterTest {
 
     assertTrue(comment.contains("_(medium confidence — verify before acting)_"));
   }
+
+  @Test
+  void shouldFormatDocCommentWithSymbolAndSuggestionBlock() {
+    var comment =
+        formatter.formatDocComment(
+            "Foo.bar(int)", "public int bar(int x) {", "/** doc */\npublic int bar(int x) {");
+
+    assertTrue(comment.contains("📝 Documentation for `Foo.bar(int)`"));
+    assertTrue(comment.contains("```suggestion"));
+    assertTrue(comment.contains("/** doc */"));
+    assertTrue(comment.contains("public int bar(int x) {"));
+  }
+
+  @Test
+  void shouldFormatDocCommentWithoutSymbol() {
+    var blank = formatter.formatDocComment(" ", "old", "/** doc */\nold");
+    var nullSymbol = formatter.formatDocComment(null, "old", "/** doc */\nold");
+
+    for (var comment : new String[] {blank, nullSymbol}) {
+      assertTrue(comment.contains("📝 Documentation**"), comment);
+      assertFalse(comment.contains("for `"), comment);
+      assertTrue(comment.contains("```suggestion"), comment);
+    }
+  }
 }
