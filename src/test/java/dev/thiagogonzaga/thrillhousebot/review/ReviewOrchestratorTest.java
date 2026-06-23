@@ -1356,6 +1356,73 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldReuseFetchedReviewsToDismissPendingInsteadOfReListing() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        // A stale pending review left by the bot, returned by the single listReviews fetch.
+        var pending =
+            new GitHubReviewClient.ReviewResponse(
+                99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(pending));
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(labeler.fetchExistingLabels(anyString(), anyString(), anyString()))
+            .thenReturn(List.of());
+        var summary =
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of());
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // listReviews is fetched exactly once for the whole run — dismissal reuses that list
+        // (#74)...
+        verify(reviewClient, times(1))
+            .listReviews(anyString(), anyString(), anyString(), anyString(), anyInt());
+        // ...and the bot's stale pending review is still dismissed from the reused list.
+        verify(reviewClient)
+            .deletePendingReview(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L));
+      }
+    }
+
+    @Test
     void shouldPersistAiResponseJsonWhenUpdatingCompletedSession() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -1890,10 +1957,8 @@ class ReviewOrchestratorTest {
           new GitHubReviewClient.ReviewResponse(
               2L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
 
-      when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(List.of(pending, approved, pendingHuman));
-
-      orchestrator.dismissPendingBotReviews("Bearer tok", "owner", "repo", 7);
+      orchestrator.dismissPendingBotReviews(
+          "Bearer tok", "owner", "repo", 7, List.of(pending, approved, pendingHuman));
 
       verify(reviewClient)
           .deletePendingReview(
@@ -1908,15 +1973,19 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldContinueWhenDismissPendingReviewsFails() {
-      when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenThrow(new RuntimeException("GitHub unavailable"));
-
-      assertDoesNotThrow(
-          () -> orchestrator.dismissPendingBotReviews("Bearer tok", "owner", "repo", 7));
-      // When listing fails there is nothing to dismiss — no delete may be attempted
-      verify(reviewClient, never())
+      var pending =
+          new GitHubReviewClient.ReviewResponse(
+              99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
+      doThrow(new RuntimeException("GitHub unavailable"))
+          .when(reviewClient)
           .deletePendingReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong());
+
+      // A delete that fails (e.g. GitHub unavailable) must not propagate out of dismissal.
+      assertDoesNotThrow(
+          () ->
+              orchestrator.dismissPendingBotReviews(
+                  "Bearer tok", "owner", "repo", 7, List.of(pending)));
     }
 
     @Test
