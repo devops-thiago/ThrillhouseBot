@@ -22,6 +22,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -59,6 +60,70 @@ class AiServicePromptRenderingTest {
   @Inject ReplyAssistant replyAssistant;
   @Inject FindingVerifier findingVerifier;
   @Inject PrReviewer prReviewer;
+  @Inject PrDescribeAssistant describeAssistant;
+  @Inject ChangelogAssistant changelogAssistant;
+  @Inject DocGenerator docGenerator;
+
+  @Test
+  void describePromptIncludesEveryContextVariable() {
+    String user =
+        captureBlocking(
+            () ->
+                describeAssistant.describe(
+                    PromptTemplateEscaper.escape("DIFF_SENTINEL"),
+                    PromptTemplateEscaper.escape("TITLE_SENTINEL"),
+                    PromptTemplateEscaper.escape("DESC_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+
+    assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
+    // Regression (#186 reintroduced): @UserMessage on the diff param dropped all of these.
+    assertTrue(user.contains("TITLE_SENTINEL"), "currentTitle missing");
+    assertTrue(user.contains("DESC_SENTINEL"), "currentDescription missing");
+    assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+    assertTrue(user.contains("## The change"), "template did not render");
+  }
+
+  @Test
+  void changelogPromptIncludesEveryContextVariable() {
+    ChatRequest request =
+        captureBlockingRequest(
+            () ->
+                changelogAssistant.draft(
+                    PromptTemplateEscaper.escape("DIFF_SENTINEL"),
+                    "4242",
+                    PromptTemplateEscaper.escape("TITLE_SENTINEL"),
+                    PromptTemplateEscaper.escape("DESC_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+    String user = userText(request);
+    String all = allText(request);
+
+    assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
+    // Regression (#186 reintroduced): every @V was dropped. prNumber renders into the system
+    // template (so each bullet can carry "(#N)"); the rest render into the user template.
+    assertTrue(all.contains("4242"), "prNumber missing");
+    assertTrue(user.contains("TITLE_SENTINEL"), "currentTitle missing");
+    assertTrue(user.contains("DESC_SENTINEL"), "currentDescription missing");
+    assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+    assertTrue(user.contains("## The change"), "template did not render");
+  }
+
+  @Test
+  void docGeneratorPromptIncludesEveryContextVariable() {
+    String user =
+        captureBlocking(
+            () ->
+                docGenerator.generate(
+                    PromptTemplateEscaper.escape("DIFF_SENTINEL"),
+                    PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
+                    PromptTemplateEscaper.escape("STACK_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+
+    assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
+    // Regression (#186 reintroduced): @UserMessage on the diff param dropped all of these.
+    assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
+    assertTrue(user.contains("STACK_SENTINEL"), "projectStack missing");
+    assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+  }
 
   @Test
   void replyPromptIncludesEveryContextVariable() {
@@ -169,7 +234,7 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("INSTRUCTIONS_SENTINEL"), "repoInstructions missing");
   }
 
-  private String captureBlocking(Runnable call) {
+  private ChatRequest captureBlockingRequest(Runnable call) {
     var captured = new AtomicReference<ChatRequest>();
     when(chatModel.chat(any(ChatRequest.class)))
         .thenAnswer(
@@ -178,7 +243,11 @@ class AiServicePromptRenderingTest {
               return ChatResponse.builder().aiMessage(AiMessage.from("ok")).build();
             });
     call.run();
-    return userText(captured.get());
+    return captured.get();
+  }
+
+  private String captureBlocking(Runnable call) {
+    return userText(captureBlockingRequest(call));
   }
 
   private String captureStreaming(Supplier<TokenStream> call) throws InterruptedException {
@@ -210,5 +279,20 @@ class AiServicePromptRenderingTest {
         .map(m -> ((UserMessage) m).singleText())
         .findFirst()
         .orElseThrow(() -> new AssertionError("no user message in chat request"));
+  }
+
+  /**
+   * Every message's text (system + user), so a variable is found wherever its template places it.
+   */
+  private static String allText(ChatRequest request) {
+    var sb = new StringBuilder();
+    for (var m : request.messages()) {
+      if (m instanceof UserMessage u) {
+        sb.append(u.singleText()).append('\n');
+      } else if (m instanceof SystemMessage s) {
+        sb.append(s.text()).append('\n');
+      }
+    }
+    return sb.toString();
   }
 }

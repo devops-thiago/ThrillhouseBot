@@ -27,9 +27,15 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 @RegisterAiService
 public interface PrDescribeAssistant {
 
+  // @UserMessage MUST be on the method, not a parameter: on a parameter quarkus-langchain4j sends
+  // only that parameter's raw value as the user message and never renders this template, silently
+  // dropping currentTitle, currentDescription and repoInstructions (see
+  // AiServicePromptRenderingTest
+  // and the #186 regression).
   @SystemMessage(PrDescribeAssistantPrompts.SYSTEM)
+  @UserMessage(PrSuggestionPrompts.USER)
   String describe(
-      @UserMessage(PrSuggestionPrompts.USER) @V("diff") String diff,
+      @V("diff") String diff,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,
       @V("repoInstructions") String repoInstructions);
