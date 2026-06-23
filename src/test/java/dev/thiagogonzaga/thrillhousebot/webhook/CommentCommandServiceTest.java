@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
@@ -52,6 +53,7 @@ class CommentCommandServiceTest {
   @Mock private PrPauseService prPauseService;
   @Mock private ManualReviewAuthorizer authorizer;
   @Mock private PrDescriptionGenerator descriptionGenerator;
+  @Mock private ChangelogEntryGenerator changelogGenerator;
   @Mock private DocGenerationService docGenerationService;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
@@ -85,6 +87,7 @@ class CommentCommandServiceTest {
             authorizer,
             new TriggerDetector(),
             descriptionGenerator,
+            changelogGenerator,
             docGenerationService,
             config);
   }
@@ -211,6 +214,29 @@ class CommentCommandServiceTest {
   }
 
   @Test
+  void changelogPostsTheGeneratedEntry() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(changelogGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn("### Added\n- thing (#7)");
+
+    service.handle(ctx(CommentCommand.CHANGELOG));
+
+    assertEquals("### Added\n- thing (#7)", postedBody());
+  }
+
+  @Test
+  void changelogPostsNothingWhenGeneratorReturnsNull() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(changelogGenerator.generate("owner", "repo", 7, "main", 12345L, "token")).thenReturn(null);
+
+    service.handle(ctx(CommentCommand.CHANGELOG));
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
   void addDocsDelegatesToDocServiceWhenAuthorized() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
@@ -220,6 +246,28 @@ class CommentCommandServiceTest {
     verify(docGenerationService)
         .handle(new DocGenerationService.DocTask("owner", "repo", 7, "main", 12345L));
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void changelogPostsPausedNoticeWhenPaused() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.CHANGELOG));
+
+    assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
+    verifyNoInteractions(changelogGenerator);
+  }
+
+  @Test
+  void changelogIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.CHANGELOG));
+
+    verifyNoInteractions(changelogGenerator);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(prPauseService);
   }
 
   @Test

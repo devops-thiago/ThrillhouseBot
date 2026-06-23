@@ -21,15 +21,17 @@ import dev.langchain4j.service.V;
 import io.quarkiverse.langchain4j.RegisterAiService;
 
 /**
- * Suggests an improved PR title and description generated from the diff. Returns the suggestion as
- * plain Markdown — like the reply assistant, there is no JSON schema to parse.
+ * Drafts a CHANGELOG entry for a pull request from its diff, in the Keep a Changelog format
+ * (Added/Changed/Fixed/Security…). Returns the entry as plain Markdown — like the describe and
+ * reply assistants, there is no JSON schema to parse.
  */
 @RegisterAiService
-public interface PrDescribeAssistant {
+public interface ChangelogAssistant {
 
-  @SystemMessage(PrDescribeAssistantPrompts.SYSTEM)
-  String describe(
+  @SystemMessage(ChangelogAssistantPrompts.SYSTEM)
+  String draft(
       @UserMessage(PrSuggestionPrompts.USER) @V("diff") String diff,
+      @V("prNumber") String prNumber,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,
       @V("repoInstructions") String repoInstructions);

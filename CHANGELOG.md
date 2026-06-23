@@ -7,6 +7,7 @@ All notable changes to ThrillhouseBot.
 ### Added
 
 - **`/describe` command**: ask the bot to generate or improve the PR title and description from the diff. It posts a suggestion comment the author can copy in — it never edits the pull request, so the author's own title and body are never overwritten. Respects the repository instructions file, is write-gated like the other paid commands, and honors a `/pause` (#35)
+- **`/changelog` command**: ask the bot to draft a CHANGELOG entry for the PR from the diff, in the Keep a Changelog format (Added/Changed/Fixed/Security…). It posts a suggestion comment the author can copy into `CHANGELOG.md` — it never commits, so nothing is changed without consent. Respects the repository instructions file, is write-gated like the other paid commands, and honors a `/pause` (#62)
 
 ### Changed
 
