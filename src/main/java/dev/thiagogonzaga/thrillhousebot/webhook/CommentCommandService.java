@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
@@ -60,6 +61,7 @@ public class CommentCommandService {
       | `/review` | Run a fresh review of this PR |
       | `/summary` | Post the PR summary if one has not been generated yet |
       | `/describe` | Suggest an improved PR title and description from the diff |
+      | `/changelog` | Draft a CHANGELOG entry for this PR from the diff |
       | `/add-docs` | Suggest docstrings for the symbols changed in this PR |
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
@@ -80,6 +82,7 @@ public class CommentCommandService {
   private final ManualReviewAuthorizer authorizer;
   private final TriggerDetector triggerDetector;
   private final PrDescriptionGenerator descriptionGenerator;
+  private final ChangelogEntryGenerator changelogGenerator;
   private final DocGenerationService docGenerationService;
   private final ThrillhouseConfig config;
 
@@ -96,6 +99,7 @@ public class CommentCommandService {
       ManualReviewAuthorizer authorizer,
       TriggerDetector triggerDetector,
       PrDescriptionGenerator descriptionGenerator,
+      ChangelogEntryGenerator changelogGenerator,
       DocGenerationService docGenerationService,
       ThrillhouseConfig config) {
     this.executor = executor;
@@ -109,6 +113,7 @@ public class CommentCommandService {
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
     this.descriptionGenerator = descriptionGenerator;
+    this.changelogGenerator = changelogGenerator;
     this.docGenerationService = docGenerationService;
     this.config = config;
   }
@@ -150,6 +155,7 @@ public class CommentCommandService {
         case HELP -> postComment(auth, ctx, HELP_TEXT);
         case SUMMARY -> handleSummary(ctx, auth);
         case DESCRIBE -> handleDescribe(ctx, auth);
+        case CHANGELOG -> handleChangelog(ctx, auth);
         case ADD_DOCS -> handleAddDocs(ctx, auth);
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
@@ -233,6 +239,36 @@ public class CommentCommandService {
       return;
     }
     postComment(auth, ctx, suggestion);
+  }
+
+  private void handleChangelog(CommandContext ctx, String auth) {
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized /changelog from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      postComment(auth, ctx, PAUSED_NOTICE);
+      return;
+    }
+    log.info(
+        "Drafting changelog entry for {}/{} #{} (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    var entry =
+        changelogGenerator.generate(
+            ctx.owner(),
+            ctx.repo(),
+            ctx.prNumber(),
+            ctx.defaultBranch(),
+            ctx.installationId(),
+            auth);
+    if (entry == null) {
+      // Nothing changelog-worthy (no diff / model declined) or no usable answer — already logged.
+      return;
+    }
+    postComment(auth, ctx, entry);
   }
 
   private void handleAddDocs(CommandContext ctx, String auth) {
