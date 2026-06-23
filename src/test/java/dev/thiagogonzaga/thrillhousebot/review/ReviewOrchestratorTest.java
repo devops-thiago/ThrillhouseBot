@@ -1846,7 +1846,7 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any()))
+        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any(), any()))
             .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -4615,7 +4615,7 @@ class ReviewOrchestratorTest {
         when(checkRunClient.getBranchRules(
                 anyString(), anyString(), eq("owner"), eq("repo"), eq("main")))
             .thenReturn(requiredStatusCheckRuleset("integration"));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
             .thenReturn("## Summary\nRequired check **integration** has not reported yet.");
 
         orchestrator.review(request());
