@@ -481,10 +481,15 @@ public class FollowUpAnalyzer {
     if (finding.file() == null || !FilePaths.same(finding.file(), prior.file())) {
       return false;
     }
+    // Same file + close lines + similar title is the same finding re-raised. Severity is NOT part
+    // of identity: two distinct findings that merely share a severity (or both carry null/unknown
+    // risk, which maps to LOW) near the same line are different defects and must not be collapsed —
+    // doing so silently dropped a new finding whenever a same-severity neighbour had been replied
+    // to (#214). A paraphrased re-raise whose title drifted is still caught by the content-overlap
+    // fallback below.
     if (Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE
-        && (RiskLevel.fromString(finding.risk()) == RiskLevel.fromString(prior.risk())
-            || FindingDeduplicator.titleSimilarity(finding.title(), prior.title())
-                >= FindingDeduplicator.TITLE_SIMILARITY_THRESHOLD)) {
+        && FindingDeduplicator.titleSimilarity(finding.title(), prior.title())
+            >= FindingDeduplicator.TITLE_SIMILARITY_THRESHOLD) {
       return true;
     }
     // Paraphrased re-raises drift in both wording and line numbers as the PR evolves
