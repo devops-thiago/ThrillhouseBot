@@ -27,6 +27,7 @@ This release makes the bot interactive and controllable from the PR — conversa
 
 ### Changed
 
+- **Multi-line suggestions**: when a finding's fix replaces several consecutive lines, the bot now posts a multi-line review comment (`start_line`..`line`) so the GitHub suggestion replaces the whole range in one click, instead of anchoring to a single line and mis-applying the rest. The range is derived from the flagged code's position in the diff and falls back to a single-line comment when it can't be resolved (#71)
 - **Manual-trigger authorization is time-bounded**: the write-access check for a manual `/review` (installation-token mint + collaborator-permission call) now runs under a configurable timeout (`MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`) on the webhook ack thread and fails closed if GitHub is too slow, so a degraded GitHub can no longer tie up a webhook worker past the delivery SLA (#92)
 - **CI — actionlint guardrail**: workflows and the consolidated Trivy composite action are linted (including inline shell via shellcheck), with the release-gate scan path mirrored so it is validated on PR CI (#93)
 - **CI — faster pipeline**: SpotBugs moved off the test job's critical path into the parallel lint job, the test job collapsed into a single Maven reactor, and the native build + image publish skipped for docs-only pushes to `main` (#170)
