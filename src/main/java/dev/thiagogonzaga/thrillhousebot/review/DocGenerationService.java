@@ -281,9 +281,7 @@ public class DocGenerationService {
 
   private List<GitHubPullRequestClient.FileDiff> fetchFiles(String auth, DocTask task) {
     try {
-      var files =
-          prClient.getPullRequestFiles(auth, ACCEPT, task.owner(), task.repo(), task.prNumber());
-      return files != null ? files : List.of();
+      return prClient.getPullRequestFiles(auth, ACCEPT, task.owner(), task.repo(), task.prNumber());
     } catch (RuntimeException e) {
       Log.warnf(
           e,
