@@ -28,6 +28,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -103,33 +105,15 @@ class ChangelogEntryGeneratorTest {
     verifyNoInteractions(changelogAssistant);
   }
 
-  @Test
-  void returnsNullWhenAssistantDeclinesWithNone() {
+  // The model declined (the NONE sentinel, case-insensitively, after trimming) or returned a blank
+  // answer — post nothing rather than noise. One parameterized test covers each "nothing usable".
+  @ParameterizedTest
+  @ValueSource(strings = {"NONE", " none ", "   "})
+  void returnsNullWhenAssistantProducesNothingUsable(String draft) {
     diffReturns("## Overview\ndiff");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("t", "b", null, null));
-    // The model says nothing in the diff is changelog-worthy — post nothing rather than a noise.
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn("NONE");
-
-    assertNull(generate());
-  }
-
-  @Test
-  void returnsNullWhenAssistantDeclinesWithLowercaseNone() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(" none ");
-
-    assertNull(generate());
-  }
-
-  @Test
-  void returnsNullWhenAssistantProducesBlank() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn("   ");
+    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(draft);
 
     assertNull(generate());
   }

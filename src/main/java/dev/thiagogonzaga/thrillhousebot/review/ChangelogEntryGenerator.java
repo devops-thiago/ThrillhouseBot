@@ -46,8 +46,13 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
   static final String HEADER = "## 🤖 ThrillhouseBot — suggested CHANGELOG entry\n\n";
 
   static final String FOOTER =
-      "\n\n---\n*Suggestion only — nothing was committed. Copy whatever fits into `CHANGELOG.md` "
-          + "under the `[Unreleased]` section. Re-run with `/changelog`.*\n";
+      """
+
+
+      ---
+      *Suggestion only — nothing was committed. Copy whatever fits into `CHANGELOG.md` \
+      under the `[Unreleased]` section. Re-run with `/changelog`.*
+      """;
 
   private final ChangelogAssistant changelogAssistant;
 
