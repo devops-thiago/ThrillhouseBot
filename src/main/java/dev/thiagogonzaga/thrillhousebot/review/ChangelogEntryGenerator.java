@@ -22,7 +22,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.util.Locale;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -107,7 +106,7 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
         return null;
       }
       entry = entry.strip();
-      if (NONE.equals(entry.toUpperCase(Locale.ROOT))) {
+      if (isNoneVerdict(entry)) {
         Log.debug("Changelog assistant judged the change not changelog-worthy — posting nothing");
         return null;
       }
@@ -116,5 +115,16 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
       Log.warn("Changelog assistant call failed — posting nothing", e);
       return null;
     }
+  }
+
+  /**
+   * Whether the assistant's whole reply is just the {@code NONE} sentinel — tolerating surrounding
+   * markdown emphasis/quote markers and trailing punctuation (e.g. {@code **NONE**}, {@code
+   * NONE.}), so a decorated decline is never posted as a literal changelog entry. Only the entire
+   * reply collapsing to {@code NONE} counts; a real entry that merely mentions the word does not.
+   */
+  private static boolean isNoneVerdict(String entry) {
+    String core = entry.replaceAll("^[\\s`*_>#-]+", "").replaceAll("[\\s`*_.!]+$", "");
+    return NONE.equalsIgnoreCase(core);
   }
 }

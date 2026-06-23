@@ -319,6 +319,17 @@ public final class DiffLineResolver {
     // lines always yields endLine > startLine — no degenerate single-line range to guard against.
     int startLine = lineNumbers.get(matchOffset);
     int endLine = lineNumbers.get(matchOffset + anchorLines.size() - 1);
+    // The match is contiguous in the trimmed-text list, but blank-line dropping lets it straddle a
+    // hunk boundary (last line of one hunk, first line of the next). Such a span covers line
+    // numbers
+    // that are not on the diff's right side, so GitHub rejects the range (422). Accept it only when
+    // every line in [startLine, endLine] is a real right-side line — always true within a single
+    // hunk, false across a boundary — otherwise fall back to a single-line comment.
+    TreeSet<Integer> fileLines = rightSideLinesByFile.get(key);
+    if (fileLines == null
+        || fileLines.subSet(startLine, true, endLine, true).size() != endLine - startLine + 1) {
+      return Optional.empty();
+    }
     return Optional.of(new LineRange(startLine, endLine));
   }
 

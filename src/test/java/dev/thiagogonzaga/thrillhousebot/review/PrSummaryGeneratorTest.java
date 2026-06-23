@@ -389,6 +389,22 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldFoldNewlinesInChangedFilesTableCells() {
+    var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/A.java", "modified"));
+    var aiSummary =
+        summaryWithFiles(new ReviewResponse.FileSummary("src/A.java", "first line\nsecond line"));
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
+
+    // A newline in a cell would break the row; it must be folded to a space so the row stays
+    // intact.
+    assertTrue(summary.contains("first line second line"));
+    assertFalse(summary.contains("first line\nsecond line"));
+  }
+
+  @Test
   void shouldLabelKnownChangeTypesAndFallBackForUnknown() {
     var changedFiles =
         List.of(

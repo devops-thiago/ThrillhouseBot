@@ -105,10 +105,11 @@ class ChangelogEntryGeneratorTest {
     verifyNoInteractions(changelogAssistant);
   }
 
-  // The model declined (the NONE sentinel, case-insensitively, after trimming) or returned a blank
-  // answer — post nothing rather than noise. One parameterized test covers each "nothing usable".
+  // The model declined (the NONE sentinel, case-insensitively, tolerating markdown emphasis/quote
+  // markers and trailing punctuation) or returned a blank answer — post nothing rather than noise.
+  // One parameterized test covers each "nothing usable".
   @ParameterizedTest
-  @ValueSource(strings = {"NONE", " none ", "   "})
+  @ValueSource(strings = {"NONE", " none ", "**NONE**", "`NONE`", "NONE.", "> NONE", "   "})
   void returnsNullWhenAssistantProducesNothingUsable(String draft) {
     diffReturns("## Overview\ndiff");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
@@ -116,6 +117,22 @@ class ChangelogEntryGeneratorTest {
     when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(draft);
 
     assertNull(generate());
+  }
+
+  @Test
+  void postsRealEntryThatMerelyMentionsNone() {
+    // The NONE guard must match only a whole-reply sentinel, never a real entry containing the
+    // word.
+    diffReturns("## Overview\ndiff");
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenReturn("### Fixed\n- Guard against a none-check regression (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.contains("none-check regression"));
   }
 
   @Test
