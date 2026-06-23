@@ -38,6 +38,13 @@ public class ReviewDiffFormatter {
 
   private record GlobMatcher(PathMatcher primary, PathMatcher suffix) {}
 
+  /** A formatted diff plus the number of files the line budget dropped (0 when nothing omitted). */
+  record FormattedDiff(String text, int omittedFiles) {
+    boolean truncated() {
+      return omittedFiles > 0;
+    }
+  }
+
   private final List<GlobMatcher> globMatchers;
   private final int maxDiffLines;
 
@@ -116,8 +123,13 @@ public class ReviewDiffFormatter {
   }
 
   String buildDiffString(List<GitHubPullRequestClient.FileDiff> files) {
+    return buildDiffStringWithStats(files).text();
+  }
+
+  /** Like {@link #buildDiffString} but also reports how many files the line budget omitted. */
+  FormattedDiff buildDiffStringWithStats(List<GitHubPullRequestClient.FileDiff> files) {
     if (files == null || files.isEmpty()) {
-      return "(no changes detected)";
+      return new FormattedDiff("(no changes detected)", 0);
     }
 
     var totalAdditions = 0;
@@ -172,8 +184,15 @@ public class ReviewDiffFormatter {
 
   String buildBaseComparison(
       GitHubPullRequestClient.CompareResponse comparison, String base, String head) {
+    return buildBaseComparisonWithStats(comparison, base, head).text();
+  }
+
+  /** Like {@link #buildBaseComparison} but also reports how many files the line budget omitted. */
+  FormattedDiff buildBaseComparisonWithStats(
+      GitHubPullRequestClient.CompareResponse comparison, String base, String head) {
     if (comparison.files().isEmpty()) {
-      return "(no changes between " + base.substring(0, 7) + " and " + head.substring(0, 7) + ")";
+      return new FormattedDiff(
+          "(no changes between " + base.substring(0, 7) + " and " + head.substring(0, 7) + ")", 0);
     }
 
     var reviewable = comparison.files().stream().filter(f -> f.patch() != null).toList();
@@ -187,13 +206,14 @@ public class ReviewDiffFormatter {
     return formatWithLineBudget(header, reviewable);
   }
 
-  private String formatWithLineBudget(String header, List<GitHubPullRequestClient.FileDiff> files) {
+  private FormattedDiff formatWithLineBudget(
+      String header, List<GitHubPullRequestClient.FileDiff> files) {
     if (maxDiffLines <= 0) {
       var sb = new StringBuilder(header);
       for (var file : files) {
         sb.append(formatFileSection(file));
       }
-      return sb.toString();
+      return new FormattedDiff(sb.toString(), 0);
     }
 
     var output = new StringBuilder(header);
@@ -232,7 +252,7 @@ public class ReviewDiffFormatter {
           maxDiffLines, maxDiffLines, omitted.size());
     }
 
-    return output.toString();
+    return new FormattedDiff(output.toString(), omitted.size());
   }
 
   void appendTruncationFooter(

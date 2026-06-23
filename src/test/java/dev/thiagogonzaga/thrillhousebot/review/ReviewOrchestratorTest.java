@@ -467,6 +467,22 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldHoldApproveAndDiscloseWhenDiffTruncated() {
+      var aiResponse = new ReviewResponse(List.of(), List.of(), null);
+
+      // A clean review that would APPROVE, but 7 files were omitted by the line budget.
+      var result =
+          orchestrator.buildResult(
+              aiResponse, true, new ReviewOrchestrator.DiffStats(120, 4000, 4000, 7), List.of());
+
+      // The verdict is held back from APPROVE — a partial review must not gate-approve the PR...
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+      // ...and the summary discloses the omission (summaryGenerator is mocked to "").
+      assertTrue(result.summaryMarkdown().contains("partial review"));
+      assertTrue(result.summaryMarkdown().contains("7 file"));
+    }
+
+    @Test
     void shouldHandleNullFindingsInAiResponse() {
       var aiResponse = new ReviewResponse(null, null, null);
 
@@ -2669,11 +2685,13 @@ class ReviewOrchestratorTest {
               new GitHubPullRequestClient.FileDiff("a.java", "modified", 3, 2, 5, "patch"),
               new GitHubPullRequestClient.FileDiff("b.java", "modified", 1, 4, 5, "patch"));
 
-      ReviewOrchestrator.DiffStats stats = ReviewOrchestrator.DiffStats.fromFiles(files);
+      ReviewOrchestrator.DiffStats stats = ReviewOrchestrator.DiffStats.fromFiles(files, 0);
 
       assertEquals(2, stats.filesChanged());
       assertEquals(4, stats.additions());
       assertEquals(6, stats.deletions());
+      assertEquals(0, stats.omittedFiles());
+      assertFalse(stats.truncated());
     }
   }
 

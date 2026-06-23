@@ -142,6 +142,33 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
+    void buildDiffStringWithStatsReportsOmittedFileCount() {
+      var formatter = new ReviewDiffFormatter(List.of(), 6);
+      var files =
+          List.of(
+              file("a.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5"),
+              file("b.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5"),
+              file("c.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5"));
+
+      var result = formatter.buildDiffStringWithStats(files);
+
+      assertTrue(result.truncated());
+      assertTrue(result.omittedFiles() >= 1);
+      assertTrue(result.text().contains("files omitted"));
+    }
+
+    @Test
+    void buildDiffStringWithStatsReportsZeroOmittedWhenEverythingFits() {
+      var formatter = new ReviewDiffFormatter(List.of(), 5000);
+
+      var result =
+          formatter.buildDiffStringWithStats(List.of(file("a.java", "modified", 1, 0, "l1\nl2")));
+
+      assertFalse(result.truncated());
+      assertEquals(0, result.omittedFiles());
+    }
+
+    @Test
     void shouldSkipFooterWhenNoLineBudgetRemains() {
       var formatter = new ReviewDiffFormatter(List.of(), 2);
       var output = new StringBuilder("line-one\nline-two\n");
