@@ -1482,13 +1482,16 @@ public class ReviewOrchestrator {
 
   /** Maps a commit-status state to one of success/pending/failing. */
   private static String classifyStatus(String state) {
-    if (CI_PENDING.equalsIgnoreCase(state)) {
-      return CI_PENDING;
+    if (CI_SUCCESS.equalsIgnoreCase(state)) {
+      return CI_SUCCESS;
     }
     if (CONCLUSION_FAILURE.equalsIgnoreCase(state) || "error".equalsIgnoreCase(state)) {
       return CI_FAILING;
     }
-    return CI_SUCCESS;
+    // "pending", null, or any unrecognized state is not a confirmed pass: classify it as pending so
+    // an indeterminate required check holds the approval rather than being mistaken for success
+    // (#217). Only an explicit "success" clears the gate.
+    return CI_PENDING;
   }
 
   private boolean isThrillhouseBotCheck(
