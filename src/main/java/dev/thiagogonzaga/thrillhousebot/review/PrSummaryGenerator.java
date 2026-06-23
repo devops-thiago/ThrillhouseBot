@@ -35,7 +35,7 @@ public class PrSummaryGenerator {
    * comment the bot already posted on a PR, so a re-review never duplicates it.
    */
   public static final String SUMMARY_HEADING = "## 🤖 ThrillhouseBot PR Summary";
-  
+
   /**
    * Upper bound on rows in the changed-files walkthrough. Keeps the comment within GitHub's size
    * budget on large PRs; any files beyond this are rolled up into a trailing "… and N more" note.
