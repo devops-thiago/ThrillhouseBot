@@ -31,8 +31,9 @@ import java.util.Set;
  * underlying defect several times — dogfooding produced the same issue three times in one review at
  * three different severities. Findings are considered duplicates when they sit on the same file
  * within a small line tolerance and their titles describe the same thing; the merged finding keeps
- * the richest description and the median severity of the cluster, so one outlier rating (high or
- * low) cannot decide the posted severity.
+ * the richest description and the cluster's median severity (the more severe of the two central
+ * values for an even cluster), so a single outlier cannot decide the posted severity or downgrade a
+ * blocking finding.
  */
 @ApplicationScoped
 public class FindingDeduplicator {
@@ -153,9 +154,11 @@ public class FindingDeduplicator {
   }
 
   /**
-   * Richest description wins; severity is the cluster's median so outliers cannot decide it. When
-   * the richest copy carries no suggestion (for example after quote validation stripped it), the
-   * suggestion of another cluster member is kept instead of being lost in the merge.
+   * Richest description wins; severity is the cluster's median (for an even cluster, the more
+   * severe of the two central values, so a single hedged duplicate cannot downgrade a blocking
+   * finding). When the richest copy carries no suggestion (for example after quote validation
+   * stripped it), the suggestion of another cluster member is kept instead of being lost in the
+   * merge.
    */
   private static ReviewResponse.Finding merge(List<ReviewResponse.Finding> cluster) {
     if (cluster.size() == 1) {
@@ -176,20 +179,27 @@ public class FindingDeduplicator {
             .map(f -> RiskLevel.fromString(f.risk()))
             .sorted(Comparator.naturalOrder())
             .toList();
-    RiskLevel median = ranked.get(ranked.size() / 2);
-    // Confidence stays paired with the chosen risk: the highest confidence among the members
-    // that carry the median risk. Taking it from an arbitrary member could either defuse a
-    // blocking critical/high-confidence finding via a hedged duplicate, or synthesize a
-    // blocking pair no single member ever asserted. Confidence is declared most-certain-first
-    // (HIGH < MEDIUM < LOW in natural order), so min() selects the highest confidence.
+    // The list is sorted most-severe first (RiskLevel natural order is CRITICAL..LOW). An odd
+    // cluster uses the true median so a lone outlier cannot decide the severity; an even cluster
+    // has
+    // no single middle, so take the more severe of the two central values (the lower index) — never
+    // the less severe — so a single hedged duplicate cannot downgrade a blocking finding (#213).
+    int mid = ranked.size() / 2;
+    RiskLevel severity = ranked.size() % 2 == 0 ? ranked.get(mid - 1) : ranked.get(mid);
+    // Confidence stays paired with the chosen severity: the highest confidence among the members
+    // that carry it. Taking it from an arbitrary member could either defuse a blocking
+    // critical/high-confidence finding via a hedged duplicate, or synthesize a blocking pair no
+    // single member ever asserted. Confidence is declared most-certain-first (HIGH < MEDIUM < LOW
+    // in
+    // natural order), so min() selects the highest confidence.
     Confidence confidence =
         cluster.stream()
-            .filter(f -> RiskLevel.fromString(f.risk()) == median)
+            .filter(f -> RiskLevel.fromString(f.risk()) == severity)
             .map(f -> Confidence.fromString(f.confidence()))
             .min(Comparator.naturalOrder())
             .orElse(Confidence.fromString(richest.confidence()));
     return new ReviewResponse.Finding(
-        median.name().toLowerCase(Locale.ROOT),
+        severity.name().toLowerCase(Locale.ROOT),
         confidence.name().toLowerCase(Locale.ROOT),
         richest.file(),
         richest.line(),

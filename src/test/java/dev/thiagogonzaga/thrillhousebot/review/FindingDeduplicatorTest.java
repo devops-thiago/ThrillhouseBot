@@ -97,13 +97,30 @@ class FindingDeduplicatorTest {
   }
 
   @Test
-  void twoDuplicatesKeepTheLowerOfTheTwoSeverities() {
-    // Median of two = second after sorting by rank (critical < high) — the less severe one,
-    // so a single escalated duplicate cannot raise the posted severity
+  void twoDuplicatesKeepTheMoreSevereSeverity() {
+    // An even cluster has no single median; the more severe of the two central values wins, so a
+    // single hedged (lower-severity) duplicate cannot downgrade a blocking finding (#213).
     var response =
         response(
             finding("critical", "src/A.java", 5, "Unbounded recursion in parser", "short"),
             finding("high", "src/A.java", 5, "Unbounded recursion in parser", "short too"));
+
+    var result = deduplicator.dedupe(response);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("critical", result.findings().get(0).risk());
+  }
+
+  @Test
+  void evenClusterTakesTheMoreSevereOfTheTwoCentralSeverities() {
+    // Sorted [critical, high, medium, low]; the two central values are high and medium, so the more
+    // severe (high) is chosen — never the less severe (medium).
+    var response =
+        response(
+            finding("critical", "src/A.java", 5, "Unbounded recursion in parser", "a"),
+            finding("high", "src/A.java", 5, "Unbounded recursion in parser", "b"),
+            finding("medium", "src/A.java", 6, "Unbounded recursion in parser", "c"),
+            finding("low", "src/A.java", 6, "Unbounded recursion in parser", "d"));
 
     var result = deduplicator.dedupe(response);
 
