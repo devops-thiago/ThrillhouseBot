@@ -61,6 +61,11 @@ public class ReviewOrchestrator {
   // Check run conclusion constants
   private static final String CONCLUSION_FAILURE = "failure";
 
+  // PR review event types submitted via createReview.
+  private static final String EVENT_APPROVE = "APPROVE";
+  private static final String EVENT_REQUEST_CHANGES = "REQUEST_CHANGES";
+  private static final String EVENT_COMMENT = "COMMENT";
+
   // CI check evaluation constants
   private static final String CI_SUCCESS = "success";
   private static final String CI_PENDING = "pending";
@@ -1007,13 +1012,61 @@ public class ReviewOrchestrator {
           new GitHubReviewClient.CreateReviewRequest(
               commitSha,
               "ThrillhouseBot requested changes — see inline comments on the diff.",
-              "REQUEST_CHANGES",
+              EVENT_REQUEST_CHANGES,
               List.of()));
     } else if (posted == 0) {
+      // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
+      // force-push). Surface them in the review body so they are not invisible: a follow-up review
+      // posts no summary comment, so without this the findings would show only as a red check
+      // (#215).
       Log.warnf(
-          "No inline comments posted for %s/%s #%d — findings are in the PR summary comment only",
+          "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
           owner, repo, prNumber);
+      String body =
+          result.isFirstReview()
+              ? "ThrillhouseBot found "
+                  + result.findings().size()
+                  + " issue(s) that could not be anchored to the current diff — see the PR summary"
+                  + " comment above for details."
+              : unanchoredFindingsBody(result);
+      createReviewWithFallback(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          new GitHubReviewClient.CreateReviewRequest(
+              commitSha,
+              body,
+              result.reviewState() == ReviewState.REQUEST_CHANGES
+                  ? EVENT_REQUEST_CHANGES
+                  : EVENT_COMMENT,
+              List.of()));
     }
+  }
+
+  /**
+   * A review-body list of findings, used when none could be anchored as inline comments (their
+   * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
+   * which posts no summary comment — without it the findings would surface only as a red check run
+   * (#215).
+   */
+  private static String unanchoredFindingsBody(ReviewResult result) {
+    var sb = new StringBuilder();
+    sb.append("ThrillhouseBot found ")
+        .append(result.findings().size())
+        .append(" issue(s) that could not be anchored to the current diff:\n\n");
+    for (Finding f : result.findings()) {
+      sb.append("- **")
+          .append(f.risk().name())
+          .append(":** ")
+          .append(f.title())
+          .append(" (`")
+          .append(f.file())
+          .append(":")
+          .append(f.line())
+          .append("`)\n");
+    }
+    return sb.toString();
   }
 
   /**
@@ -1026,7 +1079,10 @@ public class ReviewOrchestrator {
       // carries no body; follow-ups post no summary and keep the message here.
       var req =
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha, result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE, "APPROVE", List.of());
+              commitSha,
+              result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE,
+              EVENT_APPROVE,
+              List.of());
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
@@ -1047,7 +1103,9 @@ public class ReviewOrchestrator {
         new GitHubReviewClient.CreateReviewRequest(
             commitSha,
             noIssuesBody(result),
-            result.reviewState() == ReviewState.REQUEST_CHANGES ? "REQUEST_CHANGES" : "COMMENT",
+            result.reviewState() == ReviewState.REQUEST_CHANGES
+                ? EVENT_REQUEST_CHANGES
+                : EVENT_COMMENT,
             List.of());
     createReviewWithFallback(auth, owner, repo, prNumber, req);
   }
