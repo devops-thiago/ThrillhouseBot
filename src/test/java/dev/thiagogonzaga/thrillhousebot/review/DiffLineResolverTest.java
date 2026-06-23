@@ -689,4 +689,22 @@ class DiffLineResolverTest {
     assertNull(emptyResolver.getLineText("dir/Main.java", 11));
     assertNull(emptyResolver.getLineText("Main.java", 11));
   }
+
+  @Test
+  void getLineTextReturnsNullOnAmbiguousSuffixCollision() {
+    // Both a/dir/Main.java and b/dir/Main.java carry right-side text and are FilePaths.same to the
+    // queried "dir/Main.java". With no unique resolution, getLineText must return null rather than
+    // guess whichever entry the map happens to iterate first (#218).
+    var other =
+        """
+        @@ -10,3 +10,4 @@
+         def unchanged():
+        -    old_line()
+        +    other_line()
+        +    added_line()
+        """;
+    var resolver = new DiffLineResolver(Map.of("a/dir/Main.java", PATCH, "b/dir/Main.java", other));
+
+    assertNull(resolver.getLineText("dir/Main.java", 11));
+  }
 }

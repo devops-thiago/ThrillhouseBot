@@ -102,15 +102,24 @@ public final class DiffLineResolver {
     if (exact != null && !exact.isEmpty()) {
       return exact.get(line);
     }
+    // Variant fallback: resolve to the UNIQUE FilePaths.same variant. On a suffix collision (two
+    // diff keys both matching, e.g. a/Handler.java and b/Handler.java) return null rather than
+    // guess
+    // whichever entry the map iterates first — mirrors resolveRightSideLinesForFileOrVariant, the
+    // safe direction (#218).
+    Map<Integer, String> resolved = null;
     for (var entry : rightSideLineTextByFile.entrySet()) {
       var value = entry.getValue();
       if (!entry.getKey().equals(file)
           && !value.isEmpty()
           && FilePaths.same(file, entry.getKey())) {
-        return value.get(line);
+        if (resolved != null) {
+          return null;
+        }
+        resolved = value;
       }
     }
-    return null;
+    return resolved != null ? resolved.get(line) : null;
   }
 
   /** Whether {@code needle} appears as a contiguous, in-order run within {@code haystack}. */
