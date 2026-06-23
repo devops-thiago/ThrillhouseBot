@@ -138,9 +138,9 @@ class PrDescriptionGeneratorTest {
 
     var diffArg = ArgumentCaptor.forClass(String.class);
     verify(describeAssistant).describe(diffArg.capture(), any(), any(), any());
-    // PromptTemplateEscaper wraps content in a Qute unparsed section and neutralizes the markers.
-    assertTrue(diffArg.getValue().startsWith("{|"));
+    // PromptTemplateEscaper neutralizes the diff-section markers so PR content can't fake them.
     assertFalse(diffArg.getValue().contains("<<<DIFF_END>>>"));
+    assertTrue(diffArg.getValue().contains("<<DIFF_END>>"));
   }
 
   @Test

@@ -238,7 +238,9 @@ public class DocGenerationService {
                   doc.symbol(), doc.suggestionOld(), doc.suggestionNew()),
               doc.file(),
               doc.line(),
-              "RIGHT"));
+              "RIGHT",
+              null,
+              null));
       return true;
     } catch (RuntimeException e) {
       Log.debugf(e, "GitHub rejected /add-docs suggestion for %s:%d", doc.file(), doc.line());
