@@ -68,21 +68,7 @@ public class FindingQuoteValidator {
     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
-      List<String> quoted = normalizedLines(finding.suggestionOld());
-      QuoteMatch match = matchQuote(quoted, index.linesFor(finding.file()));
-      // matchQuote judges presence per line by set membership, which cannot tell a genuine
-      // multi-line block from a recombination of real-but-scattered lines. Require a contiguous
-      // in-order run for a multi-line FULL verdict, demoting a scattered quote so a fabricated
-      // suggestion is not kept (#216). Single-line quotes are trivially contiguous and unaffected.
-      if (match == QuoteMatch.FULL
-          && quoted.size() >= 2
-          && !appearsContiguous(index.diffLinesFor(finding.file()), quoted)) {
-        match = QuoteMatch.PARTIAL;
-      }
-      if (match == QuoteMatch.FULL) {
-        match = checkAmbiguity(quoted, finding.line(), index.diffLinesFor(finding.file()));
-      }
-      switch (match) {
+      switch (classifyQuote(finding, index)) {
         case FULL, NO_QUOTE -> {
           if (descriptionCitesAbsentCode(finding, index)) {
             Log.infof(
@@ -132,6 +118,27 @@ public class FindingQuoteValidator {
         kept,
         response.previousFindingsStatus(),
         FindingVerificationService.recount(response.summary(), kept));
+  }
+
+  /**
+   * The quote verdict for one finding. Starts from {@link #matchQuote}'s per-line presence, then
+   * tightens a multi-line FULL verdict to also require a contiguous in-order run on one side of the
+   * diff — a recombination of real-but-scattered lines is demoted to PARTIAL so a fabricated
+   * suggestion is not kept (#216); single-line quotes are trivially contiguous and unaffected.
+   * Finally a FULL quote is disambiguated by line when it appears in multiple locations.
+   */
+  private QuoteMatch classifyQuote(ReviewResponse.Finding finding, DiffIndex index) {
+    List<String> quoted = normalizedLines(finding.suggestionOld());
+    QuoteMatch match = matchQuote(quoted, index.linesFor(finding.file()));
+    if (match == QuoteMatch.FULL
+        && quoted.size() >= 2
+        && !appearsContiguous(index.diffLinesFor(finding.file()), quoted)) {
+      return QuoteMatch.PARTIAL;
+    }
+    if (match == QuoteMatch.FULL) {
+      return checkAmbiguity(quoted, finding.line(), index.diffLinesFor(finding.file()));
+    }
+    return match;
   }
 
   enum QuoteMatch {
