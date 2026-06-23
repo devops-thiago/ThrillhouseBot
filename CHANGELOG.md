@@ -4,7 +4,7 @@ All notable changes to ThrillhouseBot.
 
 ## [0.2.1] — 2026-06-23
 
-A patch release of review-path correctness fixes from a line-by-line audit of the orchestrator and its follow-up tracking. Most are matching and anchoring bugs — duplicate merges that mishandled severity, quote and line lookups that bound to the wrong place, and pagination gaps that truncated comments and reviews — plus two approval-safety fixes (approving after the file fetch failed, and treating an unknown CI state as passing) and a stale "retry" notice posted after a review had already gone out.
+A patch release of review-path correctness fixes. Most are matching and anchoring bugs — duplicate merges that mishandled severity, quote and line lookups that bound to the wrong place, and pagination gaps that truncated comments and reviews — plus two approval-safety fixes (approving after the file fetch failed, and treating an unknown CI state as passing) and a stale "retry" notice posted after a review had already gone out.
 
 ### Changed
 
