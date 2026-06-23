@@ -57,6 +57,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.HELP, detector.detectCommand("please /help"));
     assertEquals(CommentCommand.SUMMARY, detector.detectCommand("/summary this PR"));
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("/describe"));
+    assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("/changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("/add-docs please"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
@@ -69,6 +70,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.HELP, detector.detectCommand("@thrillhousebot help"));
     assertEquals(CommentCommand.SUMMARY, detector.detectCommand("@thrillhousebot summary please"));
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("@thrillhousebot describe"));
+    assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("@thrillhousebot changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("@thrillhousebot add-docs"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("@thrillhousebot resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("@thrillhousebot pause"));
