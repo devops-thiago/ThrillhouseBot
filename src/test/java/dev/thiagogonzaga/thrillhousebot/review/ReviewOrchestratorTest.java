@@ -2346,6 +2346,97 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       verify(suggestionFormatter, never()).formatReviewComment(finding, false);
     }
+
+    @Test
+    void shouldPostMultiLineCommentWhenSuggestionSpansSeveralLines() {
+      var patch =
+          """
+          @@ -10,1 +10,4 @@
+           keep()
+          +first_new()
+          +second_new()
+          +third_new()
+          """;
+      var finding =
+          new Finding(
+              RiskLevel.HIGH,
+              "src/Main.java",
+              13,
+              "Bug",
+              "desc",
+              "first_new()\nsecond_new()\nthird_new()",
+              "fixed()");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver = new DiffLineResolver(Map.of("src/Main.java", patch));
+
+      var posted =
+          orchestrator.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, posted);
+      // The suggestion's old code spans lines 11-13, so the comment is posted as that range.
+      verify(reviewClient, times(1))
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.line() == 13
+                          && req.startLine() != null
+                          && req.startLine() == 11
+                          && "RIGHT".equals(req.side())
+                          && "RIGHT".equals(req.startSide())));
+    }
+
+    @Test
+    void shouldFallBackToSingleLineWhenMultiLineCommentRejected() {
+      var patch =
+          """
+          @@ -10,1 +10,3 @@
+           keep()
+          +alpha()
+          +beta()
+          """;
+      var finding =
+          new Finding(
+              RiskLevel.HIGH, "src/Main.java", 12, "Bug", "desc", "alpha()\nbeta()", "fixed()");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver = new DiffLineResolver(Map.of("src/Main.java", patch));
+
+      doThrow(new RuntimeException("422"))
+          .doReturn(
+              new GitHubReviewClient.PullRequestCommentResponse(1L, "ok", "src/Main.java", 12))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      var posted =
+          orchestrator.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, posted);
+      // First attempt is the multi-line range [11, 12] ...
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.startLine() != null && req.startLine() == 11 && req.line() == 12));
+      // ... the retry without a suggestion drops the range back to a single line.
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.startLine() == null && req.line() == 12));
+    }
   }
 
   @Nested

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -125,12 +126,20 @@ public interface GitHubReviewClient {
       String side,
       String body) {}
 
+  /**
+   * A pull request review comment. When {@code startLine} is set, the comment spans the inclusive
+   * range {@code start_line}..{@code line} so a GitHub suggestion replaces every line in it (#71);
+   * a single-line comment leaves both range fields null and they are omitted from the payload.
+   */
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   record CreatePullRequestCommentRequest(
       @JsonProperty("commit_id") String commitId,
       String body,
       String path,
       int line,
-      String side) {}
+      String side,
+      @JsonProperty("start_line") Integer startLine,
+      @JsonProperty("start_side") String startSide) {}
 
   /** Reply posted into an existing review thread, keyed by the thread's root comment id in path. */
   record ReplyToReviewCommentRequest(String body) {}

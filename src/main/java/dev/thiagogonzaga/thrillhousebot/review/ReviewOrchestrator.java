@@ -1150,17 +1150,41 @@ public class ReviewOrchestrator {
           finding.file(), finding.line(), resolvedLine);
     }
 
-    if (tryPostInlineComment(target, finding, findingId, resolvedLine, true)
+    // A suggestion whose old code spans several lines is posted as a multi-line comment so the
+    // GitHub suggestion overwrites the whole range, not just the anchor line (#71). The range is
+    // resolved from the verbatim old code's position in the diff; a blank/single-line/unresolvable
+    // anchor leaves it empty and the comment stays single-line.
+    var range =
+        finding.hasSuggestion()
+            ? lineResolver.resolveSuggestionRange(finding.file(), finding.suggestionOld())
+            : Optional.<DiffLineResolver.LineRange>empty();
+
+    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, true)
         || (finding.hasSuggestion()
-            && tryPostInlineComment(target, finding, findingId, resolvedLine, false))) {
+            && tryPostInlineComment(
+                target, finding, findingId, resolvedLine, Optional.empty(), false))) {
       return true;
     }
     Log.warnf("GitHub rejected inline comment for %s:%d", finding.file(), finding.line());
     return false;
   }
 
+  /**
+   * Posts one inline comment. When {@code range} is present the comment spans {@code
+   * start_line}..{@code line} (both RIGHT side); otherwise it anchors to the single {@code line}.
+   * The retry without a suggestion block always passes an empty range — a multi-line span is only
+   * meaningful with a suggestion to apply across it.
+   */
   private boolean tryPostInlineComment(
-      CommentTarget target, Finding finding, int findingId, int line, boolean includeSuggestion) {
+      CommentTarget target,
+      Finding finding,
+      int findingId,
+      int line,
+      Optional<DiffLineResolver.LineRange> range,
+      boolean includeSuggestion) {
+    int endLine = range.map(DiffLineResolver.LineRange::endLine).orElse(line);
+    Integer startLine = range.map(DiffLineResolver.LineRange::startLine).orElse(null);
+    String startSide = startLine != null ? "RIGHT" : null;
     try {
       reviewClient.createPullRequestComment(
           target.auth(),
@@ -1172,15 +1196,17 @@ public class ReviewOrchestrator {
               target.commitSha(),
               suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId),
               finding.file(),
-              line,
-              "RIGHT"));
+              endLine,
+              "RIGHT",
+              startLine,
+              startSide));
       return true;
     } catch (RuntimeException e) {
       Log.debugf(
           e,
           "Inline comment rejected for %s:%d (suggestion=%s)",
           finding.file(),
-          line,
+          endLine,
           includeSuggestion);
       return false;
     }
