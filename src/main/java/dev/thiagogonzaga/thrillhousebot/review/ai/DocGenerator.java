@@ -29,9 +29,14 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 @RegisterAiService
 public interface DocGenerator {
 
+  // @UserMessage MUST be on the method, not a parameter: on a parameter quarkus-langchain4j sends
+  // only that parameter's raw value as the user message and never renders this template, silently
+  // dropping prContext, projectStack and repoInstructions (see AiServicePromptRenderingTest and the
+  // #186 regression).
   @SystemMessage(DocGeneratorPrompts.SYSTEM)
+  @UserMessage(DocGeneratorPrompts.USER)
   String generate(
-      @UserMessage(DocGeneratorPrompts.USER) @V("diff") String diff,
+      @V("diff") String diff,
       @V("prContext") String prContext,
       @V("projectStack") String projectStack,
       @V("repoInstructions") String repoInstructions);
