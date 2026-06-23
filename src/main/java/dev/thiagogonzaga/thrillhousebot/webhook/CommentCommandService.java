@@ -44,11 +44,6 @@ public class CommentCommandService {
 
   private static final String ACCEPT = "application/vnd.github+json";
 
-  // GitHub serves 30 review comments per page by default; request the 100 max and walk a bounded
-  // number of pages so /resolve covers every bot finding thread, not just the first page.
-  private static final int COMMENTS_PER_PAGE = 100;
-  private static final int MAX_COMMENT_PAGES = 10;
-
   /** Posted when a review-generating command lands on a paused PR. */
   static final String PAUSED_NOTICE =
       "⏸️ ThrillhouseBot is paused on this PR. Comment `/resume` to re-enable reviews.";
@@ -291,24 +286,17 @@ public class CommentCommandService {
    */
   private List<Long> botRootCommentIds(String auth, CommandContext ctx) {
     var ids = new ArrayList<Long>();
-    List<GitHubReviewClient.PullRequestComment> comments;
-    int page = 1;
-    do {
-      comments =
-          reviewClient.listPullRequestComments(
-              auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber(), COMMENTS_PER_PAGE, page);
-      if (comments != null) {
-        for (var c : comments) {
-          if (c.inReplyToId() == null
-              && c.user() != null
-              && triggerDetector.isBotComment(c.user().login())) {
-            ids.add(c.id());
-          }
-        }
+    // The client walks every page, so a PR with many comments does not leave later-page bot threads
+    // unresolved.
+    for (var c :
+        reviewClient.listPullRequestComments(
+            auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      if (c.inReplyToId() == null
+          && c.user() != null
+          && triggerDetector.isBotComment(c.user().login())) {
+        ids.add(c.id());
       }
-      page++;
-      // A short (or absent) page is GitHub's last-page marker; a full page means walk the next one.
-    } while (comments != null && comments.size() == COMMENTS_PER_PAGE && page <= MAX_COMMENT_PAGES);
+    }
     return ids;
   }
 

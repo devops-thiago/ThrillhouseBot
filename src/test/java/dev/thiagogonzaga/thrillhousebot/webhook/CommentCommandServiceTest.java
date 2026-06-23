@@ -28,7 +28,6 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -161,8 +160,7 @@ class CommentCommandServiceTest {
     var botReply = comment(101L, 100L, "thrillhousebot[bot]");
     var humanRoot = comment(200L, null, "octocat");
     var authorless = new PullRequestComment(300L, null, "src/Foo.java", "body", null);
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(botRoot, botRoot2, botReply, humanRoot, authorless));
     when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(
@@ -186,37 +184,13 @@ class CommentCommandServiceTest {
   @Test
   void resolveReportsNothingToDoWhenNoBotThreads() {
     authorize(true);
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(comment(200L, null, "octocat")));
 
     service.handle(ctx(CommentCommand.RESOLVE));
 
     verify(reviewThreadService, never()).threadsByRootComment(any(), any(), any(), anyInt());
     assertTrue(postedBody().contains("No open"));
-  }
-
-  @Test
-  void resolveWalksAllCommentPages() {
-    authorize(true);
-    var page1 = new ArrayList<PullRequestComment>();
-    for (int i = 1; i <= 100; i++) {
-      page1.add(comment(i, null, "thrillhousebot[bot]"));
-    }
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
-        .thenReturn(page1);
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(2)))
-        .thenReturn(List.of());
-    when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(Map.of());
-
-    service.handle(ctx(CommentCommand.RESOLVE));
-
-    // A full first page must force a second-page fetch so later-page bot threads are not missed.
-    verify(reviewClient)
-        .listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(2));
   }
 
   @Test
@@ -299,8 +273,7 @@ class CommentCommandServiceTest {
   @Test
   void resolveContinuesWhenOneThreadResolutionThrows() {
     authorize(true);
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(
             List.of(
                 comment(100L, null, "thrillhousebot[bot]"),
@@ -323,8 +296,7 @@ class CommentCommandServiceTest {
   @Test
   void resolveSkipsAlreadyResolvedThreads() {
     authorize(true);
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
+    when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(comment(100L, null, "thrillhousebot[bot]")));
     when(reviewThreadService.threadsByRootComment(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T100", true)));
@@ -337,45 +309,12 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void resolveStopsAtMaxCommentPages() {
-    authorize(true);
-    var fullPage = new ArrayList<PullRequestComment>();
-    for (int i = 1; i <= 100; i++) {
-      fullPage.add(comment(i, null, "octocat"));
-    }
-    // Every page is full, so the walk is bounded by the page cap rather than a short page.
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), anyInt()))
-        .thenReturn(fullPage);
-
-    service.handle(ctx(CommentCommand.RESOLVE));
-
-    verify(reviewClient, times(10))
-        .listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), anyInt());
-    assertTrue(postedBody().contains("No open"));
-  }
-
-  @Test
-  void resolveHandlesNullCommentsPage() {
-    authorize(true);
-    when(reviewClient.listPullRequestComments(
-            any(), any(), eq("owner"), eq("repo"), eq(7), eq(100), eq(1)))
-        .thenReturn(null);
-
-    service.handle(ctx(CommentCommand.RESOLVE));
-
-    verify(reviewThreadService, never()).threadsByRootComment(any(), any(), any(), anyInt());
-    assertTrue(postedBody().contains("No open"));
-  }
-
-  @Test
   void resolveIgnoredWhenUnauthorized() {
     authorize(false);
 
     service.handle(ctx(CommentCommand.RESOLVE));
 
-    verify(reviewClient, never())
-        .listPullRequestComments(any(), any(), any(), any(), anyInt(), anyInt(), anyInt());
+    verify(reviewClient, never()).listPullRequestComments(any(), any(), any(), any(), anyInt());
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 

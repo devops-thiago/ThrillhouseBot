@@ -657,8 +657,9 @@ public class ReviewOrchestrator {
   List<GitHubReviewClient.PullRequestComment> fetchPullRequestComments(
       String auth, String owner, String repo, int prNumber) {
     try {
-      var comments = reviewClient.listPullRequestComments(auth, ACCEPT, owner, repo, prNumber);
-      return comments != null ? comments : List.<GitHubReviewClient.PullRequestComment>of();
+      // The client walks every page and never returns null, so the only failure to absorb here is
+      // the fetch throwing.
+      return reviewClient.listPullRequestComments(auth, ACCEPT, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch PR inline comments, continuing without thread context", e);
       return List.of();
