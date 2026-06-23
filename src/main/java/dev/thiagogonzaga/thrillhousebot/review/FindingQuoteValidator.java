@@ -69,20 +69,6 @@ public class FindingQuoteValidator {
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
       switch (classifyQuote(finding, index)) {
-        case FULL, NO_QUOTE -> {
-          if (descriptionCitesAbsentCode(finding, index)) {
-            Log.infof(
-                "Finding '%s' (%s:%d) cites code in its description that appears nowhere in the diff —"
-                    + DEMOTION_SUFFIX,
-                finding.title(),
-                finding.file(),
-                finding.line());
-            kept.add(withoutSuggestion(finding));
-            changed = true;
-          } else {
-            kept.add(finding);
-          }
-        }
         case PARTIAL -> {
           Log.infof(
               "Finding '%s' (%s:%d) quotes code only partially present in the diff —"
@@ -108,6 +94,23 @@ public class FindingQuoteValidator {
               "Dropping finding '%s' (%s:%d) — the code it quotes does not appear in the diff",
               finding.title(), finding.file(), finding.line());
           changed = true;
+        }
+        // FULL and NO_QUOTE keep the finding; default also keeps any future verdict rather than
+        // silently dropping it. Being a real, test-covered default removes the enum switch's
+        // synthetic-default branch, which otherwise left this line only partially covered.
+        default -> {
+          if (descriptionCitesAbsentCode(finding, index)) {
+            Log.infof(
+                "Finding '%s' (%s:%d) cites code in its description that appears nowhere in the diff —"
+                    + DEMOTION_SUFFIX,
+                finding.title(),
+                finding.file(),
+                finding.line());
+            kept.add(withoutSuggestion(finding));
+            changed = true;
+          } else {
+            kept.add(finding);
+          }
         }
       }
     }
