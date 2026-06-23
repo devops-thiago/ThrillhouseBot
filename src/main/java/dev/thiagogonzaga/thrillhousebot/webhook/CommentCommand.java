@@ -31,6 +31,8 @@ public enum CommentCommand {
   SUMMARY,
   /** Suggest an improved PR title and description generated from the diff. */
   DESCRIBE,
+  /** Generate docstrings/inline docs for changed symbols as committable suggestions. */
+  ADD_DOCS,
   /** Resolve the bot's outstanding finding threads on the PR. */
   RESOLVE,
   /** Silence the bot on the PR until {@link #RESUME}. */

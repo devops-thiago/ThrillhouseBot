@@ -17,10 +17,12 @@ ignore:
   - "src/main/java/**/DashboardSpaResource.java"
   # Prompt constants — no executable logic
   - "src/main/java/**/review/ai/PrReviewPrompts.java"
+  - "src/main/java/**/review/ai/DocGeneratorPrompts.java"
   # Review DTOs — pure data records
   - "src/main/java/**/review/Finding.java"
   - "src/main/java/**/review/ReviewResult.java"
   - "src/main/java/**/review/ai/ReviewResponse.java"
+  - "src/main/java/**/review/ai/DocGenerationResponse.java"
   # REST client interfaces — no implementation to test
   - "src/main/java/**/GitHub*Client.java"
   - "src/main/java/**/GitHubTokenApi.java"
