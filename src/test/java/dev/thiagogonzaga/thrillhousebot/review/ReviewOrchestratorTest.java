@@ -3651,6 +3651,31 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldHoldApprovalWhenAStatusStateIsUnrecognized() {
+      // A commit status whose state is neither success/pending/failure/error (here a malformed
+      // value; null behaves identically) is not a confirmed pass — it must surface as a pending
+      // offending check so it holds the approval rather than clearing the gate (#217).
+      var passRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "completed", "success", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(1, List.of(passRun)));
+      var unknownStatus =
+          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "weird", "deploy", "desc");
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CombinedStatus("pending", 1, List.of(unknownStatus)));
+
+      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertEquals(1, result.size());
+      var check = result.get(0);
+      assertEquals("deploy", check.name());
+      assertTrue(check.isPending());
+      assertFalse(check.isFailing());
+    }
+
+    @Test
     void shouldFilterByRequiredContextsWhenProvided() {
       // All four checks are failing; only the two in requiredContexts must surface as offending.
       var run1 =
