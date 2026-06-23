@@ -1279,6 +1279,83 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldNotPostRetryNoticeWhenAStepFailsAfterTheResultIsPosted() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(labeler.fetchExistingLabels(anyString(), anyString(), anyString()))
+            .thenReturn(List.of());
+        var summary =
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of());
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+        // A trailing step blows up only AFTER the verdict, summary and review are already posted.
+        doThrow(new RuntimeException("labeler boom")).when(labeler).applyOrSuggest(any());
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // The clean approval was posted — the result is surfaced.
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+        // ...so the post-result failure must NOT post a "could not be completed — retry" notice,
+        // flip the session to failed, or broadcast a failure over the posted result (#220).
+        verify(commentClient, never())
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("could not be completed")));
+        verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+      }
+    }
+
+    @Test
     void shouldPersistAiResponseJsonWhenUpdatingCompletedSession() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);

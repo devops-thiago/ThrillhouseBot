@@ -211,6 +211,11 @@ public class ReviewOrchestrator {
     // the same failure path as any other error — comment, failed session, broadcast.
     var req = request;
     var checkRunId = -1L;
+    // Once the check-run verdict is committed, the review result is visible to the user; a failure
+    // in
+    // any later step must not flip that verdict to failure nor post a "retry" notice over it
+    // (#220).
+    var resultSurfaced = false;
     try {
       var resolved = resolveMissingPrDetails(auth, request);
       req = resolved;
@@ -363,6 +368,10 @@ public class ReviewOrchestrator {
               checkTitle,
               checkSummary,
               sessionUrl(session)));
+      // The verdict is now on the check run — the authoritative, user-visible result. From here a
+      // late failure (summary/review post, thread resolution, labels, persistence, broadcast) is a
+      // post-result hiccup, not a reason to retract the verdict or ask the user to re-run (#220).
+      resultSurfaced = true;
 
       // Summary goes first so it tops the PR conversation, before the inline finding comments.
       // Posted on clean first reviews too: the celebration line lives inside the summary
@@ -398,7 +407,18 @@ public class ReviewOrchestrator {
           "Review complete for %s/%s #%d: %d findings, state=%s",
           req.owner(), req.repo(), req.prNumber(), result.totalFindings(), result.reviewState());
     } catch (RuntimeException e) {
-      handleReviewFailure(auth, req, session, checkRunId, e);
+      if (resultSurfaced) {
+        // The result is already posted; log the trailing failure but leave the verdict intact so we
+        // don't overwrite it with a misleading "could not be completed — retry" notice (#220).
+        Log.warnf(
+            e,
+            "Review for %s/%s #%d was posted, but a post-result step failed",
+            req.owner(),
+            req.repo(),
+            req.prNumber());
+      } else {
+        handleReviewFailure(auth, req, session, checkRunId, e);
+      }
     }
   }
 
