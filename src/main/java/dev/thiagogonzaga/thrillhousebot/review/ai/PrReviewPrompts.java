@@ -182,6 +182,10 @@ public final class PrReviewPrompts {
               Follow that section's guidance on which labels you may use, pick the few most
               relevant (typically 1-3), and emit an empty array if none clearly apply. Omit the
               field entirely when no such section is present.
+            - walkthrough_diagram: ONLY when a "Control-Flow Diagram Request" section is provided,
+              a single Mermaid diagram of the affected control flow, following that section's size
+              and format rules; use an empty string for trivial changes. Omit the field entirely
+              when no such section is present.
 
             If no issues found: return empty findings array and total_findings: 0.
 
@@ -238,6 +242,26 @@ public final class PrReviewPrompts {
             {{repoInstructions}}
             {{/if}}
             """;
+
+  /**
+   * Trailing-guidance block that turns on the optional Mermaid control-flow diagram. Injected into
+   * the prompt's {@code repoInstructions} slot only when the diagram feature is enabled, so the
+   * model self-gates the {@code walkthrough_diagram} field on its presence (mirroring how the label
+   * section gates {@code suggested_labels}). No extra AI call — it rides the existing review pass.
+   */
+  public static final String DIAGRAM_REQUEST =
+      """
+            ## Control-Flow Diagram Request
+            When — and only when — this change is non-trivial (it alters control flow, adds or
+            reorders interactions between components, or introduces a new multi-step path),
+            populate summary.walkthrough_diagram with a single Mermaid diagram of the AFFECTED
+            control flow:
+            - Use a `flowchart TD` or a `sequenceDiagram` — nothing else.
+            - Keep it small: at most ~12 nodes / participants, modelling only the changed path,
+              not the whole system.
+            - Emit ONLY the raw Mermaid source: no ``` fences, no prose, no Markdown around it.
+            - For trivial changes (small local edits, dependency bumps, doc-only changes), leave
+              walkthrough_diagram as an empty string.""";
 
   private PrReviewPrompts() {}
 }

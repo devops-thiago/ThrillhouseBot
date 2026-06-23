@@ -58,6 +58,9 @@ class ReviewOrchestratorTest {
 
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
+  // Created in setUp() (not @Mock) so individual tests can opt into the diagram feature.
+  private ThrillhouseConfig.DiagramConfig diagramConfig;
+
   @Mock private GitHubAuthClient authClient;
 
   @Mock private GitHubCheckRunClient checkRunClient;
@@ -112,6 +115,9 @@ class ReviewOrchestratorTest {
     orchestrator = newOrchestrator(mapper);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
+    // Walkthrough diagram is off by default; individual tests opt in by re-stubbing enabled().
+    diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
+    when(reviewConfig.diagram()).thenReturn(diagramConfig);
     // Mimic the real create(): persist assigns an id to new entities only
     doAnswer(
             invocation -> {
@@ -846,6 +852,70 @@ class ReviewOrchestratorTest {
         var instructionsSection = inputsCaptor.getValue().repoInstructions();
         assertTrue(instructionsSection.contains(PromptTemplateEscaper.escape("Focus on security")));
         assertTrue(instructionsSection.contains("(from .github/thrillhousebot.md)"));
+      }
+    }
+
+    @Test
+    void shouldInjectDiagramRequestIntoPromptWhenDiagramEnabled() {
+      when(diagramConfig.enabled()).thenReturn(true);
+
+      assertTrue(captureRepoInstructions().contains("Control-Flow Diagram Request"));
+    }
+
+    @Test
+    void shouldNotInjectDiagramRequestWhenDiagramDisabled() {
+      // diagramConfig.enabled() defaults to false from setUp()
+      assertFalse(captureRepoInstructions().contains("Control-Flow Diagram Request"));
+    }
+
+    /** Runs review() far enough to capture the prompt and returns its repoInstructions slot. */
+    private String captureRepoInstructions() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        // Stop right after the prompt is built so the test stays focused on prompt assembly.
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenThrow(new RuntimeException("stop early"));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        var inputsCaptor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+        verify(aiReviewService).review(eq(session), inputsCaptor.capture());
+        return inputsCaptor.getValue().repoInstructions();
       }
     }
 

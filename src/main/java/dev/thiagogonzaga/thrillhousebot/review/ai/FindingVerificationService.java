@@ -283,7 +283,8 @@ public class FindingVerificationService {
         original.prPurpose(),
         original.descriptionGaps(),
         original.suggestedLabels(),
-        original.fileSummaries());
+        original.fileSummaries(),
+        original.walkthroughDiagram());
   }
 
   private static int countRisk(List<ReviewResponse.Finding> findings, RiskLevel risk) {
