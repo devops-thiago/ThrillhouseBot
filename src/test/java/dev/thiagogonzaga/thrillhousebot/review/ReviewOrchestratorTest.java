@@ -3388,13 +3388,13 @@ class ReviewOrchestratorTest {
   class FetchPullRequestComments {
 
     @Test
-    void shouldReturnEmptyListWhenClientReturnsNullOrThrows() {
+    void shouldReturnEmptyListWhenClientThrows() {
+      // The paginating client never returns null, so the only failure to absorb is the fetch
+      // throwing — it degrades to an empty list rather than aborting the review.
       when(reviewClient.listPullRequestComments(
               anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(null)
           .thenThrow(new RuntimeException("boom"));
 
-      assertTrue(orchestrator.fetchPullRequestComments("auth", "owner", "repo", 1).isEmpty());
       assertTrue(orchestrator.fetchPullRequestComments("auth", "owner", "repo", 1).isEmpty());
     }
 

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import java.util.ArrayList;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
@@ -45,25 +46,16 @@ public interface GitHubReviewClient {
       @PathParam("repo") String repo,
       @PathParam("pullNumber") int pullNumber);
 
-  @GET
-  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
-  @Produces(MediaType.APPLICATION_JSON)
-  List<PullRequestComment> listPullRequestComments(
-      @HeaderParam("Authorization") String auth,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("pullNumber") int pullNumber);
+  // GitHub serves 30 inline review comments per page by default; request the 100 max and walk a
+  // bounded number of pages so follow-up dedup, /resolve and the unresolved-status backstop never
+  // run on a silently truncated set on a busy PR.
+  int COMMENTS_PER_PAGE = 100;
+  int MAX_COMMENT_PAGES = 10;
 
-  /**
-   * Paged variant of {@link #listPullRequestComments}. GitHub serves 30 comments per page by
-   * default; callers that need every comment (e.g. {@code /resolve}) must request a larger {@code
-   * per_page} and walk the pages until a short one.
-   */
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)
-  List<PullRequestComment> listPullRequestComments(
+  List<PullRequestComment> listPullRequestCommentsPage(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -71,6 +63,30 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
+
+  /**
+   * Lists a PR's inline review comments, walking pages of {@value #COMMENTS_PER_PAGE} up to {@value
+   * #MAX_COMMENT_PAGES} pages so a busy PR's threads are not silently truncated. A single-page
+   * fetch caps at GitHub's 30-per-page default and drops everything past page one, which would make
+   * follow-up dedup re-raise replied findings and leave addressed threads unresolved. Stops at the
+   * first short/empty page.
+   */
+  default List<PullRequestComment> listPullRequestComments(
+      String auth, String accept, String owner, String repo, int pullNumber) {
+    var all = new ArrayList<PullRequestComment>();
+    List<PullRequestComment> batch;
+    int page = 1;
+    do {
+      batch =
+          listPullRequestCommentsPage(
+              auth, accept, owner, repo, pullNumber, COMMENTS_PER_PAGE, page);
+      if (batch != null) {
+        all.addAll(batch);
+      }
+      page++;
+    } while (batch != null && batch.size() == COMMENTS_PER_PAGE && page <= MAX_COMMENT_PAGES);
+    return all;
+  }
 
   @POST
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
