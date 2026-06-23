@@ -36,15 +36,46 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       CreateReviewRequest request);
 
+  // GitHub serves 30 reviews per page by default; request the 100 max and walk a bounded number of
+  // pages so first-review detection, the approve backstop, and dismissing a stale pending bot
+  // review
+  // all see the whole set — a pending bot review past page one would otherwise be missed (#219).
+  int REVIEWS_PER_PAGE = 100;
+  int MAX_REVIEW_PAGES = 10;
+
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews")
   @Produces(MediaType.APPLICATION_JSON)
-  List<ReviewResponse> listReviews(
+  List<ReviewResponse> listReviewsPage(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
-      @PathParam("pullNumber") int pullNumber);
+      @PathParam("pullNumber") int pullNumber,
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
+
+  /**
+   * Lists a PR's reviews, walking pages of {@value #REVIEWS_PER_PAGE} up to {@value
+   * #MAX_REVIEW_PAGES} pages so a long-lived PR's reviews are not silently truncated. A single-page
+   * fetch caps at GitHub's 30-per-page default, which would hide a prior bot review (skewing
+   * first-review detection and the backstop) and leave a pending bot review past page one
+   * undismissed. Stops at the first short/empty page.
+   */
+  default List<ReviewResponse> listReviews(
+      String auth, String accept, String owner, String repo, int pullNumber) {
+    var all = new ArrayList<ReviewResponse>();
+    List<ReviewResponse> batch;
+    int page = 1;
+    do {
+      batch = listReviewsPage(auth, accept, owner, repo, pullNumber, REVIEWS_PER_PAGE, page);
+      if (batch != null) {
+        all.addAll(batch);
+      }
+      page++;
+    } while (batch != null && batch.size() == REVIEWS_PER_PAGE && page <= MAX_REVIEW_PAGES);
+    return all;
+  }
 
   // GitHub serves 30 inline review comments per page by default; request the 100 max and walk a
   // bounded number of pages so follow-up dedup, /resolve and the unresolved-status backstop never

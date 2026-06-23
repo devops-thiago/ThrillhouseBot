@@ -25,16 +25,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Covers the {@code listPullRequestComments} default pagination loop: GitHub returns only 30 inline
- * review comments per page by default, so follow-up dedup, {@code /resolve} and the
- * unresolved-status backstop would run on a silently truncated set on a busy PR. Comments are
- * assembled by walking pages of {@value GitHubReviewClient#COMMENTS_PER_PAGE}, bounded by {@value
- * GitHubReviewClient#MAX_COMMENT_PAGES}.
+ * Covers the default pagination loops. GitHub serves only 30 rows per page by default, so a
+ * single-page fetch would silently truncate on a busy/long-lived PR: {@code
+ * listPullRequestComments} feeds follow-up dedup, {@code /resolve} and the unresolved-status
+ * backstop, and {@code listReviews} feeds first-review detection, the approve backstop, and
+ * dismissing a stale pending bot review. Each walks pages of its {@code *_PER_PAGE} bounded by its
+ * {@code MAX_*_PAGES}.
  */
 class GitHubReviewClientTest {
 
@@ -106,5 +108,68 @@ class GitHubReviewClientTest {
     when(client.listPullRequestCommentsPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(null);
 
     assertEquals(0, client.listPullRequestComments("auth", "json", "o", "r", 7).size());
+  }
+
+  private static List<ReviewResponse> reviewPage(int count) {
+    return IntStream.range(0, count)
+        .mapToObj(
+            i -> new ReviewResponse(i, "body", "COMMENTED", "sha", new ReviewResponse.User("u")))
+        .toList();
+  }
+
+  /** A mock whose default {@code listReviews} runs the real pagination loop. */
+  private static GitHubReviewClient reviewPagingClient() {
+    var client = mock(GitHubReviewClient.class);
+    when(client.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        .thenCallRealMethod();
+    return client;
+  }
+
+  @Test
+  void walksEveryReviewPageUntilAShortPage() {
+    var client = reviewPagingClient();
+    when(client.listReviewsPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(reviewPage(100));
+    when(client.listReviewsPage("auth", "json", "o", "r", 7, 100, 2)).thenReturn(reviewPage(30));
+
+    var all = client.listReviews("auth", "json", "o", "r", 7);
+
+    // 130 reviews across 2 pages — a pending bot review past page one is not missed.
+    assertEquals(130, all.size());
+    verify(client).listReviewsPage("auth", "json", "o", "r", 7, 100, 2);
+    verify(client, never()).listReviewsPage("auth", "json", "o", "r", 7, 100, 3);
+  }
+
+  @Test
+  void stopsAfterOneReviewPageWhenNotFull() {
+    var client = reviewPagingClient();
+    when(client.listReviewsPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(reviewPage(5));
+
+    assertEquals(5, client.listReviews("auth", "json", "o", "r", 7).size());
+    verify(client, times(1))
+        .listReviewsPage(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+  }
+
+  @Test
+  void reviewsAreBoundedByMaxPages() {
+    var client = reviewPagingClient();
+    when(client.listReviewsPage(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+        .thenReturn(reviewPage(100));
+
+    var all = client.listReviews("auth", "json", "o", "r", 7);
+
+    assertEquals(100 * GitHubReviewClient.MAX_REVIEW_PAGES, all.size());
+    verify(client, times(GitHubReviewClient.MAX_REVIEW_PAGES))
+        .listReviewsPage(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+  }
+
+  @Test
+  void toleratesANullReviewPage() {
+    var client = reviewPagingClient();
+    when(client.listReviewsPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(null);
+
+    assertEquals(0, client.listReviews("auth", "json", "o", "r", 7).size());
   }
 }
