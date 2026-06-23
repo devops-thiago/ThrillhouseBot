@@ -550,6 +550,27 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldRouteAddDocsCommandToCommandService() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/add-docs")).thenReturn(CommentCommand.ADD_DOCS);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/add-docs")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    var ctx = org.mockito.ArgumentCaptor.forClass(CommentCommandService.CommandContext.class);
+    verify(commentCommandService).handle(ctx.capture());
+    assertEquals(CommentCommand.ADD_DOCS, ctx.getValue().command());
+    assertEquals(77, ctx.getValue().prNumber());
+    // The command service (not the controller) does the authorization and the AI work.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldIgnoreEditedIssueComment() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 

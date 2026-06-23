@@ -40,7 +40,7 @@ code review.
 - Follow-up reviews track whether earlier findings were addressed or justified
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown
-- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/resolve`, `/pause`, `/resume`
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/add-docs`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
@@ -73,6 +73,7 @@ mention form, e.g. `@Thrillhousebot review`.
 | `/review` | Run (or re-run) a full review of the PR | write |
 | `/summary` | Post the PR summary, but only if one has not been generated yet (otherwise no-op) | write |
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
+| `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions | write |
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
@@ -86,6 +87,12 @@ AI budget.
 ignores `/review` and `/summary`, and does not answer `@thrillhousebot` mentions (it replies
 once to say it is paused). `/resume` lifts the pause. `/help` and `/resolve` keep working while
 paused.
+
+**`/add-docs`** — on demand, the bot reads the diff and proposes documentation comments for
+the public symbols changed in the PR, honoring the repository instructions and each file's
+language. Each suggestion is a committable `suggestion` block placed on the symbol's
+declaration line, so it only inserts docs without rewriting code. It spends AI budget per
+run; operators can turn it off with `REVIEW_ADD_DOCS_ENABLED=false`.
 
 ## Quick start
 
@@ -191,9 +198,16 @@ variables are the ones you will change per provider:
 | `WEBHOOK_SKIP_DRAFTS` | Skip auto-review while a PR is a draft (reviewed once marked ready / on later pushes) | `false` |
 | `WEBHOOK_REQUIRED_LABELS` | Comma-separated labels; only auto-review PRs carrying at least one (case-insensitive) | _(empty — no gate)_ |
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
+<<<<<<< HEAD
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
+=======
+| `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`) | _(empty — all branches)_ |
+| `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist) | _(empty)_ |
+| `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer maintainer replies to findings and `@thrillhousebot` mentions in PR threads with an AI reply | `true` |
+| `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
+>>>>>>> 2626ed1 (feat(review): add /add-docs command to generate docstrings on request (#56) (#177))
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |

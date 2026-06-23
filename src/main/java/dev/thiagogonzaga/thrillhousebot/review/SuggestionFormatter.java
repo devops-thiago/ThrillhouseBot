@@ -43,6 +43,21 @@ public class SuggestionFormatter {
   }
 
   /**
+   * Builds the body of an {@code /add-docs} inline comment: a short header naming the symbol,
+   * followed by the documentation as a committable suggestion block. The suggestion block
+   * reproduces the original declaration line so applying it only inserts documentation.
+   */
+  public String formatDocComment(String symbol, String suggestionOld, String suggestionNew) {
+    var sb = new StringBuilder("**📝 Documentation");
+    if (symbol != null && !symbol.isBlank()) {
+      sb.append(" for `").append(symbol.strip()).append("`");
+    }
+    sb.append("**\n");
+    sb.append(formatSuggestionBlock(suggestionOld, suggestionNew));
+    return sb.toString();
+  }
+
+  /**
    * Builds a full review comment body for a single finding. Includes the risk emoji, title,
    * description, and suggestion block (if applicable).
    */

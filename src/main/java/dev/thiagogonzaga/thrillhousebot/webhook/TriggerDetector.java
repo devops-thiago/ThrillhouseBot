@@ -67,6 +67,7 @@ public class TriggerDetector {
     patterns.put(CommentCommand.HELP, patternsFor("help"));
     patterns.put(CommentCommand.SUMMARY, patternsFor("summary"));
     patterns.put(CommentCommand.DESCRIBE, patternsFor("describe"));
+    patterns.put(CommentCommand.ADD_DOCS, patternsFor("add-docs"));
     patterns.put(CommentCommand.RESOLVE, patternsFor("resolve"));
     patterns.put(CommentCommand.PAUSE, patternsFor("pause"));
     patterns.put(CommentCommand.RESUME, patternsFor("resume"));
