@@ -111,7 +111,50 @@ public class ReviewResponseParser {
       trimmed = trimmed.substring(start);
     }
 
-    return trimmed;
+    return escapeControlCharsInStrings(trimmed);
+  }
+
+  /**
+   * Escapes raw control characters (U+0000–U+001F) that appear inside JSON string literals. Models
+   * sometimes emit a literal tab or newline inside a string field — for example verbatim source in
+   * {@code suggestion_old}/{@code suggestion_new}, escaping {@code \n} but leaving a tab raw —
+   * which strict JSON parsing rejects, failing the whole review and forcing a full-cost retry.
+   * Control characters outside string literals are valid JSON whitespace and are left untouched, as
+   * are already-escaped sequences.
+   */
+  static String escapeControlCharsInStrings(String json) {
+    var out = new StringBuilder(json.length() + 16);
+    var inString = false;
+    var escaped = false;
+    for (var i = 0; i < json.length(); i++) {
+      var c = json.charAt(i);
+      if (escaped) {
+        out.append(c);
+        escaped = false;
+      } else if (c == '\\') {
+        out.append(c);
+        escaped = true;
+      } else if (c == '"') {
+        inString = !inString;
+        out.append(c);
+      } else if (inString && c < 0x20) {
+        appendEscapedControlChar(out, c);
+      } else {
+        out.append(c);
+      }
+    }
+    return out.toString();
+  }
+
+  private static void appendEscapedControlChar(StringBuilder out, char c) {
+    switch (c) {
+      case '\t' -> out.append("\\t");
+      case '\n' -> out.append("\\n");
+      case '\r' -> out.append("\\r");
+      case '\b' -> out.append("\\b");
+      case '\f' -> out.append("\\f");
+      default -> out.append(String.format("\\u%04x", (int) c));
+    }
   }
 
   /** Index of whichever JSON opener comes first; -1 when neither is present. */

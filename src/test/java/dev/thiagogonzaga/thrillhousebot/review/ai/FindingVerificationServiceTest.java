@@ -219,6 +219,22 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void shouldTolerateRawControlCharsInVerifierResponse() {
+    // The verifier sometimes echoes code in its reason with a raw tab/newline left unescaped; the
+    // verdict must still be applied (the downgrade below only lands if the response parsed).
+    ReviewResponse original = response(finding("critical", "high", "Speculative"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            "{\"verdicts\": [{\"id\": 1, \"verdict\": \"downgraded\", \"risk\": \"medium\","
+                + " \"confidence\": \"low\", \"reason\": \"guard\tmissing\nhere\"}]}");
+
+    var result = service.verify(original, "diff", "stack", "");
+
+    assertEquals("medium", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void downgradeShouldNeverRaiseRiskOrConfidence() {
     ReviewResponse original = response(finding("medium", "low", "Already modest"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
