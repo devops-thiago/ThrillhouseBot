@@ -61,6 +61,11 @@ public class ReviewOrchestrator {
   // Check run conclusion constants
   private static final String CONCLUSION_FAILURE = "failure";
 
+  // PR review event types submitted via createReview.
+  private static final String EVENT_APPROVE = "APPROVE";
+  private static final String EVENT_REQUEST_CHANGES = "REQUEST_CHANGES";
+  private static final String EVENT_COMMENT = "COMMENT";
+
   // CI check evaluation constants
   private static final String CI_SUCCESS = "success";
   private static final String CI_PENDING = "pending";
@@ -1007,7 +1012,7 @@ public class ReviewOrchestrator {
           new GitHubReviewClient.CreateReviewRequest(
               commitSha,
               "ThrillhouseBot requested changes — see inline comments on the diff.",
-              "REQUEST_CHANGES",
+              EVENT_REQUEST_CHANGES,
               List.of()));
     } else if (posted == 0) {
       // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
@@ -1032,7 +1037,9 @@ public class ReviewOrchestrator {
           new GitHubReviewClient.CreateReviewRequest(
               commitSha,
               body,
-              result.reviewState() == ReviewState.REQUEST_CHANGES ? "REQUEST_CHANGES" : "COMMENT",
+              result.reviewState() == ReviewState.REQUEST_CHANGES
+                  ? EVENT_REQUEST_CHANGES
+                  : EVENT_COMMENT,
               List.of()));
     }
   }
@@ -1072,7 +1079,10 @@ public class ReviewOrchestrator {
       // carries no body; follow-ups post no summary and keep the message here.
       var req =
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha, result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE, "APPROVE", List.of());
+              commitSha,
+              result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE,
+              EVENT_APPROVE,
+              List.of());
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
@@ -1093,7 +1103,9 @@ public class ReviewOrchestrator {
         new GitHubReviewClient.CreateReviewRequest(
             commitSha,
             noIssuesBody(result),
-            result.reviewState() == ReviewState.REQUEST_CHANGES ? "REQUEST_CHANGES" : "COMMENT",
+            result.reviewState() == ReviewState.REQUEST_CHANGES
+                ? EVENT_REQUEST_CHANGES
+                : EVENT_COMMENT,
             List.of());
     createReviewWithFallback(auth, owner, repo, prNumber, req);
   }
