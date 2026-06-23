@@ -457,6 +457,100 @@ class PrSummaryGeneratorTest {
 
   private static ReviewResponse.Summary summaryWithFiles(ReviewResponse.FileSummary... files) {
     return new ReviewResponse.Summary(
-        0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(files));
+        0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(files), null);
+  }
+
+  @Test
+  void shouldRenderWalkthroughDiagramAsCollapsibleMermaidBlock() {
+    var aiSummary = summaryWithDiagram("flowchart TD\n  A[Start] --> B[End]");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### Control-Flow Diagram"));
+    assertTrue(summary.contains("<details>"));
+    assertTrue(summary.contains("```mermaid\nflowchart TD"));
+    assertTrue(summary.contains("A[Start] --> B[End]"));
+    assertTrue(summary.contains("</details>"));
+  }
+
+  @Test
+  void shouldOmitDiagramSectionWhenBlankOrNull() {
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    for (var aiSummary : List.of(summaryWithDiagram(null), summaryWithDiagram("   "))) {
+      var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+      assertFalse(summary.contains("Control-Flow Diagram"));
+      assertFalse(summary.contains("```mermaid"));
+    }
+  }
+
+  @Test
+  void shouldStripBacktickFencesSoTheDiagramCannotBreakOut() {
+    // A model that ignores the "no fences" rule and wraps the source must not escape our block.
+    var aiSummary = summaryWithDiagram("```mermaid\nflowchart TD\n  A --> B\n```");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    // Exactly one opening and one closing fence — the wrapper backticks were stripped.
+    assertEquals(1, countOccurrences(summary, "```mermaid"));
+    assertEquals(2, countOccurrences(summary, "```"));
+    assertTrue(summary.contains("flowchart TD"));
+  }
+
+  @Test
+  void shouldDropUnrecognizedDiagramSource() {
+    // Prose that is not a Mermaid diagram would render as a broken block, so it is dropped.
+    var aiSummary = summaryWithDiagram("This change refactors the parser and adds a cache.");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+  }
+
+  @Test
+  void shouldDropOversizedDiagram() {
+    var huge = "flowchart TD\n" + "  A --> B\n".repeat(PrSummaryGenerator.MAX_DIAGRAM_CHARS);
+    var aiSummary = summaryWithDiagram(huge);
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+  }
+
+  @Test
+  void shouldDropDiagramThatIsOnlyAFenceTag() {
+    // An empty ```mermaid fence collapses to a bare "mermaid" tag with nothing after it; stripping
+    // the tag leaves an empty string, which must be dropped rather than rendered.
+    var aiSummary = summaryWithDiagram("```mermaid```");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+  }
+
+  private static ReviewResponse.Summary summaryWithDiagram(String diagram) {
+    return new ReviewResponse.Summary(
+        0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(), diagram);
+  }
+
+  private static int countOccurrences(String haystack, String needle) {
+    int count = 0;
+    for (int i = haystack.indexOf(needle);
+        i >= 0;
+        i = haystack.indexOf(needle, i + needle.length())) {
+      count++;
+    }
+    return count;
   }
 }

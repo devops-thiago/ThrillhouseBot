@@ -76,7 +76,11 @@ public record ReviewResponse(
       @JsonProperty("pr_purpose") String prPurpose,
       @JsonProperty("description_gaps") List<String> descriptionGaps,
       @JsonProperty("suggested_labels") List<String> suggestedLabels,
-      @JsonProperty("file_summaries") List<FileSummary> fileSummaries) {
+      @JsonProperty("file_summaries") List<FileSummary> fileSummaries,
+      // Optional Mermaid source for a control-flow diagram of the change (no ``` fences). Populated
+      // only when the diagram feature is enabled and the change is non-trivial; null/blank
+      // otherwise.
+      @JsonProperty("walkthrough_diagram") String walkthroughDiagram) {
     public Summary {
       // The AI may emit null elements inside these arrays (e.g. ["bug", null]); a bare List.copyOf
       // would throw an NPE that fails the whole review, even though both lists are best-effort
@@ -134,7 +138,34 @@ public record ReviewResponse(
           prPurpose,
           descriptionGaps,
           suggestedLabels,
-          List.of());
+          List.of(),
+          null);
+    }
+
+    /** Convenience constructor for callers (and responses) that predate the walkthrough diagram. */
+    public Summary(
+        int totalFindings,
+        int critical,
+        int high,
+        int medium,
+        int low,
+        String overallAssessment,
+        String prPurpose,
+        List<String> descriptionGaps,
+        List<String> suggestedLabels,
+        List<FileSummary> fileSummaries) {
+      this(
+          totalFindings,
+          critical,
+          high,
+          medium,
+          low,
+          overallAssessment,
+          prPurpose,
+          descriptionGaps,
+          suggestedLabels,
+          fileSummaries,
+          null);
     }
   }
 }
