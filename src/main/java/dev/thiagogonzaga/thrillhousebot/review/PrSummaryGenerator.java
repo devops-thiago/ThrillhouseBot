@@ -335,11 +335,15 @@ public class PrSummaryGenerator {
     return count == 0 ? "0" : sign + Integer.toString(count);
   }
 
-  /** Escapes a value for a single Markdown table cell so a literal '|' cannot break the layout. */
+  /**
+   * Escapes a value for a single Markdown table cell: a literal {@code '|'} would break the column
+   * and a line break would break the whole row, so the pipe is escaped and any run of line breaks
+   * is folded into a single space (these are one-line cells).
+   */
   private static String escapeTableCell(String value) {
     if (value == null) {
       return "-";
     }
-    return value.replace("\\", "\\\\").replace("|", "\\|");
+    return value.replace("\\", "\\\\").replace("|", "\\|").replaceAll("[\r\n]+", " ");
   }
 }
