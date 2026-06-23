@@ -2233,23 +2233,78 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldWarnWhenNoInlineCommentsPosted() {
+    void shouldPointToSummaryInReviewBodyWhenNoneAnchorInlineOnFirstReview() {
+      // The finding's file is not in the diff, so no inline comment anchors (posted == 0). On a
+      // first review the findings are in the summary comment, so the review body points there — but
+      // a
+      // review event is still posted so the findings never vanish behind a bare check (#215).
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
-      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
 
-      assertDoesNotThrow(
-          () ->
-              orchestrator.postReview(
-                  "Bearer tok",
-                  "owner",
-                  "repo",
-                  7,
-                  "sha",
-                  result,
-                  List.of(fileDiffWithLine("src/Main.java", 10))));
+      orchestrator.postReview(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          "sha",
+          result,
+          List.of(fileDiffWithLine("src/Main.java", 10)));
 
-      verify(reviewClient, never())
-          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      "COMMENT".equals(req.event())
+                          && req.body().contains("could not be anchored")
+                          && req.body().contains("PR summary")));
+    }
+
+    @Test
+    void shouldListFindingsInReviewBodyWhenNoneAnchorInlineOnFollowUp() {
+      // Regression (#215): on a follow-up review (which posts no summary comment) findings whose
+      // lines fall outside the diff must still be listed in the review body, not show only as a red
+      // check run.
+      var finding =
+          new Finding(RiskLevel.CRITICAL, "missing.java", 10, "Auth bypass", "desc", null, null);
+      var result =
+          new ReviewResult(
+              List.of(finding),
+              1,
+              0,
+              0,
+              0,
+              RiskLevel.CRITICAL,
+              ReviewState.REQUEST_CHANGES,
+              false, // follow-up: no summary comment is posted
+              "",
+              List.of());
+
+      orchestrator.postReview(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          "sha",
+          result,
+          List.of(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      "REQUEST_CHANGES".equals(req.event())
+                          && req.body().contains("Auth bypass")
+                          && req.body().contains("missing.java:10")));
     }
 
     @Test
