@@ -227,4 +227,44 @@ class ReviewResponseParserTest {
     String json = ReviewResponseParser.extractJson("Here is the list: [1, 2, 3]");
     assertEquals("[1, 2, 3]", json);
   }
+
+  @Test
+  void shouldParsePayloadWithRawControlCharsInsideStringValue() {
+    // Models sometimes emit a literal tab/newline inside a code-bearing field (escaping \n but not
+    // the tab); strict JSON would reject the whole response and force a full-cost retry.
+    var raw =
+        "{\"findings\": [{\"risk\": \"low\", \"confidence\": \"low\", \"file\": \"f\","
+            + " \"line\": 1, \"title\": \"t\", \"description\": \"line1\tline2\nline3\"}]}";
+
+    var response = parser.parse(raw);
+
+    assertEquals(1, response.findings().size());
+    assertTrue(response.findings().get(0).description().contains("line2"));
+  }
+
+  @Test
+  void shouldEscapeRawControlCharsInsideStringLiterals() {
+    assertEquals("{\"d\":\"a\\tb\\nc\"}", ReviewResponseParser.extractJson("{\"d\":\"a\tb\nc\"}"));
+  }
+
+  @Test
+  void shouldEscapeEveryControlCharForm() {
+    // carriage-return, backspace, form-feed and an arbitrary control char cover every arm.
+    var input = "{\"d\":\"" + (char) 0x0d + (char) 0x08 + (char) 0x0c + (char) 0x01 + "\"}";
+    assertEquals("{\"d\":\"\\r\\b\\f\\u0001\"}", ReviewResponseParser.extractJson(input));
+  }
+
+  @Test
+  void shouldLeaveControlCharsOutsideStringsUntouched() {
+    // A newline between tokens is valid JSON whitespace, not inside a string — leave it alone.
+    var in = "{\n\"findings\":[]\n}";
+    assertEquals(in, ReviewResponseParser.extractJson(in));
+  }
+
+  @Test
+  void shouldNotDoubleEscapeAlreadyEscapedSequences() {
+    // \n, \" and \\ are already valid escapes and must pass through unchanged.
+    var in = "{\"d\":\"a\\nb\\\"c\\\\d\"}";
+    assertEquals(in, ReviewResponseParser.extractJson(in));
+  }
 }
