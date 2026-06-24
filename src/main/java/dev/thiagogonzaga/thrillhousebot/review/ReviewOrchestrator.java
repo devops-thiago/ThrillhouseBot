@@ -31,9 +31,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -48,9 +45,9 @@ public class ReviewOrchestrator {
   private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
   private static final String SUMMARY_HEADING = PrSummaryGenerator.SUMMARY_HEADING;
 
-  // Check run status constants
+  // Check run status constant used when building the completion update (CheckRunManager owns
+  // create).
   private static final String CHECK_STATUS_COMPLETED = "completed";
-  private static final String CHECK_STATUS_IN_PROGRESS = "in_progress";
 
   // Check run conclusion constants
   private static final String CONCLUSION_FAILURE = "failure";
@@ -69,7 +66,6 @@ public class ReviewOrchestrator {
   // <app-slug>[bot] this deployment runs under.
   private final BotIdentity botIdentity;
   private final GitHubAuthClient authClient;
-  private final GitHubCheckRunClient checkRunClient;
 
   private final GitHubReviewClient reviewClient;
 
@@ -96,6 +92,8 @@ public class ReviewOrchestrator {
   private final PrLabeler labeler;
 
   private final CiStatusEvaluator ciStatusEvaluator;
+
+  private final CheckRunManager checkRunManager;
 
   private final ObjectMapper mapper;
 
@@ -129,7 +127,6 @@ public class ReviewOrchestrator {
   public ReviewOrchestrator(
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
-      @RestClient GitHubCheckRunClient checkRunClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       @RestClient GitHubPullRequestClient prClient,
@@ -148,11 +145,11 @@ public class ReviewOrchestrator {
       ReviewDiffFormatter diffFormatter,
       PrLabeler labeler,
       CiStatusEvaluator ciStatusEvaluator,
+      CheckRunManager checkRunManager,
       ObjectMapper mapper) {
     this.config = config;
     this.botIdentity = BotIdentity.from(config.github().botLogins());
     this.authClient = authClient;
-    this.checkRunClient = checkRunClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.prClient = prClient;
@@ -171,6 +168,7 @@ public class ReviewOrchestrator {
     this.diffFormatter = diffFormatter;
     this.labeler = labeler;
     this.ciStatusEvaluator = ciStatusEvaluator;
+    this.checkRunManager = checkRunManager;
     this.mapper = mapper;
   }
 
@@ -210,7 +208,8 @@ public class ReviewOrchestrator {
       }
 
       checkRunId =
-          createCheckRun(auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
+          checkRunManager.createCheckRun(
+              auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
       var diffResult = diffFormatter.buildDiffStringWithStats(files);
       var diff = diffResult.text();
@@ -353,8 +352,8 @@ public class ReviewOrchestrator {
       String conclusion = conclusionForResult(result);
       String checkTitle = checkTitleForResult(result);
       String checkSummary = checkSummaryForResult(result);
-      updateCheckRun(
-          new CheckRunUpdate(
+      checkRunManager.updateCheckRun(
+          new CheckRunManager.CheckRunUpdate(
               auth,
               req.owner(),
               req.repo(),
@@ -506,53 +505,6 @@ public class ReviewOrchestrator {
         : response;
   }
 
-  long createCheckRun(String auth, String owner, String repo, String headSha, String detailsUrl) {
-    var req =
-        new GitHubCheckRunClient.CreateCheckRunRequest(
-            CHECK_NAME, headSha, CHECK_STATUS_IN_PROGRESS, detailsUrl);
-    var response = checkRunClient.createCheckRun(auth, ACCEPT, owner, repo, req);
-    Log.debugf("Created check run: %d", response.id());
-    return response.id();
-  }
-
-  void updateCheckRun(CheckRunUpdate u) {
-    var output =
-        u.title() != null
-            ? new GitHubCheckRunClient.UpdateCheckRunRequest.Output(u.title(), u.summary(), null)
-            : null;
-    var completed = CHECK_STATUS_COMPLETED.equals(u.status());
-    var req =
-        new GitHubCheckRunClient.UpdateCheckRunRequest(
-            completed ? null : u.status(),
-            completed ? u.conclusion() : null,
-            completed ? githubTimestamp() : null,
-            u.detailsUrl(),
-            output);
-    if (!completed) {
-      checkRunClient.updateCheckRun(u.auth(), ACCEPT, u.owner(), u.repo(), u.checkRunId(), req);
-      return;
-    }
-    try {
-      checkRunClient.updateCheckRun(u.auth(), ACCEPT, u.owner(), u.repo(), u.checkRunId(), req);
-    } catch (RuntimeException e) {
-      Log.warnf(
-          e,
-          "Check run %d completion update failed, retrying with conclusion only",
-          u.checkRunId());
-      checkRunClient.updateCheckRun(
-          u.auth(),
-          ACCEPT,
-          u.owner(),
-          u.repo(),
-          u.checkRunId(),
-          new GitHubCheckRunClient.UpdateCheckRunRequest(null, u.conclusion(), null, null, null));
-    }
-  }
-
-  private static String githubTimestamp() {
-    return DateTimeFormatter.ISO_INSTANT.format(Instant.now().truncatedTo(ChronoUnit.SECONDS));
-  }
-
   /**
    * Public dashboard deep-link for a review session, used in check runs and comments. Built from
    * the session's random public id — never the guessable sequential id. Sessions without one
@@ -569,17 +521,6 @@ public class ReviewOrchestrator {
     }
     return base + "/session/" + publicId;
   }
-
-  record CheckRunUpdate(
-      String auth,
-      String owner,
-      String repo,
-      long checkRunId,
-      String status,
-      String conclusion,
-      String title,
-      String summary,
-      String detailsUrl) {}
 
   List<GitHubPullRequestClient.FileDiff> fetchPrFiles(
       String auth, String owner, String repo, int prNumber) {
@@ -725,8 +666,8 @@ public class ReviewOrchestrator {
 
     if (checkRunId > 0) {
       try {
-        updateCheckRun(
-            new CheckRunUpdate(
+        checkRunManager.updateCheckRun(
+            new CheckRunManager.CheckRunUpdate(
                 auth,
                 req.owner(),
                 req.repo(),

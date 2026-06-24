@@ -152,7 +152,6 @@ class ReviewOrchestratorTest {
     return new ReviewOrchestrator(
         config,
         authClient,
-        checkRunClient,
         reviewClient,
         commentClient,
         prClient,
@@ -171,6 +170,7 @@ class ReviewOrchestratorTest {
         diffFormatter,
         labeler,
         new CiStatusEvaluator(checkRunClient, prClient),
+        new CheckRunManager(checkRunClient),
         objectMapper);
   }
 
@@ -2024,94 +2024,6 @@ class ReviewOrchestratorTest {
         verify(aiReviewService).review(any(ReviewSession.class), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
-    }
-  }
-
-  @Nested
-  class CheckRunUpdates {
-
-    @Test
-    void shouldCreateCheckRunAsInProgress() {
-      when(checkRunClient.createCheckRun(anyString(), anyString(), eq("owner"), eq("repo"), any()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(99L, "http://check"));
-
-      var id = orchestrator.createCheckRun("Bearer tok", "owner", "repo", "abcdefgh", SESSION_URL);
-
-      assertEquals(99L, id);
-      var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.CreateCheckRunRequest.class);
-      verify(checkRunClient)
-          .createCheckRun(anyString(), anyString(), eq("owner"), eq("repo"), captor.capture());
-      assertEquals("in_progress", captor.getValue().status());
-      assertEquals(SESSION_URL, captor.getValue().detailsUrl());
-    }
-
-    @Test
-    void shouldIncludeCompletedAtOnlyForCompletedStatusUpdate() {
-      doNothing()
-          .when(checkRunClient)
-          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-
-      orchestrator.updateCheckRun(newCheckRunUpdate("completed", "success"));
-
-      var completedCaptor =
-          ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
-      verify(checkRunClient)
-          .updateCheckRun(
-              anyString(),
-              anyString(),
-              eq("owner"),
-              eq("repo"),
-              eq(42L),
-              completedCaptor.capture());
-      assertNull(completedCaptor.getValue().status());
-      assertEquals("success", completedCaptor.getValue().conclusion());
-      assertNotNull(completedCaptor.getValue().completedAt());
-      assertTrue(completedCaptor.getValue().completedAt().endsWith("Z"));
-      assertFalse(completedCaptor.getValue().completedAt().contains("."));
-
-      clearInvocations(checkRunClient);
-
-      orchestrator.updateCheckRun(newCheckRunUpdate("in_progress", null));
-
-      var inProgressCaptor =
-          ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
-      verify(checkRunClient)
-          .updateCheckRun(
-              anyString(),
-              anyString(),
-              eq("owner"),
-              eq("repo"),
-              eq(42L),
-              inProgressCaptor.capture());
-      assertEquals("in_progress", inProgressCaptor.getValue().status());
-      assertNull(inProgressCaptor.getValue().conclusion());
-      assertNull(inProgressCaptor.getValue().completedAt());
-    }
-
-    @Test
-    void shouldRetryWithConclusionOnlyWhenCompletionUpdateFails() {
-      doThrow(new RuntimeException("422 Unprocessable Entity"))
-          .doNothing()
-          .when(checkRunClient)
-          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-
-      orchestrator.updateCheckRun(newCheckRunUpdate("completed", "failure"));
-
-      var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
-      verify(checkRunClient, times(2))
-          .updateCheckRun(
-              anyString(), anyString(), eq("owner"), eq("repo"), eq(42L), captor.capture());
-
-      var fallback = captor.getAllValues().get(1);
-      assertNull(fallback.status());
-      assertEquals("failure", fallback.conclusion());
-      assertNull(fallback.completedAt());
-      assertNull(fallback.output());
-    }
-
-    private ReviewOrchestrator.CheckRunUpdate newCheckRunUpdate(String status, String conclusion) {
-      return new ReviewOrchestrator.CheckRunUpdate(
-          "Bearer tok", "owner", "repo", 42L, status, conclusion, "Title", "Summary", SESSION_URL);
     }
   }
 
