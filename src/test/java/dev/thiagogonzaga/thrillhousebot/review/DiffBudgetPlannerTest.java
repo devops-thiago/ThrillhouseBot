@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -138,6 +139,31 @@ class DiffBudgetPlannerTest {
     assertTrue(batch.estimatedTokens() <= budget, "clipped batch over budget");
     assertTrue(batch.text().contains("truncated"), "oversized section should be clipped");
     assertFalse(plan.truncated(), "a clipped file is covered, not omitted");
+  }
+
+  @Test
+  void largePrStaysWithinCallCapAndAccountsForEveryFile() {
+    // Acceptance check (#53): a big PR splits into <= maxBatches batches, each within budget, and
+    // every file is either covered by a batch or reported by name — never silently dropped.
+    var files = new ArrayList<FileDiff>();
+    for (var i = 0; i < 120; i++) {
+      files.add(file(String.format("src/F%03d.java", i), 6, patch(6)));
+    }
+    var perFile = sectionTokens(files.get(0)); // equal-size sections
+    var maxBatches = 5;
+    var budget = 10 * perFile; // ~10 files/batch → 5 batches cover 50, the rest overflow by name
+    var plan = planner.plan(files, budget, maxBatches);
+
+    assertTrue(plan.batches().size() <= maxBatches, "exceeded the call cap");
+    for (var batch : plan.batches()) {
+      assertTrue(batch.estimatedTokens() <= budget, "batch over budget");
+    }
+
+    var accounted = new HashSet<>(coveredFilenames(plan));
+    accounted.addAll(plan.omittedFiles());
+    assertEquals(120, accounted.size(), "every file must be covered or listed by name");
+    assertEquals(50, coveredFilenames(plan).size());
+    assertEquals(70, plan.omittedFiles().size());
   }
 
   @Test
