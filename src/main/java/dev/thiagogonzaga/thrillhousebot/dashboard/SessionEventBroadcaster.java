@@ -360,6 +360,21 @@ public final class SessionEventBroadcaster {
               "findingsSoFar", findingsSoFar, "tokensUsed", tokensUsed, KEY_STATUS, "in_progress"));
     }
 
+    /**
+     * Progress on a large multi-call review: reviewing batch {@code index} of {@code count} (#53).
+     */
+    public static SessionEvent batch(ReviewSession session, int index, int count) {
+      return new SessionEvent(
+          "review.batch",
+          session.id,
+          session.getRepository(),
+          session.getPrNumber(),
+          session.getPrTitle(),
+          session.getCommitSha(),
+          session.getTimestamp().toString(),
+          Map.of("batchIndex", index, "batchCount", count, KEY_STATUS, "in_progress"));
+    }
+
     public static SessionEvent completed(ReviewSession session) {
       return new SessionEvent(
           TYPE_COMPLETED,
