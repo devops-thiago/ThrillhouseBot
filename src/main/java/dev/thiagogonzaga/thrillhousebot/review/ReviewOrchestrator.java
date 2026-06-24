@@ -460,8 +460,10 @@ public class ReviewOrchestrator {
   // The command-specific guidance line(s) for the review path's repository-instructions section
   // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
   private static final String INSTRUCTIONS_GUIDANCE =
-      "The repository maintainers have provided these additional review guidelines.\n"
-          + "These take precedence over default rules where they conflict.\n";
+      """
+      The repository maintainers have provided these additional review guidelines.
+      These take precedence over default rules where they conflict.
+      """;
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */
   static String combineSections(String first, String second) {
