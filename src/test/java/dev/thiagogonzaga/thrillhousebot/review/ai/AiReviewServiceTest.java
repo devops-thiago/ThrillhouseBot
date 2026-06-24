@@ -92,6 +92,39 @@ class AiReviewServiceTest {
   }
 
   @Test
+  void reviewBatchEmitsBatchProgressAndSuppressesTokenStream() {
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var response = service.reviewBatch(session, PROMPT_INPUTS, 2, 4);
+
+    assertNotNull(response);
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    var events = captor.getAllValues();
+    assertTrue(
+        events.stream()
+            .anyMatch(
+                e ->
+                    "review.batch".equals(e.type())
+                        && Integer.valueOf(2).equals(e.data().get("batchIndex"))
+                        && Integer.valueOf(4).equals(e.data().get("batchCount"))),
+        "expected a review.batch progress event for batch 2/4");
+    assertTrue(
+        events.stream().noneMatch(e -> "review.stream".equals(e.type())),
+        "a blocking batch must not broadcast per-token stream events");
+  }
+
+  @Test
   void shouldWrapStreamErrorWithNullMessage() {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(1);

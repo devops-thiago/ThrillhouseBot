@@ -63,7 +63,26 @@ public class AiReviewService {
     this.broadcaster = broadcaster;
   }
 
+  /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
+    return runWithRetries(session, inputs, true);
+  }
+
+  /**
+   * Reviews one batch of a large, multi-call PR (#53). Runs blocking — no per-token dashboard
+   * stream (the live feed would interleave several batches) — and emits a {@code batch index/count}
+   * progress event instead. The same retry/timeout scaffolding applies; only the findings of the
+   * returned response are used by the caller (PR-level summary comes from the final summary call).
+   */
+  public ReviewResponse reviewBatch(
+      ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.batch(session, batchIndex, batchCount));
+    return runWithRetries(session, inputs, false);
+  }
+
+  private ReviewResponse runWithRetries(
+      ReviewSession session, PromptInputs inputs, boolean broadcastTokens) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
@@ -80,7 +99,7 @@ public class AiReviewService {
         }
 
         try {
-          return streamOnce(session, inputs, attempt);
+          return streamOnce(session, inputs, attempt, broadcastTokens);
         } catch (RuntimeException e) {
           lastFailure = e;
           Log.warnf(
@@ -111,15 +130,20 @@ public class AiReviewService {
       String previousFindings,
       String repoInstructions) {}
 
-  private ReviewResponse streamOnce(ReviewSession session, PromptInputs inputs, int attempt) {
+  private ReviewResponse streamOnce(
+      ReviewSession session, PromptInputs inputs, int attempt, boolean broadcastTokens) {
     var result = new CompletableFuture<ReviewResponse>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
     var lastFlushNanos = new AtomicLong(System.nanoTime());
     var cancelled = new AtomicBoolean(false);
 
+    // Blocking batch calls still accumulate the buffer (so the final parse has the full text) but
+    // skip the per-token dashboard broadcast: the flush is a no-op when not streaming tokens.
     Runnable flushStream =
-        () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos);
+        broadcastTokens
+            ? () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos)
+            : () -> {};
 
     ReviewSessionContext.bind(session.id, attempt);
     TokenStream stream = null;
