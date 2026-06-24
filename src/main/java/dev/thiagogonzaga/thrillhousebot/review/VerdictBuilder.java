@@ -33,8 +33,6 @@ import java.util.List;
 @ApplicationScoped
 public class VerdictBuilder {
 
-  private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
-
   private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
@@ -115,7 +113,7 @@ public class VerdictBuilder {
     }
     var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
-      return ZERO_ISSUES_MESSAGE;
+      return PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
     }
     return ReviewResult.unresolvedPreviousMessage(unresolved);
   }
