@@ -21,7 +21,8 @@
     "pull_requests": "write",
     "contents": "read",
     "issues": "write",
-    "actions": "read"
+    "actions": "read",
+    "statuses": "read"
   },
   "request_oauth_on_install": false
 }

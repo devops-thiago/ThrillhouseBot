@@ -61,13 +61,16 @@
       public: false,
       default_events: [
         "pull_request",
-        "issue_comment"
+        "issue_comment",
+        "pull_request_review_comment"
       ],
       default_permissions: {
         checks: "write",
         pull_requests: "write",
         contents: "read",
-        issues: "write"
+        issues: "write",
+        actions: "read",
+        statuses: "read"
       },
       request_oauth_on_install: false
     };

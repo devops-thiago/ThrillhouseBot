@@ -163,7 +163,7 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
-| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read |
+| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit Statuses: Read |
 | Subscribe to Events | Pull Request, Issue comment, Pull request review comment |
 | Identifying & authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
