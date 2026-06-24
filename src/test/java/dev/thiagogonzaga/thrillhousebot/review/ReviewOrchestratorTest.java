@@ -490,6 +490,33 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void truncatedFollowUpReviewBodyDisclosesPartialAndOmitsZeroUnresolved() {
+      var aiResponse = new ReviewResponse(List.of(), List.of(), null);
+      // A follow-up (not first review) clean review with 7 files omitted by the line budget: held
+      // to
+      // COMMENT, but a follow-up posts no summary comment to carry the truncation banner (#245).
+      var result =
+          orchestrator.buildResult(
+              aiResponse, false, new ReviewOrchestrator.DiffStats(120, 4000, 4000, 7), List.of());
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      // The follow-up review body itself now discloses the partial review and the omitted count...
+      assertTrue(body.contains("partial review"), body);
+      assertTrue(body.contains("7 file"), body);
+      // ...and never the bogus "0 previous finding(s) remain unresolved" the truncation hold used
+      // to
+      // emit when there were no unresolved findings.
+      assertFalse(body.contains("remain unresolved"), body);
+      assertEquals("COMMENT", captor.getValue().event());
+    }
+
+    @Test
     void shouldHandleNullFindingsInAiResponse() {
       var aiResponse = new ReviewResponse(null, null, null);
 
