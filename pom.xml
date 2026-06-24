@@ -22,6 +22,7 @@
         <quarkus-langchain4j.version>1.11.2</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
+        <jackson-bom.version>2.22.0</jackson-bom.version>
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
@@ -73,6 +74,20 @@
                 <groupId>io.opentelemetry</groupId>
                 <artifactId>opentelemetry-bom-alpha</artifactId>
                 <version>${opentelemetry.alpha.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!--
+                CVE override for jackson-databind GHSA-5jmj-h7xm-6q6v / CVE-2026-54515
+                (@JsonIgnoreProperties deserialization bypass). quarkus-bom 3.36.3 manages 2.21.4
+                (vulnerable); the 2.21.x fix (2.21.5) is not yet on Maven Central, so bump to
+                2.22.0 — the next published release OSV reports clean. Declared before the
+                quarkus-bom import so this BOM wins. Remove once the platform ships a fixed jackson.
+            -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
