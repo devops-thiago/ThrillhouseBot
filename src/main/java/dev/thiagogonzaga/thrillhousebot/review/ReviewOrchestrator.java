@@ -231,9 +231,15 @@ public class ReviewOrchestrator {
       checkRunId =
           createCheckRun(auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
-      var diff = buildDiffString(files);
-      var baseComparison =
-          buildBaseComparison(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
+      var diffResult = diffFormatter.buildDiffStringWithStats(files);
+      var diff = diffResult.text();
+      var baseComparisonResult =
+          buildBaseComparisonWithStats(
+              auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
+      var baseComparison = baseComparisonResult.text();
+      // Files the budget dropped (from the PR diff or the base comparison) make the review partial.
+      // The omitted count travels in DiffStats so the verdict and summary can disclose it (#234).
+      var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
 
       var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
       // Two independent flags decouple UX presentation from context loading:
@@ -327,7 +333,7 @@ public class ReviewOrchestrator {
       List<ReviewResult.CiCheck> offendingCiChecks =
           evaluateCiChecks(auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
-      DiffStats diffStats = DiffStats.fromFiles(diffFormatter.reviewableFiles(files));
+      DiffStats diffStats = DiffStats.fromFiles(diffFormatter.reviewableFiles(files), omittedFiles);
       var unresolvedPrevious =
           followUpAnalyzer.unresolvedFindings(
               previousAiResponseJson, aiResponse.previousFindingsStatus());
@@ -628,15 +634,21 @@ public class ReviewOrchestrator {
   }
 
   String buildBaseComparison(String auth, String owner, String repo, String base, String head) {
+    return buildBaseComparisonWithStats(auth, owner, repo, base, head).text();
+  }
+
+  ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
+      String auth, String owner, String repo, String base, String head) {
     if (base == null || head == null || base.length() < 7 || head.length() < 7) {
-      return "(regression comparison unavailable — refs too short)";
+      return new ReviewDiffFormatter.FormattedDiff(
+          "(regression comparison unavailable — refs too short)", 0);
     }
     try {
       var comparison = prClient.compareCommits(auth, ACCEPT, owner, repo, base, head);
-      return diffFormatter.buildBaseComparison(comparison, base, head);
+      return diffFormatter.buildBaseComparisonWithStats(comparison, base, head);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch base comparison, continuing without regression context", e);
-      return "(regression comparison unavailable)";
+      return new ReviewDiffFormatter.FormattedDiff("(regression comparison unavailable)", 0);
     }
   }
 
@@ -888,15 +900,24 @@ public class ReviewOrchestrator {
         unresolved);
   }
 
-  record DiffStats(int filesChanged, int additions, int deletions) {
-    static DiffStats fromFiles(List<GitHubPullRequestClient.FileDiff> files) {
+  record DiffStats(int filesChanged, int additions, int deletions, int omittedFiles) {
+    DiffStats(int filesChanged, int additions, int deletions) {
+      this(filesChanged, additions, deletions, 0);
+    }
+
+    /** True when the line budget dropped whole files, so the model never saw part of the change. */
+    boolean truncated() {
+      return omittedFiles > 0;
+    }
+
+    static DiffStats fromFiles(List<GitHubPullRequestClient.FileDiff> files, int omittedFiles) {
       var additions = 0;
       var deletions = 0;
       for (var file : files) {
         additions += file.additions();
         deletions += file.deletions();
       }
-      return new DiffStats(files.size(), additions, deletions);
+      return new DiffStats(files.size(), additions, deletions, omittedFiles);
     }
   }
 
@@ -907,32 +928,11 @@ public class ReviewOrchestrator {
       List<Finding> unresolvedPrevious,
       List<ReviewResult.CiCheck> offendingCiChecks,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
-    var findings = new ArrayList<Finding>();
-    var critical = 0;
-    var high = 0;
-    var medium = 0;
-    var low = 0;
-    RiskLevel highest = null;
-
-    if (aiResponse.findings() != null) {
-      for (var ai : aiResponse.findings()) {
-        Finding f = Finding.fromAiResponse(ai);
-        findings.add(f);
-        switch (f.risk()) {
-          case CRITICAL -> critical++;
-          case HIGH -> high++;
-          case MEDIUM -> medium++;
-          case LOW -> low++;
-        }
-        if (highest == null || f.risk().compareTo(highest) < 0) {
-          highest = f.risk();
-        }
-      }
-    }
+    var tally = tallyFindings(aiResponse);
 
     // The review may only approve when nothing is outstanding: new findings AND previous
     // findings still unresolved (not fixed, no accepted justification) both count
-    var outstanding = new ArrayList<Finding>(findings);
+    var outstanding = new ArrayList<Finding>(tally.findings());
     outstanding.addAll(unresolvedPrevious);
     ReviewState state = ReviewState.fromFindings(outstanding);
     // Merge the model's previous-findings statuses with the backstop's reconstructed unresolved
@@ -955,6 +955,12 @@ public class ReviewOrchestrator {
       state = ReviewState.COMMENT;
     }
 
+    // A truncated diff means whole files were never reviewed — never sail an APPROVE over the
+    // unreviewed remainder; hold it as a COMMENT and disclose the omission below (#234).
+    if (state == ReviewState.APPROVE && diffStats.truncated()) {
+      state = ReviewState.COMMENT;
+    }
+
     // The summary is generated for clean reviews too: a zero-findings result still reports the
     // change overview and carries the celebration line inside the same comment
     var summaryMarkdown =
@@ -964,30 +970,74 @@ public class ReviewOrchestrator {
             diffStats.deletions(),
             aiResponse.summary(),
             new ReviewResult(
-                findings,
-                critical,
-                high,
-                medium,
-                low,
-                highest,
+                tally.findings(),
+                tally.critical(),
+                tally.high(),
+                tally.medium(),
+                tally.low(),
+                tally.highest(),
                 state,
                 isFirstReview,
                 "",
                 previousStatuses,
                 offendingCiChecks));
+    if (diffStats.truncated()) {
+      summaryMarkdown = truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
+    }
 
     return new ReviewResult(
-        findings,
-        critical,
-        high,
-        medium,
-        low,
-        highest,
+        tally.findings(),
+        tally.critical(),
+        tally.high(),
+        tally.medium(),
+        tally.low(),
+        tally.highest(),
         state,
         isFirstReview,
         summaryMarkdown,
         previousStatuses,
         offendingCiChecks);
+  }
+
+  /** Findings parsed from the model response, with per-severity counts and the highest risk. */
+  private record FindingTally(
+      List<Finding> findings, int critical, int high, int medium, int low, RiskLevel highest) {}
+
+  private static FindingTally tallyFindings(ReviewResponse aiResponse) {
+    var findings = new ArrayList<Finding>();
+    var critical = 0;
+    var high = 0;
+    var medium = 0;
+    var low = 0;
+    RiskLevel highest = null;
+    // ReviewResponse never returns null findings, so we iterate directly. The lowest risk level is
+    // counted by the catch-all branch — RiskLevel has exactly four values — which avoids the
+    // unreachable extra branch the compiler would otherwise generate and report as uncovered.
+    for (var ai : aiResponse.findings()) {
+      Finding f = Finding.fromAiResponse(ai);
+      findings.add(f);
+      switch (f.risk()) {
+        case CRITICAL -> critical++;
+        case HIGH -> high++;
+        case MEDIUM -> medium++;
+        default -> low++;
+      }
+      if (highest == null || f.risk().compareTo(highest) < 0) {
+        highest = f.risk();
+      }
+    }
+    return new FindingTally(findings, critical, high, medium, low, highest);
+  }
+
+  /**
+   * Banner prepended to the summary when the diff was truncated, so a reader knows the review is
+   * partial — the verdict is also held back from APPROVE in that case (#234).
+   */
+  private static String truncationNotice(int omittedFiles) {
+    return String.format(
+        "> ⚠️ **Large PR — partial review.** %d file(s) were omitted because the diff exceeded the"
+            + " size budget; the findings and verdict below cover only the reviewed portion.%n%n",
+        omittedFiles);
   }
 
   ReviewResult buildResult(
