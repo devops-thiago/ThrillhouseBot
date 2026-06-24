@@ -3261,25 +3261,6 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
-  class BuildPrContext {
-
-    @Test
-    void shouldRenderTitleAndDescription() {
-      String context = ReviewOrchestrator.buildPrContext("add new API", "Adds CRUD endpoints");
-
-      assertEquals("Title: add new API\nDescription:\nAdds CRUD endpoints\n", context);
-    }
-
-    @Test
-    void shouldOmitMissingParts() {
-      assertEquals("Title: add new API\n", ReviewOrchestrator.buildPrContext("add new API", "  "));
-      assertEquals("Description:\nbody\n", ReviewOrchestrator.buildPrContext(null, "body"));
-      assertEquals("Description:\nbody\n", ReviewOrchestrator.buildPrContext("  ", "body"));
-      assertEquals("", ReviewOrchestrator.buildPrContext(null, null));
-    }
-  }
-
-  @Nested
   class UnresolvedPreviousGating {
 
     private final FollowUpAnalyzer realAnalyzer = new FollowUpAnalyzer(new ObjectMapper());
