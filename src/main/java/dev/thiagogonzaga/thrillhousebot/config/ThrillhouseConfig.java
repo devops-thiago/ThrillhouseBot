@@ -153,6 +153,39 @@ public interface ThrillhouseConfig {
     @WithName("max-diff-lines")
     int maxDiffLines();
 
+    /**
+     * Per-call input-token budget for the review prompt (#53). The diff is split into batches that
+     * each fit this budget after the shared prompt overhead and {@link #outputBufferTokens()} are
+     * subtracted; a PR whose diff exceeds one batch is reviewed in multiple calls. Sized for the
+     * model's context window — keep headroom for output. 0 disables token budgeting (single call).
+     */
+    @WithDefault("48000")
+    @WithName("max-input-tokens")
+    int maxInputTokens();
+
+    /** Tokens reserved out of the context window for the model's response (findings JSON). */
+    @WithDefault("8192")
+    @WithName("output-buffer-tokens")
+    int outputBufferTokens();
+
+    /**
+     * Hard cap on model calls per review across all batches plus the final summary call (#53), so a
+     * pathologically large PR can never fan out without bound. Files that do not fit within this
+     * many calls are reported by name, never silently dropped.
+     */
+    @WithDefault("6")
+    @WithName("max-ai-calls")
+    int maxAiCalls();
+
+    /**
+     * Fraction of {@link #maxInputTokens()} actually used when budgeting, so an under-estimate from
+     * the provider-agnostic token counter never pushes a call over the real limit. Self-calibration
+     * against the API's reported usage is the follow-up in #239.
+     */
+    @WithDefault("0.9")
+    @WithName("token-safety-margin")
+    double tokenSafetyMargin();
+
     @WithDefault(".github/thrillhousebot.md")
     @WithName("instructions-file")
     String instructionsFile();

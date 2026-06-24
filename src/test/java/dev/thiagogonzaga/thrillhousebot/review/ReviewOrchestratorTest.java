@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -210,10 +211,12 @@ class ReviewOrchestratorTest {
             instructionsResolver,
             projectStackResolver,
             diffFormatter,
+            new DiffBudgetPlanner(diffFormatter, new TokenCounter()),
             labeler,
             followUpAnalyzer,
             sessionPersistence,
-            BOT_ID),
+            BOT_ID,
+            config),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         reviewPublisher,
         verdictBuilder,
