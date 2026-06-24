@@ -136,6 +136,7 @@ class ReviewOrchestratorTest {
     verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer);
     findingPipeline =
         new FindingPipeline(
+            aiReviewService,
             quoteValidator,
             deduplicator,
             findingVerificationService,
@@ -184,7 +185,6 @@ class ReviewOrchestratorTest {
         BOT_ID,
         authClient,
         commentClient,
-        aiReviewService,
         broadcaster,
         sessionPersistence,
         followUpAnalyzer,
@@ -2716,6 +2716,7 @@ class ReviewOrchestratorTest {
           .thenThrow(new com.fasterxml.jackson.core.JsonProcessingException("fail") {});
       var failingPipeline =
           new FindingPipeline(
+              aiReviewService,
               quoteValidator,
               deduplicator,
               findingVerificationService,

@@ -21,7 +21,6 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
-import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -50,7 +49,6 @@ public class ReviewOrchestrator {
   private final GitHubAuthClient authClient;
 
   private final GitHubCommentClient commentClient;
-  private final AiReviewService aiReviewService;
 
   private final SessionEventBroadcaster broadcaster;
 
@@ -108,7 +106,6 @@ public class ReviewOrchestrator {
       BotIdentity botIdentity,
       GitHubAuthClient authClient,
       @RestClient GitHubCommentClient commentClient,
-      AiReviewService aiReviewService,
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
       FollowUpAnalyzer followUpAnalyzer,
@@ -125,7 +122,6 @@ public class ReviewOrchestrator {
     this.botIdentity = botIdentity;
     this.authClient = authClient;
     this.commentClient = commentClient;
-    this.aiReviewService = aiReviewService;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
     this.followUpAnalyzer = followUpAnalyzer;
@@ -180,7 +176,6 @@ public class ReviewOrchestrator {
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var ctx = contextLoader.load(auth, req, session, repository);
       var files = ctx.files();
-      var diff = ctx.diff();
       var omittedFiles = ctx.omittedFiles();
       var priorReviews = ctx.priorReviews();
       var priorAiResponseJsons = ctx.priorAiResponseJsons();
@@ -191,19 +186,10 @@ public class ReviewOrchestrator {
       var repoLabels = ctx.repoLabels();
 
       var promptInputs = promptAssembler.assemble(ctx, req);
-      var aiResponse = aiReviewService.review(session, promptInputs);
       // lineResolver is shared with the verdict backstop below, so it is built here and threaded
       // through the finding pipeline rather than created inside it.
       var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
-      aiResponse =
-          findingPipeline.refine(
-              session,
-              aiResponse,
-              diff,
-              promptInputs,
-              priorAiResponseJsons,
-              inlineComments,
-              lineResolver);
+      var aiResponse = findingPipeline.run(session, promptInputs, ctx, lineResolver);
 
       // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
       // "could not determine required checks" — evaluateCiChecks then gates on all checks (null).

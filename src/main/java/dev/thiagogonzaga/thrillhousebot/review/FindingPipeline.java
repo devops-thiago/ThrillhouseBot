@@ -38,6 +38,7 @@ import java.util.List;
 @ApplicationScoped
 public class FindingPipeline {
 
+  private final AiReviewService aiReviewService;
   private final FindingQuoteValidator quoteValidator;
   private final FindingDeduplicator deduplicator;
   private final FindingVerificationService findingVerificationService;
@@ -47,12 +48,14 @@ public class FindingPipeline {
 
   @Inject
   public FindingPipeline(
+      AiReviewService aiReviewService,
       FindingQuoteValidator quoteValidator,
       FindingDeduplicator deduplicator,
       FindingVerificationService findingVerificationService,
       FollowUpAnalyzer followUpAnalyzer,
       ObjectMapper mapper,
       BotIdentity botIdentity) {
+    this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
     this.deduplicator = deduplicator;
     this.findingVerificationService = findingVerificationService;
@@ -62,11 +65,32 @@ public class FindingPipeline {
   }
 
   /**
+   * Calls the model on the assembled prompt, then runs the raw response through the full post-AI
+   * chain ({@link #refine}). The {@code lineResolver} is shared with the verdict backstop, so the
+   * caller builds it once and passes it in.
+   */
+  ReviewResponse run(
+      ReviewSession session,
+      AiReviewService.PromptInputs promptInputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver) {
+    var aiResponse = aiReviewService.review(session, promptInputs);
+    return refine(
+        session,
+        aiResponse,
+        ctx.diff(),
+        promptInputs,
+        ctx.priorAiResponseJsons(),
+        ctx.inlineComments(),
+        lineResolver);
+  }
+
+  /**
    * Runs the raw model response through the full post-AI chain and persists it. The {@code
    * lineResolver} is shared with the caller's verdict backstop, so it is passed in rather than
    * built here.
    */
-  ReviewResponse refine(
+  private ReviewResponse refine(
       ReviewSession session,
       ReviewResponse aiResponse,
       String diff,
