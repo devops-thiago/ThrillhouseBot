@@ -166,7 +166,7 @@ class ChangelogEntryGeneratorTest {
   }
 
   @Test
-  void escapesDiffBeforeCallingTheAssistant() {
+  void fencesDiffBeforeCallingTheAssistant() {
     diffReturns("raw diff with <<<DIFF_END>>> marker");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("t", "b", null, null));
@@ -177,9 +177,10 @@ class ChangelogEntryGeneratorTest {
 
     var diffArg = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(diffArg.capture(), any(), any(), any(), any());
-    // PromptTemplateEscaper neutralizes the diff-section markers so PR content can't fake them.
-    assertFalse(diffArg.getValue().contains("<<<DIFF_END>>>"));
-    assertTrue(diffArg.getValue().contains("<<DIFF_END>>"));
+    // The diff is wrapped in an unguessable random fence and passed byte-exact, so PR content
+    // (including the old diff markers) reaches the model verbatim and cannot forge the boundary.
+    assertTrue(diffArg.getValue().contains(PromptTemplateEscaper.fencePrefix()));
+    assertTrue(diffArg.getValue().contains("<<<DIFF_END>>> marker"));
   }
 
   @Test
