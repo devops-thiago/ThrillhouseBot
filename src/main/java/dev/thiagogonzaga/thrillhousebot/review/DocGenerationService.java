@@ -29,9 +29,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -167,7 +165,7 @@ public class DocGenerationService {
       List<GitHubPullRequestClient.FileDiff> files,
       GitHubPullRequestClient.PullRequestDetails pr) {
     String diff = diffFormatter.buildDiffString(files);
-    String prContext = buildPrContext(pr);
+    String prContext = PromptSections.prContext(pr.title(), pr.body());
     String stack = resolveProjectStack(task);
     String instructions = buildInstructionsSection(task);
 
@@ -187,7 +185,7 @@ public class DocGenerationService {
       String commitSha,
       List<GitHubPullRequestClient.FileDiff> reviewable,
       DocGenerationResponse response) {
-    var lineResolver = new DiffLineResolver(patchesByFile(reviewable));
+    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(reviewable));
     int cap = config.review().maxReviewComments();
     int posted = 0;
     for (DocGenerationResponse.DocSuggestion doc : response.docs()) {
@@ -304,6 +302,12 @@ public class DocGenerationService {
     }
   }
 
+  // The command-specific guidance line for the repository-instructions section
+  // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
+  private static final String INSTRUCTIONS_GUIDANCE =
+      "The repository maintainers have provided these guidelines; respect them when writing"
+          + " documentation.\n";
+
   /**
    * Pre-rendered, pre-escaped repository-instructions section, or empty when none is configured.
    */
@@ -317,25 +321,7 @@ public class DocGenerationService {
       Log.warn("Instructions resolution failed for /add-docs, continuing without them", e);
       return "";
     }
-    if (!instructions.isPresent()) {
-      return "";
-    }
-    return "## Project-Specific Instructions (from "
-        + instructions.source()
-        + ")\n"
-        + "The repository maintainers have provided these guidelines; respect them when writing"
-        + " documentation.\n"
-        + PromptTemplateEscaper.escape(instructions.content());
-  }
-
-  private Map<String, String> patchesByFile(List<GitHubPullRequestClient.FileDiff> reviewable) {
-    var patches = new HashMap<String, String>();
-    for (var file : reviewable) {
-      if (file.patch() != null && !file.patch().isBlank()) {
-        patches.put(file.filename(), file.patch());
-      }
-    }
-    return patches;
+    return PromptSections.instructionsSection(instructions, INSTRUCTIONS_GUIDANCE);
   }
 
   private void postComment(String auth, DocTask task, String body) {
@@ -346,18 +332,6 @@ public class DocGenerationService {
         task.repo(),
         task.prNumber(),
         new GitHubCommentClient.CreateCommentRequest(body));
-  }
-
-  /** Title and description of the fetched PR, framing what the change is for. */
-  private static String buildPrContext(GitHubPullRequestClient.PullRequestDetails pr) {
-    var sb = new StringBuilder();
-    if (pr.title() != null && !pr.title().isBlank()) {
-      sb.append("Title: ").append(pr.title().strip()).append('\n');
-    }
-    if (pr.body() != null && !pr.body().isBlank()) {
-      sb.append("Description:\n").append(pr.body().strip()).append('\n');
-    }
-    return sb.toString();
   }
 
   private static boolean isBlank(String value) {

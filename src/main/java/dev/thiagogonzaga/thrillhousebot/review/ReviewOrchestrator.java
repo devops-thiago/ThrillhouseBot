@@ -35,12 +35,10 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -302,11 +300,12 @@ public class ReviewOrchestrator {
               combineSections(
                   labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
                   diagramGuidance),
-              buildInstructionsSection(instructions));
+              PromptSections.instructionsSection(instructions, INSTRUCTIONS_GUIDANCE));
       var promptInputs =
           new AiReviewService.PromptInputs(
               fencedDiff,
-              PromptTemplateEscaper.escape(buildPrContext(req.prTitle(), req.prDescription())),
+              PromptTemplateEscaper.escape(
+                  PromptSections.prContext(req.prTitle(), req.prDescription())),
               PromptTemplateEscaper.escape(baseComparison),
               escapedStack,
               PromptTemplateEscaper.escape(
@@ -324,7 +323,7 @@ public class ReviewOrchestrator {
       aiResponse =
           followUpAnalyzer.dropRepliedDuplicates(
               aiResponse, priorAiResponseJsons, inlineComments, botIdentity);
-      var lineResolver = new DiffLineResolver(patchesByFile(files));
+      var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
       aiResponse = populateMissingAnchors(aiResponse, lineResolver);
       persistAiResponse(session, aiResponse);
 
@@ -458,21 +457,13 @@ public class ReviewOrchestrator {
     }
   }
 
-  /**
-   * Pre-rendered repo-instructions prompt section, header and source attribution included, so the
-   * template only needs a single variable. Only the maintainer-provided content is escaped.
-   */
-  static String buildInstructionsSection(InstructionsResolver.ResolvedInstructions instructions) {
-    if (!instructions.isPresent()) {
-      return "";
-    }
-    return "## Project-Specific Instructions (from "
-        + instructions.source()
-        + ")\n"
-        + "The repository maintainers have provided these additional review guidelines.\n"
-        + "These take precedence over default rules where they conflict.\n"
-        + PromptTemplateEscaper.escape(instructions.content());
-  }
+  // The command-specific guidance line(s) for the review path's repository-instructions section
+  // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
+  private static final String INSTRUCTIONS_GUIDANCE =
+      """
+      The repository maintainers have provided these additional review guidelines.
+      These take precedence over default rules where they conflict.
+      """;
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */
   static String combineSections(String first, String second) {
@@ -483,18 +474,6 @@ public class ReviewOrchestrator {
       return first;
     }
     return first + "\n\n" + second;
-  }
-
-  /** Title and author description block the model checks the implementation against. */
-  static String buildPrContext(String title, String description) {
-    var sb = new StringBuilder();
-    if (title != null && !title.isBlank()) {
-      sb.append("Title: ").append(title.strip()).append('\n');
-    }
-    if (description != null && !description.isBlank()) {
-      sb.append("Description:\n").append(description.strip()).append('\n');
-    }
-    return sb.toString();
   }
 
   void persistAiResponse(ReviewSession session, ReviewResponse aiResponse) {
@@ -1078,7 +1057,7 @@ public class ReviewOrchestrator {
       return;
     }
 
-    var lineResolver = new DiffLineResolver(patchesByFile(files));
+    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
     var posted = postInlineComments(auth, owner, repo, prNumber, commitSha, result, lineResolver);
 
     if (result.reviewState() == ReviewState.REQUEST_CHANGES && posted > 0) {
@@ -1207,16 +1186,6 @@ public class ReviewOrchestrator {
       sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
     }
     return sb.toString();
-  }
-
-  private Map<String, String> patchesByFile(List<GitHubPullRequestClient.FileDiff> files) {
-    var patchesByFile = new HashMap<String, String>();
-    for (var file : diffFormatter.reviewableFiles(files)) {
-      if (file.patch() != null && !file.patch().isBlank()) {
-        patchesByFile.put(file.filename(), file.patch());
-      }
-    }
-    return patchesByFile;
   }
 
   /**

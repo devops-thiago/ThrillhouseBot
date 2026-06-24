@@ -25,8 +25,10 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.PatternSyntaxException;
 
 /**
@@ -120,6 +122,21 @@ public class ReviewDiffFormatter {
       return List.of();
     }
     return files.stream().filter(f -> !isIgnored(f.filename())).toList();
+  }
+
+  /**
+   * The non-blank patch text of each reviewable file, keyed by filename — the map a {@link
+   * DiffLineResolver} parses to map AI-reported line numbers back onto the diff. Ignored files are
+   * dropped, so the resolver never anchors a comment to a file outside review scope.
+   */
+  Map<String, String> patchesByFile(List<GitHubPullRequestClient.FileDiff> files) {
+    var patches = new HashMap<String, String>();
+    for (var file : reviewableFiles(files)) {
+      if (file.patch() != null && !file.patch().isBlank()) {
+        patches.put(file.filename(), file.patch());
+      }
+    }
+    return patches;
   }
 
   String buildDiffString(List<GitHubPullRequestClient.FileDiff> files) {
