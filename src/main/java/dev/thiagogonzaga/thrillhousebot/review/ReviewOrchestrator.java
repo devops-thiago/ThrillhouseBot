@@ -32,7 +32,6 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Consumer;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -50,14 +49,6 @@ public class ReviewOrchestrator {
   // Check run conclusion constants
   private static final String CONCLUSION_FAILURE = "failure";
 
-  // PR review event types submitted via createReview.
-  private static final String EVENT_APPROVE = "APPROVE";
-  private static final String EVENT_REQUEST_CHANGES = "REQUEST_CHANGES";
-  private static final String EVENT_COMMENT = "COMMENT";
-
-  // CI check status shown in the no-issues review body; CI evaluation lives in CiStatusEvaluator.
-  private static final String CI_PENDING = "pending";
-
   private final ThrillhouseConfig config;
   // The login(s) the bot posts under, resolved once from config so that summary dedup, first-review
   // detection, and follow-up matching all recognize the bot's own activity regardless of which
@@ -65,10 +56,7 @@ public class ReviewOrchestrator {
   private final BotIdentity botIdentity;
   private final GitHubAuthClient authClient;
 
-  private final GitHubReviewClient reviewClient;
-
   private final GitHubCommentClient commentClient;
-  private final ReviewThreadService reviewThreadService;
   private final AiReviewService aiReviewService;
   private final FindingVerificationService findingVerificationService;
   private final FindingQuoteValidator quoteValidator;
@@ -78,7 +66,6 @@ public class ReviewOrchestrator {
 
   private final ReviewSessionPersistence sessionPersistence;
 
-  private final SuggestionFormatter suggestionFormatter;
   private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
 
@@ -93,6 +80,8 @@ public class ReviewOrchestrator {
   private final ReviewContextLoader contextLoader;
 
   private final ReviewPromptAssembler promptAssembler;
+
+  private final ReviewPublisher reviewPublisher;
 
   private final ObjectMapper mapper;
 
@@ -126,16 +115,13 @@ public class ReviewOrchestrator {
   public ReviewOrchestrator(
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
-      @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
-      ReviewThreadService reviewThreadService,
       AiReviewService aiReviewService,
       FindingVerificationService findingVerificationService,
       FindingQuoteValidator quoteValidator,
       FindingDeduplicator deduplicator,
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
-      SuggestionFormatter suggestionFormatter,
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       ReviewDiffFormatter diffFormatter,
@@ -144,20 +130,18 @@ public class ReviewOrchestrator {
       CheckRunManager checkRunManager,
       ReviewContextLoader contextLoader,
       ReviewPromptAssembler promptAssembler,
+      ReviewPublisher reviewPublisher,
       ObjectMapper mapper) {
     this.config = config;
     this.botIdentity = BotIdentity.from(config.github().botLogins());
     this.authClient = authClient;
-    this.reviewClient = reviewClient;
     this.commentClient = commentClient;
-    this.reviewThreadService = reviewThreadService;
     this.aiReviewService = aiReviewService;
     this.findingVerificationService = findingVerificationService;
     this.quoteValidator = quoteValidator;
     this.deduplicator = deduplicator;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
-    this.suggestionFormatter = suggestionFormatter;
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.diffFormatter = diffFormatter;
@@ -166,6 +150,7 @@ public class ReviewOrchestrator {
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
+    this.reviewPublisher = reviewPublisher;
     this.mapper = mapper;
   }
 
@@ -301,10 +286,12 @@ public class ReviewOrchestrator {
             new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
       }
 
-      dismissPendingBotReviews(auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
-      postReview(auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, files);
+      reviewPublisher.dismissPendingBotReviews(
+          auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
+      reviewPublisher.postReview(
+          auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, files);
 
-      resolveAddressedThreads(
+      reviewPublisher.resolveAddressedThreads(
           auth, req, previousAiResponseJson, inlineComments, aiResponse.previousFindingsStatus());
 
       labeler.applyOrSuggest(
@@ -394,54 +381,6 @@ public class ReviewOrchestrator {
       return base + "/dashboard/sessions/";
     }
     return base + "/session/" + publicId;
-  }
-
-  /**
-   * Resolves the GitHub threads of previous findings the model judged resolved (fix landed) or
-   * justified (a reply explains the deferral), so addressed feedback stops cluttering the PR.
-   * Best-effort: the review outcome is already posted when this runs.
-   */
-  void resolveAddressedThreads(
-      String auth,
-      ReviewRequest req,
-      String previousAiResponseJson,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      List<ReviewResponse.PreviousFindingStatus> statuses) {
-    try {
-      List<Integer> addressed =
-          statuses.stream()
-              .filter(
-                  s ->
-                      "resolved".equalsIgnoreCase(s.status())
-                          || "justified".equalsIgnoreCase(s.status()))
-              .map(ReviewResponse.PreviousFindingStatus::id)
-              .toList();
-      if (addressed.isEmpty() || inlineComments.isEmpty()) {
-        return;
-      }
-      var rootByFinding =
-          followUpAnalyzer.matchFindingThreads(previousAiResponseJson, inlineComments, botIdentity);
-      var threads =
-          reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
-      var resolved = 0;
-      for (int findingId : addressed) {
-        var rootCommentId = rootByFinding.get(findingId);
-        ReviewThreadService.ThreadRef thread =
-            rootCommentId != null ? threads.get(rootCommentId) : null;
-        if (thread != null
-            && !thread.resolved()
-            && reviewThreadService.resolve(auth, thread.id())) {
-          resolved++;
-        }
-      }
-      if (resolved > 0) {
-        Log.infof(
-            "Resolved %d addressed review thread(s) on %s/%s #%d",
-            resolved, req.owner(), req.repo(), req.prNumber());
-      }
-    } catch (RuntimeException e) {
-      Log.warn("Failed to resolve addressed review threads (continuing)", e);
-    }
   }
 
   /**
@@ -541,7 +480,7 @@ public class ReviewOrchestrator {
 
   static String checkTitleForResult(ReviewResult result) {
     if (!result.hasIssues()
-        && unresolvedPreviousCount(result) == 0
+        && result.unresolvedPreviousCount() == 0
         && result.offendingCiChecks().isEmpty()) {
       return CHECK_NAME + " ✅";
     }
@@ -564,30 +503,11 @@ public class ReviewOrchestrator {
           "No new issues found, but %d required CI check(s) are still pending or failing.",
           result.offendingCiChecks().size());
     }
-    var unresolved = unresolvedPreviousCount(result);
+    var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
       return ZERO_ISSUES_MESSAGE;
     }
-    return unresolvedPreviousMessage(unresolved);
-  }
-
-  static long unresolvedPreviousCount(ReviewResult result) {
-    return result.previousStatuses().stream()
-        .filter(s -> "unresolved".equalsIgnoreCase(s.status()))
-        .count();
-  }
-
-  // A backstop-held finding can be summary-only — its flagged line was outside the diff when first
-  // raised, so it was never posted as an inline comment and has no thread to reply on.
-  // The guidance therefore qualifies the reply path ("where one exists") instead of promising a
-  // thread that may not be there; fixing the code, or a model resolved/justified verdict, still
-  // clears such a finding.
-  static String unresolvedPreviousMessage(long unresolved) {
-    return String.format(
-        "No new issues in this revision, but %d previous finding(s) remain unresolved — "
-            + "fix them, or reply on their review thread (where one exists) with why they are"
-            + " deferred.",
-        unresolved);
+    return ReviewResult.unresolvedPreviousMessage(unresolved);
   }
 
   record DiffStats(int filesChanged, int additions, int deletions, int omittedFiles) {
@@ -679,7 +599,7 @@ public class ReviewOrchestrator {
                 previousStatuses,
                 offendingCiChecks));
     if (diffStats.truncated()) {
-      summaryMarkdown = truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
+      summaryMarkdown = ReviewResult.truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
     }
 
     return new ReviewResult(
@@ -727,17 +647,6 @@ public class ReviewOrchestrator {
     return new FindingTally(findings, critical, high, medium, low, highest);
   }
 
-  /**
-   * Banner prepended to the summary when the diff was truncated, so a reader knows the review is
-   * partial — the verdict is also held back from APPROVE in that case.
-   */
-  private static String truncationNotice(int omittedFiles) {
-    return String.format(
-        "> ⚠️ **Large PR — partial review.** %d file(s) were omitted because the diff exceeded the"
-            + " size budget; the findings and verdict below cover only the reviewed portion.%n%n",
-        omittedFiles);
-  }
-
   ReviewResult buildResult(
       ReviewResponse aiResponse,
       boolean isFirstReview,
@@ -760,327 +669,5 @@ public class ReviewOrchestrator {
       DiffStats diffStats,
       List<Finding> unresolvedPrevious) {
     return buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, List.of());
-  }
-
-  void postReview(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String commitSha,
-      ReviewResult result,
-      List<GitHubPullRequestClient.FileDiff> files) {
-    if (!result.hasIssues()) {
-      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
-      return;
-    }
-
-    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
-    var posted = postInlineComments(auth, owner, repo, prNumber, commitSha, result, lineResolver);
-
-    if (result.reviewState() == ReviewState.REQUEST_CHANGES && posted > 0) {
-      createReviewWithFallback(
-          auth,
-          owner,
-          repo,
-          prNumber,
-          new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              "ThrillhouseBot requested changes — see inline comments on the diff.",
-              EVENT_REQUEST_CHANGES,
-              List.of()));
-    } else if (posted == 0) {
-      // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
-      // force-push). Surface them in the review body so they are not invisible: a follow-up review
-      // posts no summary comment, so without this the findings would show only as a red check
-      // .
-      Log.warnf(
-          "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
-          owner, repo, prNumber);
-      String body =
-          result.isFirstReview()
-              ? "ThrillhouseBot found "
-                  + result.findings().size()
-                  + " issue(s) that could not be anchored to the current diff — see the PR summary"
-                  + " comment above for details."
-              : unanchoredFindingsBody(result);
-      createReviewWithFallback(
-          auth,
-          owner,
-          repo,
-          prNumber,
-          new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              body,
-              result.reviewState() == ReviewState.REQUEST_CHANGES
-                  ? EVENT_REQUEST_CHANGES
-                  : EVENT_COMMENT,
-              List.of()));
-    }
-  }
-
-  /**
-   * A review-body list of findings, used when none could be anchored as inline comments (their
-   * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
-   * which posts no summary comment — without it the findings would surface only as a red check run
-   * .
-   */
-  private static String unanchoredFindingsBody(ReviewResult result) {
-    var sb = new StringBuilder();
-    sb.append("ThrillhouseBot found ")
-        .append(result.findings().size())
-        .append(" issue(s) that could not be anchored to the current diff:\n\n");
-    for (Finding f : result.findings()) {
-      sb.append("- **")
-          .append(f.risk().name())
-          .append(":** ")
-          .append(f.title())
-          .append(" (`")
-          .append(f.file())
-          .append(":")
-          .append(f.line())
-          .append("`)\n");
-    }
-    return sb.toString();
-  }
-
-  /**
-   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why.
-   */
-  private void postNoIssuesReview(
-      String auth, String owner, String repo, int prNumber, String commitSha, ReviewResult result) {
-    if (result.reviewState() == ReviewState.APPROVE) {
-      // On a first review the celebration is part of the summary comment, so the approval itself
-      // carries no body; follow-ups post no summary and keep the message here.
-      var req =
-          new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              result.isFirstReview() ? "" : ZERO_ISSUES_MESSAGE,
-              EVENT_APPROVE,
-              List.of());
-      createReviewWithFallback(auth, owner, repo, prNumber, req);
-      return;
-    }
-    // A COMMENT held back only by pending/failed CI (no findings, nothing unresolved) merely
-    // restates the summary comment the first review already posts, so emitting it too would
-    // duplicate that message. Skip it on the first review and let the summary stand alone.
-    // Unresolved previous findings are excluded — their COMMENT carries distinct "reply on the
-    // thread" guidance the summary lacks, so it still posts. Follow-ups post no summary, so the
-    // COMMENT is their only signal; REQUEST_CHANGES always posts; the merge gate is the check run.
-    if (result.reviewState() == ReviewState.COMMENT
-        && result.isFirstReview()
-        && unresolvedPreviousCount(result) == 0) {
-      return;
-    }
-    // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
-    // never claim a clean review.
-    var req =
-        new GitHubReviewClient.CreateReviewRequest(
-            commitSha,
-            noIssuesBody(result),
-            result.reviewState() == ReviewState.REQUEST_CHANGES
-                ? EVENT_REQUEST_CHANGES
-                : EVENT_COMMENT,
-            List.of());
-    createReviewWithFallback(auth, owner, repo, prNumber, req);
-  }
-
-  /**
-   * Body for a no-new-findings COMMENT review: failing/pending CI checks, unresolved previous
-   * findings, and/or a truncated diff — whichever held the verdict back from APPROVE. The
-   * unresolved message is emitted only when there actually are unresolved findings (never a bogus
-   * "0 … unresolved"), and truncation is disclosed here on follow-up reviews, which post no summary
-   * comment to carry the first-review banner.
-   */
-  private String noIssuesBody(ReviewResult result) {
-    long unresolved = unresolvedPreviousCount(result);
-    var sb = new StringBuilder();
-    if (!result.offendingCiChecks().isEmpty()) {
-      sb.append(
-          "ThrillhouseBot found no issues in this PR, but some checks are still pending or"
-              + " failed:\n");
-      for (var check : result.offendingCiChecks()) {
-        String status = check.isFailing() ? "failed" : CI_PENDING;
-        sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
-      }
-      if (unresolved > 0) {
-        sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
-      }
-    } else if (unresolved > 0) {
-      sb.append(unresolvedPreviousMessage(unresolved));
-    }
-    // The first-review summary comment carries the truncation banner; a follow-up posts no summary,
-    // so disclose the partial review here instead — otherwise a truncation-only hold would surface
-    // no reason at all (and used to misreport "0 previous finding(s) remain unresolved").
-    if (result.truncated() && !result.isFirstReview()) {
-      if (!sb.isEmpty()) {
-        sb.append("\n\n");
-      }
-      sb.append(truncationNotice(result.omittedFiles()).strip());
-    }
-    return sb.toString();
-  }
-
-  /**
-   * Posts each finding as its own pull request review comment on the diff. Individual comments
-   * survive 422s that would reject an entire batched review.
-   */
-  int postInlineComments(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String commitSha,
-      ReviewResult result,
-      DiffLineResolver lineResolver) {
-    var target = new CommentTarget(auth, owner, repo, prNumber, commitSha);
-    var posted = 0;
-    var maxComments = config.review().maxReviewComments();
-    for (var i = 0; i < result.findings().size() && posted < maxComments; i++) {
-      // The 1-based index doubles as the finding's id in the persisted response and the
-      // hidden comment marker, keeping thread matching deterministic on follow-up reviews
-      if (postFindingComment(target, result.findings().get(i), i + 1, lineResolver)) {
-        posted++;
-      }
-    }
-    return posted;
-  }
-
-  /** PR coordinates shared by every inline comment of one review. */
-  private record CommentTarget(
-      String auth, String owner, String repo, int prNumber, String commitSha) {}
-
-  private boolean postFindingComment(
-      CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
-    var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
-    if (line.isEmpty()) {
-      Log.debugf(
-          "Skipping inline comment for %s:%d — line is outside PR diff",
-          finding.file(), finding.line());
-      return false;
-    }
-
-    var resolvedLine = line.getAsInt();
-    if (resolvedLine != finding.line()) {
-      Log.debugf(
-          "Adjusted inline comment line for %s from %d to %d",
-          finding.file(), finding.line(), resolvedLine);
-    }
-
-    // A suggestion whose old code spans several lines is posted as a multi-line comment so the
-    // GitHub suggestion overwrites the whole range, not just the anchor line (#71). The range is
-    // resolved from the verbatim old code's position in the diff; a blank/single-line/unresolvable
-    // anchor leaves it empty and the comment stays single-line.
-    var range =
-        finding.hasSuggestion()
-            ? lineResolver.resolveSuggestionRange(finding.file(), finding.suggestionOld())
-            : Optional.<DiffLineResolver.LineRange>empty();
-
-    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, true)
-        || (finding.hasSuggestion()
-            && tryPostInlineComment(
-                target, finding, findingId, resolvedLine, Optional.empty(), false))) {
-      return true;
-    }
-    Log.warnf("GitHub rejected inline comment for %s:%d", finding.file(), finding.line());
-    return false;
-  }
-
-  /**
-   * Posts one inline comment. When {@code range} is present the comment spans {@code
-   * start_line}..{@code line} (both RIGHT side); otherwise it anchors to the single {@code line}.
-   * The retry without a suggestion block always passes an empty range — a multi-line span is only
-   * meaningful with a suggestion to apply across it.
-   */
-  private boolean tryPostInlineComment(
-      CommentTarget target,
-      Finding finding,
-      int findingId,
-      int line,
-      Optional<DiffLineResolver.LineRange> range,
-      boolean includeSuggestion) {
-    int endLine = range.map(DiffLineResolver.LineRange::endLine).orElse(line);
-    Integer startLine = range.map(DiffLineResolver.LineRange::startLine).orElse(null);
-    String startSide = startLine != null ? "RIGHT" : null;
-    try {
-      reviewClient.createPullRequestComment(
-          target.auth(),
-          ACCEPT,
-          target.owner(),
-          target.repo(),
-          target.prNumber(),
-          new GitHubReviewClient.CreatePullRequestCommentRequest(
-              target.commitSha(),
-              suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId),
-              finding.file(),
-              endLine,
-              "RIGHT",
-              startLine,
-              startSide));
-      return true;
-    } catch (RuntimeException e) {
-      Log.debugf(
-          e,
-          "Inline comment rejected for %s:%d (suggestion=%s)",
-          finding.file(),
-          endLine,
-          includeSuggestion);
-      return false;
-    }
-  }
-
-  /**
-   * Deletes any pending review left by this bot — GitHub allows only one pending review per user.
-   * Reuses the reviews already fetched for this run instead of re-listing: no review is created
-   * between that fetch and here, so a second {@code listReviews} would only spend extra rate-limit
-   * budget.
-   */
-  void dismissPendingBotReviews(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      List<GitHubReviewClient.ReviewResponse> priorReviews) {
-    try {
-      for (var review : priorReviews) {
-        if ("PENDING".equals(review.state()) && botIdentity.matches(review.user().login())) {
-          reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
-          Log.debugf(
-              "Dismissed pending review %d on %s/%s #%d", review.id(), owner, repo, prNumber);
-        }
-      }
-    } catch (RuntimeException e) {
-      Log.debug("Could not dismiss pending bot reviews (continuing)", e);
-    }
-  }
-
-  /**
-   * Submits a PR review, falling back to a summary-only review when inline comments are rejected
-   * (e.g. stale line numbers after a force-push).
-   */
-  void createReviewWithFallback(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      GitHubReviewClient.CreateReviewRequest req) {
-    try {
-      reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, req);
-    } catch (RuntimeException e) {
-      if (req.comments() == null || req.comments().isEmpty()) {
-        throw new ReviewPostException(
-            "GitHub review rejected for " + owner + "/" + repo + " #" + prNumber, e);
-      }
-      Log.warnf(
-          e,
-          "PR review with inline comments rejected for %s/%s #%d — retrying without comments",
-          owner,
-          repo,
-          prNumber);
-      var fallback =
-          new GitHubReviewClient.CreateReviewRequest(
-              req.commitId(), req.body(), req.event(), List.of());
-      reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, fallback);
-    }
   }
 }

@@ -100,6 +100,10 @@ class ReviewOrchestratorTest {
 
   private ReviewDiffFormatter diffFormatter;
 
+  // The real write-side collaborator, built from the mocked clients; exercised directly by the
+  // posting tests and injected into the orchestrator so the review() integration path is unchanged.
+  private ReviewPublisher reviewPublisher;
+
   private ReviewOrchestrator orchestrator;
 
   @BeforeEach
@@ -111,6 +115,14 @@ class ReviewOrchestratorTest {
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
     diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
+    reviewPublisher =
+        new ReviewPublisher(
+            reviewClient,
+            reviewThreadService,
+            suggestionFormatter,
+            diffFormatter,
+            followUpAnalyzer,
+            config);
     orchestrator = newOrchestrator(mapper);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -151,16 +163,13 @@ class ReviewOrchestratorTest {
     return new ReviewOrchestrator(
         config,
         authClient,
-        reviewClient,
         commentClient,
-        reviewThreadService,
         aiReviewService,
         findingVerificationService,
         quoteValidator,
         deduplicator,
         broadcaster,
         sessionPersistence,
-        suggestionFormatter,
         summaryGenerator,
         followUpAnalyzer,
         diffFormatter,
@@ -179,6 +188,7 @@ class ReviewOrchestratorTest {
             sessionPersistence,
             config),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
+        reviewPublisher,
         objectMapper);
   }
 
@@ -235,7 +245,7 @@ class ReviewOrchestratorTest {
               aiResponse, false, new ReviewOrchestrator.DiffStats(120, 4000, 4000, 7), List.of());
       assertEquals(ReviewState.COMMENT, result.reviewState());
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -270,7 +280,7 @@ class ReviewOrchestratorTest {
               List.of(),
               7);
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -301,7 +311,7 @@ class ReviewOrchestratorTest {
               List.of(),
               7);
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -1778,7 +1788,7 @@ class ReviewOrchestratorTest {
           new GitHubReviewClient.ReviewResponse(
               2L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
 
-      orchestrator.dismissPendingBotReviews(
+      reviewPublisher.dismissPendingBotReviews(
           "Bearer tok", "owner", "repo", 7, List.of(pending, approved, pendingHuman));
 
       verify(reviewClient)
@@ -1805,7 +1815,7 @@ class ReviewOrchestratorTest {
       // A delete that fails (e.g. GitHub unavailable) must not propagate out of dismissal.
       assertDoesNotThrow(
           () ->
-              orchestrator.dismissPendingBotReviews(
+              reviewPublisher.dismissPendingBotReviews(
                   "Bearer tok", "owner", "repo", 7, List.of(pending)));
     }
 
@@ -1813,7 +1823,7 @@ class ReviewOrchestratorTest {
     void shouldCreateReviewWithoutFallbackWhenFirstAttemptSucceeds() {
       var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
 
-      orchestrator.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
+      reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
 
       verify(reviewClient)
           .createReview(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), same(req));
@@ -1908,7 +1918,7 @@ class ReviewOrchestratorTest {
           .when(reviewClient)
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
-      orchestrator.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
+      reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient, times(2))
@@ -1929,7 +1939,8 @@ class ReviewOrchestratorTest {
       ReviewPostException ex =
           assertThrows(
               ReviewPostException.class,
-              () -> orchestrator.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+              () ->
+                  reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
 
       assertTrue(ex.getMessage().contains("owner/repo #7"));
       assertSame(rejection, ex.getCause());
@@ -2077,7 +2088,7 @@ class ReviewOrchestratorTest {
       var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(0, posted);
@@ -2097,7 +2108,7 @@ class ReviewOrchestratorTest {
       when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment body");
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2131,7 +2142,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2156,7 +2167,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(0, posted);
@@ -2190,7 +2201,7 @@ class ReviewOrchestratorTest {
       when(suggestionFormatter.formatReviewComment(any(), eq(true))).thenReturn("body");
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2208,7 +2219,7 @@ class ReviewOrchestratorTest {
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
 
-      orchestrator.postReview(
+      reviewPublisher.postReview(
           "Bearer tok",
           "owner",
           "repo",
@@ -2251,7 +2262,7 @@ class ReviewOrchestratorTest {
               "",
               List.of());
 
-      orchestrator.postReview(
+      reviewPublisher.postReview(
           "Bearer tok",
           "owner",
           "repo",
@@ -2279,7 +2290,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-      orchestrator.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
 
       // First review: the celebration lives in the summary comment, not the approval body
       verify(reviewClient)
@@ -2301,7 +2312,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of());
 
-      orchestrator.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
 
       verify(reviewClient)
           .createReview(
@@ -2322,7 +2333,7 @@ class ReviewOrchestratorTest {
       var result = resultWithFinding(finding, ReviewState.COMMENT);
       when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment");
 
-      orchestrator.postReview(
+      reviewPublisher.postReview(
           "Bearer tok",
           "owner",
           "repo",
@@ -2354,7 +2365,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(0, posted);
@@ -2387,7 +2398,7 @@ class ReviewOrchestratorTest {
       var resolver = new DiffLineResolver(Map.of("src/Main.java", patch));
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2431,7 +2442,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2889,7 +2900,7 @@ class ReviewOrchestratorTest {
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -2913,7 +2924,7 @@ class ReviewOrchestratorTest {
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -2939,7 +2950,7 @@ class ReviewOrchestratorTest {
               List.of(),
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -2962,7 +2973,7 @@ class ReviewOrchestratorTest {
               List.of(),
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3043,7 +3054,7 @@ class ReviewOrchestratorTest {
           buildWithBackstop(
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3063,7 +3074,7 @@ class ReviewOrchestratorTest {
           buildWithBackstop(
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3250,7 +3261,8 @@ class ReviewOrchestratorTest {
       // T4's resolution is attempted but GitHub does not confirm it — must not throw
       when(reviewThreadService.resolve(AUTH, "T4")).thenReturn(false);
 
-      orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(rootComment()), statuses);
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), "{}", List.of(rootComment()), statuses);
 
       verify(reviewThreadService).resolve(AUTH, "T1");
       verify(reviewThreadService).resolve(AUTH, "T4");
@@ -3265,7 +3277,8 @@ class ReviewOrchestratorTest {
       when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of());
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5)).thenReturn(Map.of());
 
-      orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(rootComment()), statuses);
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), "{}", List.of(rootComment()), statuses);
 
       verify(reviewThreadService, never()).resolve(anyString(), anyString());
     }
@@ -3276,9 +3289,9 @@ class ReviewOrchestratorTest {
           List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
       var resolved = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
 
-      orchestrator.resolveAddressedThreads(
+      reviewPublisher.resolveAddressedThreads(
           AUTH, request(), "{}", List.of(rootComment()), unresolvedOnly);
-      orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(), resolved);
+      reviewPublisher.resolveAddressedThreads(AUTH, request(), "{}", List.of(), resolved);
 
       verifyNoInteractions(reviewThreadService);
     }
@@ -3293,7 +3306,7 @@ class ReviewOrchestratorTest {
 
       assertDoesNotThrow(
           () ->
-              orchestrator.resolveAddressedThreads(
+              reviewPublisher.resolveAddressedThreads(
                   AUTH, request(), "{}", List.of(rootComment()), statuses));
     }
   }
@@ -3831,7 +3844,7 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
               offending);
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
