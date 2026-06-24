@@ -976,7 +976,8 @@ public class ReviewOrchestrator {
         isFirstReview,
         summaryMarkdown,
         previousStatuses,
-        offendingCiChecks);
+        offendingCiChecks,
+        diffStats.omittedFiles());
   }
 
   /** Findings parsed from the model response, with per-severity counts and the highest risk. */
@@ -1168,22 +1169,37 @@ public class ReviewOrchestrator {
   }
 
   /**
-   * Body for a no-new-findings COMMENT review: failing/pending CI checks and/or unresolved items.
+   * Body for a no-new-findings COMMENT review: failing/pending CI checks, unresolved previous
+   * findings, and/or a truncated diff — whichever held the verdict back from APPROVE. The
+   * unresolved message is emitted only when there actually are unresolved findings (never a bogus
+   * "0 … unresolved"), and truncation is disclosed here on follow-up reviews, which post no summary
+   * comment to carry the first-review banner.
    */
   private String noIssuesBody(ReviewResult result) {
     long unresolved = unresolvedPreviousCount(result);
-    if (result.offendingCiChecks().isEmpty()) {
-      return unresolvedPreviousMessage(unresolved);
-    }
     var sb = new StringBuilder();
-    sb.append(
-        "ThrillhouseBot found no issues in this PR, but some checks are still pending or failed:\n");
-    for (var check : result.offendingCiChecks()) {
-      String status = check.isFailing() ? "failed" : CI_PENDING;
-      sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
+    if (!result.offendingCiChecks().isEmpty()) {
+      sb.append(
+          "ThrillhouseBot found no issues in this PR, but some checks are still pending or"
+              + " failed:\n");
+      for (var check : result.offendingCiChecks()) {
+        String status = check.isFailing() ? "failed" : CI_PENDING;
+        sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
+      }
+      if (unresolved > 0) {
+        sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
+      }
+    } else if (unresolved > 0) {
+      sb.append(unresolvedPreviousMessage(unresolved));
     }
-    if (unresolved > 0) {
-      sb.append("\nAdditionally, ").append(unresolvedPreviousMessage(unresolved));
+    // The first-review summary comment carries the truncation banner; a follow-up posts no summary,
+    // so disclose the partial review here instead — otherwise a truncation-only hold would surface
+    // no reason at all (and used to misreport "0 previous finding(s) remain unresolved").
+    if (result.truncated() && !result.isFirstReview()) {
+      if (!sb.isEmpty()) {
+        sb.append("\n\n");
+      }
+      sb.append(truncationNotice(result.omittedFiles()).strip());
     }
     return sb.toString();
   }
