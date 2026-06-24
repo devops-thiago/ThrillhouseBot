@@ -332,8 +332,7 @@ public class ReviewDiffFormatter {
     }
   }
 
-  private String formatFileSection(
-      GitHubPullRequestClient.FileDiff file, Set<String> reviewableNames) {
+  String formatFileSection(GitHubPullRequestClient.FileDiff file, Set<String> reviewableNames) {
     var sb =
         new StringBuilder("### ")
             .append(file.filename())
