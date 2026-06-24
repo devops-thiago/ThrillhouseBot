@@ -167,7 +167,7 @@ public class MaintainerReplyService {
     String reply =
         generateReply(
             task.question(),
-            buildPrContext(task),
+            PromptSections.prContext(task.prTitle(), task.prDescription()),
             finding,
             task.diffHunk() != null ? task.diffHunk() : "",
             thread);
@@ -189,7 +189,12 @@ public class MaintainerReplyService {
 
   private void handleMention(String auth, ReplyTask task) {
     String reply =
-        generateReply(task.question(), buildPrContext(task), "", fetchDiff(auth, task), "");
+        generateReply(
+            task.question(),
+            PromptSections.prContext(task.prTitle(), task.prDescription()),
+            "",
+            fetchDiff(auth, task),
+            "");
     if (reply == null) {
       return;
     }
@@ -277,16 +282,5 @@ public class MaintainerReplyService {
       Log.warn("Failed to fetch PR diff for mention reply, continuing without it", e);
       return "";
     }
-  }
-
-  private static String buildPrContext(ReplyTask task) {
-    var sb = new StringBuilder();
-    if (task.prTitle() != null && !task.prTitle().isBlank()) {
-      sb.append("Title: ").append(task.prTitle().strip()).append('\n');
-    }
-    if (task.prDescription() != null && !task.prDescription().isBlank()) {
-      sb.append("Description:\n").append(task.prDescription().strip()).append('\n');
-    }
-    return sb.toString();
   }
 }
