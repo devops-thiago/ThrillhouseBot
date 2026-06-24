@@ -162,7 +162,9 @@ public class ReviewOrchestrator {
       // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
       // "could not determine required checks" — evaluateCiChecks then gates on all checks (null).
       List<String> requiredContexts =
-          ciStatusEvaluator.resolveRequiredContexts(auth, req).orElse(null);
+          ciStatusEvaluator
+              .resolveRequiredContexts(auth, req.owner(), req.repo(), req.prNumber())
+              .orElse(null);
       List<ReviewResult.CiCheck> offendingCiChecks =
           ciStatusEvaluator.evaluateCiChecks(
               auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);

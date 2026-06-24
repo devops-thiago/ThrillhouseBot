@@ -436,11 +436,6 @@ class CiStatusEvaluatorTest {
   @Nested
   class ResolveRequiredContexts {
 
-    private ReviewOrchestrator.ReviewRequest req() {
-      return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 42, "sha", "Test PR", "", "base", "main", 123L, false);
-    }
-
     private void stubBaseRef(String ref) {
       when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
@@ -473,7 +468,7 @@ class CiStatusEvaluatorTest {
       when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("boom"));
 
-      assertTrue(evaluator.resolveRequiredContexts("auth", req()).isEmpty());
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
       verifyNoInteractions(checkRunClient);
     }
 
@@ -481,14 +476,14 @@ class CiStatusEvaluatorTest {
     void returnsEmptyWhenPullRequestDetailsAreNull() {
       when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42))).thenReturn(null);
 
-      assertTrue(evaluator.resolveRequiredContexts("auth", req()).isEmpty());
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
     }
 
     @Test
     void returnsEmptyWhenBaseRefIsNull() {
       stubBaseRef(null);
 
-      assertTrue(evaluator.resolveRequiredContexts("auth", req()).isEmpty());
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
       verify(checkRunClient, never())
           .getBranchRules(anyString(), anyString(), anyString(), anyString(), anyString());
     }
@@ -502,7 +497,8 @@ class CiStatusEvaluatorTest {
       stubClassic(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
 
       assertEquals(
-          List.of("build"), evaluator.resolveRequiredContexts("auth", req()).orElseThrow());
+          List.of("build"),
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
     }
 
     @Test
@@ -514,7 +510,8 @@ class CiStatusEvaluatorTest {
       stubClassic(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
 
       assertEquals(
-          List.of("build"), evaluator.resolveRequiredContexts("auth", req()).orElseThrow());
+          List.of("build"),
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
     }
 
     @Test
@@ -528,7 +525,7 @@ class CiStatusEvaluatorTest {
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenThrow(new RuntimeException("Not Found, status code 404"));
 
-      var result = evaluator.resolveRequiredContexts("auth", req());
+      var result = evaluator.resolveRequiredContexts("auth", "owner", "repo", 42);
       assertTrue(result.isPresent());
       assertTrue(result.orElseThrow().isEmpty());
     }
@@ -544,7 +541,8 @@ class CiStatusEvaluatorTest {
           .thenThrow(new RuntimeException("Not Found, status code 404"));
 
       assertEquals(
-          List.of("build"), evaluator.resolveRequiredContexts("auth", req()).orElseThrow());
+          List.of("build"),
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
     }
 
     @Test
@@ -558,7 +556,7 @@ class CiStatusEvaluatorTest {
 
       assertEquals(
           List.of("build", "lint", "deploy"),
-          evaluator.resolveRequiredContexts("auth", req()).orElseThrow());
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
     }
 
     @Test
@@ -569,7 +567,7 @@ class CiStatusEvaluatorTest {
           .thenReturn(null);
       stubClassic(null);
 
-      assertTrue(evaluator.resolveRequiredContexts("auth", req()).isEmpty());
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
     }
   }
 }

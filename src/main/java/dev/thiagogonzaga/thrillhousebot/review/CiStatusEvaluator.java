@@ -72,11 +72,10 @@ public class CiStatusEvaluator {
    * neither mechanism governs the branch or both lookups fail.
    */
   Optional<List<String>> resolveRequiredContexts(
-      String auth, ReviewOrchestrator.ReviewRequest req) {
+      String auth, String owner, String repo, int prNumber) {
     String branch;
     try {
-      var prDetails =
-          prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      var prDetails = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
       if (prDetails == null || prDetails.base() == null || prDetails.base().ref() == null) {
         return Optional.empty();
       }
@@ -88,12 +87,12 @@ public class CiStatusEvaluator {
 
     var contexts = new LinkedHashSet<String>();
     boolean resolved = false;
-    var fromRulesets = requiredContextsFromRulesets(auth, req, branch);
+    var fromRulesets = requiredContextsFromRulesets(auth, owner, repo, branch);
     if (fromRulesets.isPresent()) {
       resolved = true;
       contexts.addAll(fromRulesets.get());
     }
-    var fromClassic = requiredContextsFromClassicProtection(auth, req, branch);
+    var fromClassic = requiredContextsFromClassicProtection(auth, owner, repo, branch);
     if (fromClassic.isPresent()) {
       resolved = true;
       contexts.addAll(fromClassic.get());
@@ -108,9 +107,9 @@ public class CiStatusEvaluator {
    * applies but mandates no status checks.
    */
   private Optional<List<String>> requiredContextsFromRulesets(
-      String auth, ReviewOrchestrator.ReviewRequest req, String branch) {
+      String auth, String owner, String repo, String branch) {
     try {
-      var rules = checkRunClient.getBranchRules(auth, ACCEPT, req.owner(), req.repo(), branch);
+      var rules = checkRunClient.getBranchRules(auth, ACCEPT, owner, repo, branch);
       if (rules == null || rules.isEmpty()) {
         return Optional.empty();
       }
@@ -138,10 +137,9 @@ public class CiStatusEvaluator {
    * the lookup failed.
    */
   private Optional<List<String>> requiredContextsFromClassicProtection(
-      String auth, ReviewOrchestrator.ReviewRequest req, String branch) {
+      String auth, String owner, String repo, String branch) {
     try {
-      var protection =
-          checkRunClient.getRequiredStatusChecks(auth, ACCEPT, req.owner(), req.repo(), branch);
+      var protection = checkRunClient.getRequiredStatusChecks(auth, ACCEPT, owner, repo, branch);
       return protection == null ? Optional.empty() : Optional.of(protection.contexts());
     } catch (Exception e) {
       // A 404 here is normal when the repo uses rulesets instead of classic branch protection.
