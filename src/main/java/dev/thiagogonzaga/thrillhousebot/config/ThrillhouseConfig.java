@@ -149,7 +149,13 @@ public interface ThrillhouseConfig {
     @WithName("ai-timeout-seconds")
     int aiTimeoutSeconds();
 
-    @WithDefault("5000")
+    /**
+     * Coarse secondary guard on diff size, by lines. Superseded by token budgeting (#53, {@link
+     * #maxInputTokens()}) which is now the primary control, so this defaults to 0 (off). It only
+     * bites when token budgeting is disabled ({@code max-input-tokens=0}); set it then to bound a
+     * single uncapped call.
+     */
+    @WithDefault("0")
     @WithName("max-diff-lines")
     int maxDiffLines();
 
