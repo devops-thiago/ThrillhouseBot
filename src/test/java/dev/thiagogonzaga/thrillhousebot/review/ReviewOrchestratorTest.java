@@ -132,7 +132,7 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             config,
             BOT_ID);
-    verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer);
+    verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID);
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
@@ -181,12 +181,10 @@ class ReviewOrchestratorTest {
   private ReviewOrchestrator newOrchestrator() {
     return new ReviewOrchestrator(
         config,
-        BOT_ID,
         authClient,
         commentClient,
         broadcaster,
         sessionPersistence,
-        followUpAnalyzer,
         labeler,
         new CiStatusEvaluator(checkRunClient, prClient),
         new CheckRunManager(checkRunClient),

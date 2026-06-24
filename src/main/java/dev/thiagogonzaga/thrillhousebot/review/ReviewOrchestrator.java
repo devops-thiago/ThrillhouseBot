@@ -15,7 +15,6 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
@@ -42,10 +41,6 @@ public class ReviewOrchestrator {
   private static final String CONCLUSION_FAILURE = "failure";
 
   private final ThrillhouseConfig config;
-  // The login(s) the bot posts under, resolved once from config so that summary dedup, first-review
-  // detection, and follow-up matching all recognize the bot's own activity regardless of which
-  // <app-slug>[bot] this deployment runs under.
-  private final BotIdentity botIdentity;
   private final GitHubAuthClient authClient;
 
   private final GitHubCommentClient commentClient;
@@ -53,8 +48,6 @@ public class ReviewOrchestrator {
   private final SessionEventBroadcaster broadcaster;
 
   private final ReviewSessionPersistence sessionPersistence;
-
-  private final FollowUpAnalyzer followUpAnalyzer;
 
   private final PrLabeler labeler;
 
@@ -101,12 +94,10 @@ public class ReviewOrchestrator {
   @Inject
   public ReviewOrchestrator(
       ThrillhouseConfig config,
-      BotIdentity botIdentity,
       GitHubAuthClient authClient,
       @RestClient GitHubCommentClient commentClient,
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
-      FollowUpAnalyzer followUpAnalyzer,
       PrLabeler labeler,
       CiStatusEvaluator ciStatusEvaluator,
       CheckRunManager checkRunManager,
@@ -116,12 +107,10 @@ public class ReviewOrchestrator {
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline) {
     this.config = config;
-    this.botIdentity = botIdentity;
     this.authClient = authClient;
     this.commentClient = commentClient;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
-    this.followUpAnalyzer = followUpAnalyzer;
     this.labeler = labeler;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.checkRunManager = checkRunManager;
@@ -171,11 +160,8 @@ public class ReviewOrchestrator {
           checkRunManager.createCheckRun(
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var ctx = contextLoader.load(auth, req, session, repository);
-      var omittedFiles = ctx.omittedFiles();
       var priorReviews = ctx.priorReviews();
-      var priorAiResponseJsons = ctx.priorAiResponseJsons();
       var isFirstVisibleReview = ctx.isFirstVisibleReview();
-      var hasContext = ctx.hasContext();
       var previousAiResponseJson = ctx.previousAiResponseJson();
       var inlineComments = ctx.inlineComments();
       var repoLabels = ctx.repoLabels();
@@ -194,34 +180,7 @@ public class ReviewOrchestrator {
           ciStatusEvaluator.evaluateCiChecks(
               auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
-      var reviewableFiles = ctx.reviewableFiles();
-      var diffStats = VerdictBuilder.DiffStats.fromFiles(reviewableFiles, omittedFiles);
-      var changedFiles = VerdictBuilder.toChangedFiles(reviewableFiles);
-      var unresolvedPrevious =
-          followUpAnalyzer.unresolvedFindings(
-              previousAiResponseJson, aiResponse.previousFindingsStatus());
-      // Deterministic backstop: reconstruct the bot's own prior findings the model silently dropped
-      // from previous_findings_status but that are still present in this diff, as unresolved
-      // statuses, so an APPROVE can never sail over them. Spans every prior round, not just the
-      // newest, so a finding dropped rounds after it was raised is still caught.
-      var backstopUnresolved =
-          hasContext
-              ? followUpAnalyzer.unreportedUnresolvedStatuses(
-                  priorAiResponseJsons,
-                  aiResponse.previousFindingsStatus(),
-                  inlineComments,
-                  lineResolver,
-                  botIdentity)
-              : List.<ReviewResult.PreviousFindingStatus>of();
-      var result =
-          verdictBuilder.buildResult(
-              aiResponse,
-              isFirstVisibleReview,
-              diffStats,
-              changedFiles,
-              unresolvedPrevious,
-              offendingCiChecks,
-              backstopUnresolved);
+      var result = verdictBuilder.build(ctx, aiResponse, offendingCiChecks);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);

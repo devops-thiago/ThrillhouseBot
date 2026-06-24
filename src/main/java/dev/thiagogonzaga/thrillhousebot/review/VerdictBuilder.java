@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -36,11 +37,51 @@ public class VerdictBuilder {
 
   private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
+  private final BotIdentity botIdentity;
 
   @Inject
-  public VerdictBuilder(PrSummaryGenerator summaryGenerator, FollowUpAnalyzer followUpAnalyzer) {
+  public VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity) {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
+    this.botIdentity = botIdentity;
+  }
+
+  /**
+   * Builds the verdict from the loaded context and the refined model response: derives the diff
+   * stats and changed-file rows, the unresolved previous findings, and the deterministic backstop
+   * (the bot's own prior findings the model silently dropped but that are still present in this
+   * diff — gated on {@code hasContext}, spanning every prior round), then delegates to {@link
+   * #buildResult}. Keeps the APPROVE-gating guards in one place.
+   */
+  ReviewResult build(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewResponse aiResponse,
+      List<ReviewResult.CiCheck> offendingCiChecks) {
+    var diffStats = DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles());
+    var changedFiles = toChangedFiles(ctx.reviewableFiles());
+    var unresolvedPrevious =
+        followUpAnalyzer.unresolvedFindings(
+            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus());
+    var backstopUnresolved =
+        ctx.hasContext()
+            ? followUpAnalyzer.unreportedUnresolvedStatuses(
+                ctx.priorAiResponseJsons(),
+                aiResponse.previousFindingsStatus(),
+                ctx.inlineComments(),
+                ctx.lineResolver(),
+                botIdentity)
+            : List.<ReviewResult.PreviousFindingStatus>of();
+    return buildResult(
+        aiResponse,
+        ctx.isFirstVisibleReview(),
+        diffStats,
+        changedFiles,
+        unresolvedPrevious,
+        offendingCiChecks,
+        backstopUnresolved);
   }
 
   static String conclusionForResult(ReviewResult result) {
