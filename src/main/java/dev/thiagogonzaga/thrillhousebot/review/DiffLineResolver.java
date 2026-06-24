@@ -40,12 +40,14 @@ public final class DiffLineResolver {
   private final Map<String, List<String>> rightSideTextByFile;
   private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
   private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
+  private final Map<String, TreeSet<Integer>> rightSideHunkStartsByFile;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
     this.rightSideLinesByFile = new HashMap<>();
     this.rightSideTextByFile = new HashMap<>();
     this.rightSideTextLineNumbersByFile = new HashMap<>();
     this.rightSideLineTextByFile = new HashMap<>();
+    this.rightSideHunkStartsByFile = new HashMap<>();
     patchesByFile.forEach(
         (file, patch) -> {
           RightSide rightSide = parseRightSide(patch);
@@ -53,6 +55,7 @@ public final class DiffLineResolver {
           rightSideTextByFile.put(file, rightSide.text());
           rightSideTextLineNumbersByFile.put(file, rightSide.textLineNumbers());
           rightSideLineTextByFile.put(file, rightSide.lineText());
+          rightSideHunkStartsByFile.put(file, rightSide.hunkStarts());
         });
   }
 
@@ -320,14 +323,16 @@ public final class DiffLineResolver {
     int startLine = lineNumbers.get(matchOffset);
     int endLine = lineNumbers.get(matchOffset + anchorLines.size() - 1);
     // The match is contiguous in the trimmed-text list, but blank-line dropping lets it straddle a
-    // hunk boundary (last line of one hunk, first line of the next). Such a span covers line
-    // numbers
-    // that are not on the diff's right side, so GitHub rejects the range (422). Accept it only when
-    // every line in [startLine, endLine] is a real right-side line — always true within a single
-    // hunk, false across a boundary — otherwise fall back to a single-line comment.
-    TreeSet<Integer> fileLines = rightSideLinesByFile.get(key);
-    if (fileLines == null
-        || fileLines.subSet(startLine, true, endLine, true).size() != endLine - startLine + 1) {
+    // hunk boundary (last line of one hunk, first line of the next). A multi-line GitHub suggestion
+    // must stay within a single hunk — start_line and line in different hunks is rejected (422),
+    // even when the two hunks are numerically adjacent and the span has no missing line number.
+    // Fall
+    // back to a single-line comment when any hunk begins inside (startLine, endLine]. The key came
+    // from the parallel right-side-text map, populated in the same pass, so its hunk-starts entry
+    // is
+    // always present.
+    TreeSet<Integer> hunkStarts = rightSideHunkStartsByFile.get(key);
+    if (!hunkStarts.subSet(startLine, false, endLine, true).isEmpty()) {
       return Optional.empty();
     }
     return Optional.of(new LineRange(startLine, endLine));
@@ -368,13 +373,15 @@ public final class DiffLineResolver {
    * test the anchor as a contiguous run; blank lines are dropped from both sides so a blank line
    * inside a block never breaks an otherwise-adjacent match. {@code textLineNumbers} runs parallel
    * to {@code text}, carrying the right-side line number of each retained line so a matched anchor
-   * run can be mapped back to a concrete line range (#71).
+   * run can be mapped back to a concrete line range (#71). {@code hunkStarts} holds each hunk's
+   * 1-based right-side start line, so a resolved range can be confined to a single hunk.
    */
   private record RightSide(
       TreeSet<Integer> lines,
       List<String> text,
       List<Integer> textLineNumbers,
-      Map<Integer, String> lineText) {}
+      Map<Integer, String> lineText,
+      TreeSet<Integer> hunkStarts) {}
 
   /**
    * Walks a unified-diff patch once, collecting the right-side line numbers and the trimmed text of
@@ -391,8 +398,9 @@ public final class DiffLineResolver {
     var text = new ArrayList<String>();
     var textLineNumbers = new ArrayList<Integer>();
     var lineText = new HashMap<Integer, String>();
+    var hunkStarts = new TreeSet<Integer>();
     if (patch == null || patch.isBlank()) {
-      return new RightSide(lines, text, textLineNumbers, lineText);
+      return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts);
     }
 
     var newLine = 0;
@@ -401,6 +409,7 @@ public final class DiffLineResolver {
       OptionalInt hunkStart = hunkStart(rawLine);
       if (hunkStart.isPresent()) {
         newLine = hunkStart.getAsInt();
+        hunkStarts.add(newLine);
         inHunk = true;
         continue;
       }
@@ -409,7 +418,7 @@ public final class DiffLineResolver {
         newLine++;
       }
     }
-    return new RightSide(lines, text, textLineNumbers, lineText);
+    return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts);
   }
 
   /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */
