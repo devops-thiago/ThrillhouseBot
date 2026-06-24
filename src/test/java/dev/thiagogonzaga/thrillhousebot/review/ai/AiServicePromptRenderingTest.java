@@ -234,6 +234,25 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("INSTRUCTIONS_SENTINEL"), "repoInstructions missing");
   }
 
+  @Test
+  void summaryPromptIncludesEveryContextVariable() throws InterruptedException {
+    String user =
+        captureStreaming(
+            () ->
+                prReviewer.summarizeStream(
+                    PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
+                    PromptTemplateEscaper.escape("FINDINGS_SENTINEL"),
+                    PromptTemplateEscaper.escape("CHANGEDFILES_SENTINEL"),
+                    PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTRUCTIONS_SENTINEL")));
+
+    assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
+    assertTrue(user.contains("FINDINGS_SENTINEL"), "findings missing");
+    assertTrue(user.contains("CHANGEDFILES_SENTINEL"), "changedFiles missing");
+    assertTrue(user.contains("PREVFINDINGS_SENTINEL"), "previousFindings missing");
+    assertTrue(user.contains("INSTRUCTIONS_SENTINEL"), "repoInstructions missing");
+  }
+
   private ChatRequest captureBlockingRequest(Runnable call) {
     var captured = new AtomicReference<ChatRequest>();
     when(chatModel.chat(any(ChatRequest.class)))

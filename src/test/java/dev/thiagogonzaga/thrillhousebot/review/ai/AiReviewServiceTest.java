@@ -125,6 +125,27 @@ class AiReviewServiceTest {
   }
 
   @Test
+  void summarizeCallsSummaryStreamBlockingAndReturnsParsedResponse() {
+    ReviewSession session = reviewSession();
+    when(prReviewer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var response =
+        service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
+
+    assertNotNull(response);
+    verify(prReviewer)
+        .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeast(0)).broadcast(captor.capture());
+    assertTrue(
+        captor.getAllValues().stream().noneMatch(e -> "review.stream".equals(e.type())),
+        "the summary call must not broadcast a per-token stream");
+  }
+
+  @Test
   void shouldWrapStreamErrorWithNullMessage() {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(1);
