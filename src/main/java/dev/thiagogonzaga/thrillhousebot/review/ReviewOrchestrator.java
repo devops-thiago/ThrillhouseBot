@@ -1196,7 +1196,7 @@ public class ReviewOrchestrator {
     // so disclose the partial review here instead — otherwise a truncation-only hold would surface
     // no reason at all (and used to misreport "0 previous finding(s) remain unresolved").
     if (result.truncated() && !result.isFirstReview()) {
-      if (sb.length() > 0) {
+      if (!sb.isEmpty()) {
         sb.append("\n\n");
       }
       sb.append(truncationNotice(result.omittedFiles()).strip());
