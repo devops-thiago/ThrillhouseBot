@@ -25,7 +25,6 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
-import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -93,6 +92,8 @@ public class ReviewOrchestrator {
 
   private final ReviewContextLoader contextLoader;
 
+  private final ReviewPromptAssembler promptAssembler;
+
   private final ObjectMapper mapper;
 
   /**
@@ -142,6 +143,7 @@ public class ReviewOrchestrator {
       CiStatusEvaluator ciStatusEvaluator,
       CheckRunManager checkRunManager,
       ReviewContextLoader contextLoader,
+      ReviewPromptAssembler promptAssembler,
       ObjectMapper mapper) {
     this.config = config;
     this.botIdentity = BotIdentity.from(config.github().botLogins());
@@ -163,6 +165,7 @@ public class ReviewOrchestrator {
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
+    this.promptAssembler = promptAssembler;
     this.mapper = mapper;
   }
 
@@ -207,7 +210,6 @@ public class ReviewOrchestrator {
       var ctx = contextLoader.load(auth, req, session, repository);
       var files = ctx.files();
       var diff = ctx.diff();
-      var baseComparison = ctx.baseComparison();
       var omittedFiles = ctx.omittedFiles();
       var priorReviews = ctx.priorReviews();
       var priorAiResponseJsons = ctx.priorAiResponseJsons();
@@ -215,40 +217,9 @@ public class ReviewOrchestrator {
       var hasContext = ctx.hasContext();
       var previousAiResponseJson = ctx.previousAiResponseJson();
       var inlineComments = ctx.inlineComments();
-      var previousFindings = ctx.previousFindings();
-      var instructions = ctx.instructions();
       var repoLabels = ctx.repoLabels();
 
-      // The diff carries the code under review, so it is enclosed in a per-review random fence and
-      // passed byte-exact (no marker rewriting that would corrupt marker-handling code). The
-      // smaller prose slots keep the lightweight marker neutralization as defense-in-depth.
-      String fencedDiff = PromptTemplateEscaper.fence(diff);
-      String escapedStack = PromptTemplateEscaper.escape(ctx.projectStack());
-      // The label guidance and the repo-instructions file share the prompt's trailing
-      // {{repoInstructions}} slot; the label section is escaped (it carries repo label names),
-      // the instructions section escapes its own maintainer content.
-      String labelGuidance = PrLabeler.buildLabelGuidance(repoLabels, labeler.allowNewLabels());
-      // The diagram request is fixed guidance (no repo content), so it needs no escaping; its
-      // presence is what gates the model's walkthrough_diagram field.
-      String diagramGuidance =
-          config.review().diagram().enabled() ? PrReviewPrompts.DIAGRAM_REQUEST : "";
-      String trailingGuidance =
-          combineSections(
-              combineSections(
-                  labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
-                  diagramGuidance),
-              PromptSections.instructionsSection(instructions, INSTRUCTIONS_GUIDANCE));
-      var promptInputs =
-          new AiReviewService.PromptInputs(
-              fencedDiff,
-              PromptTemplateEscaper.escape(
-                  PromptSections.prContext(req.prTitle(), req.prDescription())),
-              PromptTemplateEscaper.escape(baseComparison),
-              escapedStack,
-              PromptTemplateEscaper.escape(
-                  diffFormatter.buildRelatedTests(diffFormatter.reviewableFiles(files))),
-              PromptTemplateEscaper.escape(previousFindings),
-              trailingGuidance);
+      var promptInputs = promptAssembler.assemble(ctx, req);
       // Quote validation runs before dedupe so a merged finding can never inherit a phantom
       // quote from one duplicate while a verbatim sibling gets discarded
       var aiResponse = aiReviewService.review(session, promptInputs);
@@ -256,7 +227,10 @@ public class ReviewOrchestrator {
       aiResponse = deduplicator.dedupe(aiResponse);
       aiResponse =
           findingVerificationService.verify(
-              aiResponse, fencedDiff, escapedStack, PromptTemplateEscaper.escape(previousFindings));
+              aiResponse,
+              promptInputs.diff(),
+              promptInputs.projectStack(),
+              promptInputs.previousFindings());
       aiResponse =
           followUpAnalyzer.dropRepliedDuplicates(
               aiResponse, priorAiResponseJsons, inlineComments, botIdentity);
@@ -361,25 +335,6 @@ public class ReviewOrchestrator {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
     }
-  }
-
-  // The command-specific guidance line(s) for the review path's repository-instructions section
-  // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
-  private static final String INSTRUCTIONS_GUIDANCE =
-      """
-      The repository maintainers have provided these additional review guidelines.
-      These take precedence over default rules where they conflict.
-      """;
-
-  /** Joins two optional prompt sections with a blank line, dropping any that are blank. */
-  static String combineSections(String first, String second) {
-    if (first.isBlank()) {
-      return second;
-    }
-    if (second.isBlank()) {
-      return first;
-    }
-    return first + "\n\n" + second;
   }
 
   void persistAiResponse(ReviewSession session, ReviewResponse aiResponse) {

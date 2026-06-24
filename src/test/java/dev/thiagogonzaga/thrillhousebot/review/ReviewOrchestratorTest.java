@@ -178,6 +178,7 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             sessionPersistence,
             config),
+        new ReviewPromptAssembler(config, labeler, diffFormatter),
         objectMapper);
   }
 
@@ -3896,27 +3897,6 @@ class ReviewOrchestratorTest {
               1,
               List.of(new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "s", "c", "d")));
       assertFalse(statusVal.statuses().isEmpty());
-    }
-  }
-
-  @Nested
-  class CombineSections {
-
-    @Test
-    void shouldReturnSecondWhenFirstIsBlank() {
-      assertEquals("b", ReviewOrchestrator.combineSections("", "b"));
-      assertEquals("b", ReviewOrchestrator.combineSections("  ", "b"));
-    }
-
-    @Test
-    void shouldReturnFirstWhenSecondIsBlank() {
-      assertEquals("a", ReviewOrchestrator.combineSections("a", ""));
-      assertEquals("a", ReviewOrchestrator.combineSections("a", "  "));
-    }
-
-    @Test
-    void shouldJoinBothWithBlankLineSeparator() {
-      assertEquals("a\n\nb", ReviewOrchestrator.combineSections("a", "b"));
     }
   }
 }
