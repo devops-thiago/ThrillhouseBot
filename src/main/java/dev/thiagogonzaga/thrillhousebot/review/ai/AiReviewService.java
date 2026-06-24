@@ -33,6 +33,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * Runs PR reviews with streaming output to the dashboard and automatic retries for transient model
@@ -65,7 +66,7 @@ public class AiReviewService {
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
-    return runWithRetries(session, inputs, true);
+    return runWithRetries(session, () -> reviewStream(inputs), true);
   }
 
   /**
@@ -78,11 +79,40 @@ public class AiReviewService {
       ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.batch(session, batchIndex, batchCount));
-    return runWithRetries(session, inputs, false);
+    return runWithRetries(session, () -> reviewStream(inputs), false);
+  }
+
+  /**
+   * Final summary call of a large multi-call review (#53): rolls the aggregated findings up into
+   * the PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
+   * response carries the summary and previous-findings status (its findings list is empty).
+   */
+  public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
+    return runWithRetries(
+        session,
+        () ->
+            prReviewer.summarizeStream(
+                inputs.prContext(),
+                inputs.findings(),
+                inputs.changedFiles(),
+                inputs.previousFindings(),
+                inputs.repoInstructions()),
+        false);
+  }
+
+  private TokenStream reviewStream(PromptInputs inputs) {
+    return prReviewer.reviewStream(
+        inputs.diff(),
+        inputs.prContext(),
+        inputs.baseComparison(),
+        inputs.projectStack(),
+        inputs.relatedTests(),
+        inputs.previousFindings(),
+        inputs.repoInstructions());
   }
 
   private ReviewResponse runWithRetries(
-      ReviewSession session, PromptInputs inputs, boolean broadcastTokens) {
+      ReviewSession session, Supplier<TokenStream> streamFactory, boolean broadcastTokens) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
@@ -99,7 +129,7 @@ public class AiReviewService {
         }
 
         try {
-          return streamOnce(session, inputs, attempt, broadcastTokens);
+          return streamOnce(session, streamFactory, attempt, broadcastTokens);
         } catch (RuntimeException e) {
           lastFailure = e;
           Log.warnf(
@@ -130,8 +160,22 @@ public class AiReviewService {
       String previousFindings,
       String repoInstructions) {}
 
+  /**
+   * The prompt sections for the final summary call (#53), pre-escaped for templating: the
+   * already-computed findings to roll up, the changed-files overview, and the PR-level context.
+   */
+  public record SummaryInputs(
+      String prContext,
+      String findings,
+      String changedFiles,
+      String previousFindings,
+      String repoInstructions) {}
+
   private ReviewResponse streamOnce(
-      ReviewSession session, PromptInputs inputs, int attempt, boolean broadcastTokens) {
+      ReviewSession session,
+      Supplier<TokenStream> streamFactory,
+      int attempt,
+      boolean broadcastTokens) {
     var result = new CompletableFuture<ReviewResponse>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
@@ -148,15 +192,7 @@ public class AiReviewService {
     ReviewSessionContext.bind(session.id, attempt);
     TokenStream stream = null;
     try {
-      stream =
-          prReviewer.reviewStream(
-              inputs.diff(),
-              inputs.prContext(),
-              inputs.baseComparison(),
-              inputs.projectStack(),
-              inputs.relatedTests(),
-              inputs.previousFindings(),
-              inputs.repoInstructions());
+      stream = streamFactory.get();
 
       stream
           .onPartialResponse(
