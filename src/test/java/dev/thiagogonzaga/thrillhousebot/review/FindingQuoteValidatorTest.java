@@ -112,7 +112,7 @@ class FindingQuoteValidatorTest {
     // Both lines exist in the diff ("}" last, "public class Main {" first) but never as a
     // contiguous in-order run — a recombination of real lines that matchQuote's per-line set
     // membership wrongly accepts as FULL. It must be demoted so the fabricated suggestion is
-    // not kept (#216).
+    // not kept.
     var response = response(finding("}\npublic class Main {"));
 
     var result = validator.validate(response, DIFF);
@@ -446,7 +446,7 @@ class FindingQuoteValidatorTest {
   void multiLineQuoteOfContiguousAddedCodeIsKept() {
     // suggestion_old may quote code this PR added (to replace a just-added bug). Those lines are
     // contiguous on the new side (context + additions) but absent from the original side (context +
-    // deletions), so the multi-line contiguity gate must still keep them (#216).
+    // deletions), so the multi-line contiguity gate must still keep them.
     var diff =
         """
         ### src/New.java (modified, +2 -0)

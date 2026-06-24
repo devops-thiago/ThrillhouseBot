@@ -127,8 +127,8 @@ public class FindingQuoteValidator {
    * The quote verdict for one finding. Starts from {@link #matchQuote}'s per-line presence, then
    * tightens a multi-line FULL verdict to also require a contiguous in-order run on one side of the
    * diff — a recombination of real-but-scattered lines is demoted to PARTIAL so a fabricated
-   * suggestion is not kept (#216); single-line quotes are trivially contiguous and unaffected.
-   * Finally a FULL quote is disambiguated by line when it appears in multiple locations.
+   * suggestion is not kept; single-line quotes are trivially contiguous and unaffected. Finally a
+   * FULL quote is disambiguated by line when it appears in multiple locations.
    */
   private QuoteMatch classifyQuote(ReviewResponse.Finding finding, DiffIndex index) {
     List<String> quoted = normalizedLines(finding.suggestionOld());

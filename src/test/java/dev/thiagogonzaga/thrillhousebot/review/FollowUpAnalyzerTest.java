@@ -312,7 +312,7 @@ class FollowUpAnalyzerTest {
 
   @Test
   void dropRepliedDuplicatesShouldKeepDistinctNearbyFindingOfTheSameSeverity() {
-    // Regression (#214): severity must not be part of finding identity. A different defect a couple
+    // Regression: severity must not be part of finding identity. A different defect a couple
     // of lines from a replied prior finding of the same severity must still post — not be dropped
     // as
     // a re-raise just because the severities match.

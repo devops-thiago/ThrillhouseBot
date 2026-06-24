@@ -36,10 +36,7 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       CreateReviewRequest request);
 
-  // GitHub serves 30 reviews per page by default; request the 100 max and walk a bounded number of
-  // pages so first-review detection, the approve backstop, and dismissing a stale pending bot
-  // review
-  // all see the whole set — a pending bot review past page one would otherwise be missed (#219).
+  // GitHub serves 30 reviews per page by default; request the 100 max and bound the page walk.
   int REVIEWS_PER_PAGE = 100;
   int MAX_REVIEW_PAGES = 10;
 
@@ -77,9 +74,7 @@ public interface GitHubReviewClient {
     return all;
   }
 
-  // GitHub serves 30 inline review comments per page by default; request the 100 max and walk a
-  // bounded number of pages so follow-up dedup, /resolve and the unresolved-status backstop never
-  // run on a silently truncated set on a busy PR.
+  // GitHub serves 30 inline comments per page by default; request the 100 max and bound the walk.
   int COMMENTS_PER_PAGE = 100;
   int MAX_COMMENT_PAGES = 10;
 
