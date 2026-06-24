@@ -39,8 +39,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class ReviewOrchestrator {
 
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final String CHECK_NAME = "ThrillhouseBot Review";
-  private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
 
   // Check run status constant used when building the completion update (CheckRunManager owns
   // create).
@@ -66,7 +64,6 @@ public class ReviewOrchestrator {
 
   private final ReviewSessionPersistence sessionPersistence;
 
-  private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
 
   private final ReviewDiffFormatter diffFormatter;
@@ -82,6 +79,8 @@ public class ReviewOrchestrator {
   private final ReviewPromptAssembler promptAssembler;
 
   private final ReviewPublisher reviewPublisher;
+
+  private final VerdictBuilder verdictBuilder;
 
   private final ObjectMapper mapper;
 
@@ -122,7 +121,6 @@ public class ReviewOrchestrator {
       FindingDeduplicator deduplicator,
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
-      PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       ReviewDiffFormatter diffFormatter,
       PrLabeler labeler,
@@ -131,6 +129,7 @@ public class ReviewOrchestrator {
       ReviewContextLoader contextLoader,
       ReviewPromptAssembler promptAssembler,
       ReviewPublisher reviewPublisher,
+      VerdictBuilder verdictBuilder,
       ObjectMapper mapper) {
     this.config = config;
     this.botIdentity = BotIdentity.from(config.github().botLogins());
@@ -142,7 +141,6 @@ public class ReviewOrchestrator {
     this.deduplicator = deduplicator;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
-    this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.diffFormatter = diffFormatter;
     this.labeler = labeler;
@@ -151,6 +149,7 @@ public class ReviewOrchestrator {
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
     this.reviewPublisher = reviewPublisher;
+    this.verdictBuilder = verdictBuilder;
     this.mapper = mapper;
   }
 
@@ -232,8 +231,8 @@ public class ReviewOrchestrator {
               auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
       var reviewableFiles = diffFormatter.reviewableFiles(files);
-      DiffStats diffStats = DiffStats.fromFiles(reviewableFiles, omittedFiles);
-      List<PrSummaryGenerator.ChangedFile> changedFiles = toChangedFiles(reviewableFiles);
+      var diffStats = VerdictBuilder.DiffStats.fromFiles(reviewableFiles, omittedFiles);
+      var changedFiles = VerdictBuilder.toChangedFiles(reviewableFiles);
       var unresolvedPrevious =
           followUpAnalyzer.unresolvedFindings(
               previousAiResponseJson, aiResponse.previousFindingsStatus());
@@ -251,7 +250,7 @@ public class ReviewOrchestrator {
                   botIdentity)
               : List.<ReviewResult.PreviousFindingStatus>of();
       var result =
-          buildResult(
+          verdictBuilder.buildResult(
               aiResponse,
               isFirstVisibleReview,
               diffStats,
@@ -260,9 +259,9 @@ public class ReviewOrchestrator {
               offendingCiChecks,
               backstopUnresolved);
 
-      String conclusion = conclusionForResult(result);
-      String checkTitle = checkTitleForResult(result);
-      String checkSummary = checkSummaryForResult(result);
+      String conclusion = VerdictBuilder.conclusionForResult(result);
+      String checkTitle = VerdictBuilder.checkTitleForResult(result);
+      String checkSummary = VerdictBuilder.checkSummaryForResult(result);
       checkRunManager.updateCheckRun(
           new CheckRunManager.CheckRunUpdate(
               auth,
@@ -472,202 +471,5 @@ public class ReviewOrchestrator {
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {
     mutator.accept(session);
     sessionPersistence.update(session.id, mutator);
-  }
-
-  static String conclusionForResult(ReviewResult result) {
-    return result.reviewState().checkRunConclusion();
-  }
-
-  static String checkTitleForResult(ReviewResult result) {
-    if (!result.hasIssues()
-        && result.unresolvedPreviousCount() == 0
-        && result.offendingCiChecks().isEmpty()) {
-      return CHECK_NAME + " ✅";
-    }
-    return CHECK_NAME;
-  }
-
-  static String checkSummaryForResult(ReviewResult result) {
-    if (result.hasIssues()) {
-      return String.format(
-          "%d findings: %d critical, %d high, %d medium, %d low",
-          result.totalFindings(),
-          result.criticalCount(),
-          result.highCount(),
-          result.mediumCount(),
-          result.lowCount());
-    }
-    // No new findings — surface CI gating first, since it also holds approval back.
-    if (!result.offendingCiChecks().isEmpty()) {
-      return String.format(
-          "No new issues found, but %d required CI check(s) are still pending or failing.",
-          result.offendingCiChecks().size());
-    }
-    var unresolved = result.unresolvedPreviousCount();
-    if (unresolved == 0) {
-      return ZERO_ISSUES_MESSAGE;
-    }
-    return ReviewResult.unresolvedPreviousMessage(unresolved);
-  }
-
-  record DiffStats(int filesChanged, int additions, int deletions, int omittedFiles) {
-    DiffStats(int filesChanged, int additions, int deletions) {
-      this(filesChanged, additions, deletions, 0);
-    }
-
-    /** True when the line budget dropped whole files, so the model never saw part of the change. */
-    boolean truncated() {
-      return omittedFiles > 0;
-    }
-
-    static DiffStats fromFiles(List<GitHubPullRequestClient.FileDiff> files, int omittedFiles) {
-      var additions = 0;
-      var deletions = 0;
-      for (var file : files) {
-        additions += file.additions();
-        deletions += file.deletions();
-      }
-      return new DiffStats(files.size(), additions, deletions, omittedFiles);
-    }
-  }
-
-  /**
-   * Projects the reviewed diff onto the (path, change type) rows the summary walkthrough renders.
-   */
-  static List<PrSummaryGenerator.ChangedFile> toChangedFiles(
-      List<GitHubPullRequestClient.FileDiff> files) {
-    return files.stream()
-        .map(f -> new PrSummaryGenerator.ChangedFile(f.filename(), f.status()))
-        .toList();
-  }
-
-  ReviewResult buildResult(
-      ReviewResponse aiResponse,
-      boolean isFirstReview,
-      DiffStats diffStats,
-      List<PrSummaryGenerator.ChangedFile> changedFiles,
-      List<Finding> unresolvedPrevious,
-      List<ReviewResult.CiCheck> offendingCiChecks,
-      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
-    var tally = tallyFindings(aiResponse);
-
-    // The review may only approve when nothing is outstanding: new findings AND previous
-    // findings still unresolved (not fixed, no accepted justification) both count
-    var outstanding = new ArrayList<Finding>(tally.findings());
-    outstanding.addAll(unresolvedPrevious);
-    ReviewState state = ReviewState.fromFindings(outstanding);
-    // Merge the model's previous-findings statuses with the backstop's reconstructed unresolved
-    // ones: the silently dropped findings then flow through the same gate, counts, and
-    // messages as any unresolved status, so no separate path is needed. Backstop statuses reach the
-    // gate but never `outstanding`, keeping the hold downgrade-only (APPROVE → COMMENT, never
-    // REQUEST_CHANGES).
-    var previousStatuses =
-        new ArrayList<ReviewResult.PreviousFindingStatus>(
-            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()));
-    previousStatuses.addAll(backstopUnresolved);
-    // Unresolved statuses that could not be mapped back to stored findings (e.g. pre-persistence
-    // sessions), or that the model dropped but the backstop reconstructed, must still hold approval
-    if (state == ReviewState.APPROVE && followUpAnalyzer.hasUnresolved(previousStatuses)) {
-      state = ReviewState.COMMENT;
-    }
-
-    if (state == ReviewState.APPROVE && !offendingCiChecks.isEmpty()) {
-      state = ReviewState.COMMENT;
-    }
-
-    if (state == ReviewState.APPROVE && diffStats.truncated()) {
-      state = ReviewState.COMMENT;
-    }
-
-    var summaryMarkdown =
-        summaryGenerator.generate(
-            diffStats.filesChanged(),
-            diffStats.additions(),
-            diffStats.deletions(),
-            changedFiles,
-            aiResponse.summary(),
-            new ReviewResult(
-                tally.findings(),
-                tally.critical(),
-                tally.high(),
-                tally.medium(),
-                tally.low(),
-                tally.highest(),
-                state,
-                isFirstReview,
-                "",
-                previousStatuses,
-                offendingCiChecks));
-    if (diffStats.truncated()) {
-      summaryMarkdown = ReviewResult.truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
-    }
-
-    return new ReviewResult(
-        tally.findings(),
-        tally.critical(),
-        tally.high(),
-        tally.medium(),
-        tally.low(),
-        tally.highest(),
-        state,
-        isFirstReview,
-        summaryMarkdown,
-        previousStatuses,
-        offendingCiChecks,
-        diffStats.omittedFiles());
-  }
-
-  /** Findings parsed from the model response, with per-severity counts and the highest risk. */
-  private record FindingTally(
-      List<Finding> findings, int critical, int high, int medium, int low, RiskLevel highest) {}
-
-  private static FindingTally tallyFindings(ReviewResponse aiResponse) {
-    var findings = new ArrayList<Finding>();
-    var critical = 0;
-    var high = 0;
-    var medium = 0;
-    var low = 0;
-    RiskLevel highest = null;
-    // ReviewResponse never returns null findings, so we iterate directly. The lowest risk level is
-    // counted by the catch-all branch — RiskLevel has exactly four values — which avoids the
-    // unreachable extra branch the compiler would otherwise generate and report as uncovered.
-    for (var ai : aiResponse.findings()) {
-      Finding f = Finding.fromAiResponse(ai);
-      findings.add(f);
-      switch (f.risk()) {
-        case CRITICAL -> critical++;
-        case HIGH -> high++;
-        case MEDIUM -> medium++;
-        default -> low++;
-      }
-      if (highest == null || f.risk().compareTo(highest) < 0) {
-        highest = f.risk();
-      }
-    }
-    return new FindingTally(findings, critical, high, medium, low, highest);
-  }
-
-  ReviewResult buildResult(
-      ReviewResponse aiResponse,
-      boolean isFirstReview,
-      DiffStats diffStats,
-      List<Finding> unresolvedPrevious,
-      List<ReviewResult.CiCheck> offendingCiChecks) {
-    return buildResult(
-        aiResponse,
-        isFirstReview,
-        diffStats,
-        List.of(),
-        unresolvedPrevious,
-        offendingCiChecks,
-        List.of());
-  }
-
-  ReviewResult buildResult(
-      ReviewResponse aiResponse,
-      boolean isFirstReview,
-      DiffStats diffStats,
-      List<Finding> unresolvedPrevious) {
-    return buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, List.of());
   }
 }
