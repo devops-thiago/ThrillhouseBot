@@ -43,7 +43,6 @@ public class ReviewOrchestrator {
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String CHECK_NAME = "ThrillhouseBot Review";
   private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
-  private static final String SUMMARY_HEADING = PrSummaryGenerator.SUMMARY_HEADING;
 
   // Check run status constant used when building the completion update (CheckRunManager owns
   // create).
@@ -70,10 +69,7 @@ public class ReviewOrchestrator {
   private final GitHubReviewClient reviewClient;
 
   private final GitHubCommentClient commentClient;
-  private final GitHubPullRequestClient prClient;
   private final ReviewThreadService reviewThreadService;
-  private final InstructionsResolver instructionsResolver;
-  private final ProjectStackResolver projectStackResolver;
   private final AiReviewService aiReviewService;
   private final FindingVerificationService findingVerificationService;
   private final FindingQuoteValidator quoteValidator;
@@ -94,6 +90,8 @@ public class ReviewOrchestrator {
   private final CiStatusEvaluator ciStatusEvaluator;
 
   private final CheckRunManager checkRunManager;
+
+  private final ReviewContextLoader contextLoader;
 
   private final ObjectMapper mapper;
 
@@ -129,10 +127,7 @@ public class ReviewOrchestrator {
       GitHubAuthClient authClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
-      @RestClient GitHubPullRequestClient prClient,
       ReviewThreadService reviewThreadService,
-      InstructionsResolver instructionsResolver,
-      ProjectStackResolver projectStackResolver,
       AiReviewService aiReviewService,
       FindingVerificationService findingVerificationService,
       FindingQuoteValidator quoteValidator,
@@ -146,16 +141,14 @@ public class ReviewOrchestrator {
       PrLabeler labeler,
       CiStatusEvaluator ciStatusEvaluator,
       CheckRunManager checkRunManager,
+      ReviewContextLoader contextLoader,
       ObjectMapper mapper) {
     this.config = config;
     this.botIdentity = BotIdentity.from(config.github().botLogins());
     this.authClient = authClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
-    this.prClient = prClient;
     this.reviewThreadService = reviewThreadService;
-    this.instructionsResolver = instructionsResolver;
-    this.projectStackResolver = projectStackResolver;
     this.aiReviewService = aiReviewService;
     this.findingVerificationService = findingVerificationService;
     this.quoteValidator = quoteValidator;
@@ -169,6 +162,7 @@ public class ReviewOrchestrator {
     this.labeler = labeler;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.checkRunManager = checkRunManager;
+    this.contextLoader = contextLoader;
     this.mapper = mapper;
   }
 
@@ -196,7 +190,7 @@ public class ReviewOrchestrator {
     var checkRunId = -1L;
     var resultSurfaced = false;
     try {
-      var resolved = resolveMissingPrDetails(auth, request);
+      var resolved = contextLoader.resolveMissingPrDetails(auth, request);
       req = resolved;
       if (resolved != request) {
         applySessionState(
@@ -210,68 +204,26 @@ public class ReviewOrchestrator {
       checkRunId =
           checkRunManager.createCheckRun(
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
-      var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
-      var diffResult = diffFormatter.buildDiffStringWithStats(files);
-      var diff = diffResult.text();
-      var baseComparisonResult =
-          buildBaseComparisonWithStats(
-              auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
-      var baseComparison = baseComparisonResult.text();
-      var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
-
-      var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
-      // Two independent flags decouple UX presentation from context loading:
-      //  • isFirstVisibleReview — true when the bot has posted nothing user-visible on the PR yet:
-      //    neither a review nor a summary comment. Gates the first-review summary issue-comment and
-      //    the APPROVE celebration body. A review alone is not a reliable proxy: a first round held
-      //    back only by pending CI posts the summary comment but no review, so keying off
-      // the
-      //    review would re-post the summary every round until one finally creates a review. The
-      //    summary comment is the artifact we must not duplicate, so we look for it directly.
-      //  • hasContext — true when persistence holds prior AI responses (surviving force-push/
-      //    rebase). Gates previous-findings context loading, inline comment fetching, and the
-      //    deterministic backstop. A persisted-but-unreviewed prior round (e.g. createReview
-      //    failed after persistAiResponse) must still reconstruct context without suppressing
-      //    the first user-visible summary.
-      List<String> priorAiResponseJsons =
-          sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
-      var isFirstVisibleReview =
-          priorReviews.stream().noneMatch(r -> botIdentity.matches(r.user().login()))
-              && !botSummaryCommentExists(auth, req.owner(), req.repo(), req.prNumber());
-      var hasContext = !priorAiResponseJsons.isEmpty();
-      String previousAiResponseJson =
-          priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(0);
-      List<String> olderAiResponseJsons =
-          priorAiResponseJsons.size() > 1
-              ? priorAiResponseJsons.subList(1, priorAiResponseJsons.size())
-              : List.of();
-      List<GitHubReviewClient.PullRequestComment> inlineComments =
-          hasContext
-              ? fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber())
-              : List.of();
-      String previousFindings =
-          hasContext
-              ? followUpAnalyzer.buildPreviousFindingsContext(
-                  previousAiResponseJson,
-                  priorReviews,
-                  inlineComments,
-                  olderAiResponseJsons,
-                  botIdentity)
-              : "";
-
-      var instructions =
-          instructionsResolver.resolve(
-              req.owner(), req.repo(), req.defaultBranch(), req.installationId());
-
-      // Existing repo labels are fetched once (when the feature is on): they both constrain the
-      // model's suggestions in the prompt and are reused to reconcile its output afterwards.
-      var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
+      var ctx = contextLoader.load(auth, req, session, repository);
+      var files = ctx.files();
+      var diff = ctx.diff();
+      var baseComparison = ctx.baseComparison();
+      var omittedFiles = ctx.omittedFiles();
+      var priorReviews = ctx.priorReviews();
+      var priorAiResponseJsons = ctx.priorAiResponseJsons();
+      var isFirstVisibleReview = ctx.isFirstVisibleReview();
+      var hasContext = ctx.hasContext();
+      var previousAiResponseJson = ctx.previousAiResponseJson();
+      var inlineComments = ctx.inlineComments();
+      var previousFindings = ctx.previousFindings();
+      var instructions = ctx.instructions();
+      var repoLabels = ctx.repoLabels();
 
       // The diff carries the code under review, so it is enclosed in a per-review random fence and
       // passed byte-exact (no marker rewriting that would corrupt marker-handling code). The
       // smaller prose slots keep the lightweight marker neutralization as defense-in-depth.
       String fencedDiff = PromptTemplateEscaper.fence(diff);
-      String escapedStack = PromptTemplateEscaper.escape(resolveProjectStack(req));
+      String escapedStack = PromptTemplateEscaper.escape(ctx.projectStack());
       // The label guidance and the repo-instructions file share the prompt's trailing
       // {{repoInstructions}} slot; the label section is escaped (it carries repo label names),
       // the instructions section escapes its own maintainer content.
@@ -411,39 +363,6 @@ public class ReviewOrchestrator {
     }
   }
 
-  /**
-   * Manual /review triggers arrive from issue_comment webhooks, which carry no PR head/base or
-   * title — fetch them so the check run gets a valid head_sha (GitHub rejects blank with 422).
-   */
-  ReviewRequest resolveMissingPrDetails(String auth, ReviewRequest req) {
-    if (req.commitSha() != null && !req.commitSha().isBlank()) {
-      return req;
-    }
-    var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
-    return new ReviewRequest(
-        req.owner(),
-        req.repo(),
-        req.prNumber(),
-        pr.head() != null ? pr.head().sha() : "",
-        pr.title() != null ? pr.title() : req.prTitle(),
-        pr.body() != null ? pr.body() : "",
-        pr.base() != null ? pr.base().sha() : "",
-        req.defaultBranch(),
-        req.installationId(),
-        req.isManualTrigger());
-  }
-
-  /** Stack context is best-effort enrichment — its failure must never fail the review. */
-  String resolveProjectStack(ReviewRequest req) {
-    try {
-      return projectStackResolver.resolve(
-          req.owner(), req.repo(), req.defaultBranch(), req.installationId());
-    } catch (RuntimeException e) {
-      Log.warn("Project stack resolution failed, continuing without stack context", e);
-      return "";
-    }
-  }
-
   // The command-specific guidance line(s) for the review path's repository-instructions section
   // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
   private static final String INSTRUCTIONS_GUIDANCE =
@@ -520,92 +439,6 @@ public class ReviewOrchestrator {
       return base + "/dashboard/sessions/";
     }
     return base + "/session/" + publicId;
-  }
-
-  List<GitHubPullRequestClient.FileDiff> fetchPrFiles(
-      String auth, String owner, String repo, int prNumber) {
-    // A fetch failure must propagate to review()'s handler (failed check + "could not complete"
-    // notice). Swallowing it into an empty list is indistinguishable from a PR with no changes and
-    // produces a false APPROVE + green check on code that was never read. A genuinely empty
-    // PR returns an empty list with no exception and still takes the normal path.
-    return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
-  }
-
-  String buildDiffString(List<GitHubPullRequestClient.FileDiff> files) {
-    return diffFormatter.buildDiffString(files);
-  }
-
-  String buildBaseComparison(String auth, String owner, String repo, String base, String head) {
-    return buildBaseComparisonWithStats(auth, owner, repo, base, head).text();
-  }
-
-  ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
-      String auth, String owner, String repo, String base, String head) {
-    if (base == null || head == null || base.length() < 7 || head.length() < 7) {
-      return new ReviewDiffFormatter.FormattedDiff(
-          "(regression comparison unavailable — refs too short)", 0);
-    }
-    try {
-      var comparison = prClient.compareCommits(auth, ACCEPT, owner, repo, base, head);
-      return diffFormatter.buildBaseComparisonWithStats(comparison, base, head);
-    } catch (RuntimeException e) {
-      Log.warn("Failed to fetch base comparison, continuing without regression context", e);
-      return new ReviewDiffFormatter.FormattedDiff("(regression comparison unavailable)", 0);
-    }
-  }
-
-  List<GitHubReviewClient.ReviewResponse> fetchPriorReviews(
-      String auth, String owner, String repo, int prNumber) {
-    try {
-      return reviewClient.listReviews(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      Log.debug("No prior reviews found (this is normal for first review)", e);
-      return List.of();
-    }
-  }
-
-  /**
-   * Whether the bot has already posted its PR summary comment on this PR. Used to suppress a
-   * duplicate summary on a re-review when a prior round left a summary comment but no review (e.g.
-   * a first round held back only by pending CI). Best-effort: on a fetch failure it returns {@code
-   * false}, falling back to the review-based signal rather than blocking the summary.
-   */
-  boolean botSummaryCommentExists(String auth, String owner, String repo, int prNumber) {
-    for (var comment : fetchIssueComments(auth, owner, repo, prNumber)) {
-      var user = comment.user();
-      var body = comment.body();
-      if (user != null
-          && botIdentity.matches(user.login())
-          && body != null
-          && body.stripLeading().startsWith(SUMMARY_HEADING)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  List<GitHubCommentClient.IssueComment> fetchIssueComments(
-      String auth, String owner, String repo, int prNumber) {
-    try {
-      // listComments paginates internally and always returns a non-null list (empty when there are
-      // no comments), so the only best-effort fallback needed here is the fetch throwing.
-      return commentClient.listComments(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      Log.debug("Could not fetch PR issue comments (continuing as if none exist)", e);
-      return List.of();
-    }
-  }
-
-  List<GitHubReviewClient.PullRequestComment> fetchPullRequestComments(
-      String auth, String owner, String repo, int prNumber) {
-    try {
-      // The client walks every page and never returns null, so the only failure to absorb here is
-      // the fetch throwing.
-      return reviewClient.listPullRequestComments(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      Log.warn("Failed to fetch PR inline comments, continuing without thread context", e);
-      return List.of();
-    }
   }
 
   /**
