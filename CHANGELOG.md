@@ -2,19 +2,21 @@
 
 All notable changes to ThrillhouseBot.
 
-## [0.2.1] — 2026-06-23
+## [0.2.1] — 2026-06-24
 
-A patch release of review-path correctness fixes. Most are matching and anchoring bugs — duplicate merges that mishandled severity, quote and line lookups that bound to the wrong place, and pagination gaps that truncated comments and reviews — plus two approval-safety fixes (approving after the file fetch failed, and treating an unknown CI state as passing) and a stale "retry" notice posted after a review had already gone out.
+A patch release of review-path correctness and robustness fixes. Most are matching and anchoring bugs — duplicate merges that mishandled severity, quote and line lookups that bound to the wrong place, and pagination gaps that truncated comments and reviews — alongside several approval-safety fixes (no approval after a failed file fetch, on an unknown CI state, or on a truncated diff), a stale "retry" notice no longer posted over a finished review, tolerance for malformed model JSON, and the commit-statuses permission that CI gating needs.
 
 ### Changed
 
 - **One fewer review fetch per run**: the orchestrator listed a PR's reviews twice on every review — once to decide whether this was the first review, and again to dismiss any stale pending review the bot had left. Nothing creates a review between the two calls, so the second was redundant; dismissal now reuses the list already fetched. The saving grew once that fetch started paginating (see #219) (#74)
+- **GitHub App permission — commit statuses (read)**: CI-aware approval gating reads a commit's combined status, which needs the App's commit-statuses permission; it was never requested, so the call failed and gating quietly fell back to gating on every check. Added `statuses: read` to `manifest.json` and `install.html` — which had itself drifted from the manifest, also missing `actions: read` and the `pull_request_review_comment` event. Existing installations must re-accept the updated permissions (#236)
 
 ### Fixed
 
 - **Approval on a failed file fetch**: when `getPullRequestFiles` failed — a deleted PR, a rate limit, a transient error — the orchestrator caught the error, carried on with an empty file list, and could approve a PR whose diff it had never read. The failure now propagates to the normal failure path (check run marked failed, no approval) instead of being swallowed (#211)
 - **Unknown CI state counted as passing**: the approval gate treated any check state it did not explicitly recognize as a success, so a `null` or unfamiliar status could let an approval through while CI was still unsettled. An unrecognized or pending state is now held as not-yet-passing and the bot waits (#217)
 - **Stale "retry" notice after a posted review**: once the verdict was on the check run, a failure in a later step — applying labels, resolving threads, persisting the session — reached the same handler as an early failure and posted a "review could not be completed" comment over the review that had already gone out. The bot now records when the result is posted and takes the full failure path only for failures before that point (#220)
+- **A truncated diff could still auto-approve, with no disclosure**: when a PR's diff exceeded the size budget the bot dropped whole files but carried on, and could post a clean approval whose summary reported the full file count without mentioning the omission. A truncated review is now held to a comment — never an approval — and the summary states how many files were left out (#234)
 - **Findings lost when every inline comment was rejected**: on a follow-up review where GitHub rejected all of the inline comments — stale line numbers after a force-push, for instance — the bot posted nothing and the findings it had just computed were dropped. It now falls back to a single review body listing those findings (#215)
 - **Pending bot review past page one never dismissed**: `listReviews` read only GitHub's first page of 30, so on a long-lived PR a stale pending review left beyond that page was never deleted, and the next review ran into GitHub's one-pending-review-per-user limit; first-review detection and the approval backstop read the same truncated list. It now walks pages of 100, bounded at 10 (#219)
 - **Inline-comment fetch truncated to one page**: the inline review-comment fetch also stopped at the first 30, so on a busy PR follow-up de-duplication, `/resolve`, and the unresolved-thread backstop ran against a partial set — re-raising findings that had already been answered and leaving handled threads open. It now paginates, and the single-page variant was removed so nothing reaches for it again (#212)
@@ -22,6 +24,7 @@ A patch release of review-path correctness fixes. Most are matching and anchorin
 - **Distinct findings merged on severity and proximity**: the follow-up de-duplicator treated two findings as the same when they shared a severity and sat close together, even when they described different problems, so a nearby second finding could be dropped. A match now also requires the titles to be similar, with the content-overlap check kept as a fallback (#214)
 - **Multi-line quote matched scattered lines**: a finding's multi-line quote counted as a full match as long as each line turned up somewhere in the diff, so a quote assembled from non-adjacent lines could anchor in the wrong place. A full multi-line match now requires the quoted lines to appear as a contiguous run (#216)
 - **Line lookup bound to the wrong file on a suffix collision**: the `getLineText` fallback matched a path by suffix, so two changed files ending the same way — `foo/Config.java` and `bar/Config.java` — could resolve to the wrong one. It now resolves only when exactly one file matches, and returns nothing when the match is ambiguous (#218)
+- **Model JSON with a raw control character failed the whole review**: the model sometimes emitted a literal tab or newline inside a JSON string value (verbatim code in a suggestion field), which strict parsing rejected, failing the attempt and forcing a full-cost retry. Raw control characters inside string values are now escaped before parsing, so both the review and the verifier tolerate them (#235)
 
 ## [0.2.0] — 2026-06-21
 
