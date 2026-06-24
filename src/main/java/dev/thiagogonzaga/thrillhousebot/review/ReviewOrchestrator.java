@@ -211,10 +211,6 @@ public class ReviewOrchestrator {
     // the same failure path as any other error — comment, failed session, broadcast.
     var req = request;
     var checkRunId = -1L;
-    // Once the check-run verdict is committed, the review result is visible to the user; a failure
-    // in
-    // any later step must not flip that verdict to failure nor post a "retry" notice over it
-    // (#220).
     var resultSurfaced = false;
     try {
       var resolved = resolveMissingPrDetails(auth, request);
@@ -237,8 +233,6 @@ public class ReviewOrchestrator {
           buildBaseComparisonWithStats(
               auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
       var baseComparison = baseComparisonResult.text();
-      // Files the budget dropped (from the PR diff or the base comparison) make the review partial.
-      // The omitted count travels in DiffStats so the verdict and summary can disclose it (#234).
       var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
 
       var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
@@ -359,7 +353,6 @@ public class ReviewOrchestrator {
               offendingCiChecks,
               backstopUnresolved);
 
-      // Finalize check run before posting PR review — avoid approving then failing later
       String conclusion = conclusionForResult(result);
       String checkTitle = checkTitleForResult(result);
       String checkSummary = checkSummaryForResult(result);
@@ -374,13 +367,8 @@ public class ReviewOrchestrator {
               checkTitle,
               checkSummary,
               sessionUrl(session)));
-      // The verdict is now on the check run — the authoritative, user-visible result. From here a
-      // late failure (summary/review post, thread resolution, labels, persistence, broadcast) is a
-      // post-result hiccup, not a reason to retract the verdict or ask the user to re-run (#220).
       resultSurfaced = true;
 
-      // Summary goes first so it tops the PR conversation, before the inline finding comments.
-      // Posted on clean first reviews too: the celebration line lives inside the summary
       if (isFirstVisibleReview && !result.summaryMarkdown().isBlank()) {
         commentClient.createComment(
             auth,
@@ -391,8 +379,6 @@ public class ReviewOrchestrator {
             new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
       }
 
-      // Dismiss any stale pending review this bot left before posting the new one, reusing the
-      // reviews already fetched for this run rather than re-listing them (#74).
       dismissPendingBotReviews(auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       postReview(auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, files);
 
@@ -417,8 +403,6 @@ public class ReviewOrchestrator {
           req.owner(), req.repo(), req.prNumber(), result.totalFindings(), result.reviewState());
     } catch (RuntimeException e) {
       if (resultSurfaced) {
-        // The result is already posted; log the trailing failure but leave the verdict intact so we
-        // don't overwrite it with a misleading "could not be completed — retry" notice (#220).
         Log.warnf(
             e,
             "Review for %s/%s #%d was posted, but a post-result step failed",
@@ -624,7 +608,7 @@ public class ReviewOrchestrator {
       String auth, String owner, String repo, int prNumber) {
     // A fetch failure must propagate to review()'s handler (failed check + "could not complete"
     // notice). Swallowing it into an empty list is indistinguishable from a PR with no changes and
-    // produces a false APPROVE + green check on code that was never read (#211). A genuinely empty
+    // produces a false APPROVE + green check on code that was never read. A genuinely empty
     // PR returns an empty list with no exception and still takes the normal path.
     return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
   }
@@ -950,19 +934,14 @@ public class ReviewOrchestrator {
       state = ReviewState.COMMENT;
     }
 
-    // Gating approval verdict on CI status:
     if (state == ReviewState.APPROVE && !offendingCiChecks.isEmpty()) {
       state = ReviewState.COMMENT;
     }
 
-    // A truncated diff means whole files were never reviewed — never sail an APPROVE over the
-    // unreviewed remainder; hold it as a COMMENT and disclose the omission below (#234).
     if (state == ReviewState.APPROVE && diffStats.truncated()) {
       state = ReviewState.COMMENT;
     }
 
-    // The summary is generated for clean reviews too: a zero-findings result still reports the
-    // change overview and carries the celebration line inside the same comment
     var summaryMarkdown =
         summaryGenerator.generate(
             diffStats.filesChanged(),
@@ -1031,7 +1010,7 @@ public class ReviewOrchestrator {
 
   /**
    * Banner prepended to the summary when the diff was truncated, so a reader knows the review is
-   * partial — the verdict is also held back from APPROVE in that case (#234).
+   * partial — the verdict is also held back from APPROVE in that case.
    */
   private static String truncationNotice(int omittedFiles) {
     return String.format(
@@ -1089,7 +1068,7 @@ public class ReviewOrchestrator {
       // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
       // force-push). Surface them in the review body so they are not invisible: a follow-up review
       // posts no summary comment, so without this the findings would show only as a red check
-      // (#215).
+      // .
       Log.warnf(
           "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
           owner, repo, prNumber);
@@ -1119,7 +1098,7 @@ public class ReviewOrchestrator {
    * A review-body list of findings, used when none could be anchored as inline comments (their
    * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
    * which posts no summary comment — without it the findings would surface only as a red check run
-   * (#215).
+   * .
    */
   private static String unanchoredFindingsBody(ReviewResult result) {
     var sb = new StringBuilder();
@@ -1298,7 +1277,7 @@ public class ReviewOrchestrator {
    * Deletes any pending review left by this bot — GitHub allows only one pending review per user.
    * Reuses the reviews already fetched for this run instead of re-listing: no review is created
    * between that fetch and here, so a second {@code listReviews} would only spend extra rate-limit
-   * budget (#74).
+   * budget.
    */
   void dismissPendingBotReviews(
       String auth,
@@ -1356,7 +1335,6 @@ public class ReviewOrchestrator {
    * {@link Optional} — which the caller maps to {@code null}, gating on every check — only when
    * neither mechanism governs the branch or both lookups fail.
    */
-  // Package-private so each resolution branch can be exercised directly in tests.
   Optional<List<String>> resolveRequiredContexts(String auth, ReviewRequest req) {
     String branch;
     try {
@@ -1569,7 +1547,7 @@ public class ReviewOrchestrator {
     }
     // "pending", null, or any unrecognized state is not a confirmed pass: classify it as pending so
     // an indeterminate required check holds the approval rather than being mistaken for success
-    // (#217). Only an explicit "success" clears the gate.
+    // . Only an explicit "success" clears the gate.
     return CI_PENDING;
   }
 

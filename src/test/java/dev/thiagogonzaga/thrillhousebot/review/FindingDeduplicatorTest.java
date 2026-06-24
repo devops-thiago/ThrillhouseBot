@@ -99,7 +99,7 @@ class FindingDeduplicatorTest {
   @Test
   void twoDuplicatesKeepTheMoreSevereSeverity() {
     // An even cluster has no single median; the more severe of the two central values wins, so a
-    // single hedged (lower-severity) duplicate cannot downgrade a blocking finding (#213).
+    // single hedged (lower-severity) duplicate cannot downgrade a blocking finding.
     var response =
         response(
             finding("critical", "src/A.java", 5, "Unbounded recursion in parser", "short"),

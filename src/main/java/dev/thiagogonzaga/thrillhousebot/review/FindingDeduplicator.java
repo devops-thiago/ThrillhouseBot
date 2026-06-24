@@ -183,7 +183,7 @@ public class FindingDeduplicator {
     // cluster uses the true median so a lone outlier cannot decide the severity; an even cluster
     // has
     // no single middle, so take the more severe of the two central values (the lower index) — never
-    // the less severe — so a single hedged duplicate cannot downgrade a blocking finding (#213).
+    // the less severe — so a single hedged duplicate cannot downgrade a blocking finding.
     int mid = ranked.size() / 2;
     RiskLevel severity = ranked.size() % 2 == 0 ? ranked.get(mid - 1) : ranked.get(mid);
     // Confidence stays paired with the chosen severity: the highest confidence among the members

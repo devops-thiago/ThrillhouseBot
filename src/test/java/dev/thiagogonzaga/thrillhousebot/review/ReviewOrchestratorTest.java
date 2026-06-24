@@ -372,7 +372,7 @@ class ReviewOrchestratorTest {
           .thenThrow(new RuntimeException("GitHub API error"));
 
       // Swallowing the failure into an empty list would yield an empty diff and a false APPROVE on
-      // unreviewed code (#211); it must propagate so review() takes the failure path.
+      // unreviewed code; it must propagate so review() takes the failure path.
       assertThrows(
           RuntimeException.class, () -> orchestrator.fetchPrFiles("auth", "owner", "repo", 42));
     }
@@ -1358,7 +1358,7 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> "APPROVE".equals(req.event())));
         // ...so the post-result failure must NOT post a "could not be completed — retry" notice,
-        // flip the session to failed, or broadcast a failure over the posted result (#220).
+        // flip the session to failed, or broadcast a failure over the posted result.
         verify(commentClient, never())
             .createComment(
                 anyString(),
@@ -1428,7 +1428,7 @@ class ReviewOrchestratorTest {
                 false));
 
         // listReviews is fetched exactly once for the whole run — dismissal reuses that list
-        // (#74)...
+        // ...
         verify(reviewClient, times(1))
             .listReviews(anyString(), anyString(), anyString(), anyString(), anyInt());
         // ...and the bot's stale pending review is still dismissed from the reused list.
@@ -2399,7 +2399,7 @@ class ReviewOrchestratorTest {
       // The finding's file is not in the diff, so no inline comment anchors (posted == 0). On a
       // first review the findings are in the summary comment, so the review body points there — but
       // a
-      // review event is still posted so the findings never vanish behind a bare check (#215).
+      // review event is still posted so the findings never vanish behind a bare check.
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
 
@@ -2428,7 +2428,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldListFindingsInReviewBodyWhenNoneAnchorInlineOnFollowUp() {
-      // Regression (#215): on a follow-up review (which posts no summary comment) findings whose
+      // Regression: on a follow-up review (which posts no summary comment) findings whose
       // lines fall outside the diff must still be listed in the review body, not show only as a red
       // check run.
       var finding =
@@ -3818,7 +3818,7 @@ class ReviewOrchestratorTest {
     void shouldHoldApprovalWhenAStatusStateIsUnrecognized() {
       // A commit status whose state is neither success/pending/failure/error (here a malformed
       // value; null behaves identically) is not a confirmed pass — it must surface as a pending
-      // offending check so it holds the approval rather than clearing the gate (#217).
+      // offending check so it holds the approval rather than clearing the gate.
       var passRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "completed", "success", null);

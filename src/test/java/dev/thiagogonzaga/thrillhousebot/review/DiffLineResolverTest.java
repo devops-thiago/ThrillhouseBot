@@ -694,7 +694,7 @@ class DiffLineResolverTest {
   void getLineTextReturnsNullOnAmbiguousSuffixCollision() {
     // Both a/dir/Main.java and b/dir/Main.java carry right-side text and are FilePaths.same to the
     // queried "dir/Main.java". With no unique resolution, getLineText must return null rather than
-    // guess whichever entry the map happens to iterate first (#218).
+    // guess whichever entry the map happens to iterate first.
     var other =
         """
         @@ -10,3 +10,4 @@

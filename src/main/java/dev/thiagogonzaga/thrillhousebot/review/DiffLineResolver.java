@@ -106,7 +106,7 @@ public final class DiffLineResolver {
     // diff keys both matching, e.g. a/Handler.java and b/Handler.java) return null rather than
     // guess
     // whichever entry the map iterates first — mirrors resolveRightSideLinesForFileOrVariant, the
-    // safe direction (#218).
+    // safe direction.
     Map<Integer, String> resolved = null;
     for (var entry : rightSideLineTextByFile.entrySet()) {
       var value = entry.getValue();

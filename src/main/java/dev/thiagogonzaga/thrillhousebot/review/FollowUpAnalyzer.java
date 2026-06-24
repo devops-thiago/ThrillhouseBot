@@ -485,7 +485,7 @@ public class FollowUpAnalyzer {
     // of identity: two distinct findings that merely share a severity (or both carry null/unknown
     // risk, which maps to LOW) near the same line are different defects and must not be collapsed —
     // doing so silently dropped a new finding whenever a same-severity neighbour had been replied
-    // to (#214). A paraphrased re-raise whose title drifted is still caught by the content-overlap
+    // to. A paraphrased re-raise whose title drifted is still caught by the content-overlap
     // fallback below.
     if (Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE
         && FindingDeduplicator.titleSimilarity(finding.title(), prior.title())
