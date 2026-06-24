@@ -152,8 +152,6 @@ public class ReviewOrchestrator {
       var priorReviews = ctx.priorReviews();
       var previousAiResponseJson = ctx.previousAiResponseJson();
       var inlineComments = ctx.inlineComments();
-      // Resolved once in the loader and shared via the context: the finding pipeline, the verdict
-      // backstop below, and the publisher's inline comments all anchor against the same diff.
       var lineResolver = ctx.lineResolver();
 
       var promptInputs = promptAssembler.assemble(ctx, req);

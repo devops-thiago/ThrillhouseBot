@@ -77,8 +77,7 @@ public class ReviewPromptAssembler {
         PromptTemplateEscaper.escape(PromptSections.prContext(req.prTitle(), req.prDescription())),
         PromptTemplateEscaper.escape(ctx.baseComparison()),
         escapedStack,
-        PromptTemplateEscaper.escape(
-            diffFormatter.buildRelatedTests(diffFormatter.reviewableFiles(ctx.files()))),
+        PromptTemplateEscaper.escape(diffFormatter.buildRelatedTests(ctx.reviewableFiles())),
         PromptTemplateEscaper.escape(ctx.previousFindings()),
         trailingGuidance);
   }

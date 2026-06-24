@@ -21,8 +21,11 @@ import jakarta.inject.Singleton;
 
 /**
  * Exposes the bot's {@link BotIdentity} — resolved once from {@code GITHUB_BOT_LOGINS} — as a
- * single application-scoped bean, so the review collaborators inject it instead of each re-deriving
- * it from {@link ThrillhouseConfig} (one config read, no per-class drift).
+ * single application-scoped bean, so the review-pipeline collaborators inject it instead of each
+ * re-deriving it from {@link ThrillhouseConfig} (one config read, no per-class drift within the
+ * review package). {@code TriggerDetector} (webhook) deliberately keeps its own {@link
+ * BotIdentity#from} derivation so its no-arg and bot-logins constructors stay usable as test and
+ * fallback wiring.
  */
 @ApplicationScoped
 public class BotIdentityProducer {
