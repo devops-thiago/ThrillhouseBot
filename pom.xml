@@ -177,6 +177,14 @@
             <artifactId>quarkus-smallrye-openapi</artifactId>
         </dependency>
 
+        <!-- Token estimation for diff budgeting (#53): one OpenAI BPE encoding as a
+             provider-agnostic estimate. Exact per-model encodings are follow-up #239. -->
+        <dependency>
+            <groupId>com.knuddels</groupId>
+            <artifactId>jtokkit</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>io.quarkus</groupId>
