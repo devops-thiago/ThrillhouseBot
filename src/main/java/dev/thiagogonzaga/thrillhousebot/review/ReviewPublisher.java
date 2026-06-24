@@ -59,14 +59,15 @@ public class ReviewPublisher {
       SuggestionFormatter suggestionFormatter,
       ReviewDiffFormatter diffFormatter,
       FollowUpAnalyzer followUpAnalyzer,
-      ThrillhouseConfig config) {
+      ThrillhouseConfig config,
+      BotIdentity botIdentity) {
     this.reviewClient = reviewClient;
     this.reviewThreadService = reviewThreadService;
     this.suggestionFormatter = suggestionFormatter;
     this.diffFormatter = diffFormatter;
     this.followUpAnalyzer = followUpAnalyzer;
     this.config = config;
-    this.botIdentity = BotIdentity.from(config.github().botLogins());
+    this.botIdentity = botIdentity;
   }
 
   void postReview(

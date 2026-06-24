@@ -18,7 +18,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
-import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -53,13 +52,13 @@ public class FindingPipeline {
       FindingVerificationService findingVerificationService,
       FollowUpAnalyzer followUpAnalyzer,
       ObjectMapper mapper,
-      ThrillhouseConfig config) {
+      BotIdentity botIdentity) {
     this.quoteValidator = quoteValidator;
     this.deduplicator = deduplicator;
     this.findingVerificationService = findingVerificationService;
     this.followUpAnalyzer = followUpAnalyzer;
     this.mapper = mapper;
-    this.botIdentity = BotIdentity.from(config.github().botLogins());
+    this.botIdentity = botIdentity;
   }
 
   /**

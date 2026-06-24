@@ -16,7 +16,6 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
-import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -65,7 +64,7 @@ public class ReviewContextLoader {
       PrLabeler labeler,
       FollowUpAnalyzer followUpAnalyzer,
       ReviewSessionPersistence sessionPersistence,
-      ThrillhouseConfig config) {
+      BotIdentity botIdentity) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
@@ -75,7 +74,7 @@ public class ReviewContextLoader {
     this.labeler = labeler;
     this.followUpAnalyzer = followUpAnalyzer;
     this.sessionPersistence = sessionPersistence;
-    this.botIdentity = BotIdentity.from(config.github().botLogins());
+    this.botIdentity = botIdentity;
   }
 
   /** Everything the review pipeline reads before the model call, loaded once up front. */

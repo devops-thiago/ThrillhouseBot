@@ -131,7 +131,8 @@ class ReviewOrchestratorTest {
             suggestionFormatter,
             diffFormatter,
             followUpAnalyzer,
-            config);
+            config,
+            BOT_ID);
     verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer);
     findingPipeline =
         new FindingPipeline(
@@ -140,7 +141,7 @@ class ReviewOrchestratorTest {
             findingVerificationService,
             followUpAnalyzer,
             mapper,
-            config);
+            BOT_ID);
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -180,6 +181,7 @@ class ReviewOrchestratorTest {
   private ReviewOrchestrator newOrchestrator() {
     return new ReviewOrchestrator(
         config,
+        BOT_ID,
         authClient,
         commentClient,
         aiReviewService,
@@ -200,7 +202,7 @@ class ReviewOrchestratorTest {
             labeler,
             followUpAnalyzer,
             sessionPersistence,
-            config),
+            BOT_ID),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         reviewPublisher,
         verdictBuilder,
@@ -2719,7 +2721,7 @@ class ReviewOrchestratorTest {
               findingVerificationService,
               followUpAnalyzer,
               badMapper,
-              config);
+              BOT_ID);
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

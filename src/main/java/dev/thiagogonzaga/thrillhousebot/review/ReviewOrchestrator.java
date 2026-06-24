@@ -105,6 +105,7 @@ public class ReviewOrchestrator {
   @Inject
   public ReviewOrchestrator(
       ThrillhouseConfig config,
+      BotIdentity botIdentity,
       GitHubAuthClient authClient,
       @RestClient GitHubCommentClient commentClient,
       AiReviewService aiReviewService,
@@ -121,7 +122,7 @@ public class ReviewOrchestrator {
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline) {
     this.config = config;
-    this.botIdentity = BotIdentity.from(config.github().botLogins());
+    this.botIdentity = botIdentity;
     this.authClient = authClient;
     this.commentClient = commentClient;
     this.aiReviewService = aiReviewService;

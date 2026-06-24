@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import java.util.Collections;
@@ -47,16 +47,12 @@ class ReviewContextLoaderTest {
   @Mock private PrLabeler labeler;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private ReviewSessionPersistence sessionPersistence;
-  @Mock private ThrillhouseConfig config;
 
   private ReviewContextLoader loader;
 
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
-    when(config.github()).thenReturn(githubConfig);
-    when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
     loader =
         new ReviewContextLoader(
             prClient,
@@ -68,7 +64,7 @@ class ReviewContextLoaderTest {
             labeler,
             followUpAnalyzer,
             sessionPersistence,
-            config);
+            BotIdentity.from(List.of(BOT_LOGIN)));
   }
 
   @Nested
