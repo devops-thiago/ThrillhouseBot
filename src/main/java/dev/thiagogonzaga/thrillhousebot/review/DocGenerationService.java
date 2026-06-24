@@ -173,7 +173,7 @@ public class DocGenerationService {
 
     String raw =
         docGenerator.generate(
-            PromptTemplateEscaper.escape(diff),
+            PromptTemplateEscaper.fence(diff),
             PromptTemplateEscaper.escape(prContext),
             PromptTemplateEscaper.escape(stack),
             instructions);

@@ -82,13 +82,14 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
   }
 
   /**
-   * Calls the assistant with already-loaded inputs, escaping each for templating. Null on failure.
+   * Calls the assistant with already-loaded inputs, fencing the diff and escaping the rest for
+   * templating. Null on failure.
    */
   private String callAssistant(Inputs inputs) {
     try {
       String suggestion =
           describeAssistant.describe(
-              PromptTemplateEscaper.escape(inputs.diff()),
+              PromptTemplateEscaper.fence(inputs.diff()),
               PromptTemplateEscaper.escape(inputs.title()),
               PromptTemplateEscaper.escape(inputs.body()),
               PromptTemplateEscaper.escape(inputs.instructions()));
