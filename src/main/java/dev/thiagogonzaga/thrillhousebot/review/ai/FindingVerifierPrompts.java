@@ -38,7 +38,12 @@ public final class FindingVerifierPrompts {
               contracts, query dialects, lifecycle rules, routing and rendering semantics) that
               the provided diff and project
               stack do not support — especially claims that idiomatic-looking code "will fail
-              at runtime".
+              at runtime". This does NOT cover a config/IaC finding whose breakage is visible in
+              the diff text itself — an invalid or schema-violating manifest field, an over-broad
+              RBAC/IAM rule, a privileged or unhardened container, an automounted service-account
+              token: that is demonstrable here, so confirm or reject it against the manifest rather
+              than rejecting it as unverifiable remembered behavior. Still reject a config claim
+              that genuinely rests on cluster, provider, or registry state not shown in the diff.
             - suggestion_new is functionally equivalent to suggestion_old (an alias,
               reformatting, or a documented shorthand of the same call) — a fix that changes
               nothing disproves the finding.
@@ -84,8 +89,12 @@ public final class FindingVerifierPrompts {
               repeat.
 
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
-            the provided diff and context. Unverifiable framework-behavior claims are at most
-            "medium" risk with "low" confidence. Claims about the contents or behavior of
+            the provided diff and context. A config/IaC defect whose breakage is visible in the
+            manifest text in the diff — a field that fails schema validation, an over-broad RBAC
+            rule, a privileged container, a change that weakens the safety property the PR claims
+            to add — IS demonstrable here and may be "high"; do not auto-downgrade it as remembered
+            framework behavior. Unverifiable framework-behavior claims are at most "medium" risk
+            with "low" confidence. Claims about the contents or behavior of
             artifacts not shown in the diff (base images, registries, installed packages,
             remote services) are not demonstrable here: downgrade any such finding above
             "medium". An "undefined / unset / missing symbol" claim is demonstrable only when

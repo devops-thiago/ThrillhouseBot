@@ -12,6 +12,7 @@ All notable changes to ThrillhouseBot.
 ### Changed
 
 - **Multi-line suggestions**: when a finding's fix replaces several consecutive lines, the bot now posts a multi-line review comment (`start_line`..`line`) so the GitHub suggestion replaces the whole range in one click, instead of anchoring to a single line and mis-applying the rest. The range is derived from the flagged code's position in the diff and falls back to a single-line comment when it can't be resolved (#71)
+- **Config/IaC findings no longer suppressed**: the reviewer was high-precision but had weak recall on declarative diffs (Kubernetes/Helm manifests, Terraform, CI workflow YAML, Dockerfiles) — it would *consider* issues like over-broad RBAC, missing container hardening, token automounting, or a schema-invalid manifest and then drop them, because the SECURITY dimension named only application-code threats and severity was anchored on "will fail at runtime". The review prompt now names infra/config security classes, adds a config/IaC correctness dimension, and recalibrates severity so a change that fails schema/lint/CI validation — or that weakens a safety property the PR itself claims to add — is a defensible finding. Precision is preserved by the verifier (it still rejects config claims that rest on cluster/provider state not in the diff), not by blanket suppression (#238)
 
 ## [0.2.1] — 2026-06-24
 

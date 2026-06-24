@@ -25,7 +25,16 @@ public final class PrReviewPrompts {
 
             Review dimensions:
             1. FUNCTIONAL CORRECTNESS: Does the code do what it claims? Edge cases covered? Null checks? Off-by-one errors?
-            2. SECURITY: SQL injection, XSS, path traversal, auth bypass, hardcoded secrets, unsafe deserialization, race conditions.
+            2. SECURITY: application-code threats — SQL injection, XSS, path traversal, auth bypass,
+               hardcoded secrets, unsafe deserialization, race conditions — and, equally,
+               infrastructure and configuration threats in declarative files (Kubernetes/Helm
+               manifests, Terraform, CI workflow YAML, Dockerfiles): over-broad RBAC/IAM that
+               violates least privilege, missing container hardening or privilege escalation
+               (privileged, runAsRoot, no securityContext, hostPath/hostNetwork), secret and token
+               exposure (including service-account token automounting), unintended public exposure,
+               and unpinned supply-chain references. A config or hardening weakness visible in the
+               diff is as much a finding as a code vulnerability — do not pass over it because it is
+               declarative rather than executable.
             3. REGRESSIONS: Does this change break or remove existing behavior? Compare with base commit context.
             4. COMMENT CONSISTENCY: Comments that contradict code. Outdated comments. Missing comments where logic is complex.
                Excessive/obvious comments (e.g., "i++ // increment i"). TODO/FIXME without resolution.
@@ -46,6 +55,19 @@ public final class PrReviewPrompts {
                that one page suffices or the call intentionally caps the result. Scale severity by
                what is dropped: a lost review thread, finding, or changed file that alters a decision
                is medium or higher; a cosmetic list is low.
+            7. CONFIG / IaC CORRECTNESS: When the diff adds or changes a declarative file — a
+               Kubernetes/Helm manifest, a Terraform file, a CI workflow YAML, a Dockerfile, or
+               similar — check it for defects demonstrable from the text in the diff: a manifest that
+               will not pass schema validation (a missing required field, a mistyped value, an
+               invalid apiVersion/kind pairing), a Helm/template expression that renders to invalid
+               output, a workflow that will not parse, or a value that contradicts a constraint
+               stated elsewhere in the same file. These fail at apply/validation/CI time, not at
+               "runtime", so judge them on whether the breakage is visible here — not on whether they
+               map to a code exception. Scale severity by impact: a change that will fail
+               schema/lint/CI validation, or that breaks the safety property the PR itself claims to
+               add, is high; a cosmetic or stylistic config nitpick is low. Not a finding when a
+               comment or adjacent value justifies the choice, or when correctness depends on
+               cluster/provider state not shown in the diff — phrase that as a verification request.
 
             For each finding, provide:
             - risk: "critical" | "high" | "medium" | "low"
@@ -63,13 +85,19 @@ public final class PrReviewPrompts {
               provided here (e.g. a null dereference on a path visible in the diff, injected
               user input reaching a query, a committed secret).
             - "high": a likely bug with a concrete failure scenario you can trace through the
-              diff.
+              diff — including a declarative change that will fail schema/lint/CI validation, or
+              that removes or weakens a safety property the PR itself claims to provide (a PR that
+              says it hardens RBAC but widens it, that adds a securityContext but leaves a container
+              privileged). "Will fail at runtime" is not the only path to this level; "will fail at
+              apply/validation time, shown in the diff" counts equally.
             - "medium": a real correctness or maintainability concern. Performance findings need
               evidence of scale in the diff (unbounded data, hot paths) — a one-time task over a
               handful of rows is not a finding.
             - "low": rarely worth reporting — prefer omitting it unless the project instructions
-              ask for that level of detail. Documentation-vs-code phrasing nitpicks with no
-              correctness impact are not findings.
+              ask for that level of detail. Cosmetic phrasing nitpicks (documentation-vs-code
+              wording, stylistic config formatting) with no correctness or security impact are not
+              findings — but a genuine config defect, least-privilege violation, or hardening gap is
+              a real finding, not a nitpick, and belongs at its impact-based severity above.
 
             Confidence calibration:
             - confidence "high" means another reviewer could confirm the issue using only the
@@ -106,7 +134,13 @@ public final class PrReviewPrompts {
               enclosing method's entry to the crash line. If an earlier statement makes that line
               unreachable for that input — an early return/continue/throw, or a guard on a value
               derived from the flagged one — the line cannot crash and the finding is invalid.
-            - A claim that two places are inconsistent ("X does this but Y does not") must quote
+            - A claim that a declarative/config change fails at apply, validation, or CI time
+              (schema validation, template render, YAML/HCL parse) is defended differently from a
+              runtime crash: name the offending field, expression, or value in the diff and the
+              specific rule it breaks — the required field it omits, the type it mismatches, the
+              schema or constraint it violates. Such a finding needs no runtime input trace; but if
+              the rule it cites cannot be confirmed from the diff and provided context, it is a
+              confidence "medium"/"low" finding phrased as a verification request, not "high".
               both places verbatim from the provided material and confirm they belong to the
               same enclosing unit (the same function, block, or scope). When the two places are
               in different units, first verify the units are genuinely equivalent; when the
