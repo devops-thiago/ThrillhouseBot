@@ -26,6 +26,10 @@ A patch release of review-path correctness and robustness fixes. Most are matchi
 - **Line lookup bound to the wrong file on a suffix collision**: the `getLineText` fallback matched a path by suffix, so two changed files ending the same way — `foo/Config.java` and `bar/Config.java` — could resolve to the wrong one. It now resolves only when exactly one file matches, and returns nothing when the match is ambiguous (#218)
 - **Model JSON with a raw control character failed the whole review**: the model sometimes emitted a literal tab or newline inside a JSON string value (verbatim code in a suggestion field), which strict parsing rejected, failing the attempt and forcing a full-cost retry. Raw control characters inside string values are now escaped before parsing, so both the review and the verifier tolerate them (#235)
 
+### Dependencies
+
+- Bumped `jackson-bom` to 2.22.0 to clear GHSA-5jmj-h7xm-6q6v / CVE-2026-54515 — a `@JsonIgnoreProperties` deserialization bypass — in the `jackson-databind` 2.21.4 the Quarkus platform manages; the 2.21.x patch fix is not yet on Maven Central (#244)
+
 ## [0.2.0] — 2026-06-21
 
 This release makes the bot interactive and controllable from the PR — conversational replies, comment commands, context-aware labels, and configurable triggers — and hardens startup and the manual-review path.
