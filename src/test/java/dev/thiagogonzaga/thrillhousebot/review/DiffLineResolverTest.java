@@ -773,6 +773,33 @@ class DiffLineResolverTest {
   }
 
   @Test
+  void resolveSuggestionRangeShouldReturnEmptyAcrossNumericallyAdjacentHunks() {
+    // Two hunks with consecutive right-side line numbers: hunk 1 ends at 11, hunk 2 starts at 12.
+    // Every line in 11..12 is a real right-side line, so a line-membership check would accept the
+    // span — but GitHub rejects a suggestion whose start_line and line are in different hunks
+    // (422),
+    // even with no gap. The range must stay in one hunk, so this falls back to a single-line
+    // comment.
+    var patch =
+        """
+        @@ -10,2 +10,2 @@
+         keep10()
+        +shared_a()
+        @@ -12,2 +12,2 @@
+        +shared_b()
+         keep13()
+        """;
+    var resolver = new DiffLineResolver(Map.of("A.java", patch));
+
+    assertTrue(resolver.resolveSuggestionRange("A.java", "shared_a()\nshared_b()").isEmpty());
+    // A genuine within-hunk run still resolves.
+    var range = resolver.resolveSuggestionRange("A.java", "keep10()\nshared_a()");
+    assertTrue(range.isPresent());
+    assertEquals(10, range.get().startLine());
+    assertEquals(11, range.get().endLine());
+  }
+
+  @Test
   void resolveSuggestionRangeShouldReturnEmptyForSingleLineOrBlankAnchor() {
     var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
 
