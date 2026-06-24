@@ -99,8 +99,7 @@ public class ReviewPublisher {
     } else if (posted == 0) {
       // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
       // force-push). Surface them in the review body so they are not invisible: a follow-up review
-      // posts no summary comment, so without this the findings would show only as a red check
-      // .
+      // posts no summary comment, so without this the findings would show only as a red check run.
       Log.warnf(
           "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
           owner, repo, prNumber);
@@ -129,8 +128,7 @@ public class ReviewPublisher {
   /**
    * A review-body list of findings, used when none could be anchored as inline comments (their
    * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
-   * which posts no summary comment — without it the findings would surface only as a red check run
-   * .
+   * which posts no summary comment — without it the findings would surface only as a red check run.
    */
   private static String unanchoredFindingsBody(ReviewResult result) {
     var sb = new StringBuilder();

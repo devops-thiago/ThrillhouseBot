@@ -32,7 +32,6 @@ import java.util.List;
 @ApplicationScoped
 public class VerdictBuilder {
 
-  private static final String CHECK_NAME = "ThrillhouseBot Review";
   private static final String ZERO_ISSUES_MESSAGE = PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
 
   private final PrSummaryGenerator summaryGenerator;
@@ -52,9 +51,9 @@ public class VerdictBuilder {
     if (!result.hasIssues()
         && result.unresolvedPreviousCount() == 0
         && result.offendingCiChecks().isEmpty()) {
-      return CHECK_NAME + " ✅";
+      return CheckRunManager.CHECK_NAME + " ✅";
     }
-    return CHECK_NAME;
+    return CheckRunManager.CHECK_NAME;
   }
 
   static String checkSummaryForResult(ReviewResult result) {

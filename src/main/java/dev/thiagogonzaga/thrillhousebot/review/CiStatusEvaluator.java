@@ -41,7 +41,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class CiStatusEvaluator {
 
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final String CHECK_NAME = "ThrillhouseBot Review";
   private static final String CHECK_STATUS_COMPLETED = "completed";
   private static final String CONCLUSION_FAILURE = "failure";
   private static final String CI_SUCCESS = "success";
@@ -291,7 +290,8 @@ public class CiStatusEvaluator {
 
   private boolean isThrillhouseBotCheck(
       String name, GitHubCheckRunClient.CheckRunsResponse.CheckRun.App app) {
-    if (name != null && (name.equalsIgnoreCase(CHECK_NAME) || containsBotToken(name))) {
+    if (name != null
+        && (name.equalsIgnoreCase(CheckRunManager.CHECK_NAME) || containsBotToken(name))) {
       return true;
     }
     return app != null && (containsBotToken(app.slug()) || containsBotToken(app.name()));
