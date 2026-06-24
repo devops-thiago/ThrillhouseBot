@@ -20,8 +20,10 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +49,8 @@ class ReviewContextLoaderTest {
   @Mock private PrLabeler labeler;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private ReviewSessionPersistence sessionPersistence;
+  @Mock private ThrillhouseConfig config;
+  @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
@@ -54,6 +58,8 @@ class ReviewContextLoaderTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    // Token-budget getters default to 0 → single-batch plan; enough to exercise load() paths.
+    lenient().when(config.review()).thenReturn(reviewConfig);
     loader =
         new ReviewContextLoader(
             prClient,
@@ -62,10 +68,12 @@ class ReviewContextLoaderTest {
             instructionsResolver,
             projectStackResolver,
             diffFormatter,
+            new DiffBudgetPlanner(diffFormatter, new TokenCounter()),
             labeler,
             followUpAnalyzer,
             sessionPersistence,
-            BotIdentity.from(List.of(BOT_LOGIN)));
+            BotIdentity.from(List.of(BOT_LOGIN)),
+            config);
   }
 
   @Nested

@@ -74,6 +74,21 @@ public class DiffBudgetPlanner {
   }
 
   /**
+   * Plans batches given the per-call input budget and the shared prompt overhead that every batch
+   * call repeats (system prompt, project stack, previous findings, instructions). The diff budget
+   * is what remains of {@code inputBudgetTokens} after that overhead, so each call's full prompt
+   * (shared + one batch's diff) stays within the model's input limit.
+   */
+  BudgetPlan plan(
+      List<GitHubPullRequestClient.FileDiff> files,
+      String sharedPromptOverhead,
+      int inputBudgetTokens,
+      int maxBatches) {
+    var diffBudget = inputBudgetTokens - tokenCounter.estimateTokens(sharedPromptOverhead);
+    return plan(files, diffBudget, maxBatches);
+  }
+
+  /**
    * Plans batches for {@code files}. A {@code diffBudgetTokens <= 0} disables budgeting — every
    * reviewable file lands in a single batch (the legacy "no cap" behaviour).
    */
