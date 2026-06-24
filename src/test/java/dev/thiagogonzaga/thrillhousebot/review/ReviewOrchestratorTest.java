@@ -108,6 +108,11 @@ class ReviewOrchestratorTest {
   // directly by the verdict tests and injected so review()'s gating path is unchanged.
   private VerdictBuilder verdictBuilder;
 
+  // The real post-AI chain (validate/dedupe/verify/drop-replied/anchors/persist), exercised
+  // directly
+  // by the pipeline tests and injected so review()'s finding flow is unchanged.
+  private FindingPipeline findingPipeline;
+
   private ReviewOrchestrator orchestrator;
 
   @BeforeEach
@@ -128,7 +133,15 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             config);
     verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer);
-    orchestrator = newOrchestrator(mapper);
+    findingPipeline =
+        new FindingPipeline(
+            quoteValidator,
+            deduplicator,
+            findingVerificationService,
+            followUpAnalyzer,
+            mapper,
+            config);
+    orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
     // Walkthrough diagram is off by default; individual tests opt in by re-stubbing enabled().
@@ -164,15 +177,12 @@ class ReviewOrchestratorTest {
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "ok", "main.py", 10));
   }
 
-  private ReviewOrchestrator newOrchestrator(ObjectMapper objectMapper) {
+  private ReviewOrchestrator newOrchestrator() {
     return new ReviewOrchestrator(
         config,
         authClient,
         commentClient,
         aiReviewService,
-        findingVerificationService,
-        quoteValidator,
-        deduplicator,
         broadcaster,
         sessionPersistence,
         followUpAnalyzer,
@@ -194,7 +204,7 @@ class ReviewOrchestratorTest {
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         reviewPublisher,
         verdictBuilder,
-        objectMapper);
+        findingPipeline);
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiffWithLine(
@@ -2689,7 +2699,7 @@ class ReviewOrchestratorTest {
       var session = new ReviewSession();
       var response = new ReviewResponse(List.of(), List.of(), null);
 
-      orchestrator.persistAiResponse(session, response);
+      findingPipeline.persistAiResponse(session, response);
 
       assertNotNull(session.getAiResponseJson());
     }
@@ -2698,14 +2708,21 @@ class ReviewOrchestratorTest {
     void shouldHandleSerializationFailureGracefully() throws Exception {
       var session = new ReviewSession();
 
-      // ObjectMapper that always fails — passed through the constructor
+      // ObjectMapper that always fails — a pipeline built with it must swallow the error.
       ObjectMapper badMapper = mock(ObjectMapper.class);
       when(badMapper.writeValueAsString(any()))
           .thenThrow(new com.fasterxml.jackson.core.JsonProcessingException("fail") {});
-      var failingOrchestrator = newOrchestrator(badMapper);
+      var failingPipeline =
+          new FindingPipeline(
+              quoteValidator,
+              deduplicator,
+              findingVerificationService,
+              followUpAnalyzer,
+              badMapper,
+              config);
 
       var response = new ReviewResponse(List.of(), List.of(), null);
-      failingOrchestrator.persistAiResponse(session, response);
+      failingPipeline.persistAiResponse(session, response);
 
       assertNull(session.getAiResponseJson());
     }
@@ -2748,7 +2765,7 @@ class ReviewOrchestratorTest {
               List.of(),
               null);
 
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
 
       assertEquals(4, updated.findings().size());
 
@@ -2769,7 +2786,7 @@ class ReviewOrchestratorTest {
     void shouldReturnOriginalResponseWhenFindingsIsEmpty() {
       var lineResolver = new DiffLineResolver(Map.of());
       var response = new ReviewResponse(List.of(), List.of(), null);
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
     }
 
@@ -2788,7 +2805,7 @@ class ReviewOrchestratorTest {
           new ReviewResponse.Finding(
               "high", "high", "main.py", 11, "Title", "Desc", "  anchor  ", "new_line()");
       var response = new ReviewResponse(List.of(finding), List.of(), null);
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
     }
 
@@ -2806,7 +2823,7 @@ class ReviewOrchestratorTest {
           new ReviewResponse.Finding(
               "high", "high", "main.py", 2, "Title", "Desc", null, "new_line()");
       var response = new ReviewResponse(List.of(finding), List.of(), null);
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
     }
   }

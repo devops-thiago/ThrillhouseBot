@@ -15,8 +15,6 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -24,13 +22,10 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
-import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
-import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -56,9 +51,6 @@ public class ReviewOrchestrator {
 
   private final GitHubCommentClient commentClient;
   private final AiReviewService aiReviewService;
-  private final FindingVerificationService findingVerificationService;
-  private final FindingQuoteValidator quoteValidator;
-  private final FindingDeduplicator deduplicator;
 
   private final SessionEventBroadcaster broadcaster;
 
@@ -82,7 +74,7 @@ public class ReviewOrchestrator {
 
   private final VerdictBuilder verdictBuilder;
 
-  private final ObjectMapper mapper;
+  private final FindingPipeline findingPipeline;
 
   /**
    * Parameter object for the {@link #review(ReviewRequest)} method.
@@ -116,9 +108,6 @@ public class ReviewOrchestrator {
       GitHubAuthClient authClient,
       @RestClient GitHubCommentClient commentClient,
       AiReviewService aiReviewService,
-      FindingVerificationService findingVerificationService,
-      FindingQuoteValidator quoteValidator,
-      FindingDeduplicator deduplicator,
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
       FollowUpAnalyzer followUpAnalyzer,
@@ -130,15 +119,12 @@ public class ReviewOrchestrator {
       ReviewPromptAssembler promptAssembler,
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
-      ObjectMapper mapper) {
+      FindingPipeline findingPipeline) {
     this.config = config;
     this.botIdentity = BotIdentity.from(config.github().botLogins());
     this.authClient = authClient;
     this.commentClient = commentClient;
     this.aiReviewService = aiReviewService;
-    this.findingVerificationService = findingVerificationService;
-    this.quoteValidator = quoteValidator;
-    this.deduplicator = deduplicator;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
     this.followUpAnalyzer = followUpAnalyzer;
@@ -150,7 +136,7 @@ public class ReviewOrchestrator {
     this.promptAssembler = promptAssembler;
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
-    this.mapper = mapper;
+    this.findingPipeline = findingPipeline;
   }
 
   /**
@@ -204,23 +190,19 @@ public class ReviewOrchestrator {
       var repoLabels = ctx.repoLabels();
 
       var promptInputs = promptAssembler.assemble(ctx, req);
-      // Quote validation runs before dedupe so a merged finding can never inherit a phantom
-      // quote from one duplicate while a verbatim sibling gets discarded
       var aiResponse = aiReviewService.review(session, promptInputs);
-      aiResponse = quoteValidator.validate(aiResponse, diff);
-      aiResponse = deduplicator.dedupe(aiResponse);
-      aiResponse =
-          findingVerificationService.verify(
-              aiResponse,
-              promptInputs.diff(),
-              promptInputs.projectStack(),
-              promptInputs.previousFindings());
-      aiResponse =
-          followUpAnalyzer.dropRepliedDuplicates(
-              aiResponse, priorAiResponseJsons, inlineComments, botIdentity);
+      // lineResolver is shared with the verdict backstop below, so it is built here and threaded
+      // through the finding pipeline rather than created inside it.
       var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
-      aiResponse = populateMissingAnchors(aiResponse, lineResolver);
-      persistAiResponse(session, aiResponse);
+      aiResponse =
+          findingPipeline.refine(
+              session,
+              aiResponse,
+              diff,
+              promptInputs,
+              priorAiResponseJsons,
+              inlineComments,
+              lineResolver);
 
       // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
       // "could not determine required checks" — evaluateCiChecks then gates on all checks (null).
@@ -321,48 +303,6 @@ public class ReviewOrchestrator {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
     }
-  }
-
-  void persistAiResponse(ReviewSession session, ReviewResponse aiResponse) {
-    try {
-      session.setAiResponseJson(mapper.writeValueAsString(aiResponse));
-    } catch (JsonProcessingException e) {
-      Log.warn("Failed to serialize AI response for session persistence", e);
-    }
-  }
-
-  ReviewResponse populateMissingAnchors(ReviewResponse response, DiffLineResolver lineResolver) {
-    if (response.findings().isEmpty()) {
-      return response;
-    }
-    var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
-    var changed = false;
-    for (ReviewResponse.Finding finding : response.findings()) {
-      if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
-        String fallback = lineResolver.getLineText(finding.file(), finding.line());
-        if (fallback != null && !fallback.isBlank()) {
-          Log.infof(
-              "Populating missing content anchor for finding '%s' (%s:%d) with: '%s'",
-              finding.title(), finding.file(), finding.line(), fallback.strip());
-          adjusted.add(
-              new ReviewResponse.Finding(
-                  finding.risk(),
-                  finding.confidence(),
-                  finding.file(),
-                  finding.line(),
-                  finding.title(),
-                  finding.description(),
-                  fallback,
-                  finding.suggestionNew()));
-          changed = true;
-          continue;
-        }
-      }
-      adjusted.add(finding);
-    }
-    return changed
-        ? new ReviewResponse(adjusted, response.previousFindingsStatus(), response.summary())
-        : response;
   }
 
   /**
