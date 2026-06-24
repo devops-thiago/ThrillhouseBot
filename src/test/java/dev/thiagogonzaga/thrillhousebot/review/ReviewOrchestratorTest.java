@@ -127,9 +127,11 @@ class ReviewOrchestratorTest {
     reviewPublisher =
         new ReviewPublisher(
             reviewClient,
+            commentClient,
             reviewThreadService,
             suggestionFormatter,
             followUpAnalyzer,
+            labeler,
             config,
             BOT_ID);
     verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID);
@@ -182,10 +184,8 @@ class ReviewOrchestratorTest {
     return new ReviewOrchestrator(
         config,
         authClient,
-        commentClient,
         broadcaster,
         sessionPersistence,
-        labeler,
         new CiStatusEvaluator(checkRunClient, prClient),
         new CheckRunManager(checkRunClient),
         new ReviewContextLoader(

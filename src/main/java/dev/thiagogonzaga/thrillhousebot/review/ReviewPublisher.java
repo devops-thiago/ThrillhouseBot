@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -44,26 +45,98 @@ public class ReviewPublisher {
   private static final String CI_PENDING = "pending";
 
   private final GitHubReviewClient reviewClient;
+  private final GitHubCommentClient commentClient;
   private final ReviewThreadService reviewThreadService;
   private final SuggestionFormatter suggestionFormatter;
   private final FollowUpAnalyzer followUpAnalyzer;
+  private final PrLabeler labeler;
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
 
   @Inject
   public ReviewPublisher(
       @RestClient GitHubReviewClient reviewClient,
+      @RestClient GitHubCommentClient commentClient,
       ReviewThreadService reviewThreadService,
       SuggestionFormatter suggestionFormatter,
       FollowUpAnalyzer followUpAnalyzer,
+      PrLabeler labeler,
       ThrillhouseConfig config,
       BotIdentity botIdentity) {
     this.reviewClient = reviewClient;
+    this.commentClient = commentClient;
     this.reviewThreadService = reviewThreadService;
     this.suggestionFormatter = suggestionFormatter;
     this.followUpAnalyzer = followUpAnalyzer;
+    this.labeler = labeler;
     this.config = config;
     this.botIdentity = botIdentity;
+  }
+
+  /**
+   * Posts the PR summary comment, but only on the first user-visible review (and only when there is
+   * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
+   * comment.
+   */
+  void publishSummary(String auth, String owner, String repo, int prNumber, ReviewResult result) {
+    if (result.isFirstReview() && !result.summaryMarkdown().isBlank()) {
+      commentClient.createComment(
+          auth,
+          ACCEPT,
+          owner,
+          repo,
+          prNumber,
+          new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
+    }
+  }
+
+  /**
+   * Applies or suggests the model's labels (best-effort; never blocks the review). The suggested
+   * labels come from the model summary and are reconciled against the repo's existing labels.
+   */
+  void applyLabels(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      ReviewResult result,
+      ReviewResponse aiResponse,
+      ReviewContextLoader.ReviewContext ctx) {
+    labeler.applyOrSuggest(
+        new PrLabeler.LabelRequest(
+            auth,
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            result.isFirstReview(),
+            aiResponse.summary() != null ? aiResponse.summary().suggestedLabels() : List.of(),
+            ctx.repoLabels()));
+  }
+
+  /**
+   * Posts the "review could not be completed" notice when a review fails before its result was
+   * surfaced. Best-effort: a failure to post it is logged, not propagated.
+   */
+  void postFailureNotice(String auth, String owner, String repo, int prNumber) {
+    try {
+      commentClient.createComment(
+          auth,
+          ACCEPT,
+          owner,
+          repo,
+          prNumber,
+          new GitHubCommentClient.CreateCommentRequest(
+              """
+                  ⚠️ **ThrillhouseBot review could not be completed.**
+
+                  The review service encountered an error. \
+                  Please reply with `/review` or `@Thrillhousebot review` to retry."""));
+    } catch (RuntimeException commentError) {
+      Log.warnf(
+          commentError,
+          "Failed to post review failure comment for %s/%s #%d",
+          owner,
+          repo,
+          prNumber);
+    }
   }
 
   void postReview(

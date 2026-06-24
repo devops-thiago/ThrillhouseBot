@@ -26,12 +26,9 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
 import java.util.function.Consumer;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 @ApplicationScoped
 public class ReviewOrchestrator {
-
-  private static final String ACCEPT = "application/vnd.github+json";
 
   // Check run status constant used when building the completion update (CheckRunManager owns
   // create).
@@ -43,13 +40,9 @@ public class ReviewOrchestrator {
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
 
-  private final GitHubCommentClient commentClient;
-
   private final SessionEventBroadcaster broadcaster;
 
   private final ReviewSessionPersistence sessionPersistence;
-
-  private final PrLabeler labeler;
 
   private final CiStatusEvaluator ciStatusEvaluator;
 
@@ -95,10 +88,8 @@ public class ReviewOrchestrator {
   public ReviewOrchestrator(
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
-      @RestClient GitHubCommentClient commentClient,
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
-      PrLabeler labeler,
       CiStatusEvaluator ciStatusEvaluator,
       CheckRunManager checkRunManager,
       ReviewContextLoader contextLoader,
@@ -108,10 +99,8 @@ public class ReviewOrchestrator {
       FindingPipeline findingPipeline) {
     this.config = config;
     this.authClient = authClient;
-    this.commentClient = commentClient;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
-    this.labeler = labeler;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
@@ -161,10 +150,8 @@ public class ReviewOrchestrator {
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var ctx = contextLoader.load(auth, req, session, repository);
       var priorReviews = ctx.priorReviews();
-      var isFirstVisibleReview = ctx.isFirstVisibleReview();
       var previousAiResponseJson = ctx.previousAiResponseJson();
       var inlineComments = ctx.inlineComments();
-      var repoLabels = ctx.repoLabels();
       // Resolved once in the loader and shared via the context: the finding pipeline, the verdict
       // backstop below, and the publisher's inline comments all anchor against the same diff.
       var lineResolver = ctx.lineResolver();
@@ -198,16 +185,7 @@ public class ReviewOrchestrator {
               sessionUrl(session)));
       resultSurfaced = true;
 
-      if (isFirstVisibleReview && !result.summaryMarkdown().isBlank()) {
-        commentClient.createComment(
-            auth,
-            ACCEPT,
-            req.owner(),
-            req.repo(),
-            req.prNumber(),
-            new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
-      }
-
+      reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       reviewPublisher.postReview(
@@ -216,15 +194,7 @@ public class ReviewOrchestrator {
       reviewPublisher.resolveAddressedThreads(
           auth, req, previousAiResponseJson, inlineComments, aiResponse.previousFindingsStatus());
 
-      labeler.applyOrSuggest(
-          new PrLabeler.LabelRequest(
-              auth,
-              req.owner(),
-              req.repo(),
-              req.prNumber(),
-              isFirstVisibleReview,
-              aiResponse.summary() != null ? aiResponse.summary().suggestedLabels() : List.of(),
-              repoLabels));
+      reviewPublisher.applyLabels(auth, req, result, aiResponse, ctx);
 
       applyReviewResult(session, result);
       broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session));
@@ -289,27 +259,7 @@ public class ReviewOrchestrator {
       }
     }
 
-    try {
-      commentClient.createComment(
-          auth,
-          ACCEPT,
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          new GitHubCommentClient.CreateCommentRequest(
-              """
-                  ⚠️ **ThrillhouseBot review could not be completed.**
-
-                  The review service encountered an error. \
-                  Please reply with `/review` or `@Thrillhousebot review` to retry."""));
-    } catch (RuntimeException commentError) {
-      Log.warnf(
-          commentError,
-          "Failed to post review failure comment for %s/%s #%d",
-          req.owner(),
-          req.repo(),
-          req.prNumber());
-    }
+    reviewPublisher.postFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
 
     String errorMessage =
         e.getMessage() != null
