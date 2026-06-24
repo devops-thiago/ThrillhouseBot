@@ -517,6 +517,66 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void truncatedFollowUpBodyAppendsTruncationAfterUnresolved() {
+      // A follow-up held to COMMENT by BOTH unresolved previous findings and a truncated diff: the
+      // body carries the unresolved message and then the partial-review banner.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
+              List.of(),
+              7);
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
+      assertTrue(body.contains("partial review"), body);
+      assertTrue(body.contains("7 file"), body);
+    }
+
+    @Test
+    void truncatedFirstReviewBodyOmitsBannerSinceSummaryCarriesIt() {
+      // On a FIRST review the summary comment carries the truncation banner, so the review body
+      // must
+      // not repeat it — even when the body is posted for unresolved previous findings.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
+              List.of(),
+              7);
+
+      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
+      assertFalse(body.contains("partial review"), body);
+    }
+
+    @Test
     void shouldHandleNullFindingsInAiResponse() {
       var aiResponse = new ReviewResponse(null, null, null);
 
