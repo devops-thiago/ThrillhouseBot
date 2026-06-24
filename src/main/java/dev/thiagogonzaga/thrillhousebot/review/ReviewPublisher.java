@@ -17,7 +17,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -47,7 +46,6 @@ public class ReviewPublisher {
   private final GitHubReviewClient reviewClient;
   private final ReviewThreadService reviewThreadService;
   private final SuggestionFormatter suggestionFormatter;
-  private final ReviewDiffFormatter diffFormatter;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
@@ -57,14 +55,12 @@ public class ReviewPublisher {
       @RestClient GitHubReviewClient reviewClient,
       ReviewThreadService reviewThreadService,
       SuggestionFormatter suggestionFormatter,
-      ReviewDiffFormatter diffFormatter,
       FollowUpAnalyzer followUpAnalyzer,
       ThrillhouseConfig config,
       BotIdentity botIdentity) {
     this.reviewClient = reviewClient;
     this.reviewThreadService = reviewThreadService;
     this.suggestionFormatter = suggestionFormatter;
-    this.diffFormatter = diffFormatter;
     this.followUpAnalyzer = followUpAnalyzer;
     this.config = config;
     this.botIdentity = botIdentity;
@@ -77,13 +73,12 @@ public class ReviewPublisher {
       int prNumber,
       String commitSha,
       ReviewResult result,
-      List<GitHubPullRequestClient.FileDiff> files) {
+      DiffLineResolver lineResolver) {
     if (!result.hasIssues()) {
       postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
       return;
     }
 
-    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
     var posted = postInlineComments(auth, owner, repo, prNumber, commitSha, result, lineResolver);
 
     if (result.reviewState() == ReviewState.REQUEST_CHANGES && posted > 0) {

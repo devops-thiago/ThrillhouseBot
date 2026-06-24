@@ -92,13 +92,16 @@ public class ReviewContextLoader {
       String previousFindings,
       InstructionsResolver.ResolvedInstructions instructions,
       List<GitHubLabelClient.Label> repoLabels,
-      String projectStack) {
+      String projectStack,
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+      DiffLineResolver lineResolver) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
       priorAiResponseJsons = List.copyOf(priorAiResponseJsons);
       inlineComments = List.copyOf(inlineComments);
       repoLabels = List.copyOf(repoLabels);
+      reviewableFiles = List.copyOf(reviewableFiles);
     }
   }
 
@@ -115,6 +118,10 @@ public class ReviewContextLoader {
     var baseComparisonResult =
         buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
     var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
+    // Built once here and shared via the context: the finding pipeline (anchor backfill), the
+    // verdict backstop, and the publisher's inline comments all resolve against the same diff.
+    var reviewableFiles = diffFormatter.reviewableFiles(files);
+    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
 
     var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
     // Two independent flags decouple UX presentation from context loading:
@@ -177,7 +184,9 @@ public class ReviewContextLoader {
         previousFindings,
         instructions,
         repoLabels,
-        resolveProjectStack(req));
+        resolveProjectStack(req),
+        reviewableFiles,
+        lineResolver);
   }
 
   /**

@@ -129,7 +129,6 @@ class ReviewOrchestratorTest {
             reviewClient,
             reviewThreadService,
             suggestionFormatter,
-            diffFormatter,
             followUpAnalyzer,
             config,
             BOT_ID);
@@ -188,7 +187,6 @@ class ReviewOrchestratorTest {
         broadcaster,
         sessionPersistence,
         followUpAnalyzer,
-        diffFormatter,
         labeler,
         new CiStatusEvaluator(checkRunClient, prClient),
         new CheckRunManager(checkRunClient),
@@ -207,6 +205,12 @@ class ReviewOrchestratorTest {
         reviewPublisher,
         verdictBuilder,
         findingPipeline);
+  }
+
+  // postReview now takes the DiffLineResolver from the context (built once in the loader), so the
+  // posting tests build it from the same files they would have passed before.
+  private DiffLineResolver resolverFor(GitHubPullRequestClient.FileDiff... files) {
+    return new DiffLineResolver(diffFormatter.patchesByFile(List.of(files)));
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiffWithLine(
@@ -262,7 +266,7 @@ class ReviewOrchestratorTest {
               aiResponse, false, new VerdictBuilder.DiffStats(120, 4000, 4000, 7), List.of());
       assertEquals(ReviewState.COMMENT, result.reviewState());
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -297,7 +301,7 @@ class ReviewOrchestratorTest {
               List.of(),
               7);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -328,7 +332,7 @@ class ReviewOrchestratorTest {
               List.of(),
               7);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -2243,7 +2247,7 @@ class ReviewOrchestratorTest {
           7,
           "sha",
           result,
-          List.of(fileDiffWithLine("src/Main.java", 10)));
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
 
       verify(reviewClient)
           .createReview(
@@ -2286,7 +2290,7 @@ class ReviewOrchestratorTest {
           7,
           "sha",
           result,
-          List.of(fileDiffWithLine("src/Main.java", 10)));
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
 
       verify(reviewClient)
           .createReview(
@@ -2307,7 +2311,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
       // First review: the celebration lives in the summary comment, not the approval body
       verify(reviewClient)
@@ -2329,7 +2333,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of());
 
-      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
       verify(reviewClient)
           .createReview(
@@ -2357,7 +2361,7 @@ class ReviewOrchestratorTest {
           7,
           "sha",
           result,
-          List.of(
+          resolverFor(
               new GitHubPullRequestClient.FileDiff("empty.java", "modified", 0, 0, 0, ""),
               new GitHubPullRequestClient.FileDiff("nopatch.java", "modified", 1, 1, 2, null),
               fileDiffWithLine("src/Main.java", 10)));
@@ -2925,7 +2929,7 @@ class ReviewOrchestratorTest {
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -2949,7 +2953,7 @@ class ReviewOrchestratorTest {
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -2975,7 +2979,7 @@ class ReviewOrchestratorTest {
               List.of(),
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -2998,7 +3002,7 @@ class ReviewOrchestratorTest {
               List.of(),
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3079,7 +3083,7 @@ class ReviewOrchestratorTest {
           buildWithBackstop(
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3099,7 +3103,7 @@ class ReviewOrchestratorTest {
           buildWithBackstop(
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3869,7 +3873,7 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
               offending);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)

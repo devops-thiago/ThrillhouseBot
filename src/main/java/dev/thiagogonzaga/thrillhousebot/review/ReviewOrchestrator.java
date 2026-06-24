@@ -56,8 +56,6 @@ public class ReviewOrchestrator {
 
   private final FollowUpAnalyzer followUpAnalyzer;
 
-  private final ReviewDiffFormatter diffFormatter;
-
   private final PrLabeler labeler;
 
   private final CiStatusEvaluator ciStatusEvaluator;
@@ -109,7 +107,6 @@ public class ReviewOrchestrator {
       SessionEventBroadcaster broadcaster,
       ReviewSessionPersistence sessionPersistence,
       FollowUpAnalyzer followUpAnalyzer,
-      ReviewDiffFormatter diffFormatter,
       PrLabeler labeler,
       CiStatusEvaluator ciStatusEvaluator,
       CheckRunManager checkRunManager,
@@ -125,7 +122,6 @@ public class ReviewOrchestrator {
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
     this.followUpAnalyzer = followUpAnalyzer;
-    this.diffFormatter = diffFormatter;
     this.labeler = labeler;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.checkRunManager = checkRunManager;
@@ -175,7 +171,6 @@ public class ReviewOrchestrator {
           checkRunManager.createCheckRun(
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var ctx = contextLoader.load(auth, req, session, repository);
-      var files = ctx.files();
       var omittedFiles = ctx.omittedFiles();
       var priorReviews = ctx.priorReviews();
       var priorAiResponseJsons = ctx.priorAiResponseJsons();
@@ -184,11 +179,11 @@ public class ReviewOrchestrator {
       var previousAiResponseJson = ctx.previousAiResponseJson();
       var inlineComments = ctx.inlineComments();
       var repoLabels = ctx.repoLabels();
+      // Resolved once in the loader and shared via the context: the finding pipeline, the verdict
+      // backstop below, and the publisher's inline comments all anchor against the same diff.
+      var lineResolver = ctx.lineResolver();
 
       var promptInputs = promptAssembler.assemble(ctx, req);
-      // lineResolver is shared with the verdict backstop below, so it is built here and threaded
-      // through the finding pipeline rather than created inside it.
-      var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
       var aiResponse = findingPipeline.run(session, promptInputs, ctx, lineResolver);
 
       // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
@@ -199,7 +194,7 @@ public class ReviewOrchestrator {
           ciStatusEvaluator.evaluateCiChecks(
               auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
-      var reviewableFiles = diffFormatter.reviewableFiles(files);
+      var reviewableFiles = ctx.reviewableFiles();
       var diffStats = VerdictBuilder.DiffStats.fromFiles(reviewableFiles, omittedFiles);
       var changedFiles = VerdictBuilder.toChangedFiles(reviewableFiles);
       var unresolvedPrevious =
@@ -257,7 +252,7 @@ public class ReviewOrchestrator {
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       reviewPublisher.postReview(
-          auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, files);
+          auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, lineResolver);
 
       reviewPublisher.resolveAddressedThreads(
           auth, req, previousAiResponseJson, inlineComments, aiResponse.previousFindingsStatus());
