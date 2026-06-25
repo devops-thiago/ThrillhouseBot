@@ -107,6 +107,35 @@ public record ReviewResult(
     return omittedFiles > 0;
   }
 
+  /** How many previous findings the model (or the backstop) still reports as unresolved. */
+  public long unresolvedPreviousCount() {
+    return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
+  }
+
+  // A backstop-held finding can be summary-only — its flagged line was outside the diff when first
+  // raised, so it was never posted as an inline comment and has no thread to reply on.
+  // The guidance therefore qualifies the reply path ("where one exists") instead of promising a
+  // thread that may not be there; fixing the code, or a model resolved/justified verdict, still
+  // clears such a finding.
+  public static String unresolvedPreviousMessage(long unresolved) {
+    return String.format(
+        "No new issues in this revision, but %d previous finding(s) remain unresolved — "
+            + "fix them, or reply on their review thread (where one exists) with why they are"
+            + " deferred.",
+        unresolved);
+  }
+
+  /**
+   * Banner prepended to the summary when the diff was truncated, so a reader knows the review is
+   * partial — the verdict is also held back from APPROVE in that case.
+   */
+  public static String truncationNotice(int omittedFiles) {
+    return String.format(
+        "> ⚠️ **Large PR — partial review.** %d file(s) were omitted because the diff exceeded the"
+            + " size budget; the findings and verdict below cover only the reviewed portion.%n%n",
+        omittedFiles);
+  }
+
   public int totalFindings() {
     return findings.size();
   }
