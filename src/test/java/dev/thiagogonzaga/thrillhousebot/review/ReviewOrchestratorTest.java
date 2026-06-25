@@ -963,7 +963,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldNotPostPrReviewWhenCheckRunUpdateFailsAfterCleanAiReview() {
+    void checkRunConclusionFailureAfterReviewKeepsPostedReviewAndCompletesSession() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -1014,8 +1014,75 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        verify(reviewClient, never())
+        // The review posts BEFORE the check run is concluded (#254), so a check-run-conclusion
+        // failure no longer discards the review: it is still posted, the session still completes,
+        // and no "review could not be completed" retry notice is sent.
+        verify(reviewClient)
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+        verify(commentClient, never())
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("review could not be completed")));
+      }
+    }
+
+    @Test
+    void postReviewFailureMarksReviewFailedInsteadOfLeavingAConcludedCheckRun() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        // The review post itself fails, before the check run is concluded.
+        when(reviewClient.createReview(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+            .thenThrow(new RuntimeException("502 Bad Gateway"));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // resultSurfaced was never set (post failed before it), so the failure path runs: the
+        // session is marked failed and a retry notice is posted — never a concluded check run with
+        // no review (#254).
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
         verify(commentClient)
             .createComment(
