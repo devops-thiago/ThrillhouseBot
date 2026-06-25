@@ -17,12 +17,15 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -35,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -83,6 +87,10 @@ class FindingPipelineTest {
   }
 
   private static ReviewContextLoader.ReviewContext multiBatchContext() {
+    return multiBatchContext(List.of());
+  }
+
+  private static ReviewContextLoader.ReviewContext multiBatchContext(List<String> omittedByName) {
     return new ReviewContextLoader.ReviewContext(
         List.of(),
         "",
@@ -104,7 +112,7 @@ class FindingPipelineTest {
         new DiffLineResolver(Map.of()),
         null,
         List.of(batch("a.java"), batch("b.java")),
-        List.of());
+        omittedByName);
   }
 
   @Test
@@ -135,5 +143,51 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
     assertEquals(previous, result.previousFindingsStatus());
+  }
+
+  @Test
+  void summaryInputsDiscloseOmittedFilesByName() {
+    var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
+    var ctx = multiBatchContext(List.of("vendor/huge.min.js"));
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, new DiffLineResolver(Map.of()));
+
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(changedFiles.contains("vendor/huge.min.js"), changedFiles);
+    assertTrue(changedFiles.contains("omitted"), changedFiles);
+  }
+
+  @Test
+  void findingsSerializationFailureFallsBackToEmptyArray() throws Exception {
+    var throwingMapper = mock(ObjectMapper.class);
+    when(throwingMapper.writeValueAsString(any()))
+        .thenThrow(new JsonProcessingException("boom") {});
+    var p =
+        new FindingPipeline(
+            aiReviewService,
+            quoteValidator,
+            deduplicator,
+            findingVerificationService,
+            followUpAnalyzer,
+            throwingMapper,
+            BotIdentity.from(List.of("thrillhousebot[bot]")));
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    p.run(session, template, multiBatchContext(), new DiffLineResolver(Map.of()));
+
+    // The summary still gets a valid (empty) findings array rather than propagating the failure.
+    assertTrue(captor.getValue().findings().contains("[]"), captor.getValue().findings());
   }
 }
