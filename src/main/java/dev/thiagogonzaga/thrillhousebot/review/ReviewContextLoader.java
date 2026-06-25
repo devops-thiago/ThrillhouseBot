@@ -209,11 +209,11 @@ public class ReviewContextLoader {
     var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
     var projectStack = resolveProjectStack(req);
 
-    // Token-budget the diff into batches so a large PR is reviewed across multiple calls rather
-    // than
-    // silently truncated (#53). The shared prompt overhead each batch call repeats (system prompt,
-    // project stack, previous findings, instructions) is subtracted from the per-call input budget;
-    // one call of the cap is reserved for the final summary. A single batch is the normal-PR path.
+    // Token-budget the diff into batches so a large PR is reviewed across multiple calls instead of
+    // being silently truncated (#53). Every batch call repeats the shared prompt overhead — system
+    // prompt, project stack, previous findings, instructions — so that overhead is subtracted from
+    // the per-call input budget, and one call of the cap is held back for the final summary. A
+    // single batch is the normal-PR path.
     var review = config.review();
     var sharedOverhead =
         PrReviewPrompts.SYSTEM
