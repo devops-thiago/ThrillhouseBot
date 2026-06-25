@@ -29,7 +29,6 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -101,6 +100,19 @@ class ReviewOrchestratorTest {
 
   private ReviewDiffFormatter diffFormatter;
 
+  // The real write-side collaborator, built from the mocked clients; exercised directly by the
+  // posting tests and injected into the orchestrator so the review() integration path is unchanged.
+  private ReviewPublisher reviewPublisher;
+
+  // The real verdict collaborator (buildResult + check-run conclusion/title/summary), exercised
+  // directly by the verdict tests and injected so review()'s gating path is unchanged.
+  private VerdictBuilder verdictBuilder;
+
+  // The real post-AI chain (validate/dedupe/verify/drop-replied/anchors/persist), exercised
+  // directly
+  // by the pipeline tests and injected so review()'s finding flow is unchanged.
+  private FindingPipeline findingPipeline;
+
   private ReviewOrchestrator orchestrator;
 
   @BeforeEach
@@ -112,7 +124,27 @@ class ReviewOrchestratorTest {
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
     diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
-    orchestrator = newOrchestrator(mapper);
+    reviewPublisher =
+        new ReviewPublisher(
+            reviewClient,
+            commentClient,
+            reviewThreadService,
+            suggestionFormatter,
+            followUpAnalyzer,
+            labeler,
+            config,
+            BOT_ID);
+    verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID);
+    findingPipeline =
+        new FindingPipeline(
+            aiReviewService,
+            quoteValidator,
+            deduplicator,
+            findingVerificationService,
+            followUpAnalyzer,
+            mapper,
+            BOT_ID);
+    orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
     // Walkthrough diagram is off by default; individual tests opt in by re-stubbing enabled().
@@ -148,29 +180,35 @@ class ReviewOrchestratorTest {
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "ok", "main.py", 10));
   }
 
-  private ReviewOrchestrator newOrchestrator(ObjectMapper objectMapper) {
+  private ReviewOrchestrator newOrchestrator() {
     return new ReviewOrchestrator(
         config,
         authClient,
-        checkRunClient,
-        reviewClient,
-        commentClient,
-        prClient,
-        reviewThreadService,
-        instructionsResolver,
-        projectStackResolver,
-        aiReviewService,
-        findingVerificationService,
-        quoteValidator,
-        deduplicator,
         broadcaster,
         sessionPersistence,
-        suggestionFormatter,
-        summaryGenerator,
-        followUpAnalyzer,
-        diffFormatter,
-        labeler,
-        objectMapper);
+        new CiStatusEvaluator(checkRunClient, prClient),
+        new CheckRunManager(checkRunClient),
+        new ReviewContextLoader(
+            prClient,
+            reviewClient,
+            commentClient,
+            instructionsResolver,
+            projectStackResolver,
+            diffFormatter,
+            labeler,
+            followUpAnalyzer,
+            sessionPersistence,
+            BOT_ID),
+        new ReviewPromptAssembler(config, labeler, diffFormatter),
+        reviewPublisher,
+        verdictBuilder,
+        findingPipeline);
+  }
+
+  // postReview now takes the DiffLineResolver from the context (built once in the loader), so the
+  // posting tests build it from the same files they would have passed before.
+  private DiffLineResolver resolverFor(GitHubPullRequestClient.FileDiff... files) {
+    return new DiffLineResolver(diffFormatter.patchesByFile(List.of(files)));
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiffWithLine(
@@ -181,280 +219,6 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
-  class BuildDiffString {
-
-    @Test
-    void shouldReturnNoChangesForNullList() {
-      var result = orchestrator.buildDiffString(null);
-      assertEquals("(no changes detected)", result);
-    }
-
-    @Test
-    void shouldReturnNoChangesForEmptyList() {
-      var result = orchestrator.buildDiffString(Collections.emptyList());
-      assertEquals("(no changes detected)", result);
-    }
-
-    @Test
-    void shouldFormatSingleFileWithPatch() {
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/main/Foo.java",
-                  "modified",
-                  5,
-                  3,
-                  8,
-                  "@@ -1,3 +1,5 @@\n unchanged\n+added line\n+another line"));
-
-      var result = orchestrator.buildDiffString(files);
-
-      assertTrue(result.contains("## Overview: 1 files (+5 -3)"));
-      assertTrue(result.contains("### src/main/Foo.java (modified, +5 -3)"));
-      assertTrue(result.contains("```diff"));
-      assertTrue(result.contains("+added line"));
-    }
-
-    @Test
-    void shouldFormatSingleFileWithoutPatch() {
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff("binary-file.png", "modified", 0, 0, 0, null));
-
-      var result = orchestrator.buildDiffString(files);
-
-      assertTrue(result.contains("binary-file.png (modified, +0 -0)"));
-      assertFalse(result.contains("```diff"));
-    }
-
-    @Test
-    void shouldAccumulateTotalsAcrossMultipleFiles() {
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff("a.java", "modified", 10, 2, 12, "@@ patch a"),
-              new GitHubPullRequestClient.FileDiff("b.java", "added", 25, 0, 25, "@@ patch b"),
-              new GitHubPullRequestClient.FileDiff("c.java", "modified", 3, 5, 8, null));
-
-      var result = orchestrator.buildDiffString(files);
-
-      assertTrue(result.contains("## Overview: 3 files (+38 -7)"));
-      assertTrue(result.contains("a.java"));
-      assertTrue(result.contains("b.java"));
-      assertTrue(result.contains("c.java"));
-    }
-
-    @Test
-    void shouldHandleFilesWithZeroChanges() {
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff("renamed-only.txt", "renamed", 0, 0, 0, null));
-
-      var result = orchestrator.buildDiffString(files);
-
-      assertTrue(result.contains("## Overview: 1 files (+0 -0)"));
-      assertTrue(result.contains("renamed-only.txt (renamed, +0 -0)"));
-    }
-  }
-
-  @Nested
-  class BuildBaseComparison {
-
-    @Test
-    void shouldReturnSafeMessageForNullBase() {
-      var result = orchestrator.buildBaseComparison("auth", "owner", "repo", null, "abcdefgh");
-      assertEquals("(regression comparison unavailable — refs too short)", result);
-    }
-
-    @Test
-    void shouldReturnSafeMessageForNullHead() {
-      var result = orchestrator.buildBaseComparison("auth", "owner", "repo", "abcdefgh", null);
-      assertEquals("(regression comparison unavailable — refs too short)", result);
-    }
-
-    @Test
-    void shouldReturnSafeMessageForShortBaseSha() {
-      var result = orchestrator.buildBaseComparison("auth", "owner", "repo", "abc", "abcdefgh");
-      assertEquals("(regression comparison unavailable — refs too short)", result);
-    }
-
-    @Test
-    void shouldReturnSafeMessageForShortHeadSha() {
-      var result = orchestrator.buildBaseComparison("auth", "owner", "repo", "abcdefgh", "def");
-      assertEquals("(regression comparison unavailable — refs too short)", result);
-    }
-
-    @Test
-    void shouldReturnSafeMessageWhenBothNull() {
-      var result = orchestrator.buildBaseComparison("auth", "owner", "repo", null, null);
-      assertEquals("(regression comparison unavailable — refs too short)", result);
-    }
-
-    @Test
-    void shouldReturnNoChangesMessageWhenComparisonHasEmptyFiles() {
-      var emptyComparison = new GitHubPullRequestClient.CompareResponse(3, List.of());
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
-          .thenReturn(emptyComparison);
-
-      var result =
-          orchestrator.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
-
-      assertEquals("(no changes between abcdefg and hijklmn)", result);
-    }
-
-    @Test
-    void shouldReturnNoChangesMessageWhenComparisonHasNullFiles() {
-      var nullFilesComparison = new GitHubPullRequestClient.CompareResponse(0, null);
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
-          .thenReturn(nullFilesComparison);
-
-      var result =
-          orchestrator.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
-
-      assertEquals("(no changes between abcdefg and hijklmn)", result);
-    }
-
-    @Test
-    void shouldBuildComparisonWithFiles() {
-      var comparison =
-          new GitHubPullRequestClient.CompareResponse(
-              2,
-              List.of(
-                  new GitHubPullRequestClient.FileDiff(
-                      "src/Bar.java", "modified", 3, 1, 4, "@@ -1 +1,3 @@\n-old\n+new\n+extra")));
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
-          .thenReturn(comparison);
-
-      var result =
-          orchestrator.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
-
-      assertTrue(result.contains("## Changes between base and head"));
-      assertTrue(result.contains("abcdefg..hijklmn: 2"));
-      assertTrue(result.contains("src/Bar.java"));
-      assertTrue(result.contains("```diff"));
-      assertTrue(result.contains("+new"));
-    }
-
-    @Test
-    void shouldSkipFilesWithoutPatchInComparison() {
-      var comparison =
-          new GitHubPullRequestClient.CompareResponse(
-              1,
-              List.of(
-                  new GitHubPullRequestClient.FileDiff("binary.bin", "modified", 0, 0, 0, null),
-                  new GitHubPullRequestClient.FileDiff(
-                      "src/Text.java", "modified", 1, 1, 2, "@@ patch")));
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
-          .thenReturn(comparison);
-
-      var result =
-          orchestrator.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
-
-      assertTrue(result.contains("src/Text.java"));
-      assertFalse(result.contains("binary.bin"));
-    }
-
-    @Test
-    void shouldReturnUnavailableOnException() {
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
-          .thenThrow(new RuntimeException("API down"));
-
-      var result =
-          orchestrator.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
-
-      assertEquals("(regression comparison unavailable)", result);
-    }
-  }
-
-  @Nested
-  class FetchPrFiles {
-
-    @Test
-    void shouldPropagateExceptionSoTheReviewFailsInsteadOfApproving() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenThrow(new RuntimeException("GitHub API error"));
-
-      // Swallowing the failure into an empty list would yield an empty diff and a false APPROVE on
-      // unreviewed code; it must propagate so review() takes the failure path.
-      assertThrows(
-          RuntimeException.class, () -> orchestrator.fetchPrFiles("auth", "owner", "repo", 42));
-    }
-
-    @Test
-    void shouldPropagateNotAuthorizedRatherThanReturnEmpty() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(123)))
-          .thenThrow(new jakarta.ws.rs.NotAuthorizedException("Bad credentials"));
-
-      assertThrows(
-          jakarta.ws.rs.NotAuthorizedException.class,
-          () -> orchestrator.fetchPrFiles("auth", "owner", "repo", 123));
-    }
-
-    @Test
-    void shouldReturnFilesOnSuccess() {
-      var expected =
-          List.of(
-              new GitHubPullRequestClient.FileDiff("README.md", "modified", 2, 1, 3, "@@ patch"));
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
-          .thenReturn(expected);
-
-      var result = orchestrator.fetchPrFiles("auth", "owner", "repo", 1);
-
-      assertEquals(expected, result);
-      assertEquals(1, result.size());
-    }
-  }
-
-  @Nested
-  class FetchPriorReviews {
-
-    @Test
-    void shouldReturnEmptyListOnException() {
-      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenThrow(new RuntimeException("GitHub API error"));
-
-      var result = orchestrator.fetchPriorReviews("auth", "owner", "repo", 42);
-
-      assertNotNull(result);
-      assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void shouldReturnEmptyListOnNotFound() {
-      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(99)))
-          .thenThrow(new jakarta.ws.rs.NotFoundException("Not found"));
-
-      var result = orchestrator.fetchPriorReviews("auth", "owner", "repo", 99);
-
-      assertNotNull(result);
-      assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void shouldReturnReviewsOnSuccess() {
-      var expected =
-          List.of(
-              new GitHubReviewClient.ReviewResponse(
-                  1L,
-                  "Looks good",
-                  "APPROVED",
-                  "abc123",
-                  new GitHubReviewClient.ReviewResponse.User("some-user")));
-      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(10)))
-          .thenReturn(expected);
-
-      var result = orchestrator.fetchPriorReviews("auth", "owner", "repo", 10);
-
-      assertEquals(1, result.size());
-      assertEquals("Looks good", result.get(0).body());
-    }
-  }
-
-  @Nested
   class BuildResult {
 
     @Test
@@ -462,8 +226,8 @@ class ReviewOrchestratorTest {
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertNotNull(result);
       assertTrue(result.findings().isEmpty());
@@ -479,8 +243,8 @@ class ReviewOrchestratorTest {
 
       // A clean review that would APPROVE, but 7 files were omitted by the line budget.
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(120, 4000, 4000, 7), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(120, 4000, 4000, 7), List.of());
 
       // The verdict is held back from APPROVE — a partial review must not gate-approve the PR...
       assertEquals(ReviewState.COMMENT, result.reviewState());
@@ -496,11 +260,11 @@ class ReviewOrchestratorTest {
       // to
       // COMMENT, but a follow-up posts no summary comment to carry the truncation banner (#245).
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(120, 4000, 4000, 7), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(120, 4000, 4000, 7), List.of());
       assertEquals(ReviewState.COMMENT, result.reviewState());
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -535,7 +299,7 @@ class ReviewOrchestratorTest {
               List.of(),
               7);
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -566,7 +330,7 @@ class ReviewOrchestratorTest {
               List.of(),
               7);
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -581,8 +345,8 @@ class ReviewOrchestratorTest {
       var aiResponse = new ReviewResponse(null, null, null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertNotNull(result);
       assertTrue(result.findings().isEmpty());
@@ -608,8 +372,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(1, result.criticalCount());
       assertEquals(RiskLevel.CRITICAL, result.highestRisk());
@@ -633,8 +397,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(1, result.totalFindings());
       assertEquals(1, result.criticalCount());
@@ -660,8 +424,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(1, result.highCount());
       assertEquals(RiskLevel.HIGH, result.highestRisk());
@@ -685,8 +449,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(1, result.mediumCount());
       assertEquals(RiskLevel.MEDIUM, result.highestRisk());
@@ -710,8 +474,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(1, result.lowCount());
       assertEquals(RiskLevel.LOW, result.highestRisk());
@@ -732,8 +496,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(4, result.totalFindings());
       assertEquals(1, result.criticalCount());
@@ -767,8 +531,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(2, result.previousStatuses().size());
       verify(followUpAnalyzer).toStatuses(aiStatuses);
@@ -788,8 +552,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(4, 120, 45), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(4, 120, 45), List.of());
 
       assertTrue(result.summaryMarkdown().contains("Test summary content"));
       verify(summaryGenerator).generate(eq(4), eq(120), eq(45), any(), any(), any());
@@ -802,8 +566,8 @@ class ReviewOrchestratorTest {
           .thenReturn("Clean summary with celebration");
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals("Clean summary with celebration", result.summaryMarkdown());
       verify(summaryGenerator).generate(eq(0), eq(0), eq(0), any(), any(), any());
@@ -826,8 +590,8 @@ class ReviewOrchestratorTest {
               null);
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, true, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(1, result.lowCount());
       assertEquals(RiskLevel.LOW, result.highestRisk());
@@ -843,7 +607,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-      String summary = ReviewOrchestrator.checkSummaryForResult(result);
+      String summary = VerdictBuilder.checkSummaryForResult(result);
 
       assertTrue(summary.contains("Everything's coming up Thrillhouse"));
       assertTrue(summary.contains("No issues found"));
@@ -864,7 +628,7 @@ class ReviewOrchestratorTest {
               "",
               List.of());
 
-      String summary = ReviewOrchestrator.checkSummaryForResult(result);
+      String summary = VerdictBuilder.checkSummaryForResult(result);
 
       assertEquals("1 findings: 0 critical, 1 high, 0 medium, 0 low", summary);
     }
@@ -874,7 +638,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-      String title = ReviewOrchestrator.checkTitleForResult(result);
+      String title = VerdictBuilder.checkTitleForResult(result);
 
       assertEquals("ThrillhouseBot Review ✅", title);
     }
@@ -888,8 +652,8 @@ class ReviewOrchestratorTest {
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), offending);
 
-      assertFalse(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
-      String summary = ReviewOrchestrator.checkSummaryForResult(result);
+      assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+      String summary = VerdictBuilder.checkSummaryForResult(result);
       assertFalse(summary.contains("Everything's coming up Thrillhouse"));
       assertTrue(summary.contains("required CI check(s) are still pending or failing"));
     }
@@ -2027,94 +1791,6 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
-  class CheckRunUpdates {
-
-    @Test
-    void shouldCreateCheckRunAsInProgress() {
-      when(checkRunClient.createCheckRun(anyString(), anyString(), eq("owner"), eq("repo"), any()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(99L, "http://check"));
-
-      var id = orchestrator.createCheckRun("Bearer tok", "owner", "repo", "abcdefgh", SESSION_URL);
-
-      assertEquals(99L, id);
-      var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.CreateCheckRunRequest.class);
-      verify(checkRunClient)
-          .createCheckRun(anyString(), anyString(), eq("owner"), eq("repo"), captor.capture());
-      assertEquals("in_progress", captor.getValue().status());
-      assertEquals(SESSION_URL, captor.getValue().detailsUrl());
-    }
-
-    @Test
-    void shouldIncludeCompletedAtOnlyForCompletedStatusUpdate() {
-      doNothing()
-          .when(checkRunClient)
-          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-
-      orchestrator.updateCheckRun(newCheckRunUpdate("completed", "success"));
-
-      var completedCaptor =
-          ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
-      verify(checkRunClient)
-          .updateCheckRun(
-              anyString(),
-              anyString(),
-              eq("owner"),
-              eq("repo"),
-              eq(42L),
-              completedCaptor.capture());
-      assertNull(completedCaptor.getValue().status());
-      assertEquals("success", completedCaptor.getValue().conclusion());
-      assertNotNull(completedCaptor.getValue().completedAt());
-      assertTrue(completedCaptor.getValue().completedAt().endsWith("Z"));
-      assertFalse(completedCaptor.getValue().completedAt().contains("."));
-
-      clearInvocations(checkRunClient);
-
-      orchestrator.updateCheckRun(newCheckRunUpdate("in_progress", null));
-
-      var inProgressCaptor =
-          ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
-      verify(checkRunClient)
-          .updateCheckRun(
-              anyString(),
-              anyString(),
-              eq("owner"),
-              eq("repo"),
-              eq(42L),
-              inProgressCaptor.capture());
-      assertEquals("in_progress", inProgressCaptor.getValue().status());
-      assertNull(inProgressCaptor.getValue().conclusion());
-      assertNull(inProgressCaptor.getValue().completedAt());
-    }
-
-    @Test
-    void shouldRetryWithConclusionOnlyWhenCompletionUpdateFails() {
-      doThrow(new RuntimeException("422 Unprocessable Entity"))
-          .doNothing()
-          .when(checkRunClient)
-          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-
-      orchestrator.updateCheckRun(newCheckRunUpdate("completed", "failure"));
-
-      var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
-      verify(checkRunClient, times(2))
-          .updateCheckRun(
-              anyString(), anyString(), eq("owner"), eq("repo"), eq(42L), captor.capture());
-
-      var fallback = captor.getAllValues().get(1);
-      assertNull(fallback.status());
-      assertEquals("failure", fallback.conclusion());
-      assertNull(fallback.completedAt());
-      assertNull(fallback.output());
-    }
-
-    private ReviewOrchestrator.CheckRunUpdate newCheckRunUpdate(String status, String conclusion) {
-      return new ReviewOrchestrator.CheckRunUpdate(
-          "Bearer tok", "owner", "repo", 42L, status, conclusion, "Title", "Summary", SESSION_URL);
-    }
-  }
-
-  @Nested
   class GitHubReviewSubmission {
 
     @Test
@@ -2131,7 +1807,7 @@ class ReviewOrchestratorTest {
           new GitHubReviewClient.ReviewResponse(
               2L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
 
-      orchestrator.dismissPendingBotReviews(
+      reviewPublisher.dismissPendingBotReviews(
           "Bearer tok", "owner", "repo", 7, List.of(pending, approved, pendingHuman));
 
       verify(reviewClient)
@@ -2158,7 +1834,7 @@ class ReviewOrchestratorTest {
       // A delete that fails (e.g. GitHub unavailable) must not propagate out of dismissal.
       assertDoesNotThrow(
           () ->
-              orchestrator.dismissPendingBotReviews(
+              reviewPublisher.dismissPendingBotReviews(
                   "Bearer tok", "owner", "repo", 7, List.of(pending)));
     }
 
@@ -2166,7 +1842,7 @@ class ReviewOrchestratorTest {
     void shouldCreateReviewWithoutFallbackWhenFirstAttemptSucceeds() {
       var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
 
-      orchestrator.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
+      reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
 
       verify(reviewClient)
           .createReview(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), same(req));
@@ -2261,7 +1937,7 @@ class ReviewOrchestratorTest {
           .when(reviewClient)
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
-      orchestrator.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
+      reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req);
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient, times(2))
@@ -2282,7 +1958,8 @@ class ReviewOrchestratorTest {
       ReviewPostException ex =
           assertThrows(
               ReviewPostException.class,
-              () -> orchestrator.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+              () ->
+                  reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
 
       assertTrue(ex.getMessage().contains("owner/repo #7"));
       assertSame(rejection, ex.getCause());
@@ -2373,7 +2050,7 @@ class ReviewOrchestratorTest {
           new ReviewResult(
               List.of(), 0, 0, 0, 0, RiskLevel.LOW, ReviewState.APPROVE, true, "", List.of());
 
-      String conclusion = ReviewOrchestrator.conclusionForResult(result);
+      String conclusion = VerdictBuilder.conclusionForResult(result);
 
       assertEquals("success", conclusion);
     }
@@ -2393,7 +2070,7 @@ class ReviewOrchestratorTest {
               "",
               List.of());
 
-      assertEquals("failure", ReviewOrchestrator.conclusionForResult(result));
+      assertEquals("failure", VerdictBuilder.conclusionForResult(result));
     }
 
     @Test
@@ -2402,7 +2079,7 @@ class ReviewOrchestratorTest {
           new ReviewResult(
               List.of(), 0, 0, 1, 0, RiskLevel.MEDIUM, ReviewState.COMMENT, true, "", List.of());
 
-      assertEquals("neutral", ReviewOrchestrator.conclusionForResult(result));
+      assertEquals("neutral", VerdictBuilder.conclusionForResult(result));
     }
   }
 
@@ -2430,7 +2107,7 @@ class ReviewOrchestratorTest {
       var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(0, posted);
@@ -2450,7 +2127,7 @@ class ReviewOrchestratorTest {
       when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment body");
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2484,7 +2161,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2509,7 +2186,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(0, posted);
@@ -2543,7 +2220,7 @@ class ReviewOrchestratorTest {
       when(suggestionFormatter.formatReviewComment(any(), eq(true))).thenReturn("body");
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2561,14 +2238,14 @@ class ReviewOrchestratorTest {
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
 
-      orchestrator.postReview(
+      reviewPublisher.postReview(
           "Bearer tok",
           "owner",
           "repo",
           7,
           "sha",
           result,
-          List.of(fileDiffWithLine("src/Main.java", 10)));
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
 
       verify(reviewClient)
           .createReview(
@@ -2604,14 +2281,14 @@ class ReviewOrchestratorTest {
               "",
               List.of());
 
-      orchestrator.postReview(
+      reviewPublisher.postReview(
           "Bearer tok",
           "owner",
           "repo",
           7,
           "sha",
           result,
-          List.of(fileDiffWithLine("src/Main.java", 10)));
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
 
       verify(reviewClient)
           .createReview(
@@ -2632,7 +2309,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
 
-      orchestrator.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
       // First review: the celebration lives in the summary comment, not the approval body
       verify(reviewClient)
@@ -2654,7 +2331,7 @@ class ReviewOrchestratorTest {
       var result =
           new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of());
 
-      orchestrator.postReview("Bearer tok", "owner", "repo", 7, "sha", result, List.of());
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
       verify(reviewClient)
           .createReview(
@@ -2675,14 +2352,14 @@ class ReviewOrchestratorTest {
       var result = resultWithFinding(finding, ReviewState.COMMENT);
       when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment");
 
-      orchestrator.postReview(
+      reviewPublisher.postReview(
           "Bearer tok",
           "owner",
           "repo",
           7,
           "sha",
           result,
-          List.of(
+          resolverFor(
               new GitHubPullRequestClient.FileDiff("empty.java", "modified", 0, 0, 0, ""),
               new GitHubPullRequestClient.FileDiff("nopatch.java", "modified", 1, 1, 2, null),
               fileDiffWithLine("src/Main.java", 10)));
@@ -2707,7 +2384,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(0, posted);
@@ -2740,7 +2417,7 @@ class ReviewOrchestratorTest {
       var resolver = new DiffLineResolver(Map.of("src/Main.java", patch));
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2784,7 +2461,7 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          orchestrator.postInlineComments(
+          reviewPublisher.postInlineComments(
               "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
       assertEquals(1, posted);
@@ -2934,7 +2611,7 @@ class ReviewOrchestratorTest {
               new GitHubPullRequestClient.FileDiff("a.java", "modified", 3, 2, 5, "patch"),
               new GitHubPullRequestClient.FileDiff("b.java", "modified", 1, 4, 5, "patch"));
 
-      ReviewOrchestrator.DiffStats stats = ReviewOrchestrator.DiffStats.fromFiles(files, 0);
+      VerdictBuilder.DiffStats stats = VerdictBuilder.DiffStats.fromFiles(files, 0);
 
       assertEquals(2, stats.filesChanged());
       assertEquals(4, stats.additions());
@@ -2950,7 +2627,7 @@ class ReviewOrchestratorTest {
               new GitHubPullRequestClient.FileDiff("a.java", "added", 3, 0, 3, "patch"),
               new GitHubPullRequestClient.FileDiff("b.java", "renamed", 0, 0, 0, null));
 
-      var changed = ReviewOrchestrator.toChangedFiles(files);
+      var changed = VerdictBuilder.toChangedFiles(files);
 
       assertEquals(2, changed.size());
       assertEquals("a.java", changed.get(0).path());
@@ -3026,7 +2703,7 @@ class ReviewOrchestratorTest {
       var session = new ReviewSession();
       var response = new ReviewResponse(List.of(), List.of(), null);
 
-      orchestrator.persistAiResponse(session, response);
+      findingPipeline.persistAiResponse(session, response);
 
       assertNotNull(session.getAiResponseJson());
     }
@@ -3035,14 +2712,22 @@ class ReviewOrchestratorTest {
     void shouldHandleSerializationFailureGracefully() throws Exception {
       var session = new ReviewSession();
 
-      // ObjectMapper that always fails — passed through the constructor
+      // ObjectMapper that always fails — a pipeline built with it must swallow the error.
       ObjectMapper badMapper = mock(ObjectMapper.class);
       when(badMapper.writeValueAsString(any()))
           .thenThrow(new com.fasterxml.jackson.core.JsonProcessingException("fail") {});
-      var failingOrchestrator = newOrchestrator(badMapper);
+      var failingPipeline =
+          new FindingPipeline(
+              aiReviewService,
+              quoteValidator,
+              deduplicator,
+              findingVerificationService,
+              followUpAnalyzer,
+              badMapper,
+              BOT_ID);
 
       var response = new ReviewResponse(List.of(), List.of(), null);
-      failingOrchestrator.persistAiResponse(session, response);
+      failingPipeline.persistAiResponse(session, response);
 
       assertNull(session.getAiResponseJson());
     }
@@ -3085,7 +2770,7 @@ class ReviewOrchestratorTest {
               List.of(),
               null);
 
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
 
       assertEquals(4, updated.findings().size());
 
@@ -3106,7 +2791,7 @@ class ReviewOrchestratorTest {
     void shouldReturnOriginalResponseWhenFindingsIsEmpty() {
       var lineResolver = new DiffLineResolver(Map.of());
       var response = new ReviewResponse(List.of(), List.of(), null);
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
     }
 
@@ -3125,7 +2810,7 @@ class ReviewOrchestratorTest {
           new ReviewResponse.Finding(
               "high", "high", "main.py", 11, "Title", "Desc", "  anchor  ", "new_line()");
       var response = new ReviewResponse(List.of(finding), List.of(), null);
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
     }
 
@@ -3143,207 +2828,8 @@ class ReviewOrchestratorTest {
           new ReviewResponse.Finding(
               "high", "high", "main.py", 2, "Title", "Desc", null, "new_line()");
       var response = new ReviewResponse(List.of(finding), List.of(), null);
-      var updated = orchestrator.populateMissingAnchors(response, lineResolver);
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
-    }
-  }
-
-  @Nested
-  class ResolveMissingPrDetails {
-
-    private ReviewOrchestrator.ReviewRequest manualRequest(String sha) {
-      return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 7, sha, "(manual review)", "", "", "main", 123L, true);
-    }
-
-    @Test
-    void shouldFetchPrDetailsWhenShaIsBlank() {
-      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
-          .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "add new API",
-                  "Adds a new API endpoint",
-                  new GitHubPullRequestClient.Ref("headsha1234"),
-                  new GitHubPullRequestClient.Ref("basesha5678")));
-
-      var resolved = orchestrator.resolveMissingPrDetails("Bearer tok", manualRequest(""));
-
-      assertEquals("headsha1234", resolved.commitSha());
-      assertEquals("basesha5678", resolved.baseSha());
-      assertEquals("add new API", resolved.prTitle());
-      assertEquals("Adds a new API endpoint", resolved.prDescription());
-      assertTrue(resolved.isManualTrigger());
-    }
-
-    @Test
-    void shouldNotFetchWhenShaIsPresent() {
-      var req = manualRequest("abcdefgh");
-
-      var resolved = orchestrator.resolveMissingPrDetails("Bearer tok", req);
-
-      assertSame(req, resolved);
-      verifyNoInteractions(prClient);
-    }
-
-    @Test
-    void shouldTolerateMissingRefsInPrDetails() {
-      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
-          .thenReturn(new GitHubPullRequestClient.PullRequestDetails(null, null, null, null));
-
-      var resolved = orchestrator.resolveMissingPrDetails("Bearer tok", manualRequest(null));
-
-      assertEquals("", resolved.commitSha());
-      assertEquals("", resolved.baseSha());
-      assertEquals("(manual review)", resolved.prTitle());
-      assertEquals("", resolved.prDescription());
-    }
-
-    @Test
-    void reviewShouldPostFailureCommentWhenPrResolutionThrows() {
-      try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = mock(ReviewSession.class);
-        session.id = 1L;
-        when(session.getRepository()).thenReturn("owner/repo");
-        when(session.getPrNumber()).thenReturn(7);
-        when(session.getPrTitle()).thenReturn("(manual review)");
-        when(session.getCommitSha()).thenReturn("");
-        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-        mockedStatic
-            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
-
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
-            .thenThrow(new RuntimeException("PR was deleted"));
-
-        orchestrator.review(manualRequest(""));
-
-        // A failing PR fetch takes the standard failure path instead of escaping to the
-        // dispatcher: failure comment, failed session, broadcast — and no check run calls
-        verify(commentClient)
-            .createComment(
-                anyString(),
-                anyString(),
-                eq("owner"),
-                eq("repo"),
-                eq(7),
-                argThat(req -> req.body().contains("could not be completed")));
-        verify(session).setStatus(ReviewSession.STATUS_FAILED);
-        verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
-        verify(checkRunClient, never())
-            .createCheckRun(anyString(), anyString(), anyString(), anyString(), any());
-      }
-    }
-
-    @Test
-    void reviewShouldUpdateSessionWithResolvedTitleAndSha() {
-      try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = mock(ReviewSession.class);
-        session.id = 1L;
-        when(session.getRepository()).thenReturn("owner/repo");
-        when(session.getPrNumber()).thenReturn(7);
-        when(session.getPrTitle()).thenReturn("(manual review)");
-        when(session.getCommitSha()).thenReturn("");
-        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-        mockedStatic
-            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
-
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
-            .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
-                    "add new API",
-                    "Adds a new API endpoint",
-                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
-                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
-        when(checkRunClient.createCheckRun(
-                anyString(), anyString(), anyString(), anyString(), any()))
-            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
-        when(checkRunClient.getRequiredStatusChecks(
-                anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(
-                new GitHubCheckRunClient.RequiredStatusChecks(
-                    List.of("required-build"), List.of()));
-        when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
-        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
-            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-
-        orchestrator.review(manualRequest(""));
-
-        // The session is created with the placeholder, then updated with resolved PR details
-        verify(session).setPrTitle("add new API");
-        verify(session).setCommitSha("headsha1234");
-        var checkRunCaptor =
-            ArgumentCaptor.forClass(GitHubCheckRunClient.CreateCheckRunRequest.class);
-        verify(checkRunClient)
-            .createCheckRun(
-                anyString(), anyString(), eq("owner"), eq("repo"), checkRunCaptor.capture());
-        assertEquals("headsha1234", checkRunCaptor.getValue().headSha());
-      }
-    }
-
-    @Test
-    void reviewShouldCatchExceptionWhenFetchingStatusChecks() {
-      try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = mock(ReviewSession.class);
-        session.id = 1L;
-        when(session.getRepository()).thenReturn("owner/repo");
-        when(session.getPrNumber()).thenReturn(7);
-        when(session.getPrTitle()).thenReturn("(manual review)");
-        when(session.getCommitSha()).thenReturn("");
-        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-        mockedStatic
-            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
-
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
-            .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
-                    "add new API",
-                    "Adds a new API endpoint",
-                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
-                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
-        when(checkRunClient.getRequiredStatusChecks(
-                anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenThrow(new RuntimeException("failed"));
-        when(checkRunClient.createCheckRun(
-                anyString(), anyString(), anyString(), anyString(), any()))
-            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
-        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
-            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-
-        orchestrator.review(
-            new ReviewOrchestrator.ReviewRequest(
-                "owner", "repo", 7, "", "(manual review)", "", "", "main", 123L, true));
-
-        // The thrown getRequiredStatusChecks must be swallowed: the review still finalizes its
-        // check run and posts a review rather than failing the whole run.
-        verify(checkRunClient)
-            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        verify(reviewClient)
-            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-      }
     }
   }
 
@@ -3371,13 +2857,13 @@ class ReviewOrchestratorTest {
       var unresolvedPrevious = List.of(new Finding(RiskLevel.MEDIUM, "f", 1, "t", "d", null, null));
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), unresolvedPrevious);
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), unresolvedPrevious);
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
-      assertFalse(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
+      assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
       assertTrue(
-          ReviewOrchestrator.checkSummaryForResult(result)
+          VerdictBuilder.checkSummaryForResult(result)
               .contains("1 previous finding(s) remain unresolved"));
     }
 
@@ -3390,8 +2876,8 @@ class ReviewOrchestratorTest {
           List.of(new Finding(RiskLevel.CRITICAL, Confidence.HIGH, "f", 1, "t", "d", null, null));
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), unresolvedPrevious);
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), unresolvedPrevious);
 
       assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
     }
@@ -3403,8 +2889,8 @@ class ReviewOrchestratorTest {
           responseWithStatuses(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
     }
@@ -3418,12 +2904,12 @@ class ReviewOrchestratorTest {
               new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional"));
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of());
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
 
       assertEquals(ReviewState.APPROVE, result.reviewState());
-      assertTrue(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
-      assertTrue(ReviewOrchestrator.checkSummaryForResult(result).contains("No issues found"));
+      assertTrue(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+      assertTrue(VerdictBuilder.checkSummaryForResult(result).contains("No issues found"));
     }
 
     @Test
@@ -3441,7 +2927,7 @@ class ReviewOrchestratorTest {
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3465,7 +2951,7 @@ class ReviewOrchestratorTest {
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3491,7 +2977,7 @@ class ReviewOrchestratorTest {
               List.of(),
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -3514,7 +3000,7 @@ class ReviewOrchestratorTest {
               List.of(),
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3537,10 +3023,10 @@ class ReviewOrchestratorTest {
     }
 
     private ReviewResult buildWithBackstop(List<ReviewResult.PreviousFindingStatus> backstop) {
-      return orchestrator.buildResult(
+      return verdictBuilder.buildResult(
           new ReviewResponse(List.of(), List.of(), null),
           false,
-          new ReviewOrchestrator.DiffStats(0, 0, 0),
+          new VerdictBuilder.DiffStats(0, 0, 0),
           List.of(), // changedFiles
           List.of(),
           List.of(),
@@ -3556,10 +3042,10 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
-      assertFalse(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
+      assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
       // The message reflects the held finding — never the contradictory "0 previous finding(s)".
       assertTrue(
-          ReviewOrchestrator.checkSummaryForResult(result)
+          VerdictBuilder.checkSummaryForResult(result)
               .contains("1 previous finding(s) remain unresolved"));
     }
 
@@ -3570,8 +3056,8 @@ class ReviewOrchestratorTest {
       var result = buildWithBackstop(List.of());
 
       assertEquals(ReviewState.APPROVE, result.reviewState());
-      assertTrue(ReviewOrchestrator.checkTitleForResult(result).contains("✅"));
-      assertTrue(ReviewOrchestrator.checkSummaryForResult(result).contains("No issues found"));
+      assertTrue(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+      assertTrue(VerdictBuilder.checkSummaryForResult(result).contains("No issues found"));
     }
 
     @Test
@@ -3595,7 +3081,7 @@ class ReviewOrchestratorTest {
           buildWithBackstop(
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3615,7 +3101,7 @@ class ReviewOrchestratorTest {
           buildWithBackstop(
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -3802,7 +3288,8 @@ class ReviewOrchestratorTest {
       // T4's resolution is attempted but GitHub does not confirm it — must not throw
       when(reviewThreadService.resolve(AUTH, "T4")).thenReturn(false);
 
-      orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(rootComment()), statuses);
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), "{}", List.of(rootComment()), statuses);
 
       verify(reviewThreadService).resolve(AUTH, "T1");
       verify(reviewThreadService).resolve(AUTH, "T4");
@@ -3817,7 +3304,8 @@ class ReviewOrchestratorTest {
       when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of());
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5)).thenReturn(Map.of());
 
-      orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(rootComment()), statuses);
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), "{}", List.of(rootComment()), statuses);
 
       verify(reviewThreadService, never()).resolve(anyString(), anyString());
     }
@@ -3828,9 +3316,9 @@ class ReviewOrchestratorTest {
           List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
       var resolved = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
 
-      orchestrator.resolveAddressedThreads(
+      reviewPublisher.resolveAddressedThreads(
           AUTH, request(), "{}", List.of(rootComment()), unresolvedOnly);
-      orchestrator.resolveAddressedThreads(AUTH, request(), "{}", List.of(), resolved);
+      reviewPublisher.resolveAddressedThreads(AUTH, request(), "{}", List.of(), resolved);
 
       verifyNoInteractions(reviewThreadService);
     }
@@ -3845,527 +3333,165 @@ class ReviewOrchestratorTest {
 
       assertDoesNotThrow(
           () ->
-              orchestrator.resolveAddressedThreads(
+              reviewPublisher.resolveAddressedThreads(
                   AUTH, request(), "{}", List.of(rootComment()), statuses));
     }
   }
 
   @Nested
-  class FetchPullRequestComments {
+  class ResolveMissingPrDetailsIntegration {
 
-    @Test
-    void shouldReturnEmptyListWhenClientThrows() {
-      // The paginating client never returns null, so the only failure to absorb is the fetch
-      // throwing — it degrades to an empty list rather than aborting the review.
-      when(reviewClient.listPullRequestComments(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenThrow(new RuntimeException("boom"));
-
-      assertTrue(orchestrator.fetchPullRequestComments("auth", "owner", "repo", 1).isEmpty());
+    private ReviewOrchestrator.ReviewRequest manualRequest(String sha) {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 7, sha, "(manual review)", "", "", "main", 123L, true);
     }
 
     @Test
-    void shouldReturnCommentsFromClient() {
-      var comment =
-          new GitHubReviewClient.PullRequestComment(
-              1L, null, "f", "body", new GitHubReviewClient.ReviewResponse.User("u"));
-      when(reviewClient.listPullRequestComments(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(List.of(comment));
+    void reviewShouldPostFailureCommentWhenPrResolutionThrows() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(7);
+        when(session.getPrTitle()).thenReturn("(manual review)");
+        when(session.getCommitSha()).thenReturn("");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
 
-      assertEquals(
-          List.of(comment), orchestrator.fetchPullRequestComments("auth", "owner", "repo", 1));
-    }
-  }
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
+            .thenThrow(new RuntimeException("PR was deleted"));
 
-  @Nested
-  class BotSummaryCommentDetection {
+        orchestrator.review(manualRequest(""));
 
-    private GitHubCommentClient.IssueComment comment(String body, String login) {
-      return new GitHubCommentClient.IssueComment(
-          body, login == null ? null : new GitHubReviewClient.ReviewResponse.User(login));
-    }
-
-    private void stubComments(GitHubCommentClient.IssueComment... comments) {
-      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenReturn(List.of(comments));
-    }
-
-    @Test
-    void shouldDetectABotSummaryComment() {
-      stubComments(
-          comment("@thrillhousebot please review", "someuser"),
-          comment(PrSummaryGenerator.SUMMARY_HEADING + "\n\nbody", "thrillhousebot[bot]"));
-
-      assertTrue(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldTolerateLeadingWhitespaceBeforeTheHeading() {
-      stubComments(
-          comment("\n  " + PrSummaryGenerator.SUMMARY_HEADING + "\n", "thrillhousebot[bot]"));
-
-      assertTrue(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldIgnoreASummaryHeadingPostedBySomeoneElse() {
-      // A human (or another bot) quoting the heading must not be mistaken for the bot's own
-      // summary.
-      stubComments(comment(PrSummaryGenerator.SUMMARY_HEADING + "\n\nspoof", "impersonator"));
-
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldIgnoreBotCommentsThatAreNotTheSummary() {
-      // The bot also posts conversational replies (e.g. answering /review questions); only the
-      // summary heading counts.
-      stubComments(comment("I don't have enough context to answer that.", "thrillhousebot[bot]"));
-
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldReturnFalseForEmptyComments() {
-      stubComments();
-
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldNotMatchTheHeadingMidComment() {
-      // Only a comment that *starts* with the heading is the bot's summary; an embedded mention is
-      // a
-      // quote in a discussion, not the summary artifact.
-      stubComments(
-          comment("As noted in the " + PrSummaryGenerator.SUMMARY_HEADING, "thrillhousebot[bot]"));
-
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldTolerateNullUserAndNullBody() {
-      stubComments(
-          comment("body without user", null),
-          comment(null, "thrillhousebot[bot]"),
-          comment(PrSummaryGenerator.SUMMARY_HEADING, "thrillhousebot[bot]"));
-
-      assertTrue(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-    }
-
-    @Test
-    void shouldBeBestEffortWhenTheFetchThrows() {
-      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
-          .thenThrow(new RuntimeException("boom"));
-
-      // A thrown fetch falls back to "no summary seen" rather than blocking the review.
-      // (listComments paginates internally and never returns null, so that case can't arise.)
-      assertFalse(orchestrator.botSummaryCommentExists("auth", "owner", "repo", 1));
-      assertTrue(orchestrator.fetchIssueComments("auth", "owner", "repo", 1).isEmpty());
-    }
-  }
-
-  @Nested
-  class ResolveProjectStack {
-
-    @Test
-    void shouldReturnEmptyWhenStackResolverThrows() {
-      when(projectStackResolver.resolve(any(), any(), any(), anyLong()))
-          .thenThrow(new RuntimeException("github down"));
-
-      var stack =
-          orchestrator.resolveProjectStack(
-              new ReviewOrchestrator.ReviewRequest(
-                  "owner", "repo", 1, "sha", "title", "", "base", "main", 123L, false));
-
-      assertEquals("", stack);
-    }
-  }
-
-  @Nested
-  class EvaluateCiChecks {
-
-    @Test
-    void shouldIgnoreThrillhouseBotChecks() {
-      // All checks below are failing; only the genuinely-non-bot ones must surface as offending,
-      // proving the ThrillhouseBot checks are dropped by bot-detection rather than by being green.
-      var app =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
-              1L, "thrillhousebot", "ThrillhouseBot");
-      var tbRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "ThrillhouseBot Review", "completed", "failure", app);
-      var appSlugRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              10L,
-              "Some Checks",
-              "completed",
-              "failure",
-              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(2L, "thrillhousebot", null));
-      var appNameRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              11L,
-              "Other Checks",
-              "completed",
-              "failure",
-              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(3L, null, "ThrillhouseBot"));
-      var otherRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "build", "completed", "failure", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CheckRunsResponse(
-                  4, List.of(tbRun, appSlugRun, appNameRun, otherRun)));
-
-      // Setup statuses
-      var tbStatus =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(
-              1L, "failure", "thrillhousebot-status", "desc");
-      var otherStatus =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "failure", "lint", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CombinedStatus(
-                  "failure", 2, List.of(tbStatus, otherStatus)));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      assertEquals(2, result.size());
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().anyMatch(c -> "lint".equals(c.name())));
-      assertFalse(result.stream().anyMatch(c -> c.name().contains("thrillhousebot")));
-    }
-
-    @Test
-    void shouldExcludePassingChecksFromOffendingList() {
-      // Every check is green — the offending list must come back empty so APPROVE is not gated.
-      var passRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "build", "completed", "success", null);
-      var skippedRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "docs", "completed", "skipped", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(passRun, skippedRun)));
-      var passStatus =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "success", "lint", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 1, List.of(passStatus)));
-
-      // requiredContexts lists checks that are all green and already reported — none is missing.
-      var result =
-          orchestrator.evaluateCiChecks(
-              "auth", "owner", "repo", "sha", List.of("build", "docs", "lint"));
-
-      assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void shouldHoldApprovalWhenAStatusStateIsUnrecognized() {
-      // A commit status whose state is neither success/pending/failure/error (here a malformed
-      // value; null behaves identically) is not a confirmed pass — it must surface as a pending
-      // offending check so it holds the approval rather than clearing the gate.
-      var passRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "build", "completed", "success", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(1, List.of(passRun)));
-      var unknownStatus =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "weird", "deploy", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CombinedStatus("pending", 1, List.of(unknownStatus)));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      assertEquals(1, result.size());
-      var check = result.get(0);
-      assertEquals("deploy", check.name());
-      assertTrue(check.isPending());
-      assertFalse(check.isFailing());
-    }
-
-    @Test
-    void shouldFilterByRequiredContextsWhenProvided() {
-      // All four checks are failing; only the two in requiredContexts must surface as offending.
-      var run1 =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "build", "completed", "failure", null);
-      var run2 =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "test", "completed", "failure", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(run1, run2)));
-
-      var status1 =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "failure", "lint", "desc");
-      var status2 =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "failure", "deploy", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CombinedStatus("failure", 2, List.of(status1, status2)));
-
-      var result =
-          orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build", "lint"));
-
-      assertEquals(2, result.size());
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().anyMatch(c -> "lint".equals(c.name())));
-      assertFalse(result.stream().anyMatch(c -> "test".equals(c.name())));
-      assertFalse(result.stream().anyMatch(c -> "deploy".equals(c.name())));
-    }
-
-    @Test
-    void shouldMarkMissingRequiredChecksAsPending() {
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
-
-      var result =
-          orchestrator.evaluateCiChecks(
-              "auth", "owner", "repo", "sha", List.of("build", "thrillhousebot"));
-
-      // thrillhousebot is ignored, so only "build" is missing
-      assertEquals(1, result.size());
-      var check = result.get(0);
-      assertEquals("build", check.name());
-      assertEquals("missing", check.type());
-      assertEquals("pending", check.status());
-    }
-
-    @Test
-    void shouldEvaluateStatusesAndConclusionsCorrectly() {
-      // 1. Pending check run
-      var runPending =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "build", "in_progress", null, null);
-      // 2. Failed check run
-      var runFailed =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "test", "completed", "failure", null);
-      // 3. Skipped check run (success)
-      var runSkipped =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              3L, "docs", "completed", "skipped", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CheckRunsResponse(
-                  3, List.of(runPending, runFailed, runSkipped)));
-
-      // 4. Pending status
-      var statusPending =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "pending", "lint", "desc");
-      // 5. Error status
-      var statusError =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "error", "security", "desc");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CombinedStatus(
-                  "pending", 2, List.of(statusPending, statusError)));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      // docs (skipped → passing) is excluded; only the four offending checks remain.
-      assertEquals(4, result.size());
-
-      var build = result.stream().filter(c -> "build".equals(c.name())).findFirst().orElseThrow();
-      assertEquals("pending", build.status());
-
-      var test = result.stream().filter(c -> "test".equals(c.name())).findFirst().orElseThrow();
-      assertEquals("failing", test.status());
-
-      assertFalse(result.stream().anyMatch(c -> "docs".equals(c.name())));
-
-      var lint = result.stream().filter(c -> "lint".equals(c.name())).findFirst().orElseThrow();
-      assertEquals("pending", lint.status());
-
-      var security =
-          result.stream().filter(c -> "security".equals(c.name())).findFirst().orElseThrow();
-      assertEquals("failing", security.status());
-    }
-
-    @Test
-    void shouldPageThroughCheckRunsUntilAShortPageIsReturned() {
-      // A full first page (100 rows) must trigger a second fetch; the short second page stops it.
-      var fullPage = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
-      for (int i = 0; i < 100; i++) {
-        fullPage.add(
-            new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-                i, "check-" + i, "completed", "failure", null));
+        // A failing PR fetch takes the standard failure path instead of escaping to the
+        // dispatcher: failure comment, failed session, broadcast — and no check run calls
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                eq("owner"),
+                eq("repo"),
+                eq(7),
+                argThat(req -> req.body().contains("could not be completed")));
+        verify(session).setStatus(ReviewSession.STATUS_FAILED);
+        verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+        verify(checkRunClient, never())
+            .createCheckRun(anyString(), anyString(), anyString(), anyString(), any());
       }
-      var lastPage =
-          List.of(
-              new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-                  100L, "check-100", "completed", "failure", null));
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(101, fullPage))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(101, lastPage));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      // Both pages were consumed: 100 + 1 failing check runs.
-      assertEquals(101, result.size());
-      verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(1));
-      verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(2));
     }
 
     @Test
-    void shouldPageThroughCombinedStatusUntilAShortPageIsReturned() {
-      var fullStatusPage =
-          new java.util.ArrayList<GitHubCheckRunClient.CombinedStatus.StatusDetail>();
-      for (int i = 0; i < 100; i++) {
-        fullStatusPage.add(
-            new GitHubCheckRunClient.CombinedStatus.StatusDetail(i, "failure", "ctx-" + i, "d"));
+    void reviewShouldUpdateSessionWithResolvedTitleAndSha() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(7);
+        when(session.getPrTitle()).thenReturn("(manual review)");
+        when(session.getCommitSha()).thenReturn("");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "add new API",
+                    "Adds a new API endpoint",
+                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
+                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(
+                new GitHubCheckRunClient.RequiredStatusChecks(
+                    List.of("required-build"), List.of()));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+        orchestrator.review(manualRequest(""));
+
+        // The session is created with the placeholder, then updated with resolved PR details
+        verify(session).setPrTitle("add new API");
+        verify(session).setCommitSha("headsha1234");
+        var checkRunCaptor =
+            ArgumentCaptor.forClass(GitHubCheckRunClient.CreateCheckRunRequest.class);
+        verify(checkRunClient)
+            .createCheckRun(
+                anyString(), anyString(), eq("owner"), eq("repo"), checkRunCaptor.capture());
+        assertEquals("headsha1234", checkRunCaptor.getValue().headSha());
       }
-      var lastStatusPage =
-          List.of(
-              new GitHubCheckRunClient.CombinedStatus.StatusDetail(
-                  100L, "failure", "ctx-100", "d"));
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 101, fullStatusPage))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 101, lastStatusPage));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      assertEquals(101, result.size());
-      verify(checkRunClient).getCombinedStatus(any(), any(), any(), any(), any(), eq(100), eq(2));
     }
 
     @Test
-    void shouldStopPagingAtTheMaxPagesGuard() {
-      // Every page is full (CI_PER_PAGE rows) so the short-page break never fires; the loop must
-      // terminate at the CI_MAX_PAGES guard rather than run forever.
-      var fullRuns = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
-      var fullStatuses =
-          new java.util.ArrayList<GitHubCheckRunClient.CombinedStatus.StatusDetail>();
-      for (int i = 0; i < ReviewOrchestrator.CI_PER_PAGE; i++) {
-        fullRuns.add(
-            new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-                i, "run-" + i, "completed", "failure", null));
-        fullStatuses.add(
-            new GitHubCheckRunClient.CombinedStatus.StatusDetail(i, "failure", "status-" + i, "d"));
+    void reviewShouldCatchExceptionWhenFetchingStatusChecks() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(7);
+        when(session.getPrTitle()).thenReturn("(manual review)");
+        when(session.getCommitSha()).thenReturn("");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "add new API",
+                    "Adds a new API endpoint",
+                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
+                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenThrow(new RuntimeException("failed"));
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner", "repo", 7, "", "(manual review)", "", "", "main", 123L, true));
+
+        // The thrown getRequiredStatusChecks must be swallowed: the review still finalizes its
+        // check run and posts a review rather than failing the whole run.
+        verify(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       }
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CheckRunsResponse(ReviewOrchestrator.CI_PER_PAGE, fullRuns));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CombinedStatus(
-                  "failure", ReviewOrchestrator.CI_PER_PAGE, fullStatuses));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      // Deduped to the distinct names across the repeated pages.
-      assertEquals(2 * ReviewOrchestrator.CI_PER_PAGE, result.size());
-      verify(checkRunClient, times(ReviewOrchestrator.CI_MAX_PAGES))
-          .getCheckRuns(
-              any(), any(), any(), any(), any(), eq(ReviewOrchestrator.CI_PER_PAGE), anyInt());
-      verify(checkRunClient, times(ReviewOrchestrator.CI_MAX_PAGES))
-          .getCombinedStatus(
-              any(), any(), any(), any(), any(), eq(ReviewOrchestrator.CI_PER_PAGE), anyInt());
-    }
-
-    @Test
-    void shouldBreakWhenCheckRunsAndStatusResponsesAreNull() {
-      // Unmocked endpoints return null; the page loops must break immediately without error.
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void shouldTreatCompletedRunWithNullConclusionAsFailing() {
-      var run =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(1L, "build", "completed", null, null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(1, List.of(run)));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      assertEquals(1, result.size());
-      assertEquals("failing", result.get(0).status());
-    }
-
-    @Test
-    void shouldDeduplicateContextReportedAsBothCheckRunAndStatus() {
-      // The same failing context reported twice via check runs and once via status → listed once.
-      var run =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "build", "completed", "failure", null);
-      var dupRun =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, "build", "completed", "failure", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(run, dupRun)));
-      var status =
-          new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "failure", "build", "d");
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 1, List.of(status)));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      assertEquals(1, result.size());
-      assertEquals("build", result.get(0).name());
-      assertEquals("check-run", result.get(0).type());
-    }
-
-    @Test
-    void shouldKeepNonBotChecksWhoseAppAndNameDoNotMatch() {
-      // Apps present but not ThrillhouseBot (one with a name, one without), plus a null-named run.
-      var appWithName =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
-              9L, "github-actions", "GitHub Actions");
-      var appNoName = new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(8L, "circleci", null);
-      var named =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              1L, "build", "completed", "failure", appWithName);
-      var namelessApp =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              3L, "deploy", "completed", "failure", appNoName);
-      var nullNamed =
-          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-              2L, null, "completed", "failure", null);
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(
-              new GitHubCheckRunClient.CheckRunsResponse(
-                  3, List.of(named, namelessApp, nullNamed)));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-
-      assertEquals(3, result.size());
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().anyMatch(c -> "deploy".equals(c.name())));
-    }
-
-    @Test
-    void shouldHandleNullChecksAndStatusesGracefully() {
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, null));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("pending", 0, null));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.isEmpty());
-    }
-
-    @Test
-    void shouldHandleExceptionsGracefully() {
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenThrow(new RuntimeException("failed"));
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenThrow(new RuntimeException("failed"));
-
-      var result = orchestrator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.isEmpty());
     }
   }
 
@@ -4711,146 +3837,6 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
-  class ResolveRequiredContexts {
-
-    private ReviewOrchestrator.ReviewRequest req() {
-      return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 42, "sha", "Test PR", "", "base", "main", 123L, false);
-    }
-
-    private void stubBaseRef(String ref) {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Test PR",
-                  "",
-                  new GitHubPullRequestClient.Ref("head", "feature"),
-                  new GitHubPullRequestClient.Ref("base", ref)));
-    }
-
-    private GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck check(String context) {
-      return new GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck(context, null);
-    }
-
-    private GitHubCheckRunClient.BranchRule statusCheckRule(
-        GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck... checks) {
-      return new GitHubCheckRunClient.BranchRule(
-          "required_status_checks",
-          new GitHubCheckRunClient.BranchRule.Parameters(List.of(checks)));
-    }
-
-    private void stubClassic(GitHubCheckRunClient.RequiredStatusChecks protection) {
-      when(checkRunClient.getRequiredStatusChecks(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(protection);
-    }
-
-    @Test
-    void returnsEmptyWhenPullRequestLookupThrows() {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenThrow(new RuntimeException("boom"));
-
-      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
-      verifyNoInteractions(checkRunClient);
-    }
-
-    @Test
-    void returnsEmptyWhenPullRequestDetailsAreNull() {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42))).thenReturn(null);
-
-      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
-    }
-
-    @Test
-    void returnsEmptyWhenBaseRefIsNull() {
-      stubBaseRef(null);
-
-      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
-      verify(checkRunClient, never())
-          .getBranchRules(anyString(), anyString(), anyString(), anyString(), anyString());
-    }
-
-    @Test
-    void fallsBackToClassicWhenRulesetLookupThrows() {
-      stubBaseRef("main");
-      when(checkRunClient.getBranchRules(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenThrow(new RuntimeException("rules boom"));
-      stubClassic(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
-
-      assertEquals(
-          List.of("build"), orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
-    }
-
-    @Test
-    void fallsBackToClassicWhenNoRulesetGovernsBranch() {
-      stubBaseRef("main");
-      when(checkRunClient.getBranchRules(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(List.of());
-      stubClassic(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
-
-      assertEquals(
-          List.of("build"), orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
-    }
-
-    @Test
-    void skipsRequiredStatusChecksRuleWithNullParameters() {
-      stubBaseRef("main");
-      when(checkRunClient.getBranchRules(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(List.of(new GitHubCheckRunClient.BranchRule("required_status_checks", null)));
-      // Classic 404s — a ruleset governs the branch but contributes no required contexts.
-      when(checkRunClient.getRequiredStatusChecks(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenThrow(new RuntimeException("Not Found, status code 404"));
-
-      var result = orchestrator.resolveRequiredContexts("auth", req());
-      assertTrue(result.isPresent());
-      assertTrue(result.orElseThrow().isEmpty());
-    }
-
-    @Test
-    void skipsRequiredCheckWithNullContext() {
-      stubBaseRef("main");
-      when(checkRunClient.getBranchRules(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(List.of(statusCheckRule(check(null), check("build"))));
-      when(checkRunClient.getRequiredStatusChecks(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenThrow(new RuntimeException("Not Found, status code 404"));
-
-      assertEquals(
-          List.of("build"), orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
-    }
-
-    @Test
-    void unionsRulesetAndClassicContextsWithoutDuplicates() {
-      stubBaseRef("main");
-      when(checkRunClient.getBranchRules(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(List.of(statusCheckRule(check("build"), check("lint"))));
-      stubClassic(
-          new GitHubCheckRunClient.RequiredStatusChecks(List.of("lint", "deploy"), List.of()));
-
-      assertEquals(
-          List.of("build", "lint", "deploy"),
-          orchestrator.resolveRequiredContexts("auth", req()).orElseThrow());
-    }
-
-    @Test
-    void returnsEmptyWhenNeitherMechanismGovernsBranch() {
-      stubBaseRef("main");
-      when(checkRunClient.getBranchRules(
-              anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(null);
-      stubClassic(null);
-
-      assertTrue(orchestrator.resolveRequiredContexts("auth", req()).isEmpty());
-    }
-  }
-
-  @Nested
   class CiChecksGating {
 
     @Test
@@ -4859,8 +3845,8 @@ class ReviewOrchestratorTest {
       var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
 
       var result =
-          orchestrator.buildResult(
-              aiResponse, false, new ReviewOrchestrator.DiffStats(0, 0, 0), List.of(), offending);
+          verdictBuilder.buildResult(
+              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of(), offending);
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
     }
@@ -4885,7 +3871,7 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
               offending);
 
-      orchestrator.postReview("auth", "owner", "repo", 5, "sha", result, List.of());
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -4951,27 +3937,6 @@ class ReviewOrchestratorTest {
               1,
               List.of(new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "s", "c", "d")));
       assertFalse(statusVal.statuses().isEmpty());
-    }
-  }
-
-  @Nested
-  class CombineSections {
-
-    @Test
-    void shouldReturnSecondWhenFirstIsBlank() {
-      assertEquals("b", ReviewOrchestrator.combineSections("", "b"));
-      assertEquals("b", ReviewOrchestrator.combineSections("  ", "b"));
-    }
-
-    @Test
-    void shouldReturnFirstWhenSecondIsBlank() {
-      assertEquals("a", ReviewOrchestrator.combineSections("a", ""));
-      assertEquals("a", ReviewOrchestrator.combineSections("a", "  "));
-    }
-
-    @Test
-    void shouldJoinBothWithBlankLineSeparator() {
-      assertEquals("a\n\nb", ReviewOrchestrator.combineSections("a", "b"));
     }
   }
 }
