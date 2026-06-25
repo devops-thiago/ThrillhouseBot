@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
@@ -39,6 +40,9 @@ import java.util.stream.Collectors;
  */
 @ApplicationScoped
 public class DiffBudgetPlanner {
+
+  private static final String PLACEHOLDER_OVER_BUDGET =
+      "(file section omitted — exceeds the per-call token budget)\n";
 
   private final ReviewDiffFormatter formatter;
   private final TokenCounter tokenCounter;
@@ -206,6 +210,15 @@ public class DiffBudgetPlanner {
       var ratio = Math.min(0.95, (double) target / current);
       lines = Math.max(1, (int) (lines * ratio));
       clipped = ReviewDiffFormatter.truncateSection(section, lines);
+    }
+    // Safety net: a pathologically small budget (a few tokens) can leave even a one-line section
+    // over budget. Fall back to a fixed placeholder so a batch never exceeds its budget; the file
+    // is
+    // still surfaced (clipped to a notice) rather than silently bloating the call.
+    if (tokenCounter.estimateTokens(clipped) > budgetTokens) {
+      Log.warnf(
+          "File section exceeds the %d-token budget after clipping; using a notice", budgetTokens);
+      return PLACEHOLDER_OVER_BUDGET;
     }
     return clipped;
   }

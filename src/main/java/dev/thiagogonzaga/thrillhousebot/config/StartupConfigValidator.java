@@ -81,6 +81,7 @@ public class StartupConfigValidator {
         "GITHUB_WEBHOOK_SECRET",
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
+    validateReviewBudget(problems, config.review());
 
     if (!problems.isEmpty()) {
       throw new ConfigValidationException(formatMessage(problems));
@@ -90,6 +91,47 @@ public class StartupConfigValidator {
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
+  }
+
+  /**
+   * Validates the token-budget settings (#53) so a misconfiguration is rejected at boot rather than
+   * silently producing a degenerate budget (e.g. a negative input budget disables batching when the
+   * operator meant to set a limit). Token budgeting is off when {@code max-input-tokens} is 0.
+   */
+  private static void validateReviewBudget(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    if (review.maxInputTokens() < 0) {
+      problems.add(
+          "REVIEW_MAX_INPUT_TOKENS must be >= 0, where 0 disables token budgeting"
+              + " (thrillhousebot.review.max-input-tokens): "
+              + review.maxInputTokens());
+    }
+    if (review.outputBufferTokens() < 0) {
+      problems.add(
+          "REVIEW_OUTPUT_BUFFER_TOKENS must be >= 0"
+              + " (thrillhousebot.review.output-buffer-tokens): "
+              + review.outputBufferTokens());
+    }
+    if (review.maxAiCalls() < 1) {
+      problems.add(
+          "REVIEW_MAX_AI_CALLS must be >= 1 (thrillhousebot.review.max-ai-calls): "
+              + review.maxAiCalls());
+    }
+    var margin = review.tokenSafetyMargin();
+    if (margin <= 0 || margin > 1.0) {
+      problems.add(
+          "REVIEW_TOKEN_SAFETY_MARGIN must be in (0, 1]"
+              + " (thrillhousebot.review.token-safety-margin): "
+              + margin);
+    }
+    if (review.maxInputTokens() > 0 && review.outputBufferTokens() >= review.maxInputTokens()) {
+      problems.add(
+          "REVIEW_OUTPUT_BUFFER_TOKENS ("
+              + review.outputBufferTokens()
+              + ") must be less than REVIEW_MAX_INPUT_TOKENS ("
+              + review.maxInputTokens()
+              + ") so there is budget left for the diff");
+    }
   }
 
   private static void requirePresent(
