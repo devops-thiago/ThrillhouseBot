@@ -126,6 +126,72 @@ class CiStatusEvaluatorTest {
     }
 
     @Test
+    void unreadableCheckRunsHoldApproveInGateAllMode() {
+      // Check Runs API throws; combined status reads clean. In gate-all mode (no required-context
+      // list to backfill) we cannot confirm CI is green, so a "CI status unavailable" pending check
+      // must surface to hold the verdict to COMMENT rather than approving over CI we never saw.
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenThrow(new RuntimeException("rate limited"));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(
+          result.stream()
+              .filter(c -> "CI status unavailable".equals(c.name()))
+              .allMatch(c -> c.isPending()),
+          "the unavailable entry must be pending (holds COMMENT, not REQUEST_CHANGES)");
+    }
+
+    @Test
+    void nullCombinedStatusBodyHoldsApproveInGateAllMode() {
+      // A null body (not an empty list) means the response could not be read — must not count
+      // green.
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(null);
+
+      var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(result.stream().anyMatch(c -> "CI status unavailable".equals(c.name())));
+    }
+
+    @Test
+    void readableGreenCiInGateAllModeStillApproves() {
+      // Both sources read cleanly and green — no synthetic unavailable entry, APPROVE not gated.
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  1,
+                  List.of(
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                          1L, "build", "completed", "success", null))));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void unreadableCiInGateSpecificModeReliesOnRequiredBackfill() {
+      // Gate-specific mode is already safe: a required context that never reported (because its
+      // source threw) is backfilled as pending — no separate "CI status unavailable" entry needed.
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenThrow(new RuntimeException("boom"));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.stream().noneMatch(c -> "CI status unavailable".equals(c.name())));
+    }
+
+    @Test
     void shouldHoldApprovalWhenAStatusStateIsUnrecognized() {
       // A commit status whose state is neither success/pending/failure/error (here a malformed
       // value; null behaves identically) is not a confirmed pass — it must surface as a pending
@@ -337,9 +403,11 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldBreakWhenCheckRunsAndStatusResponsesAreNull() {
-      // Unmocked endpoints return null; the page loops must break immediately without error.
+      // Unmocked endpoints return null; the page loops break immediately without error, but a null
+      // body is "could not read", so gate-all mode holds the verdict rather than allowing APPROVE
+      // over CI it never saw (#253).
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.isEmpty());
+      assertTrue(result.stream().anyMatch(c -> "CI status unavailable".equals(c.name())));
     }
 
     @Test
@@ -429,7 +497,9 @@ class CiStatusEvaluatorTest {
           .thenThrow(new RuntimeException("failed"));
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.isEmpty());
+      // Exceptions are swallowed (no crash), but in gate-all mode unreadable CI must hold the
+      // verdict — not come back empty and silently allow APPROVE (#253).
+      assertTrue(result.stream().anyMatch(c -> "CI status unavailable".equals(c.name())));
     }
   }
 

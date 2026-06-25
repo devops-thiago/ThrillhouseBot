@@ -46,6 +46,7 @@ public class CiStatusEvaluator {
   private static final String CI_SUCCESS = "success";
   private static final String CI_PENDING = "pending";
   private static final String CI_FAILING = "failing";
+  private static final String CI_UNAVAILABLE = "CI status unavailable";
   private static final String THRILLHOUSEBOT_TOKEN = "thrillhousebot";
   private static final Set<String> PASSING_CONCLUSIONS = Set.of(CI_SUCCESS, "skipped", "neutral");
 
@@ -164,34 +165,67 @@ public class CiStatusEvaluator {
     // and the Commit Status API is not listed twice.
     var offendingNames = new HashSet<String>();
 
-    try {
-      collectPaged(
-          page -> {
-            var resp =
-                checkRunClient.getCheckRuns(
-                    auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
-            return resp == null ? null : resp.checkRuns();
-          },
-          run -> addOffendingCheckRun(run, requiredContexts, seen, offendingNames, offending));
-    } catch (Exception e) {
-      Log.warnf(e, "Failed to fetch check runs for commit %s", commitSha);
-    }
+    var checkRunsReadable =
+        collectReadable(
+            page -> {
+              var resp =
+                  checkRunClient.getCheckRuns(
+                      auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
+              return resp == null ? null : resp.checkRuns();
+            },
+            run -> addOffendingCheckRun(run, requiredContexts, seen, offendingNames, offending),
+            "check runs for commit " + commitSha);
 
-    try {
-      collectPaged(
-          page -> {
-            var resp =
-                checkRunClient.getCombinedStatus(
-                    auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
-            return resp == null ? null : resp.statuses();
-          },
-          status -> addOffendingStatus(status, requiredContexts, seen, offendingNames, offending));
-    } catch (Exception e) {
-      Log.warnf(e, "Failed to fetch combined status for commit %s", commitSha);
-    }
+    var statusReadable =
+        collectReadable(
+            page -> {
+              var resp =
+                  checkRunClient.getCombinedStatus(
+                      auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
+              return resp == null ? null : resp.statuses();
+            },
+            status -> addOffendingStatus(status, requiredContexts, seen, offendingNames, offending),
+            "combined status for commit " + commitSha);
 
     addMissingRequiredChecks(requiredContexts, seen, offending);
+
+    // Fail closed for the APPROVE decision (#253): in gate-all mode there is no required-context
+    // list to backfill, so a CI source we could not read (an exception or a null body) means we
+    // cannot confirm CI is green. Surface it as a pending check so the verdict holds to COMMENT
+    // instead of approving over CI we never saw (aligns with #217). Gate-specific mode is already
+    // safe — addMissingRequiredChecks flags any required context that did not report.
+    if (requiredContexts == null
+        && (!checkRunsReadable || !statusReadable)
+        && offendingNames.add(CI_UNAVAILABLE)) {
+      offending.add(new ReviewResult.CiCheck(CI_UNAVAILABLE, "unavailable", CI_PENDING, null));
+    }
     return offending;
+  }
+
+  /**
+   * Pages through a CI list endpoint like {@link #collectPaged}, but reports whether the fetch was
+   * actually readable: {@code false} when it threw or returned a null body (GitHub returns an empty
+   * list, never null, past the last page), so the caller can tell "no checks" from "could not
+   * read".
+   */
+  private <T> boolean collectReadable(
+      IntFunction<List<T>> fetchPage, Consumer<T> consume, String what) {
+    var readable = new boolean[] {true};
+    try {
+      collectPaged(
+          page -> {
+            var fetched = fetchPage.apply(page);
+            if (fetched == null) {
+              readable[0] = false;
+            }
+            return fetched;
+          },
+          consume);
+    } catch (Exception e) {
+      Log.warnf(e, "Failed to fetch %s", what);
+      return false;
+    }
+    return readable[0];
   }
 
   /**
