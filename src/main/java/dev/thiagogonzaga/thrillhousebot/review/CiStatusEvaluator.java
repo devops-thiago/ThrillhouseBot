@@ -194,9 +194,7 @@ public class CiStatusEvaluator {
     // cannot confirm CI is green. Surface it as a pending check so the verdict holds to COMMENT
     // instead of approving over CI we never saw (aligns with #217). Gate-specific mode is already
     // safe — addMissingRequiredChecks flags any required context that did not report.
-    if (requiredContexts == null
-        && (!checkRunsReadable || !statusReadable)
-        && offendingNames.add(CI_UNAVAILABLE)) {
+    if (requiredContexts == null && (!checkRunsReadable || !statusReadable)) {
       offending.add(new ReviewResult.CiCheck(CI_UNAVAILABLE, "unavailable", CI_PENDING, null));
     }
     return offending;
