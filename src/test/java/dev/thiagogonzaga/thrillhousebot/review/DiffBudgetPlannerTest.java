@@ -167,6 +167,18 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void absurdlySmallBudgetFallsBackToPlaceholder() {
+    // A budget of a couple tokens can't fit even one clipped line; the section becomes a fixed
+    // notice rather than silently blowing the budget with the full file.
+    var big = file("dir/huge.java", 400, patch(400));
+    var plan = planner.plan(List.of(big), 2, 1);
+    assertEquals(1, plan.batches().size());
+    assertTrue(
+        plan.batches().get(0).text().contains("exceeds the per-call token budget"),
+        "expected the over-budget placeholder notice");
+  }
+
+  @Test
   void ignoredFilesAreNeverPlannedOrOmitted() {
     var files = List.of(file("dir/app.java", 5, patch(5)), file("deps/yarn.lock", 999, patch(50)));
     var plan = planner.plan(files, 100_000, 3);
