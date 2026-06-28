@@ -17,6 +17,7 @@ All notable changes to ThrillhouseBot.
 ### Fixed
 
 - **Check run concluded before the review was posted**: the orchestrator marked the check run `completed` with its final conclusion *before* posting the review and comments, so a transient failure while posting left a concluded — for a zero-findings PR, green `success` — check run with no review actually on the PR (branch protection saw green; the human saw nothing). The review and its comments now post first, and the check run is concluded only afterwards (and best-effort, so a conclusion hiccup keeps the posted review rather than discarding it). A failure while posting now takes the normal failure path — check run marked failed plus a retry notice — instead of being swallowed (#254)
+- **Unreadable CI status no longer allows an approval**: the CI gate works off the *offending* checks, and an empty list meant "nothing blocks". But when the Check Runs / Combined Status API threw or returned a null body, that empty list was indistinguishable from "CI all green", so a PR whose CI was actually failing or still pending could receive an APPROVE on a transient GitHub hiccup. When CI cannot be read in gate-all mode the bot now surfaces a pending "CI status unavailable" check that holds the verdict to a comment instead of approving over CI it never saw — findings still post, only the approval is held (#253)
 
 ## [0.2.1] — 2026-06-24
 
