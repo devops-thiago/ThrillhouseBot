@@ -147,6 +147,16 @@ class ReviewOrchestratorTest {
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
+    // CI reads clean and green by default, so the verdict is not held by the #253 unreadable-CI
+    // guard; tests that exercise red/pending/unreadable CI override these. The unreadable-CI
+    // behaviour itself is unit-tested in CiStatusEvaluatorTest.
+    lenient()
+        .when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+        .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
+    lenient()
+        .when(
+            checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+        .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
     // Walkthrough diagram is off by default; individual tests opt in by re-stubbing enabled().
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
