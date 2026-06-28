@@ -172,24 +172,38 @@ public class ReviewOrchestrator {
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
-      checkRunManager.updateCheckRun(
-          new CheckRunManager.CheckRunUpdate(
-              auth,
-              req.owner(),
-              req.repo(),
-              checkRunId,
-              CHECK_STATUS_COMPLETED,
-              conclusion,
-              checkTitle,
-              checkSummary,
-              sessionUrl(session)));
-      resultSurfaced = true;
-
       reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       reviewPublisher.postReview(
           auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, lineResolver);
+
+      // The review and its comments are on the PR now. Conclude the check run only after they post,
+      // so a posting failure takes the failure path (check run marked failed + retry notice) rather
+      // than leaving a concluded — possibly green — check run with no review posted (#254).
+      resultSurfaced = true;
+      try {
+        checkRunManager.updateCheckRun(
+            new CheckRunManager.CheckRunUpdate(
+                auth,
+                req.owner(),
+                req.repo(),
+                checkRunId,
+                CHECK_STATUS_COMPLETED,
+                conclusion,
+                checkTitle,
+                checkSummary,
+                sessionUrl(session)));
+      } catch (RuntimeException checkRunError) {
+        // The review is already posted; concluding the check run is best-effort from here. Keep the
+        // posted review and let the session complete rather than discarding them (#254).
+        Log.warnf(
+            checkRunError,
+            "Review posted but the check run could not be concluded for %s/%s #%d",
+            req.owner(),
+            req.repo(),
+            req.prNumber());
+      }
 
       reviewPublisher.resolveAddressedThreads(
           auth, req, previousAiResponseJson, inlineComments, aiResponse.previousFindingsStatus());
