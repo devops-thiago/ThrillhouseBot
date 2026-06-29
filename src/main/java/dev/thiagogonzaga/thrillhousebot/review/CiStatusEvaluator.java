@@ -17,7 +17,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -29,7 +28,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.IntFunction;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -50,12 +49,7 @@ public class CiStatusEvaluator {
   private static final String CI_FAILING = "failing";
   private static final Set<String> PASSING_CONCLUSIONS = Set.of(CI_SUCCESS, "skipped", "neutral");
 
-  // GitHub serves 30 rows per page by default; request the 100 max and bound the page walk.
-  static final int CI_PER_PAGE = 100;
-  static final int CI_MAX_PAGES = 50;
-
   private final GitHubCheckRunClient checkRunClient;
-  private final GitHubPullRequestClient prClient;
 
   // Bot-identity tokens (the slug of each "<slug>[bot]" login), derived from the shared BotIdentity
   // bean so check/app matching honors the configured logins — including the alternate slug — rather
@@ -64,11 +58,8 @@ public class CiStatusEvaluator {
 
   @Inject
   public CiStatusEvaluator(
-      @RestClient GitHubCheckRunClient checkRunClient,
-      @RestClient GitHubPullRequestClient prClient,
-      BotIdentity botIdentity) {
+      @RestClient GitHubCheckRunClient checkRunClient, BotIdentity botIdentity) {
     this.checkRunClient = checkRunClient;
-    this.prClient = prClient;
     this.botTokens =
         botIdentity.logins().stream()
             .map(CiStatusEvaluator::loginToken)
@@ -90,18 +81,17 @@ public class CiStatusEvaluator {
    * neither mechanism governs the branch or both lookups fail.
    */
   Optional<List<String>> resolveRequiredContexts(
-      String auth, String owner, String repo, int prNumber) {
-    String branch;
-    try {
-      var prDetails = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
-      if (prDetails == null || prDetails.base() == null || prDetails.base().ref() == null) {
-        return Optional.empty();
-      }
-      branch = prDetails.base().ref();
-    } catch (Exception e) {
-      Log.warnf(e, "Could not resolve target branch; gating CI on all checks");
+      String auth, String owner, String repo, String baseBranch) {
+    if (baseBranch == null || baseBranch.isBlank()) {
+      // The base branch was not carried on the request (e.g. a manual trigger whose PR lookup did
+      // not yield one): gate on all checks rather than guessing the target branch. The branch ref
+      // is
+      // resolved upstream (webhook payload / resolveMissingPrDetails), so this no longer fetches
+      // the
+      // PR here just to read it.
       return Optional.empty();
     }
+    String branch = baseBranch;
 
     var contexts = new LinkedHashSet<String>();
     boolean resolved = false;
@@ -193,23 +183,13 @@ public class CiStatusEvaluator {
 
     var checkRunsReadable =
         collectReadable(
-            page -> {
-              var resp =
-                  checkRunClient.getCheckRuns(
-                      auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
-              return resp == null ? null : resp.checkRuns();
-            },
+            () -> checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha),
             run -> addOffendingCheckRun(run, requiredContexts, seen, offendingNames, offending),
             "check runs for commit " + commitSha);
 
     var statusReadable =
         collectReadable(
-            page -> {
-              var resp =
-                  checkRunClient.getCombinedStatus(
-                      auth, ACCEPT, owner, repo, commitSha, CI_PER_PAGE, page);
-              return resp == null ? null : resp.statuses();
-            },
+            () -> checkRunClient.getAllCombinedStatus(auth, ACCEPT, owner, repo, commitSha),
             status -> addOffendingStatus(status, requiredContexts, seen, offendingNames, offending),
             "combined status for commit " + commitSha);
 
@@ -227,23 +207,19 @@ public class CiStatusEvaluator {
   }
 
   /**
-   * Pages through a GitHub CI list endpoint, applying {@code consume} to every row, and reports
-   * whether the fetch was actually readable. Stops on a short page (GitHub's last-page marker) or
-   * once {@link #CI_MAX_PAGES} is reached. Returns {@code false} when the call threw or a page came
-   * back as a null body (GitHub returns an empty list, never null, past the last page), so the
-   * caller can tell "no checks" from "could not read".
+   * Applies {@code consume} to every row from {@code fetchAll} (the client's paging helper) and
+   * reports whether the fetch was actually readable. Returns {@code false} when the call threw or
+   * came back {@code null} — the client's "could not read" signal — so the caller can tell "no
+   * checks" from "could not read" (GitHub returns an empty list, never null, when there are none).
    */
   private <T> boolean collectReadable(
-      IntFunction<List<T>> fetchPage, Consumer<T> consume, String what) {
+      Supplier<List<T>> fetchAll, Consumer<T> consume, String what) {
     try {
-      List<T> page = null;
-      for (int p = 1; p <= CI_MAX_PAGES && (page == null || page.size() == CI_PER_PAGE); p++) {
-        page = fetchPage.apply(p);
-        if (page == null) {
-          return false;
-        }
-        page.forEach(consume);
+      var all = fetchAll.get();
+      if (all == null) {
+        return false;
       }
+      all.forEach(consume);
       return true;
     } catch (Exception e) {
       Log.warnf(e, "Failed to fetch %s", what);
