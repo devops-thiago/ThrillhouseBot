@@ -237,14 +237,6 @@ public class ReviewContextLoader {
     return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
   }
 
-  String buildDiffString(List<GitHubPullRequestClient.FileDiff> files) {
-    return diffFormatter.buildDiffString(files);
-  }
-
-  String buildBaseComparison(String auth, String owner, String repo, String base, String head) {
-    return buildBaseComparisonWithStats(auth, owner, repo, base, head).text();
-  }
-
   ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
       String auth, String owner, String repo, String base, String head) {
     if (base == null || head == null || base.length() < 7 || head.length() < 7) {
