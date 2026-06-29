@@ -57,13 +57,6 @@ public class VerdictBuilder {
   ReviewResult build(
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
-      List<ReviewResult.CiCheck> offendingCiChecks) {
-    return build(ctx, aiResponse, offendingCiChecks, false);
-  }
-
-  ReviewResult build(
-      ReviewContextLoader.ReviewContext ctx,
-      ReviewResponse aiResponse,
       List<ReviewResult.CiCheck> offendingCiChecks,
       boolean ciUnreadable) {
     var diffStats = DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles());

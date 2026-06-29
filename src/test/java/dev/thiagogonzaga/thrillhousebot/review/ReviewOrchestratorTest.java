@@ -4059,6 +4059,38 @@ class ReviewOrchestratorTest {
           body.contains(
               "Additionally, No new issues in this revision, but 1 previous finding(s) remain unresolved"));
     }
+
+    @Test
+    void shouldDiscloseUnreadableCiInTheFollowUpPostReviewBody() {
+      // #6: on a follow-up review (no summary comment), an unreadable CI hold must surface in the
+      // review body — not silently post nothing. With an unresolved previous finding it also
+      // appends
+      // the "Additionally, …" line.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
+              List.of(),
+              0,
+              true);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("CI status could not be read"));
+      assertTrue(body.contains("Additionally, No new issues in this revision"));
+    }
   }
 
   @Nested

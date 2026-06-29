@@ -137,6 +137,30 @@ class CiStatusEvaluatorTest {
     }
 
     @Test
+    void botTokenMatchingHandlesAConfiguredLoginWithoutTheBotSuffix() {
+      // A configured login that does not end in "[bot]" is used as the token verbatim, so a check
+      // whose name contains that bare token is still recognized as the bot's and dropped.
+      var custom =
+          new CiStatusEvaluator(checkRunClient, prClient, BotIdentity.of("acme-bot-login"));
+      var botRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "acme-bot-login check", "completed", "failure", null);
+      var otherRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "build", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(botRun, otherRun)));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = custom.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertFalse(
+          result.offendingChecks().stream().anyMatch(c -> c.name().contains("acme-bot-login")));
+    }
+
+    @Test
     void shouldExcludePassingChecksFromOffendingList() {
       // Every check is green — the offending list must come back empty so APPROVE is not gated.
       var passRun =
