@@ -269,29 +269,4 @@ public class VerdictBuilder {
     }
     return new FindingTally(findings, critical, high, medium, low, highest);
   }
-
-  ReviewResult buildResult(
-      ReviewResponse aiResponse,
-      boolean isFirstReview,
-      DiffStats diffStats,
-      List<Finding> unresolvedPrevious,
-      List<ReviewResult.CiCheck> offendingCiChecks) {
-    return buildResult(
-        aiResponse,
-        isFirstReview,
-        diffStats,
-        List.of(),
-        unresolvedPrevious,
-        offendingCiChecks,
-        false,
-        List.of());
-  }
-
-  ReviewResult buildResult(
-      ReviewResponse aiResponse,
-      boolean isFirstReview,
-      DiffStats diffStats,
-      List<Finding> unresolvedPrevious) {
-    return buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, List.of());
-  }
 }
