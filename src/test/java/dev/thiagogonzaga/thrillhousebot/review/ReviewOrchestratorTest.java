@@ -4091,6 +4091,36 @@ class ReviewOrchestratorTest {
       assertTrue(body.contains("CI status could not be read"));
       assertTrue(body.contains("Additionally, No new issues in this revision"));
     }
+
+    @Test
+    void shouldDiscloseUnreadableCiWithoutUnresolvedFindingsInTheFollowUpBody() {
+      // The unreadable-CI body with no unresolved previous findings: the "Additionally, …" line is
+      // omitted (covers the unresolved == 0 branch).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(),
+              List.of(),
+              0,
+              true);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("CI status could not be read"));
+      assertFalse(body.contains("Additionally,"));
+    }
   }
 
   @Nested
