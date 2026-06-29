@@ -178,40 +178,49 @@ public class ReviewOrchestrator {
       reviewPublisher.postReview(
           auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, lineResolver);
 
-      // The review and its comments are on the PR now. Conclude the check run only after they post,
-      // so a posting failure takes the failure path (check run marked failed + retry notice) rather
-      // than leaving a concluded — possibly green — check run with no review posted (#254).
+      // The review and its comments are on the PR now (#254). Everything past this point is
+      // best-effort and independent: each step runs in isolation so one failure can't abort the
+      // rest. In particular a failure in an earlier step must not skip the session completion and
+      // broadcast, which would otherwise leave the session stuck IN_PROGRESS in the dashboard even
+      // though the review was posted (#253/#254 follow-up).
       resultSurfaced = true;
-      try {
-        checkRunManager.updateCheckRun(
-            new CheckRunManager.CheckRunUpdate(
-                auth,
-                req.owner(),
-                req.repo(),
-                checkRunId,
-                CHECK_STATUS_COMPLETED,
-                conclusion,
-                checkTitle,
-                checkSummary,
-                sessionUrl(session)));
-      } catch (RuntimeException checkRunError) {
-        // The review is already posted; concluding the check run is best-effort from here. Keep the
-        // posted review and let the session complete rather than discarding them (#254).
-        Log.warnf(
-            checkRunError,
-            "Review posted but the check run could not be concluded for %s/%s #%d",
-            req.owner(),
-            req.repo(),
-            req.prNumber());
-      }
-
-      reviewPublisher.resolveAddressedThreads(
-          auth, req, previousAiResponseJson, inlineComments, aiResponse.previousFindingsStatus());
-
-      reviewPublisher.applyLabels(auth, req, result, aiResponse, ctx);
-
-      applyReviewResult(session, result);
-      broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session));
+      final var doneReq = req;
+      final var concludedCheckRunId = checkRunId;
+      runPostResultStep(
+          doneReq,
+          "conclude the check run",
+          () ->
+              checkRunManager.updateCheckRun(
+                  new CheckRunManager.CheckRunUpdate(
+                      auth,
+                      doneReq.owner(),
+                      doneReq.repo(),
+                      concludedCheckRunId,
+                      CHECK_STATUS_COMPLETED,
+                      conclusion,
+                      checkTitle,
+                      checkSummary,
+                      sessionUrl(session))));
+      runPostResultStep(
+          doneReq,
+          "resolve addressed threads",
+          () ->
+              reviewPublisher.resolveAddressedThreads(
+                  auth,
+                  doneReq,
+                  previousAiResponseJson,
+                  inlineComments,
+                  aiResponse.previousFindingsStatus()));
+      runPostResultStep(
+          doneReq,
+          "apply labels",
+          () -> reviewPublisher.applyLabels(auth, doneReq, result, aiResponse, ctx));
+      runPostResultStep(
+          doneReq, "mark the session completed", () -> applyReviewResult(session, result));
+      runPostResultStep(
+          doneReq,
+          "broadcast completion",
+          () -> broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session)));
 
       Log.infof(
           "Review complete for %s/%s #%d: %d findings, state=%s",
@@ -227,6 +236,27 @@ public class ReviewOrchestrator {
       } else {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
+    }
+  }
+
+  /**
+   * Runs one post-result step in isolation. Once the review and its comments are on the PR the
+   * remaining work — check-run conclusion, thread resolution, labels, session completion,
+   * completion broadcast — is best-effort: a failure in one step is logged and the others still
+   * run, so a hiccup can't leave the session stuck IN_PROGRESS or swallow the completion broadcast.
+   * The review is already surfaced, so none of these failures should flip it to FAILED.
+   */
+  private void runPostResultStep(ReviewRequest req, String step, Runnable action) {
+    try {
+      action.run();
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Review for %s/%s #%d was posted, but post-result step '%s' failed",
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          step);
     }
   }
 
