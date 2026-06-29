@@ -196,7 +196,7 @@ class ReviewOrchestratorTest {
         authClient,
         broadcaster,
         sessionPersistence,
-        new CiStatusEvaluator(checkRunClient, prClient),
+        new CiStatusEvaluator(checkRunClient, prClient, BOT_ID),
         new CheckRunManager(checkRunClient),
         new ReviewContextLoader(
             prClient,
