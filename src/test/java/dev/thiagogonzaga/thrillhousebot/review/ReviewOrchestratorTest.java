@@ -1068,6 +1068,9 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+        // The failure is in an EARLY post-result step (concluding the check run); the later
+        // completion step must still run and broadcast — started + completed both fire.
+        verify(broadcaster, times(2)).broadcast(any());
         verify(commentClient, never())
             .createComment(
                 anyString(),
@@ -1143,7 +1146,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void postResultPersistenceFailureStillBroadcastsCompletionAndDoesNotFail() {
+    void postResultPersistenceFailureDoesNotBroadcastAFalseCompletion() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -1172,11 +1175,10 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        // Marking the session completed fails (DB hiccup) AFTER the review is posted. This must not
-        // skip the completion broadcast nor flip the posted review to FAILED — the post-result
-        // steps
-        // are independent and best-effort, so the session still reaches a terminal state for the
-        // dashboard rather than being stuck IN_PROGRESS (#253/#254 follow-up).
+        // The completion persist fails (DB hiccup) AFTER the review is posted. The completed event
+        // must NOT be broadcast in that case: persist-then-broadcast is one step, so a failed write
+        // skips the broadcast and live state can't claim "completed" over a row still IN_PROGRESS
+        // (which would revert on reload). The review still stands and the session is never FAILED.
         doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
 
         orchestrator.review(
@@ -1196,8 +1198,10 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        // started + completed both fire despite the persistence failure between them.
-        verify(broadcaster, times(2)).broadcast(any());
+        // Only the initial "started" event fired; no "completed" broadcast, because the persist
+        // that
+        // would back it threw — DB and live state stay consistent rather than diverging.
+        verify(broadcaster, times(1)).broadcast(any());
       }
     }
 
@@ -1463,6 +1467,10 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("could not be completed")));
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+        // The apply-labels failure is an early post-result step; its isolation must not abort the
+        // later completion step — the session still completes and broadcasts (started + completed).
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        verify(broadcaster, times(2)).broadcast(any());
       }
     }
 
@@ -4120,6 +4128,40 @@ class ReviewOrchestratorTest {
       var body = captor.getValue().body();
       assertTrue(body.contains("CI status could not be read"));
       assertFalse(body.contains("Additionally,"));
+    }
+
+    @Test
+    void shouldDiscloseBothOffendingChecksAndUnreadableCiWhenHeldByEach() {
+      // A review can be held by BOTH an offending check and an unreadable CI source at once; the
+      // body
+      // must disclose each independently, not drop the unreadable note because offending is
+      // present.
+      var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(),
+              offending,
+              0,
+              true);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("some checks are still pending or failed:"));
+      assertTrue(body.contains("- Check **build** is failed"));
+      assertTrue(body.contains("CI status could not be read"));
     }
   }
 

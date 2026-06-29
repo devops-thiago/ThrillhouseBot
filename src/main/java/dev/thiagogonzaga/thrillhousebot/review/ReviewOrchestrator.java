@@ -218,11 +218,18 @@ public class ReviewOrchestrator {
           "apply labels",
           () -> reviewPublisher.applyLabels(auth, doneReq, result, aiResponse, ctx));
       runPostResultStep(
-          doneReq, "mark the session completed", () -> applyReviewResult(session, result));
-      runPostResultStep(
           doneReq,
-          "broadcast completion",
-          () -> broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session)));
+          "complete the session",
+          () -> {
+            // Persist the completed status FIRST, then broadcast: the broadcast must not fire if
+            // the
+            // persistence write throws, or the dashboard would show a "completed" event over a row
+            // still IN_PROGRESS (and revert to IN_PROGRESS on reload). Keeping them in one step
+            // means
+            // a failed write skips the broadcast, so persisted and live state stay consistent.
+            applyReviewResult(session, result);
+            broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session));
+          });
 
       Log.infof(
           "Review complete for %s/%s #%d: %d findings, state=%s",
