@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 
 class PrSummaryGeneratorTest {
 
-  private final PrSummaryGenerator generator = new PrSummaryGenerator();
+  private final PrSummaryGenerator generator = new PrSummaryGenerator(true);
 
   @Test
   void shouldGenerateSummaryWithFindings() {
@@ -489,6 +489,21 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("```mermaid\nflowchart TD"));
     assertTrue(summary.contains("A[Start] --> B[End]"));
     assertTrue(summary.contains("</details>"));
+  }
+
+  @Test
+  void shouldNotRenderDiagramWhenFeatureDisabledEvenIfModelVolunteersOne() {
+    // The kill switch must hold at render too: a model that returns a walkthrough_diagram the
+    // prompt never requested must not produce a Control-Flow Diagram block when the feature is off.
+    var disabled = new PrSummaryGenerator(false);
+    var aiSummary = summaryWithDiagram("flowchart TD\n  A[Start] --> B[End]");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = disabled.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+    assertFalse(summary.contains("```mermaid"));
   }
 
   @Test
