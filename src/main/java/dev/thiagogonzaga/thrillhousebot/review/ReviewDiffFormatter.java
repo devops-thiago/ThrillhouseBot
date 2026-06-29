@@ -130,8 +130,17 @@ public class ReviewDiffFormatter {
    * dropped, so the resolver never anchors a comment to a file outside review scope.
    */
   Map<String, String> patchesByFile(List<GitHubPullRequestClient.FileDiff> files) {
+    return patchesByReviewableFiles(reviewableFiles(files));
+  }
+
+  /**
+   * Same as {@link #patchesByFile} but for a list already filtered to reviewable files, so the
+   * ignore-glob filter is not walked a second time when the caller has already computed it.
+   */
+  Map<String, String> patchesByReviewableFiles(
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
     var patches = new HashMap<String, String>();
-    for (var file : reviewableFiles(files)) {
+    for (var file : reviewableFiles) {
       if (file.patch() != null && !file.patch().isBlank()) {
         patches.put(file.filename(), file.patch());
       }

@@ -52,6 +52,24 @@ class ReviewDiffFormatterTest {
     assertTrue(formatter.isIgnored("yarn.lock"));
   }
 
+  @Test
+  void patchesByReviewableFilesTrustsTheCallersFilterAndDropsBlankPatches() {
+    var formatter = new ReviewDiffFormatter(List.of("**/*.lock"), 5000);
+    var withPatch = file("src/A.java", "modified", 1, 0, "@@ -1 +1 @@\n+x");
+    var noPatch = file("bin/img.png", "modified", 0, 0, null);
+    // Passed in already-filtered: the method must not re-apply the ignore glob (so deps.lock is
+    // kept here even though reviewableFiles would have dropped it upstream) and must skip blank
+    // patches.
+    var ignoredButPassed = file("deps.lock", "modified", 1, 0, "@@ -1 +1 @@\n+y");
+
+    var patches = formatter.patchesByReviewableFiles(List.of(withPatch, noPatch, ignoredButPassed));
+
+    assertEquals(2, patches.size());
+    assertTrue(patches.containsKey("src/A.java"));
+    assertTrue(patches.containsKey("deps.lock"));
+    assertFalse(patches.containsKey("bin/img.png"));
+  }
+
   @Nested
   class IgnoredFiles {
 
