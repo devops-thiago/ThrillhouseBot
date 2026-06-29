@@ -170,37 +170,44 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
-      if (result.offendingCiChecks().isEmpty()) {
+      if (!result.ciHoldsApproval()) {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       } else {
         sb.append(
-            "No new issues found in this PR, but the review cannot be approved until the required checks are passing.\n\n");
+            "No new issues found in this PR, but the review cannot be approved until required CI is confirmed green.\n\n");
       }
     }
   }
 
   private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
-    if (result.offendingCiChecks().isEmpty()) {
-      return;
+    if (!result.offendingCiChecks().isEmpty()) {
+      sb.append("### ⚠️ Required CI Checks Status\n");
+      sb.append("Some required checks are still pending or have failed:\n\n");
+      sb.append("| Check | Type | Status | Detail |\n");
+      sb.append("|-------|------|--------|--------|\n");
+      for (var check : result.offendingCiChecks()) {
+        String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
+        String detail = check.conclusion() != null ? check.conclusion() : "-";
+        sb.append("| **")
+            .append(escapeTableCell(check.name()))
+            .append("** | ")
+            .append(escapeTableCell(check.type()))
+            .append(" | ")
+            .append(statusEmoji)
+            .append(" | ")
+            .append(escapeTableCell(detail))
+            .append(" |\n");
+      }
+      sb.append("\n");
     }
-    sb.append("### ⚠️ Required CI Checks Status\n");
-    sb.append("Some required checks are still pending or have failed:\n\n");
-    sb.append("| Check | Type | Status | Detail |\n");
-    sb.append("|-------|------|--------|--------|\n");
-    for (var check : result.offendingCiChecks()) {
-      String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
-      String detail = check.conclusion() != null ? check.conclusion() : "-";
-      sb.append("| **")
-          .append(escapeTableCell(check.name()))
-          .append("** | ")
-          .append(escapeTableCell(check.type()))
-          .append(" | ")
-          .append(statusEmoji)
-          .append(" | ")
-          .append(escapeTableCell(detail))
-          .append(" |\n");
+    // Unreadable CI is a distinct hold from an offending check: render it as its own note rather
+    // than as a counterfeit row in the required-checks table (#253/#6).
+    if (result.ciUnreadable()) {
+      sb.append("### ⚠️ CI Status Unavailable\n");
+      sb.append(
+          "The CI status could not be read from GitHub, so approval is held until it can be"
+              + " confirmed.\n\n");
     }
-    sb.append("\n");
   }
 
   /** A clean review celebrates only when nothing from earlier rounds is still unresolved. */

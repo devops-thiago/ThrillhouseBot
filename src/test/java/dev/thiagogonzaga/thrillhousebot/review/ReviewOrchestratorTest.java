@@ -666,6 +666,31 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void unreadableCiHoldsApprovalAndIsDisclosedAsItsOwnSignal() {
+      // #6: an unreadable CI source holds approval and is surfaced as a first-class signal — not as
+      // a synthetic "CI status unavailable" check smuggled into the offending list.
+      var clean = new ReviewResponse(List.of(), List.of(), null);
+      var result =
+          verdictBuilder.buildResult(
+              clean,
+              true,
+              new VerdictBuilder.DiffStats(1, 1, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              true, // ciUnreadable
+              List.of());
+
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+      assertTrue(result.ciUnreadable());
+      assertTrue(result.offendingCiChecks().isEmpty());
+      assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+      assertEquals("neutral", VerdictBuilder.conclusionForResult(result));
+      assertTrue(
+          VerdictBuilder.checkSummaryForResult(result).contains("CI status could not be read"));
+    }
+
+    @Test
     void shouldNotCelebrateWhenCiChecksAreOffendingDespiteNoFindings() {
       // No findings and nothing unresolved, but a required check is failing: the bot's own check
       // run must not show the green ✅ title nor the zero-issues celebration summary.
@@ -3178,6 +3203,7 @@ class ReviewOrchestratorTest {
           List.of(), // changedFiles
           List.of(),
           List.of(),
+          false, // ciUnreadable
           backstop);
     }
 

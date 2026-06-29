@@ -163,11 +163,13 @@ public class ReviewOrchestrator {
           ciStatusEvaluator
               .resolveRequiredContexts(auth, req.owner(), req.repo(), req.prNumber())
               .orElse(null);
-      List<ReviewResult.CiCheck> offendingCiChecks =
+      CiStatusEvaluator.CiEvaluation ciEvaluation =
           ciStatusEvaluator.evaluateCiChecks(
               auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
 
-      var result = verdictBuilder.build(ctx, aiResponse, offendingCiChecks);
+      var result =
+          verdictBuilder.build(
+              ctx, aiResponse, ciEvaluation.offendingChecks(), ciEvaluation.unreadable());
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
