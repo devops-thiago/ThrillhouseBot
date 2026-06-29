@@ -119,9 +119,12 @@ public class ReviewContextLoader {
         buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
     var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
     // Built once here and shared via the context: the finding pipeline (anchor backfill), the
-    // verdict backstop, and the publisher's inline comments all resolve against the same diff.
+    // verdict backstop, and the publisher's inline comments all resolve against the same diff. The
+    // ignore-glob filter runs once: the already-filtered list feeds the line resolver directly
+    // instead of patchesByFile re-walking it.
     var reviewableFiles = diffFormatter.reviewableFiles(files);
-    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(files));
+    var lineResolver =
+        new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewableFiles));
 
     var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
     // Two independent flags decouple UX presentation from context loading:
