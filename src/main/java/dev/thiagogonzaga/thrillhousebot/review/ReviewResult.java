@@ -75,60 +75,6 @@ public record ReviewResult(
         false);
   }
 
-  /** Convenience constructor for results with no omitted files (a complete diff). */
-  public ReviewResult(
-      List<Finding> findings,
-      int criticalCount,
-      int highCount,
-      int mediumCount,
-      int lowCount,
-      RiskLevel highestRisk,
-      ReviewState reviewState,
-      boolean isFirstReview,
-      String summaryMarkdown,
-      List<PreviousFindingStatus> previousStatuses,
-      List<CiCheck> offendingCiChecks) {
-    this(
-        findings,
-        criticalCount,
-        highCount,
-        mediumCount,
-        lowCount,
-        highestRisk,
-        reviewState,
-        isFirstReview,
-        summaryMarkdown,
-        previousStatuses,
-        offendingCiChecks,
-        0);
-  }
-
-  public ReviewResult(
-      List<Finding> findings,
-      int criticalCount,
-      int highCount,
-      int mediumCount,
-      int lowCount,
-      RiskLevel highestRisk,
-      ReviewState reviewState,
-      boolean isFirstReview,
-      String summaryMarkdown,
-      List<PreviousFindingStatus> previousStatuses) {
-    this(
-        findings,
-        criticalCount,
-        highCount,
-        mediumCount,
-        lowCount,
-        highestRisk,
-        reviewState,
-        isFirstReview,
-        summaryMarkdown,
-        previousStatuses,
-        List.of(),
-        0);
-  }
-
   public boolean hasIssues() {
     return !findings.isEmpty();
   }

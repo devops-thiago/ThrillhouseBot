@@ -29,7 +29,18 @@ class ReviewResultTest {
 
     var result =
         new ReviewResult(
-            findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of());
+            findings,
+            0,
+            0,
+            0,
+            1,
+            RiskLevel.LOW,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
 
     assertTrue(result.hasIssues());
   }
@@ -37,7 +48,8 @@ class ReviewResultTest {
   @Test
   void hasIssuesShouldReturnFalseWhenFindingsEmpty() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     assertFalse(result.hasIssues());
   }
@@ -61,7 +73,9 @@ class ReviewResultTest {
             ReviewState.REQUEST_CHANGES,
             false,
             "",
-            List.of());
+            List.of(),
+            List.of(),
+            0);
 
     assertEquals(3, result.totalFindings());
   }
@@ -69,7 +83,8 @@ class ReviewResultTest {
   @Test
   void totalFindingsShouldReturnZeroForEmptyList() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     assertEquals(0, result.totalFindings());
   }
@@ -92,7 +107,9 @@ class ReviewResultTest {
             ReviewState.COMMENT,
             true,
             "",
-            mutableStatuses);
+            mutableStatuses,
+            List.of(),
+            0);
 
     // Mutate the original lists — the record's lists should be unaffected
     mutableFindings.add(new Finding(RiskLevel.HIGH, "g", 2, "x", "y", null, null));
@@ -108,14 +125,17 @@ class ReviewResultTest {
   void compactConstructorShouldDeriveNullReviewStateFromHighestRisk() {
     var findings = List.of(new Finding(RiskLevel.HIGH, "f", 1, "t", "d", null, null));
 
-    var result = new ReviewResult(findings, 0, 1, 0, 0, RiskLevel.HIGH, null, true, "", List.of());
+    var result =
+        new ReviewResult(
+            findings, 0, 1, 0, 0, RiskLevel.HIGH, null, true, "", List.of(), List.of(), 0);
 
     assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
   }
 
   @Test
   void compactConstructorShouldDeriveApproveWhenStateAndRiskAreNull() {
-    var result = new ReviewResult(List.of(), 0, 0, 0, 0, null, null, true, "", List.of());
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, null, true, "", List.of(), List.of(), 0);
 
     assertEquals(ReviewState.APPROVE, result.reviewState());
   }

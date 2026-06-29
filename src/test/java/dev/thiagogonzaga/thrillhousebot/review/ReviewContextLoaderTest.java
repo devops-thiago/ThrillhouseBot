@@ -49,6 +49,7 @@ class ReviewContextLoaderTest {
   @Mock private ReviewSessionPersistence sessionPersistence;
 
   private ReviewContextLoader loader;
+  private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
 
   @BeforeEach
   void setUp() {
@@ -60,7 +61,7 @@ class ReviewContextLoaderTest {
             commentClient,
             instructionsResolver,
             projectStackResolver,
-            new ReviewDiffFormatter(List.of(), 5000),
+            diffFormatter,
             labeler,
             followUpAnalyzer,
             sessionPersistence,
@@ -72,13 +73,13 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnNoChangesForNullList() {
-      var result = loader.buildDiffString(null);
+      var result = diffFormatter.buildDiffString(null);
       assertEquals("(no changes detected)", result);
     }
 
     @Test
     void shouldReturnNoChangesForEmptyList() {
-      var result = loader.buildDiffString(Collections.emptyList());
+      var result = diffFormatter.buildDiffString(Collections.emptyList());
       assertEquals("(no changes detected)", result);
     }
 
@@ -94,7 +95,7 @@ class ReviewContextLoaderTest {
                   8,
                   "@@ -1,3 +1,5 @@\n unchanged\n+added line\n+another line"));
 
-      var result = loader.buildDiffString(files);
+      var result = diffFormatter.buildDiffString(files);
 
       assertTrue(result.contains("## Overview: 1 files (+5 -3)"));
       assertTrue(result.contains("### src/main/Foo.java (modified, +5 -3)"));
@@ -108,7 +109,7 @@ class ReviewContextLoaderTest {
           List.of(
               new GitHubPullRequestClient.FileDiff("binary-file.png", "modified", 0, 0, 0, null));
 
-      var result = loader.buildDiffString(files);
+      var result = diffFormatter.buildDiffString(files);
 
       assertTrue(result.contains("binary-file.png (modified, +0 -0)"));
       assertFalse(result.contains("```diff"));
@@ -122,7 +123,7 @@ class ReviewContextLoaderTest {
               new GitHubPullRequestClient.FileDiff("b.java", "added", 25, 0, 25, "@@ patch b"),
               new GitHubPullRequestClient.FileDiff("c.java", "modified", 3, 5, 8, null));
 
-      var result = loader.buildDiffString(files);
+      var result = diffFormatter.buildDiffString(files);
 
       assertTrue(result.contains("## Overview: 3 files (+38 -7)"));
       assertTrue(result.contains("a.java"));
@@ -136,7 +137,7 @@ class ReviewContextLoaderTest {
           List.of(
               new GitHubPullRequestClient.FileDiff("renamed-only.txt", "renamed", 0, 0, 0, null));
 
-      var result = loader.buildDiffString(files);
+      var result = diffFormatter.buildDiffString(files);
 
       assertTrue(result.contains("## Overview: 1 files (+0 -0)"));
       assertTrue(result.contains("renamed-only.txt (renamed, +0 -0)"));
@@ -148,31 +149,35 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnSafeMessageForNullBase() {
-      var result = loader.buildBaseComparison("auth", "owner", "repo", null, "abcdefgh");
+      var result =
+          loader.buildBaseComparisonWithStats("auth", "owner", "repo", null, "abcdefgh").text();
       assertEquals("(regression comparison unavailable — refs too short)", result);
     }
 
     @Test
     void shouldReturnSafeMessageForNullHead() {
-      var result = loader.buildBaseComparison("auth", "owner", "repo", "abcdefgh", null);
+      var result =
+          loader.buildBaseComparisonWithStats("auth", "owner", "repo", "abcdefgh", null).text();
       assertEquals("(regression comparison unavailable — refs too short)", result);
     }
 
     @Test
     void shouldReturnSafeMessageForShortBaseSha() {
-      var result = loader.buildBaseComparison("auth", "owner", "repo", "abc", "abcdefgh");
+      var result =
+          loader.buildBaseComparisonWithStats("auth", "owner", "repo", "abc", "abcdefgh").text();
       assertEquals("(regression comparison unavailable — refs too short)", result);
     }
 
     @Test
     void shouldReturnSafeMessageForShortHeadSha() {
-      var result = loader.buildBaseComparison("auth", "owner", "repo", "abcdefgh", "def");
+      var result =
+          loader.buildBaseComparisonWithStats("auth", "owner", "repo", "abcdefgh", "def").text();
       assertEquals("(regression comparison unavailable — refs too short)", result);
     }
 
     @Test
     void shouldReturnSafeMessageWhenBothNull() {
-      var result = loader.buildBaseComparison("auth", "owner", "repo", null, null);
+      var result = loader.buildBaseComparisonWithStats("auth", "owner", "repo", null, null).text();
       assertEquals("(regression comparison unavailable — refs too short)", result);
     }
 
@@ -183,7 +188,10 @@ class ReviewContextLoaderTest {
               any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(emptyComparison);
 
-      var result = loader.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
+      var result =
+          loader
+              .buildBaseComparisonWithStats("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn")
+              .text();
 
       assertEquals("(no changes between abcdefg and hijklmn)", result);
     }
@@ -195,7 +203,10 @@ class ReviewContextLoaderTest {
               any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(nullFilesComparison);
 
-      var result = loader.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
+      var result =
+          loader
+              .buildBaseComparisonWithStats("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn")
+              .text();
 
       assertEquals("(no changes between abcdefg and hijklmn)", result);
     }
@@ -212,7 +223,10 @@ class ReviewContextLoaderTest {
               any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(comparison);
 
-      var result = loader.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
+      var result =
+          loader
+              .buildBaseComparisonWithStats("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn")
+              .text();
 
       assertTrue(result.contains("## Changes between base and head"));
       assertTrue(result.contains("abcdefg..hijklmn: 2"));
@@ -234,7 +248,10 @@ class ReviewContextLoaderTest {
               any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(comparison);
 
-      var result = loader.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
+      var result =
+          loader
+              .buildBaseComparisonWithStats("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn")
+              .text();
 
       assertTrue(result.contains("src/Text.java"));
       assertFalse(result.contains("binary.bin"));
@@ -246,7 +263,10 @@ class ReviewContextLoaderTest {
               any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenThrow(new RuntimeException("API down"));
 
-      var result = loader.buildBaseComparison("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn");
+      var result =
+          loader
+              .buildBaseComparisonWithStats("Bearer tok", "owner", "repo", "abcdefgh", "hijklmn")
+              .text();
 
       assertEquals("(regression comparison unavailable)", result);
     }

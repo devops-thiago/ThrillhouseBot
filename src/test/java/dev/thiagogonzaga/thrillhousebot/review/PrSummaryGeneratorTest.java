@@ -41,7 +41,8 @@ class PrSummaryGeneratorTest {
 
     var fromConfig = new PrSummaryGenerator(config);
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary =
         fromConfig.generate(
@@ -59,7 +60,18 @@ class PrSummaryGeneratorTest {
 
     var result =
         new ReviewResult(
-            findings, 0, 1, 1, 0, RiskLevel.HIGH, ReviewState.REQUEST_CHANGES, true, "", List.of());
+            findings,
+            0,
+            1,
+            1,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
 
     var summary = generator.generate(3, 120, 45, List.of(), null, result);
 
@@ -85,7 +97,8 @@ class PrSummaryGeneratorTest {
             "Adds a user update endpoint with validation.",
             List.of("Description claims tests were added, but no test files changed", "  "));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
@@ -105,7 +118,8 @@ class PrSummaryGeneratorTest {
     // Only blank gaps must not render a section header with zero bullets
     var blankGapsSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, List.of(" ", ""));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     for (var summary :
         List.of(
@@ -121,7 +135,8 @@ class PrSummaryGeneratorTest {
   @Test
   void shouldNotRenderSignedZeroLineCounts() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(3, 169, 0, List.of(), null, result);
 
@@ -135,7 +150,8 @@ class PrSummaryGeneratorTest {
   void shouldNotIncludeDashboardLink() {
     // The dashboard deep-link lives on the check run (details_url), not in the PR comment
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     assertFalse(generator.generate(1, 0, 0, List.of(), null, result).contains("View in dashboard"));
   }
@@ -143,7 +159,8 @@ class PrSummaryGeneratorTest {
   @Test
   void shouldGenerateSummaryWithZeroFindings() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -154,7 +171,8 @@ class PrSummaryGeneratorTest {
   @Test
   void cleanReviewCelebratesInsideTheSummary() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -166,7 +184,8 @@ class PrSummaryGeneratorTest {
   void unresolvedStatusCasingDoesNotEnableCelebration() {
     var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "UNRESOLVED", "still"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses, List.of(), 0);
 
     assertFalse(
         generator.generate(1, 10, 2, List.of(), null, result).contains("coming up Thrillhouse"));
@@ -176,7 +195,8 @@ class PrSummaryGeneratorTest {
   void cleanReviewWithUnresolvedPreviousFindingsDoesNotCelebrate() {
     var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "Still there"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses, List.of(), 0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -188,7 +208,18 @@ class PrSummaryGeneratorTest {
     var findings = List.of(new Finding(RiskLevel.LOW, "src/A.java", 1, "Nit", "d", null, null));
     var result =
         new ReviewResult(
-            findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of());
+            findings,
+            0,
+            0,
+            0,
+            1,
+            RiskLevel.LOW,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -204,7 +235,8 @@ class PrSummaryGeneratorTest {
             new ReviewResult.PreviousFindingStatus(2, "unresolved", "Still broken"));
 
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses, List.of(), 0);
 
     var summary = generator.generate(1, 0, 0, List.of(), null, result);
 
@@ -224,7 +256,8 @@ class PrSummaryGeneratorTest {
             new ReviewResult.PreviousFindingStatus(3, "Justified", "Intentional"));
 
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses);
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses, List.of(), 0);
 
     var summary = generator.generate(1, 0, 0, List.of(), null, result);
 
@@ -255,7 +288,9 @@ class PrSummaryGeneratorTest {
             ReviewState.REQUEST_CHANGES,
             true,
             "",
-            List.of());
+            List.of(),
+            List.of(),
+            0);
 
     var summary = generator.generate(6, 0, 0, List.of(), null, result);
 
@@ -276,7 +311,7 @@ class PrSummaryGeneratorTest {
             new ReviewResult.CiCheck("test", "status", "pending", "pending"));
     var result =
         new ReviewResult(
-            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks, 0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -296,7 +331,18 @@ class PrSummaryGeneratorTest {
     var checks = List.of(new ReviewResult.CiCheck("lint", "status", "failing", "failure"));
     var result =
         new ReviewResult(
-            findings, 0, 0, 0, 1, RiskLevel.LOW, ReviewState.COMMENT, true, "", List.of(), checks);
+            findings,
+            0,
+            0,
+            0,
+            1,
+            RiskLevel.LOW,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            checks,
+            0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -314,7 +360,7 @@ class PrSummaryGeneratorTest {
         List.of(new ReviewResult.CiCheck("build | strict", "check-run", "failing", "failure"));
     var result =
         new ReviewResult(
-            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks, 0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -327,7 +373,7 @@ class PrSummaryGeneratorTest {
     var checks = List.of(new ReviewResult.CiCheck(null, "missing", "pending", null));
     var result =
         new ReviewResult(
-            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks);
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks, 0);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
@@ -347,7 +393,8 @@ class PrSummaryGeneratorTest {
             new ReviewResponse.FileSummary("src/A.java", "Adds null guard to parse()"),
             new ReviewResponse.FileSummary("src/B.java", "New cache wrapper"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(2, 10, 1, changedFiles, aiSummary, result);
 
@@ -363,7 +410,8 @@ class PrSummaryGeneratorTest {
     // AI summarized a different file; the changed file still appears, with "-" for its summary.
     var aiSummary = summaryWithFiles(new ReviewResponse.FileSummary("src/Other.java", "unrelated"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
 
@@ -373,7 +421,8 @@ class PrSummaryGeneratorTest {
   @Test
   void shouldOmitChangedFilesSectionWhenNoFiles() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(0, 0, 0, List.of(), summaryWithFiles(), result);
 
@@ -388,7 +437,8 @@ class PrSummaryGeneratorTest {
       changedFiles.add(new PrSummaryGenerator.ChangedFile("src/F" + i + ".java", "modified"));
     }
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(total, 0, 0, changedFiles, null, result);
 
@@ -405,7 +455,8 @@ class PrSummaryGeneratorTest {
     var aiSummary =
         summaryWithFiles(new ReviewResponse.FileSummary("src/a|b.java", "handles a | b case"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
 
@@ -419,7 +470,8 @@ class PrSummaryGeneratorTest {
     var aiSummary =
         summaryWithFiles(new ReviewResponse.FileSummary("src/A.java", "first line\nsecond line"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
 
@@ -444,7 +496,8 @@ class PrSummaryGeneratorTest {
             new PrSummaryGenerator.ChangedFile("i", "copied"),
             new PrSummaryGenerator.ChangedFile("j", "CHANGED"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(10, 0, 0, changedFiles, null, result);
 
@@ -463,7 +516,8 @@ class PrSummaryGeneratorTest {
   @Test
   void shouldOmitChangedFilesSectionWhenChangedFilesNull() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(0, 0, 0, null, null, result);
 
@@ -487,7 +541,8 @@ class PrSummaryGeneratorTest {
             new ReviewResponse.FileSummary("src/A.java", "second ignored"),
             new ReviewResponse.FileSummary("src/B.java", "b note"));
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(2, 1, 0, changedFiles, aiSummary, result);
 
@@ -505,7 +560,8 @@ class PrSummaryGeneratorTest {
   void shouldRenderWalkthroughDiagramAsCollapsibleMermaidBlock() {
     var aiSummary = summaryWithDiagram("flowchart TD\n  A[Start] --> B[End]");
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
@@ -550,7 +606,8 @@ class PrSummaryGeneratorTest {
     var disabled = new PrSummaryGenerator(false);
     var aiSummary = summaryWithDiagram("flowchart TD\n  A[Start] --> B[End]");
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = disabled.generate(1, 5, 0, List.of(), aiSummary, result);
 
@@ -561,7 +618,8 @@ class PrSummaryGeneratorTest {
   @Test
   void shouldOmitDiagramSectionWhenBlankOrNull() {
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     for (var aiSummary : List.of(summaryWithDiagram(null), summaryWithDiagram("   "))) {
       var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
@@ -575,7 +633,8 @@ class PrSummaryGeneratorTest {
     // A model that ignores the "no fences" rule and wraps the source must not escape our block.
     var aiSummary = summaryWithDiagram("```mermaid\nflowchart TD\n  A --> B\n```");
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
@@ -590,7 +649,8 @@ class PrSummaryGeneratorTest {
     // Prose that is not a Mermaid diagram would render as a broken block, so it is dropped.
     var aiSummary = summaryWithDiagram("This change refactors the parser and adds a cache.");
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
@@ -602,7 +662,8 @@ class PrSummaryGeneratorTest {
     var huge = "flowchart TD\n" + "  A --> B\n".repeat(PrSummaryGenerator.MAX_DIAGRAM_CHARS);
     var aiSummary = summaryWithDiagram(huge);
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
@@ -615,7 +676,8 @@ class PrSummaryGeneratorTest {
     // the tag leaves an empty string, which must be dropped rather than rendered.
     var aiSummary = summaryWithDiagram("```mermaid```");
     var result =
-        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 

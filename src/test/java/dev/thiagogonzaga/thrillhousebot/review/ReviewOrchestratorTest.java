@@ -243,7 +243,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertNotNull(result);
       assertTrue(result.findings().isEmpty());
@@ -260,7 +267,14 @@ class ReviewOrchestratorTest {
       // A clean review that would APPROVE, but 7 files were omitted by the line budget.
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(120, 4000, 4000, 7), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       // The verdict is held back from APPROVE — a partial review must not gate-approve the PR...
       assertEquals(ReviewState.COMMENT, result.reviewState());
@@ -277,7 +291,14 @@ class ReviewOrchestratorTest {
       // COMMENT, but a follow-up posts no summary comment to carry the truncation banner (#245).
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(120, 4000, 4000, 7), List.of());
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
       assertEquals(ReviewState.COMMENT, result.reviewState());
 
       reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
@@ -362,7 +383,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertNotNull(result);
       assertTrue(result.findings().isEmpty());
@@ -389,7 +417,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(1, result.criticalCount());
       assertEquals(RiskLevel.CRITICAL, result.highestRisk());
@@ -414,7 +449,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(1, result.totalFindings());
       assertEquals(1, result.criticalCount());
@@ -441,7 +483,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(1, result.highCount());
       assertEquals(RiskLevel.HIGH, result.highestRisk());
@@ -466,7 +515,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(1, result.mediumCount());
       assertEquals(RiskLevel.MEDIUM, result.highestRisk());
@@ -491,7 +547,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(1, result.lowCount());
       assertEquals(RiskLevel.LOW, result.highestRisk());
@@ -513,7 +576,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(4, result.totalFindings());
       assertEquals(1, result.criticalCount());
@@ -548,7 +618,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(2, result.previousStatuses().size());
       verify(followUpAnalyzer).toStatuses(aiStatuses);
@@ -569,7 +646,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(4, 120, 45), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(4, 120, 45),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertTrue(result.summaryMarkdown().contains("Test summary content"));
       verify(summaryGenerator).generate(eq(4), eq(120), eq(45), any(), any(), any());
@@ -583,7 +667,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals("Clean summary with celebration", result.summaryMarkdown());
       verify(summaryGenerator).generate(eq(0), eq(0), eq(0), any(), any(), any());
@@ -607,7 +698,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, true, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(1, result.lowCount());
       assertEquals(RiskLevel.LOW, result.highestRisk());
@@ -621,7 +719,8 @@ class ReviewOrchestratorTest {
     @Test
     void checkSummaryForResultShouldUseZeroIssuesMessageWhenClean() {
       var result =
-          new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
       String summary = VerdictBuilder.checkSummaryForResult(result);
 
@@ -642,7 +741,9 @@ class ReviewOrchestratorTest {
               ReviewState.REQUEST_CHANGES,
               true,
               "",
-              List.of());
+              List.of(),
+              List.of(),
+              0);
 
       String summary = VerdictBuilder.checkSummaryForResult(result);
 
@@ -652,7 +753,8 @@ class ReviewOrchestratorTest {
     @Test
     void checkTitleForResultShouldAppendCheckmarkWhenClean() {
       var result =
-          new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
       String title = VerdictBuilder.checkTitleForResult(result);
 
@@ -703,7 +805,7 @@ class ReviewOrchestratorTest {
       var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
       var result =
           new ReviewResult(
-              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), offending);
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), offending, 0);
 
       assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
       String summary = VerdictBuilder.checkSummaryForResult(result);
@@ -2235,7 +2337,18 @@ class ReviewOrchestratorTest {
     void shouldReturnSuccessConclusionForApprovedReview() {
       var result =
           new ReviewResult(
-              List.of(), 0, 0, 0, 0, RiskLevel.LOW, ReviewState.APPROVE, true, "", List.of());
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              RiskLevel.LOW,
+              ReviewState.APPROVE,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              0);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
 
@@ -2255,7 +2368,9 @@ class ReviewOrchestratorTest {
               ReviewState.REQUEST_CHANGES,
               true,
               "",
-              List.of());
+              List.of(),
+              List.of(),
+              0);
 
       assertEquals("failure", VerdictBuilder.conclusionForResult(result));
     }
@@ -2264,7 +2379,18 @@ class ReviewOrchestratorTest {
     void shouldReturnNeutralConclusionForCommentReview() {
       var result =
           new ReviewResult(
-              List.of(), 0, 0, 1, 0, RiskLevel.MEDIUM, ReviewState.COMMENT, true, "", List.of());
+              List.of(),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              0);
 
       assertEquals("neutral", VerdictBuilder.conclusionForResult(result));
     }
@@ -2284,7 +2410,9 @@ class ReviewOrchestratorTest {
           state,
           true,
           "",
-          List.of());
+          List.of(),
+          List.of(),
+          0);
     }
 
     @Test
@@ -2398,7 +2526,9 @@ class ReviewOrchestratorTest {
               ReviewState.COMMENT,
               true,
               "",
-              List.of());
+              List.of(),
+              List.of(),
+              0);
       var resolver =
           new DiffLineResolver(
               Map.of(
@@ -2466,7 +2596,9 @@ class ReviewOrchestratorTest {
               ReviewState.REQUEST_CHANGES,
               false, // follow-up: no summary comment is posted
               "",
-              List.of());
+              List.of(),
+              List.of(),
+              0);
 
       reviewPublisher.postReview(
           "Bearer tok",
@@ -2494,7 +2626,8 @@ class ReviewOrchestratorTest {
     @Test
     void shouldApproveCleanPrFromPostReview() {
       var result =
-          new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
       reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
@@ -2516,7 +2649,8 @@ class ReviewOrchestratorTest {
     void shouldApproveCleanFollowUpWithCelebrationBody() {
       // Follow-up reviews post no summary, so the celebration stays in the approval body
       var result =
-          new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of());
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
 
       reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
@@ -2843,7 +2977,9 @@ class ReviewOrchestratorTest {
               ReviewState.REQUEST_CHANGES,
               true,
               "",
-              List.of());
+              List.of(),
+              List.of(),
+              0);
 
       orchestrator.applyReviewResult(session, result);
 
@@ -2870,7 +3006,8 @@ class ReviewOrchestratorTest {
       var session = new ReviewSession();
       session.id = 8L;
       var result =
-          new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
       orchestrator.applyReviewResult(session, result);
 
@@ -3045,7 +3182,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), unresolvedPrevious);
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              unresolvedPrevious,
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
       assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
@@ -3064,7 +3208,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), unresolvedPrevious);
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              unresolvedPrevious,
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
     }
@@ -3077,7 +3228,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
     }
@@ -3092,7 +3250,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of());
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
 
       assertEquals(ReviewState.APPROVE, result.reviewState());
       assertTrue(VerdictBuilder.checkTitleForResult(result).contains("✅"));
@@ -3112,7 +3277,9 @@ class ReviewOrchestratorTest {
               ReviewState.COMMENT,
               false,
               "",
-              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(),
+              0);
 
       reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
@@ -3136,7 +3303,9 @@ class ReviewOrchestratorTest {
               ReviewState.REQUEST_CHANGES,
               false,
               "",
-              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(),
+              0);
 
       reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
@@ -3162,7 +3331,8 @@ class ReviewOrchestratorTest {
               true,
               "",
               List.of(),
-              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
 
       reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
@@ -3185,7 +3355,8 @@ class ReviewOrchestratorTest {
               false,
               "",
               List.of(),
-              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)));
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
 
       reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
@@ -4005,7 +4176,14 @@ class ReviewOrchestratorTest {
 
       var result =
           verdictBuilder.buildResult(
-              aiResponse, false, new VerdictBuilder.DiffStats(0, 0, 0), List.of(), offending);
+              aiResponse,
+              false,
+              new VerdictBuilder.DiffStats(0, 0, 0),
+              List.of(),
+              List.of(),
+              offending,
+              false,
+              List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
     }
@@ -4028,7 +4206,8 @@ class ReviewOrchestratorTest {
               false,
               "",
               List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
-              offending);
+              offending,
+              0);
 
       reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
 
@@ -4148,7 +4327,18 @@ class ReviewOrchestratorTest {
     void shouldCoverCiCheckMethods() {
       var nullChecksResult =
           new ReviewResult(
-              List.of(), 0, 0, 0, 0, RiskLevel.LOW, ReviewState.APPROVE, true, "", List.of(), null);
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              RiskLevel.LOW,
+              ReviewState.APPROVE,
+              true,
+              "",
+              List.of(),
+              null,
+              0);
       assertTrue(nullChecksResult.offendingCiChecks().isEmpty());
       var failing = new ReviewResult.CiCheck("build", "check-run", "failing", "failure");
       var pending = new ReviewResult.CiCheck("lint", "status", "pending", "pending");
