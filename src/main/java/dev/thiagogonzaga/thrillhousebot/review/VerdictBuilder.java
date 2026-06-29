@@ -58,6 +58,14 @@ public class VerdictBuilder {
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
       List<ReviewResult.CiCheck> offendingCiChecks) {
+    return build(ctx, aiResponse, offendingCiChecks, false);
+  }
+
+  ReviewResult build(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewResponse aiResponse,
+      List<ReviewResult.CiCheck> offendingCiChecks,
+      boolean ciUnreadable) {
     var diffStats = DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles());
     var changedFiles = toChangedFiles(ctx.reviewableFiles());
     var unresolvedPrevious =
@@ -79,6 +87,7 @@ public class VerdictBuilder {
         changedFiles,
         unresolvedPrevious,
         offendingCiChecks,
+        ciUnreadable,
         backstopUnresolved);
   }
 
@@ -113,6 +122,10 @@ public class VerdictBuilder {
       return String.format(
           "No new issues found, but %d required CI check(s) are still pending or failing.",
           result.offendingCiChecks().size());
+    }
+    if (result.ciUnreadable()) {
+      return "No new issues found, but the CI status could not be read — holding approval until it"
+          + " can be confirmed.";
     }
     var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
@@ -159,6 +172,7 @@ public class VerdictBuilder {
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       List<Finding> unresolvedPrevious,
       List<ReviewResult.CiCheck> offendingCiChecks,
+      boolean ciUnreadable,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
     var tally = tallyFindings(aiResponse);
 
@@ -182,7 +196,9 @@ public class VerdictBuilder {
       state = ReviewState.COMMENT;
     }
 
-    if (state == ReviewState.APPROVE && !offendingCiChecks.isEmpty()) {
+    // CI holds approval back when a required check is offending OR a CI source could not be read at
+    // all — an unread source means we cannot confirm CI is green, so we fail closed (#253/#5).
+    if (state == ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
       state = ReviewState.COMMENT;
     }
 
@@ -208,7 +224,9 @@ public class VerdictBuilder {
                 isFirstReview,
                 "",
                 previousStatuses,
-                offendingCiChecks));
+                offendingCiChecks,
+                0,
+                ciUnreadable));
     if (diffStats.truncated()) {
       summaryMarkdown = ReviewResult.truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
     }
@@ -225,7 +243,8 @@ public class VerdictBuilder {
         summaryMarkdown,
         previousStatuses,
         offendingCiChecks,
-        diffStats.omittedFiles());
+        diffStats.omittedFiles(),
+        ciUnreadable);
   }
 
   /** Findings parsed from the model response, with per-severity counts and the highest risk. */
@@ -271,6 +290,7 @@ public class VerdictBuilder {
         List.of(),
         unresolvedPrevious,
         offendingCiChecks,
+        false,
         List.of());
   }
 

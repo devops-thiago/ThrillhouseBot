@@ -46,7 +46,6 @@ public class CiStatusEvaluator {
   private static final String CI_SUCCESS = "success";
   private static final String CI_PENDING = "pending";
   private static final String CI_FAILING = "failing";
-  private static final String CI_UNAVAILABLE = "CI status unavailable";
   private static final String THRILLHOUSEBOT_TOKEN = "thrillhousebot";
   private static final Set<String> PASSING_CONCLUSIONS = Set.of(CI_SUCCESS, "skipped", "neutral");
 
@@ -150,12 +149,21 @@ public class CiStatusEvaluator {
   }
 
   /**
-   * Returns only the <em>offending</em> CI checks on {@code commitSha} — those that are pending,
-   * failing, or (when required) missing entirely. Passing checks are deliberately excluded so the
-   * caller can gate APPROVE on a non-empty result; a successful required check is recorded in
-   * {@code seen} so it is not later mistaken for a missing one.
+   * The outcome of evaluating a commit's CI: the <em>offending</em> checks (pending, failing, or
+   * missing) and whether a CI source could not be read at all. Both hold the APPROVE decision back,
+   * but they are distinct concepts — unreadable is not a check — so the verdict and the rendered
+   * summary can treat them separately (#253/#6).
    */
-  List<ReviewResult.CiCheck> evaluateCiChecks(
+  record CiEvaluation(List<ReviewResult.CiCheck> offendingChecks, boolean unreadable) {}
+
+  /**
+   * Evaluates the CI checks on {@code commitSha}: the <em>offending</em> ones — pending, failing,
+   * or (when required) missing entirely — plus whether either CI source could not be read. Passing
+   * checks are deliberately excluded so the caller can gate APPROVE on a non-empty result; a
+   * successful required check is recorded in {@code seen} so it is not later mistaken for a missing
+   * one.
+   */
+  CiEvaluation evaluateCiChecks(
       String auth, String owner, String repo, String commitSha, List<String> requiredContexts) {
     var offending = new ArrayList<ReviewResult.CiCheck>();
     // Required contexts that reported in any state, so the missing-check pass does not re-flag a
@@ -189,15 +197,15 @@ public class CiStatusEvaluator {
 
     addMissingRequiredChecks(requiredContexts, seen, offending);
 
-    // Fail closed for the APPROVE decision (#253): in gate-all mode there is no required-context
-    // list to backfill, so a CI source we could not read (an exception or a null body) means we
-    // cannot confirm CI is green. Surface it as a pending check so the verdict holds to COMMENT
-    // instead of approving over CI we never saw (aligns with #217). Gate-specific mode is already
-    // safe — addMissingRequiredChecks flags any required context that did not report.
-    if (requiredContexts == null && (!checkRunsReadable || !statusReadable)) {
-      offending.add(new ReviewResult.CiCheck(CI_UNAVAILABLE, "unavailable", CI_PENDING, null));
-    }
-    return offending;
+    // Fail closed for the APPROVE decision (#253/#5): if either CI source could not be read (an
+    // exception or a null body — GitHub returns an empty list, never null, past the last page) we
+    // cannot confirm CI is green, so the verdict must not approve over CI we never saw (#217). This
+    // holds in BOTH gate modes: gate-specific is not automatically safe, because
+    // addMissingRequired-
+    // Checks only catches required contexts that did not report — a source going unread can still
+    // hide a required check's true state. Reported as a first-class signal, not a synthetic check.
+    boolean unreadable = !checkRunsReadable || !statusReadable;
+    return new CiEvaluation(offending, unreadable);
   }
 
   /**
