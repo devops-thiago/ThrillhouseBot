@@ -29,7 +29,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.PatternSyntaxException;
+import java.util.stream.Collectors;
 
 /**
  * Applies review-scoping rules from config: skip ignored file patterns and cap total diff lines
@@ -154,6 +156,18 @@ public class ReviewDiffFormatter {
 
   /** Like {@link #buildDiffString} but also reports how many files the line budget omitted. */
   FormattedDiff buildDiffStringWithStats(List<GitHubPullRequestClient.FileDiff> files) {
+    return buildDiffStringWithStats(files, reviewableFiles(files));
+  }
+
+  /**
+   * Like {@link #buildDiffStringWithStats(List)} but reuses an already-computed reviewable-file
+   * list instead of re-running the ignore-glob filter — the caller (the context loader) computes it
+   * once for the line resolver and the diff render alike, so the glob is walked a single time per
+   * review.
+   */
+  FormattedDiff buildDiffStringWithStats(
+      List<GitHubPullRequestClient.FileDiff> files,
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
     if (files == null || files.isEmpty()) {
       return new FormattedDiff("(no changes detected)", 0);
     }
@@ -168,7 +182,13 @@ public class ReviewDiffFormatter {
     var header =
         String.format(
             "## Overview: %d files (+%d -%d)%n%n", files.size(), totalAdditions, totalDeletions);
-    return formatWithLineBudget(header, files);
+    return formatWithLineBudget(header, files, namesOf(reviewableFiles));
+  }
+
+  private static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
+    return files.stream()
+        .map(GitHubPullRequestClient.FileDiff::filename)
+        .collect(Collectors.toSet());
   }
 
   /**
@@ -221,7 +241,7 @@ public class ReviewDiffFormatter {
           "(no changes between " + base.substring(0, 7) + " and " + head.substring(0, 7) + ")", 0);
     }
 
-    var reviewable = comparison.files().stream().filter(f -> f.patch() != null).toList();
+    var withPatch = comparison.files().stream().filter(f -> f.patch() != null).toList();
     var header =
         new StringBuilder("## Changes between base and head\n")
             .append(
@@ -229,15 +249,15 @@ public class ReviewDiffFormatter {
                     "Commits between %s..%s: %d%n%n",
                     base.substring(0, 7), head.substring(0, 7), comparison.totalCommits()))
             .toString();
-    return formatWithLineBudget(header, reviewable);
+    return formatWithLineBudget(header, withPatch, namesOf(reviewableFiles(withPatch)));
   }
 
   private FormattedDiff formatWithLineBudget(
-      String header, List<GitHubPullRequestClient.FileDiff> files) {
+      String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {
     if (maxDiffLines <= 0) {
       var sb = new StringBuilder(header);
       for (var file : files) {
-        sb.append(formatFileSection(file));
+        sb.append(formatFileSection(file, reviewableNames));
       }
       return new FormattedDiff(sb.toString(), 0);
     }
@@ -248,7 +268,7 @@ public class ReviewDiffFormatter {
 
     for (var i = 0; i < files.size(); i++) {
       var file = files.get(i);
-      var section = formatFileSection(file);
+      var section = formatFileSection(file, reviewableNames);
       var sectionLines = lineCount(section);
 
       if (usedLines + sectionLines <= maxDiffLines) {
@@ -312,7 +332,8 @@ public class ReviewDiffFormatter {
     }
   }
 
-  private String formatFileSection(GitHubPullRequestClient.FileDiff file) {
+  private String formatFileSection(
+      GitHubPullRequestClient.FileDiff file, Set<String> reviewableNames) {
     var sb =
         new StringBuilder("### ")
             .append(file.filename())
@@ -323,7 +344,9 @@ public class ReviewDiffFormatter {
             .append(" -")
             .append(file.deletions())
             .append(")\n");
-    if (isIgnored(file.filename())) {
+    // Membership in the caller's precomputed reviewable set, not a fresh isIgnored() glob match, so
+    // the ignore-glob filter is walked once per review rather than again here for every file.
+    if (!reviewableNames.contains(file.filename())) {
       sb.append(
               String.format(
                   "(%s skipped: matches ignored pattern, +%d -%d)",

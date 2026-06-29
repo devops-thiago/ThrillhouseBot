@@ -114,15 +114,16 @@ public class ReviewContextLoader {
   ReviewContext load(
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
-    var diffResult = diffFormatter.buildDiffStringWithStats(files);
+    // The ignore-glob filter runs once here; the already-filtered list feeds the diff render (so
+    // formatFileSection does not re-glob each file) and the line resolver alike, instead of either
+    // re-walking it.
+    var reviewableFiles = diffFormatter.reviewableFiles(files);
+    var diffResult = diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
     var baseComparisonResult =
         buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
     var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
     // Built once here and shared via the context: the finding pipeline (anchor backfill), the
-    // verdict backstop, and the publisher's inline comments all resolve against the same diff. The
-    // ignore-glob filter runs once: the already-filtered list feeds the line resolver directly
-    // instead of patchesByFile re-walking it.
-    var reviewableFiles = diffFormatter.reviewableFiles(files);
+    // verdict backstop, and the publisher's inline comments all resolve against the same diff.
     var lineResolver =
         new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewableFiles));
 
@@ -218,13 +219,13 @@ public class ReviewContextLoader {
 
   /** Stack context is best-effort enrichment — its failure must never fail the review. */
   String resolveProjectStack(ReviewOrchestrator.ReviewRequest req) {
-    try {
-      return projectStackResolver.resolve(
-          req.owner(), req.repo(), req.defaultBranch(), req.installationId());
-    } catch (RuntimeException e) {
-      Log.warn("Project stack resolution failed, continuing without stack context", e);
-      return "";
-    }
+    return SoftLoaders.projectStack(
+        projectStackResolver,
+        req.owner(),
+        req.repo(),
+        req.defaultBranch(),
+        req.installationId(),
+        "review");
   }
 
   List<GitHubPullRequestClient.FileDiff> fetchPrFiles(
