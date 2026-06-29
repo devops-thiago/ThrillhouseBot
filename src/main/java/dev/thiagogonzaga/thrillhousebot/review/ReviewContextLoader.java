@@ -212,7 +212,8 @@ public class ReviewContextLoader {
         pr.base() != null ? pr.base().sha() : "",
         req.defaultBranch(),
         req.installationId(),
-        req.isManualTrigger());
+        req.isManualTrigger(),
+        pr.base() != null ? pr.base().ref() : "");
   }
 
   /** Stack context is best-effort enrichment — its failure must never fail the review. */

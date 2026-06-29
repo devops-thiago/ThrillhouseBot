@@ -20,11 +20,20 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import java.util.ArrayList;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 @RegisterRestClient(configKey = "github-api")
 public interface GitHubCheckRunClient {
+
+  // GitHub serves 30 rows per page by default; request the 100 max and bound the page walk so the
+  // aggregating helpers below own the pagination (like the other GitHub clients) rather than
+  // leaking
+  // per_page/page to callers.
+  int CI_PER_PAGE = 100;
+  int CI_MAX_PAGES = 50;
+
   @POST
   @Path("/repos/{owner}/{repo}/check-runs")
   @Produces(MediaType.APPLICATION_JSON)
@@ -97,6 +106,50 @@ public interface GitHubCheckRunClient {
       @PathParam("ref") String ref,
       @QueryParam("per_page") @DefaultValue("100") int perPage,
       @QueryParam("page") @DefaultValue("1") int page);
+
+  /**
+   * All check runs for {@code ref}, paging through {@link #getCheckRuns} (full page → fetch the
+   * next, short page → stop) and bounded by {@link #CI_MAX_PAGES}. Returns {@code null} if a page
+   * response body is {@code null} — the "could not read" signal callers need to distinguish from
+   * "no checks" (GitHub returns an empty list, never null, past the last page).
+   */
+  default List<CheckRunsResponse.CheckRun> getAllCheckRuns(
+      String auth, String accept, String owner, String repo, String ref) {
+    var all = new ArrayList<CheckRunsResponse.CheckRun>();
+    for (int page = 1; page <= CI_MAX_PAGES; page++) {
+      var resp = getCheckRuns(auth, accept, owner, repo, ref, CI_PER_PAGE, page);
+      if (resp == null) {
+        return null;
+      }
+      var batch = resp.checkRuns();
+      all.addAll(batch);
+      if (batch.size() < CI_PER_PAGE) {
+        break;
+      }
+    }
+    return all;
+  }
+
+  /**
+   * All commit-status details for {@code ref}, paging through {@link #getCombinedStatus} the same
+   * way as {@link #getAllCheckRuns} and with the same {@code null}-means-unreadable contract.
+   */
+  default List<CombinedStatus.StatusDetail> getAllCombinedStatus(
+      String auth, String accept, String owner, String repo, String ref) {
+    var all = new ArrayList<CombinedStatus.StatusDetail>();
+    for (int page = 1; page <= CI_MAX_PAGES; page++) {
+      var resp = getCombinedStatus(auth, accept, owner, repo, ref, CI_PER_PAGE, page);
+      if (resp == null) {
+        return null;
+      }
+      var batch = resp.statuses();
+      all.addAll(batch);
+      if (batch.size() < CI_PER_PAGE) {
+        break;
+      }
+    }
+    return all;
+  }
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record RequiredStatusChecks(List<String> contexts, List<Check> checks) {

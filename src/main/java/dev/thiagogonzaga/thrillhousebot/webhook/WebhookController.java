@@ -204,7 +204,8 @@ public class WebhookController {
                 pr.base().sha(),
                 repo.defaultBranch(),
                 payload.installation().id(),
-                false));
+                false,
+                pr.base().ref()));
       }
       default -> {
         log.debug("Ignoring pull_request action: {}", action);

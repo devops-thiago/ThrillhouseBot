@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
@@ -25,6 +26,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 
 @ApplicationScoped
@@ -58,6 +61,10 @@ public class ReviewOrchestrator {
 
   private final FindingPipeline findingPipeline;
 
+  // The CI status I/O (required-context resolution + check evaluation) is independent of the model
+  // response, so it runs on this executor concurrently with the blocking AI call rather than after.
+  private final ExecutorService reviewExecutor;
+
   /**
    * Parameter object for the {@link #review(ReviewRequest)} method.
    *
@@ -71,6 +78,8 @@ public class ReviewOrchestrator {
    * @param defaultBranch repo default branch name
    * @param installationId GitHub App installation ID
    * @param isManualTrigger {@code true} when triggered by a /review command
+   * @param baseRef PR base/target branch name, used to resolve required CI checks without an extra
+   *     PR fetch; may be empty until {@link ReviewContextLoader#resolveMissingPrDetails} fills it
    */
   public record ReviewRequest(
       String owner,
@@ -82,7 +91,39 @@ public class ReviewOrchestrator {
       String baseSha,
       String defaultBranch,
       long installationId,
-      boolean isManualTrigger) {}
+      boolean isManualTrigger,
+      String baseRef) {
+
+    /**
+     * Back-compat convenience for callers that don't yet carry the base ref — the manual /review
+     * entry points (filled in later by {@link ReviewContextLoader#resolveMissingPrDetails}) and
+     * tests. Defaults {@code baseRef} to empty, so the CI resolver gates on all checks until known.
+     */
+    public ReviewRequest(
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        String prTitle,
+        String prDescription,
+        String baseSha,
+        String defaultBranch,
+        long installationId,
+        boolean isManualTrigger) {
+      this(
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          prTitle,
+          prDescription,
+          baseSha,
+          defaultBranch,
+          installationId,
+          isManualTrigger,
+          "");
+    }
+  }
 
   @Inject
   public ReviewOrchestrator(
@@ -96,7 +137,8 @@ public class ReviewOrchestrator {
       ReviewPromptAssembler promptAssembler,
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
-      FindingPipeline findingPipeline) {
+      FindingPipeline findingPipeline,
+      @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
@@ -108,6 +150,7 @@ public class ReviewOrchestrator {
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
+    this.reviewExecutor = reviewExecutor;
   }
 
   /**
@@ -155,17 +198,19 @@ public class ReviewOrchestrator {
       var lineResolver = ctx.lineResolver();
 
       var promptInputs = promptAssembler.assemble(ctx, req);
+
+      // CI status (required-context resolution + check evaluation) depends only on the
+      // commit/branch,
+      // not the model response, so kick it off concurrently with the blocking AI call and join
+      // after
+      // — the GitHub latency overlaps the model latency instead of stacking on top of it.
+      final var ciReq = req;
+      var ciFuture =
+          CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, ciReq), reviewExecutor);
+
       var aiResponse = findingPipeline.run(session, promptInputs, ctx, lineResolver);
 
-      // Fetch required status checks and evaluate CI checks on the head SHA. An absent result means
-      // "could not determine required checks" — evaluateCiChecks then gates on all checks (null).
-      List<String> requiredContexts =
-          ciStatusEvaluator
-              .resolveRequiredContexts(auth, req.owner(), req.repo(), req.prNumber())
-              .orElse(null);
-      CiStatusEvaluator.CiEvaluation ciEvaluation =
-          ciStatusEvaluator.evaluateCiChecks(
-              auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
+      CiStatusEvaluator.CiEvaluation ciEvaluation = ciFuture.join();
 
       var result =
           verdictBuilder.build(
@@ -246,6 +291,21 @@ public class ReviewOrchestrator {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
     }
+  }
+
+  /**
+   * Resolves the CI evaluation for a request: the required-context lookup unioned across rulesets
+   * and classic protection, then the per-check evaluation on the head commit. Runs off the review
+   * executor concurrently with the blocking AI call (#10) — it depends only on the commit and base
+   * branch carried on the request, not the model response.
+   */
+  private CiStatusEvaluator.CiEvaluation resolveCiEvaluation(String auth, ReviewRequest req) {
+    List<String> requiredContexts =
+        ciStatusEvaluator
+            .resolveRequiredContexts(auth, req.owner(), req.repo(), req.baseRef())
+            .orElse(null);
+    return ciStatusEvaluator.evaluateCiChecks(
+        auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
   }
 
   /**

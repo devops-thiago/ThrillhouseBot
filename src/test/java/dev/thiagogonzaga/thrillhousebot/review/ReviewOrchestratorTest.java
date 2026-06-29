@@ -31,6 +31,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -113,6 +115,10 @@ class ReviewOrchestratorTest {
   // by the pipeline tests and injected so review()'s finding flow is unchanged.
   private FindingPipeline findingPipeline;
 
+  // Real virtual-thread executor: the CI resolution runs on it concurrently with the (stubbed) AI
+  // call and is joined before the verdict, so review() stays deterministic in tests.
+  private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
   private ReviewOrchestrator orchestrator;
 
   @BeforeEach
@@ -151,12 +157,11 @@ class ReviewOrchestratorTest {
     // guard; tests that exercise red/pending/unreadable CI override these. The unreadable-CI
     // behaviour itself is unit-tested in CiStatusEvaluatorTest.
     lenient()
-        .when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-        .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
+        .when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+        .thenReturn(List.of());
     lenient()
-        .when(
-            checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-        .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+        .when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
+        .thenReturn(List.of());
     // Walkthrough diagram is off by default; individual tests opt in by re-stubbing enabled().
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
@@ -196,7 +201,7 @@ class ReviewOrchestratorTest {
         authClient,
         broadcaster,
         sessionPersistence,
-        new CiStatusEvaluator(checkRunClient, prClient, BOT_ID),
+        new CiStatusEvaluator(checkRunClient, BOT_ID),
         new CheckRunManager(checkRunClient),
         new ReviewContextLoader(
             prClient,
@@ -212,7 +217,8 @@ class ReviewOrchestratorTest {
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         reviewPublisher,
         verdictBuilder,
-        findingPipeline);
+        findingPipeline,
+        reviewExecutor);
   }
 
   // postReview now takes the DiffLineResolver from the context (built once in the loader), so the
@@ -3700,10 +3706,10 @@ class ReviewOrchestratorTest {
       when(checkRunClient.getRequiredStatusChecks(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of("build"), List.of()));
-      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(checkRuns);
-      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(checkRuns.checkRuns());
+      when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
+          .thenReturn(List.of());
       when(prClient.compareCommits(
               anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -3716,8 +3722,21 @@ class ReviewOrchestratorTest {
     }
 
     private ReviewOrchestrator.ReviewRequest request() {
+      // baseRef "main" so resolveRequiredContexts resolves the required "build" check
+      // (gate-specific)
+      // rather than gating on all checks — exercising the required-context path these tests assert.
       return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 42, "abcdefgh", "Test PR", "", "base1234567", "main", 123L, false);
+          "owner",
+          "repo",
+          42,
+          "abcdefgh",
+          "Test PR",
+          "",
+          "base1234567",
+          "main",
+          123L,
+          false,
+          "main");
     }
 
     @Test
@@ -3800,7 +3819,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void reviewShouldFallBackWhenBaseRefMissing() {
+    void reviewShouldFallBackToAllChecksWhenBaseRefBlank() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -3817,21 +3836,19 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "success", null))));
-        // Base ref is null: required-status-checks must not be fetched and gating falls back to
-        // all checks (which are green here), so the review still approves.
-        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
-            .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
-                    "Test PR",
-                    "",
-                    new GitHubPullRequestClient.Ref("abcdefgh", "feature"),
-                    new GitHubPullRequestClient.Ref("base1234567", null)));
+        // No base ref on the request: required-status-checks (and branch rules) must not be fetched
+        // and gating falls back to all checks (green here), so the review still approves.
+        var noBaseRef =
+            new ReviewOrchestrator.ReviewRequest(
+                "owner", "repo", 42, "abcdefgh", "Test PR", "", "base1234567", "main", 123L, false);
 
-        orchestrator.review(request());
+        orchestrator.review(noBaseRef);
 
         verify(checkRunClient, never())
             .getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(checkRunClient, never())
+            .getBranchRules(anyString(), anyString(), anyString(), anyString(), anyString());
         verify(reviewClient)
             .createReview(
                 anyString(),
@@ -3869,46 +3886,6 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(request());
 
-        verify(reviewClient)
-            .createReview(
-                anyString(),
-                anyString(),
-                anyString(),
-                anyString(),
-                anyInt(),
-                argThat(req -> "APPROVE".equals(req.event())));
-      }
-    }
-
-    @Test
-    void reviewShouldFallBackWhenBaseIsNull() {
-      try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = mock(ReviewSession.class);
-        session.id = 1L;
-        when(session.getRepository()).thenReturn("owner/repo");
-        when(session.getPrNumber()).thenReturn(42);
-        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-        mockedStatic
-            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
-
-        stubCommonReviewMocks(
-            new GitHubCheckRunClient.CheckRunsResponse(
-                1,
-                List.of(
-                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
-                        1L, "build", "completed", "success", null))));
-        // The PR has no base ref object at all — required checks are not fetched.
-        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
-            .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
-                    "Test PR", "", new GitHubPullRequestClient.Ref("abcdefgh", "feature"), null));
-
-        orchestrator.review(request());
-
-        verify(checkRunClient, never())
-            .getRequiredStatusChecks(
-                anyString(), anyString(), anyString(), anyString(), anyString());
         verify(reviewClient)
             .createReview(
                 anyString(),
