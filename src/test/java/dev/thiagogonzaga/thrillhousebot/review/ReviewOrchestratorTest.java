@@ -196,7 +196,7 @@ class ReviewOrchestratorTest {
         authClient,
         broadcaster,
         sessionPersistence,
-        new CiStatusEvaluator(checkRunClient, prClient),
+        new CiStatusEvaluator(checkRunClient, prClient, BOT_ID),
         new CheckRunManager(checkRunClient),
         new ReviewContextLoader(
             prClient,
@@ -663,6 +663,31 @@ class ReviewOrchestratorTest {
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
 
       assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+    }
+
+    @Test
+    void unreadableCiHoldsApprovalAndIsDisclosedAsItsOwnSignal() {
+      // #6: an unreadable CI source holds approval and is surfaced as a first-class signal — not as
+      // a synthetic "CI status unavailable" check smuggled into the offending list.
+      var clean = new ReviewResponse(List.of(), List.of(), null);
+      var result =
+          verdictBuilder.buildResult(
+              clean,
+              true,
+              new VerdictBuilder.DiffStats(1, 1, 0),
+              List.of(),
+              List.of(),
+              List.of(),
+              true, // ciUnreadable
+              List.of());
+
+      assertEquals(ReviewState.COMMENT, result.reviewState());
+      assertTrue(result.ciUnreadable());
+      assertTrue(result.offendingCiChecks().isEmpty());
+      assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+      assertEquals("neutral", VerdictBuilder.conclusionForResult(result));
+      assertTrue(
+          VerdictBuilder.checkSummaryForResult(result).contains("CI status could not be read"));
     }
 
     @Test
@@ -3178,6 +3203,7 @@ class ReviewOrchestratorTest {
           List.of(), // changedFiles
           List.of(),
           List.of(),
+          false, // ciUnreadable
           backstop);
     }
 
@@ -4032,6 +4058,68 @@ class ReviewOrchestratorTest {
       assertTrue(
           body.contains(
               "Additionally, No new issues in this revision, but 1 previous finding(s) remain unresolved"));
+    }
+
+    @Test
+    void shouldDiscloseUnreadableCiInTheFollowUpPostReviewBody() {
+      // #6: on a follow-up review (no summary comment), an unreadable CI hold must surface in the
+      // review body — not silently post nothing. With an unresolved previous finding it also
+      // appends
+      // the "Additionally, …" line.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "")),
+              List.of(),
+              0,
+              true);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("CI status could not be read"));
+      assertTrue(body.contains("Additionally, No new issues in this revision"));
+    }
+
+    @Test
+    void shouldDiscloseUnreadableCiWithoutUnresolvedFindingsInTheFollowUpBody() {
+      // The unreadable-CI body with no unresolved previous findings: the "Additionally, …" line is
+      // omitted (covers the unresolved == 0 branch).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(),
+              List.of(),
+              0,
+              true);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("CI status could not be read"));
+      assertFalse(body.contains("Additionally,"));
     }
   }
 

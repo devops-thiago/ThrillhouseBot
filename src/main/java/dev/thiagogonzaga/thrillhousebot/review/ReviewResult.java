@@ -32,7 +32,8 @@ public record ReviewResult(
     String summaryMarkdown,
     List<PreviousFindingStatus> previousStatuses,
     List<CiCheck> offendingCiChecks,
-    int omittedFiles) {
+    int omittedFiles,
+    boolean ciUnreadable) {
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
@@ -42,6 +43,36 @@ public record ReviewResult(
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
+  }
+
+  /** Convenience constructor for results whose CI status was fully readable (the common case). */
+  public ReviewResult(
+      List<Finding> findings,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      RiskLevel highestRisk,
+      ReviewState reviewState,
+      boolean isFirstReview,
+      String summaryMarkdown,
+      List<PreviousFindingStatus> previousStatuses,
+      List<CiCheck> offendingCiChecks,
+      int omittedFiles) {
+    this(
+        findings,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        highestRisk,
+        reviewState,
+        isFirstReview,
+        summaryMarkdown,
+        previousStatuses,
+        offendingCiChecks,
+        omittedFiles,
+        false);
   }
 
   /** Convenience constructor for results with no omitted files (a complete diff). */
@@ -100,6 +131,11 @@ public record ReviewResult(
 
   public boolean hasIssues() {
     return !findings.isEmpty();
+  }
+
+  /** True when CI holds approval back: a required check is offending, or CI could not be read. */
+  public boolean ciHoldsApproval() {
+    return !offendingCiChecks.isEmpty() || ciUnreadable;
   }
 
   /** True when the line budget dropped whole files, so this review covers only part of the diff. */

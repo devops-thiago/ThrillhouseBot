@@ -517,6 +517,33 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldRenderCiUnavailableNoteWhenCiUnreadableInsteadOfCelebrating() {
+    // #6: unreadable CI renders its own distinct note (not a fake required-check row), and the
+    // clean-review celebration is suppressed because approval is held.
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0,
+            true);
+
+    var summary = generator.generate(1, 5, 0, List.of(), null, result);
+
+    assertTrue(summary.contains("CI Status Unavailable"));
+    assertTrue(summary.contains("could not be read"));
+    assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE));
+  }
+
+  @Test
   void shouldNotRenderDiagramWhenFeatureDisabledEvenIfModelVolunteersOne() {
     // The kill switch must hold at render too: a model that returns a walkthrough_diagram the
     // prompt never requested must not produce a Control-Flow Diagram block when the feature is off.

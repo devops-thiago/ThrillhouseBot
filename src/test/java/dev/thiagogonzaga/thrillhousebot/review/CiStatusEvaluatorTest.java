@@ -19,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -44,7 +46,10 @@ class CiStatusEvaluatorTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    evaluator = new CiStatusEvaluator(checkRunClient, prClient);
+    // Empty set falls back to BotIdentity.DEFAULT_LOGINS (thrillhousebot[bot],
+    // thrillhouse-bot[bot]),
+    // so the bot-token detection keeps recognizing the "thrillhousebot" checks these tests use.
+    evaluator = new CiStatusEvaluator(checkRunClient, prClient, new BotIdentity(Set.of()));
   }
 
   @Nested
@@ -95,10 +100,64 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(2, result.size());
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().anyMatch(c -> "lint".equals(c.name())));
-      assertFalse(result.stream().anyMatch(c -> c.name().contains("thrillhousebot")));
+      assertEquals(2, result.offendingChecks().size());
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "lint".equals(c.name())));
+      assertFalse(
+          result.offendingChecks().stream().anyMatch(c -> c.name().contains("thrillhousebot")));
+    }
+
+    @Test
+    void usesConfiguredBotIdentityToIgnoreItsOwnChecks() {
+      // #9: bot detection is driven by the shared BotIdentity, not a hardcoded literal — a
+      // deployment under a custom slug recognizes its own app's checks (here "acme-reviewer"),
+      // which the old hardcoded "thrillhousebot" token would have missed.
+      var custom =
+          new CiStatusEvaluator(checkRunClient, prClient, BotIdentity.of("acme-reviewer[bot]"));
+      var botRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L,
+              "Some Check",
+              "completed",
+              "failure",
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
+                  1L, "acme-reviewer", "Acme Reviewer"));
+      var otherRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "build", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(botRun, otherRun)));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = custom.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertFalse(result.offendingChecks().stream().anyMatch(c -> "Some Check".equals(c.name())));
+    }
+
+    @Test
+    void botTokenMatchingHandlesAConfiguredLoginWithoutTheBotSuffix() {
+      // A configured login that does not end in "[bot]" is used as the token verbatim, so a check
+      // whose name contains that bare token is still recognized as the bot's and dropped.
+      var custom =
+          new CiStatusEvaluator(checkRunClient, prClient, BotIdentity.of("acme-bot-login"));
+      var botRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "acme-bot-login check", "completed", "failure", null);
+      var otherRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "build", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(botRun, otherRun)));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = custom.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertFalse(
+          result.offendingChecks().stream().anyMatch(c -> c.name().contains("acme-bot-login")));
     }
 
     @Test
@@ -122,14 +181,15 @@ class CiStatusEvaluatorTest {
           evaluator.evaluateCiChecks(
               "auth", "owner", "repo", "sha", List.of("build", "docs", "lint"));
 
-      assertTrue(result.isEmpty());
+      assertTrue(result.offendingChecks().isEmpty());
     }
 
     @Test
     void unreadableCheckRunsHoldApproveInGateAllMode() {
       // Check Runs API throws; combined status reads clean. In gate-all mode (no required-context
-      // list to backfill) we cannot confirm CI is green, so a "CI status unavailable" pending check
-      // must surface to hold the verdict to COMMENT rather than approving over CI we never saw.
+      // list to backfill) we cannot confirm CI is green, so the evaluation reports a first-class
+      // unreadable signal that holds the verdict to COMMENT rather than approving over CI we never
+      // saw — and it is NOT smuggled in as a synthetic offending check.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenThrow(new RuntimeException("rate limited"));
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
@@ -137,11 +197,10 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertTrue(
-          result.stream()
-              .filter(c -> "CI status unavailable".equals(c.name()))
-              .allMatch(c -> c.isPending()),
-          "the unavailable entry must be pending (holds COMMENT, not REQUEST_CHANGES)");
+      assertTrue(result.unreadable(), "an unreadable CI source must hold the verdict");
+      assertFalse(
+          result.offendingChecks().stream().anyMatch(c -> "CI status unavailable".equals(c.name())),
+          "unreadable CI is a first-class signal, not a synthetic offending check");
     }
 
     @Test
@@ -155,12 +214,13 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertTrue(result.stream().anyMatch(c -> "CI status unavailable".equals(c.name())));
+      assertTrue(result.unreadable());
     }
 
     @Test
     void readableGreenCiInGateAllModeStillApproves() {
-      // Both sources read cleanly and green — no synthetic unavailable entry, APPROVE not gated.
+      // Both sources read cleanly and green — nothing offending and CI is readable, APPROVE not
+      // gated.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CheckRunsResponse(
@@ -173,13 +233,16 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertTrue(result.isEmpty());
+      assertTrue(result.offendingChecks().isEmpty());
+      assertFalse(result.unreadable());
     }
 
     @Test
-    void unreadableCiInGateSpecificModeReliesOnRequiredBackfill() {
-      // Gate-specific mode is already safe: a required context that never reported (because its
-      // source threw) is backfilled as pending — no separate "CI status unavailable" entry needed.
+    void unreadableCiInGateSpecificModeAlsoHoldsApproval() {
+      // #5: gate-specific mode is NOT automatically safe. The Check Runs source throws, so a
+      // required check reporting only there could be hidden; the missing-required backfill still
+      // flags "build", and the unread source is now reported as a first-class unreadable signal too
+      // — closing the gap where a gate-specific review could approve over a source it never read.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenThrow(new RuntimeException("boom"));
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
@@ -187,8 +250,8 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
 
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().noneMatch(c -> "CI status unavailable".equals(c.name())));
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.unreadable());
     }
 
     @Test
@@ -209,8 +272,8 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(1, result.size());
-      var check = result.get(0);
+      assertEquals(1, result.offendingChecks().size());
+      var check = result.offendingChecks().get(0);
       assertEquals("deploy", check.name());
       assertTrue(check.isPending());
       assertFalse(check.isFailing());
@@ -239,11 +302,11 @@ class CiStatusEvaluatorTest {
       var result =
           evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build", "lint"));
 
-      assertEquals(2, result.size());
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().anyMatch(c -> "lint".equals(c.name())));
-      assertFalse(result.stream().anyMatch(c -> "test".equals(c.name())));
-      assertFalse(result.stream().anyMatch(c -> "deploy".equals(c.name())));
+      assertEquals(2, result.offendingChecks().size());
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "lint".equals(c.name())));
+      assertFalse(result.offendingChecks().stream().anyMatch(c -> "test".equals(c.name())));
+      assertFalse(result.offendingChecks().stream().anyMatch(c -> "deploy".equals(c.name())));
     }
 
     @Test
@@ -258,8 +321,8 @@ class CiStatusEvaluatorTest {
               "auth", "owner", "repo", "sha", List.of("build", "thrillhousebot"));
 
       // thrillhousebot is ignored, so only "build" is missing
-      assertEquals(1, result.size());
-      var check = result.get(0);
+      assertEquals(1, result.offendingChecks().size());
+      var check = result.offendingChecks().get(0);
       assertEquals("build", check.name());
       assertEquals("missing", check.type());
       assertEquals("pending", check.status());
@@ -298,21 +361,36 @@ class CiStatusEvaluatorTest {
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
       // docs (skipped → passing) is excluded; only the four offending checks remain.
-      assertEquals(4, result.size());
+      assertEquals(4, result.offendingChecks().size());
 
-      var build = result.stream().filter(c -> "build".equals(c.name())).findFirst().orElseThrow();
+      var build =
+          result.offendingChecks().stream()
+              .filter(c -> "build".equals(c.name()))
+              .findFirst()
+              .orElseThrow();
       assertEquals("pending", build.status());
 
-      var test = result.stream().filter(c -> "test".equals(c.name())).findFirst().orElseThrow();
+      var test =
+          result.offendingChecks().stream()
+              .filter(c -> "test".equals(c.name()))
+              .findFirst()
+              .orElseThrow();
       assertEquals("failing", test.status());
 
-      assertFalse(result.stream().anyMatch(c -> "docs".equals(c.name())));
+      assertFalse(result.offendingChecks().stream().anyMatch(c -> "docs".equals(c.name())));
 
-      var lint = result.stream().filter(c -> "lint".equals(c.name())).findFirst().orElseThrow();
+      var lint =
+          result.offendingChecks().stream()
+              .filter(c -> "lint".equals(c.name()))
+              .findFirst()
+              .orElseThrow();
       assertEquals("pending", lint.status());
 
       var security =
-          result.stream().filter(c -> "security".equals(c.name())).findFirst().orElseThrow();
+          result.offendingChecks().stream()
+              .filter(c -> "security".equals(c.name()))
+              .findFirst()
+              .orElseThrow();
       assertEquals("failing", security.status());
     }
 
@@ -338,7 +416,7 @@ class CiStatusEvaluatorTest {
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
       // Both pages were consumed: 100 + 1 failing check runs.
-      assertEquals(101, result.size());
+      assertEquals(101, result.offendingChecks().size());
       verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(1));
       verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(2));
     }
@@ -363,7 +441,7 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(101, result.size());
+      assertEquals(101, result.offendingChecks().size());
       verify(checkRunClient).getCombinedStatus(any(), any(), any(), any(), any(), eq(100), eq(2));
     }
 
@@ -392,7 +470,7 @@ class CiStatusEvaluatorTest {
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
       // Deduped to the distinct names across the repeated pages.
-      assertEquals(2 * CiStatusEvaluator.CI_PER_PAGE, result.size());
+      assertEquals(2 * CiStatusEvaluator.CI_PER_PAGE, result.offendingChecks().size());
       verify(checkRunClient, times(CiStatusEvaluator.CI_MAX_PAGES))
           .getCheckRuns(
               any(), any(), any(), any(), any(), eq(CiStatusEvaluator.CI_PER_PAGE), anyInt());
@@ -407,7 +485,7 @@ class CiStatusEvaluatorTest {
       // body is "could not read", so gate-all mode holds the verdict rather than allowing APPROVE
       // over CI it never saw (#253).
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.stream().anyMatch(c -> "CI status unavailable".equals(c.name())));
+      assertTrue(result.unreadable());
     }
 
     @Test
@@ -421,8 +499,8 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(1, result.size());
-      assertEquals("failing", result.get(0).status());
+      assertEquals(1, result.offendingChecks().size());
+      assertEquals("failing", result.offendingChecks().get(0).status());
     }
 
     @Test
@@ -443,9 +521,9 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(1, result.size());
-      assertEquals("build", result.get(0).name());
-      assertEquals("check-run", result.get(0).type());
+      assertEquals(1, result.offendingChecks().size());
+      assertEquals("build", result.offendingChecks().get(0).name());
+      assertEquals("check-run", result.offendingChecks().get(0).type());
     }
 
     @Test
@@ -473,9 +551,9 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      assertEquals(3, result.size());
-      assertTrue(result.stream().anyMatch(c -> "build".equals(c.name())));
-      assertTrue(result.stream().anyMatch(c -> "deploy".equals(c.name())));
+      assertEquals(3, result.offendingChecks().size());
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "deploy".equals(c.name())));
     }
 
     @Test
@@ -486,7 +564,7 @@ class CiStatusEvaluatorTest {
           .thenReturn(new GitHubCheckRunClient.CombinedStatus("pending", 0, null));
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      assertTrue(result.isEmpty());
+      assertTrue(result.offendingChecks().isEmpty());
     }
 
     @Test
@@ -497,9 +575,11 @@ class CiStatusEvaluatorTest {
           .thenThrow(new RuntimeException("failed"));
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      // Exceptions are swallowed (no crash), but in gate-all mode unreadable CI must hold the
-      // verdict — not come back empty and silently allow APPROVE (#253).
-      assertTrue(result.stream().anyMatch(c -> "CI status unavailable".equals(c.name())));
+      // Exceptions are swallowed (no crash), but unreadable CI must hold the verdict — not come
+      // back
+      // empty and silently allow APPROVE (#253).
+      assertTrue(result.unreadable());
+      assertTrue(result.offendingChecks().isEmpty());
     }
   }
 

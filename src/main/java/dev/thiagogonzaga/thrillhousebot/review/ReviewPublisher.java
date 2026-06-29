@@ -280,6 +280,13 @@ public class ReviewPublisher {
       if (unresolved > 0) {
         sb.append("\nAdditionally, ").append(ReviewResult.unresolvedPreviousMessage(unresolved));
       }
+    } else if (result.ciUnreadable()) {
+      sb.append(
+          "ThrillhouseBot found no issues in this PR, but the CI status could not be read, so"
+              + " approval is held until it can be confirmed.\n");
+      if (unresolved > 0) {
+        sb.append("\nAdditionally, ").append(ReviewResult.unresolvedPreviousMessage(unresolved));
+      }
     } else if (unresolved > 0) {
       sb.append(ReviewResult.unresolvedPreviousMessage(unresolved));
     }
