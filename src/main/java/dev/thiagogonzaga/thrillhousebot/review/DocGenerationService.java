@@ -112,13 +112,17 @@ public class DocGenerationService {
   public void handle(DocTask task) {
     try {
       var auth = authClient.getAuthHeader(task.installationId());
-      var pr = fetchPullRequest(auth, task);
+      var pr =
+          SoftLoaders.pullRequest(
+              prClient, auth, task.owner(), task.repo(), task.prNumber(), "/add-docs");
       if (pr == null || pr.head() == null || isBlank(pr.head().sha())) {
         postComment(auth, task, NO_PR_DETAILS);
         return;
       }
 
-      var files = fetchFiles(auth, task);
+      var files =
+          SoftLoaders.files(
+              prClient, auth, task.owner(), task.repo(), task.prNumber(), "/add-docs");
       var reviewable = diffFormatter.reviewableFiles(files);
       if (reviewable.isEmpty()) {
         postComment(auth, task, NO_FILES);
@@ -166,7 +170,14 @@ public class DocGenerationService {
       GitHubPullRequestClient.PullRequestDetails pr) {
     String diff = diffFormatter.buildDiffString(files);
     String prContext = PromptSections.prContext(pr.title(), pr.body());
-    String stack = resolveProjectStack(task);
+    String stack =
+        SoftLoaders.projectStack(
+            projectStackResolver,
+            task.owner(),
+            task.repo(),
+            task.defaultBranch(),
+            task.installationId(),
+            "/add-docs");
     String instructions = buildInstructionsSection(task);
 
     String raw =
@@ -185,7 +196,9 @@ public class DocGenerationService {
       String commitSha,
       List<GitHubPullRequestClient.FileDiff> reviewable,
       DocGenerationResponse response) {
-    var lineResolver = new DiffLineResolver(diffFormatter.patchesByFile(reviewable));
+    // `reviewable` is already ignore-glob filtered (postReview computes it), so use the overload
+    // that trusts the caller's filter rather than re-walking the glob here.
+    var lineResolver = new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewable));
     int cap = config.review().maxReviewComments();
     int posted = 0;
     for (DocGenerationResponse.DocSuggestion doc : response.docs()) {
@@ -267,41 +280,6 @@ public class DocGenerationService {
     return response.docs().isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
   }
 
-  private GitHubPullRequestClient.PullRequestDetails fetchPullRequest(String auth, DocTask task) {
-    try {
-      return prClient.getPullRequest(auth, ACCEPT, task.owner(), task.repo(), task.prNumber());
-    } catch (RuntimeException e) {
-      Log.warnf(
-          e, "Failed to fetch PR for /add-docs on %s/%s #%d", task.owner(), task.repo(), num(task));
-      return null;
-    }
-  }
-
-  private List<GitHubPullRequestClient.FileDiff> fetchFiles(String auth, DocTask task) {
-    try {
-      return prClient.getPullRequestFiles(auth, ACCEPT, task.owner(), task.repo(), task.prNumber());
-    } catch (RuntimeException e) {
-      Log.warnf(
-          e,
-          "Failed to fetch PR files for /add-docs on %s/%s #%d",
-          task.owner(),
-          task.repo(),
-          num(task));
-      return List.of();
-    }
-  }
-
-  /** Stack context is best-effort enrichment — its failure must never fail the command. */
-  private String resolveProjectStack(DocTask task) {
-    try {
-      return projectStackResolver.resolve(
-          task.owner(), task.repo(), task.defaultBranch(), task.installationId());
-    } catch (RuntimeException e) {
-      Log.warn("Project stack resolution failed for /add-docs, continuing without it", e);
-      return "";
-    }
-  }
-
   // The command-specific guidance line for the repository-instructions section
   // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
   private static final String INSTRUCTIONS_GUIDANCE =
@@ -312,15 +290,14 @@ public class DocGenerationService {
    * Pre-rendered, pre-escaped repository-instructions section, or empty when none is configured.
    */
   private String buildInstructionsSection(DocTask task) {
-    InstructionsResolver.ResolvedInstructions instructions;
-    try {
-      instructions =
-          instructionsResolver.resolve(
-              task.owner(), task.repo(), task.defaultBranch(), task.installationId());
-    } catch (RuntimeException e) {
-      Log.warn("Instructions resolution failed for /add-docs, continuing without them", e);
-      return "";
-    }
+    var instructions =
+        SoftLoaders.instructions(
+            instructionsResolver,
+            task.owner(),
+            task.repo(),
+            task.defaultBranch(),
+            task.installationId(),
+            "/add-docs");
     return PromptSections.instructionsSection(instructions, INSTRUCTIONS_GUIDANCE);
   }
 

@@ -28,8 +28,6 @@ import io.quarkus.logging.Log;
  */
 public abstract class AbstractPrSuggestionGenerator {
 
-  protected static final String ACCEPT = "application/vnd.github+json";
-
   /** The PR context a suggestion is generated from. */
   protected record Inputs(String diff, String title, String body, String instructions) {}
 
@@ -71,43 +69,20 @@ public abstract class AbstractPrSuggestionGenerator {
       Log.debugf("No diff for %s on %s/%s #%d — posting nothing", command, owner, repo, prNumber);
       return null;
     }
-    var details = fetchDetails(auth, owner, repo, prNumber, command);
+    var details = SoftLoaders.pullRequest(prClient, auth, owner, repo, prNumber, command);
     String title = details != null && details.title() != null ? details.title() : "";
     String body = details != null && details.body() != null ? details.body() : "";
-    String instructions = resolveInstructions(owner, repo, defaultBranch, installationId, command);
+    String instructions =
+        SoftLoaders.instructions(
+                instructionsResolver, owner, repo, defaultBranch, installationId, command)
+            .content();
     return new Inputs(diff, title, body, instructions);
   }
 
   private String fetchDiff(String auth, String owner, String repo, int prNumber, String command) {
-    try {
-      var files = prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
-      return diffFormatter.buildDiffString(files);
-    } catch (RuntimeException e) {
-      Log.warnf(e, "Failed to fetch diff for %s on %s/%s #%d", command, owner, repo, prNumber);
-      return null;
-    }
-  }
-
-  private GitHubPullRequestClient.PullRequestDetails fetchDetails(
-      String auth, String owner, String repo, int prNumber, String command) {
-    try {
-      return prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
-    } catch (RuntimeException e) {
-      // The current title/body are best-effort context; the command still works from the diff
-      // alone.
-      Log.warnf(
-          e, "Failed to fetch PR details for %s on %s/%s #%d", command, owner, repo, prNumber);
-      return null;
-    }
-  }
-
-  private String resolveInstructions(
-      String owner, String repo, String defaultBranch, long installationId, String command) {
-    try {
-      return instructionsResolver.resolve(owner, repo, defaultBranch, installationId).content();
-    } catch (RuntimeException e) {
-      Log.warnf(e, "Failed to resolve instructions for %s on %s/%s", command, owner, repo);
-      return "";
-    }
+    // SoftLoaders.files degrades a failed fetch to an empty list; buildDiffString then yields
+    // "(no changes detected)", which loadInputs treats the same as null (post nothing).
+    var files = SoftLoaders.files(prClient, auth, owner, repo, prNumber, command);
+    return diffFormatter.buildDiffString(files);
   }
 }
