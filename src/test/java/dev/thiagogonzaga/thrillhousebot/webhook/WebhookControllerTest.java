@@ -203,7 +203,8 @@ class WebhookControllerTest {
                 "basesha456",
                 "default",
                 12345L,
-                false));
+                false,
+                "default"));
   }
 
   @Test
@@ -271,7 +272,8 @@ class WebhookControllerTest {
                 "basesha456",
                 "develop",
                 12345L,
-                false));
+                false,
+                "develop"));
   }
 
   @Test
@@ -297,7 +299,8 @@ class WebhookControllerTest {
                 "basesha456",
                 "main",
                 12345L,
-                false));
+                false,
+                "main"));
   }
 
   @Test
@@ -325,7 +328,8 @@ class WebhookControllerTest {
                 "basesha456",
                 "main",
                 12345L,
-                false));
+                false,
+                "main"));
   }
 
   @Test
@@ -342,7 +346,17 @@ class WebhookControllerTest {
     verify(reviewDispatcher)
         .dispatch(
             new ReviewOrchestrator.ReviewRequest(
-                "a", "b", 12, "sha12", "Test PR title", "", "basesha456", "main", 12345L, false));
+                "a",
+                "b",
+                12,
+                "sha12",
+                "Test PR title",
+                "",
+                "basesha456",
+                "main",
+                12345L,
+                false,
+                "main"));
   }
 
   @Test

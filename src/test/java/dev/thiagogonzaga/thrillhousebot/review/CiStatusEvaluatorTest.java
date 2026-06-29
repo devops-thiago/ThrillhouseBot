@@ -21,14 +21,12 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.Answers;
 
 /**
  * Unit tests for {@link CiStatusEvaluator} — the CI-status subsystem extracted from {@code
@@ -38,18 +36,26 @@ import org.mockito.MockitoAnnotations;
  */
 class CiStatusEvaluatorTest {
 
-  @Mock private GitHubCheckRunClient checkRunClient;
-  @Mock private GitHubPullRequestClient prClient;
+  private GitHubCheckRunClient checkRunClient;
 
   private CiStatusEvaluator evaluator;
 
   @BeforeEach
   void setUp() {
-    MockitoAnnotations.openMocks(this);
+    // getAllCheckRuns/getAllCombinedStatus are default methods that page over the abstract
+    // getCheckRuns/getCombinedStatus the tests stub, so the mock must invoke real default methods
+    // while still mocking the abstract calls.
+    checkRunClient =
+        mock(
+            GitHubCheckRunClient.class,
+            invocation ->
+                invocation.getMethod().isDefault()
+                    ? invocation.callRealMethod()
+                    : Answers.RETURNS_DEFAULTS.answer(invocation));
     // Empty set falls back to BotIdentity.DEFAULT_LOGINS (thrillhousebot[bot],
     // thrillhouse-bot[bot]),
     // so the bot-token detection keeps recognizing the "thrillhousebot" checks these tests use.
-    evaluator = new CiStatusEvaluator(checkRunClient, prClient, new BotIdentity(Set.of()));
+    evaluator = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()));
   }
 
   @Nested
@@ -112,8 +118,7 @@ class CiStatusEvaluatorTest {
       // #9: bot detection is driven by the shared BotIdentity, not a hardcoded literal — a
       // deployment under a custom slug recognizes its own app's checks (here "acme-reviewer"),
       // which the old hardcoded "thrillhousebot" token would have missed.
-      var custom =
-          new CiStatusEvaluator(checkRunClient, prClient, BotIdentity.of("acme-reviewer[bot]"));
+      var custom = new CiStatusEvaluator(checkRunClient, BotIdentity.of("acme-reviewer[bot]"));
       var botRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L,
@@ -140,8 +145,7 @@ class CiStatusEvaluatorTest {
     void botTokenMatchingHandlesAConfiguredLoginWithoutTheBotSuffix() {
       // A configured login that does not end in "[bot]" is used as the token verbatim, so a check
       // whose name contains that bare token is still recognized as the bot's and dropped.
-      var custom =
-          new CiStatusEvaluator(checkRunClient, prClient, BotIdentity.of("acme-bot-login"));
+      var custom = new CiStatusEvaluator(checkRunClient, BotIdentity.of("acme-bot-login"));
       var botRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "acme-bot-login check", "completed", "failure", null);
@@ -452,7 +456,7 @@ class CiStatusEvaluatorTest {
       var fullRuns = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
       var fullStatuses =
           new java.util.ArrayList<GitHubCheckRunClient.CombinedStatus.StatusDetail>();
-      for (int i = 0; i < CiStatusEvaluator.CI_PER_PAGE; i++) {
+      for (int i = 0; i < GitHubCheckRunClient.CI_PER_PAGE; i++) {
         fullRuns.add(
             new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                 i, "run-" + i, "completed", "failure", null));
@@ -461,22 +465,23 @@ class CiStatusEvaluatorTest {
       }
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
-              new GitHubCheckRunClient.CheckRunsResponse(CiStatusEvaluator.CI_PER_PAGE, fullRuns));
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  GitHubCheckRunClient.CI_PER_PAGE, fullRuns));
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CombinedStatus(
-                  "failure", CiStatusEvaluator.CI_PER_PAGE, fullStatuses));
+                  "failure", GitHubCheckRunClient.CI_PER_PAGE, fullStatuses));
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
       // Deduped to the distinct names across the repeated pages.
-      assertEquals(2 * CiStatusEvaluator.CI_PER_PAGE, result.offendingChecks().size());
-      verify(checkRunClient, times(CiStatusEvaluator.CI_MAX_PAGES))
+      assertEquals(2 * GitHubCheckRunClient.CI_PER_PAGE, result.offendingChecks().size());
+      verify(checkRunClient, times(GitHubCheckRunClient.CI_MAX_PAGES))
           .getCheckRuns(
-              any(), any(), any(), any(), any(), eq(CiStatusEvaluator.CI_PER_PAGE), anyInt());
-      verify(checkRunClient, times(CiStatusEvaluator.CI_MAX_PAGES))
+              any(), any(), any(), any(), any(), eq(GitHubCheckRunClient.CI_PER_PAGE), anyInt());
+      verify(checkRunClient, times(GitHubCheckRunClient.CI_MAX_PAGES))
           .getCombinedStatus(
-              any(), any(), any(), any(), any(), eq(CiStatusEvaluator.CI_PER_PAGE), anyInt());
+              any(), any(), any(), any(), any(), eq(GitHubCheckRunClient.CI_PER_PAGE), anyInt());
     }
 
     @Test
@@ -586,16 +591,6 @@ class CiStatusEvaluatorTest {
   @Nested
   class ResolveRequiredContexts {
 
-    private void stubBaseRef(String ref) {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Test PR",
-                  "",
-                  new GitHubPullRequestClient.Ref("head", "feature"),
-                  new GitHubPullRequestClient.Ref("base", ref)));
-    }
-
     private GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck check(String context) {
       return new GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck(context, null);
     }
@@ -614,33 +609,18 @@ class CiStatusEvaluatorTest {
     }
 
     @Test
-    void returnsEmptyWhenPullRequestLookupThrows() {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
-          .thenThrow(new RuntimeException("boom"));
-
-      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
-      verifyNoInteractions(checkRunClient);
-    }
-
-    @Test
-    void returnsEmptyWhenPullRequestDetailsAreNull() {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42))).thenReturn(null);
-
-      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
-    }
-
-    @Test
-    void returnsEmptyWhenBaseRefIsNull() {
-      stubBaseRef(null);
-
-      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
+    void returnsEmptyWhenBaseBranchIsBlank() {
+      // The base branch is resolved upstream (webhook payload / resolveMissingPrDetails); when it
+      // is
+      // absent we gate on all checks and never look up branch rules — no PR fetch happens here.
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", "").isEmpty());
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", null).isEmpty());
       verify(checkRunClient, never())
           .getBranchRules(anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
     void fallsBackToClassicWhenRulesetLookupThrows() {
-      stubBaseRef("main");
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenThrow(new RuntimeException("rules boom"));
@@ -648,12 +628,11 @@ class CiStatusEvaluatorTest {
 
       assertEquals(
           List.of("build"),
-          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", "main").orElseThrow());
     }
 
     @Test
     void fallsBackToClassicWhenNoRulesetGovernsBranch() {
-      stubBaseRef("main");
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(List.of());
@@ -661,12 +640,11 @@ class CiStatusEvaluatorTest {
 
       assertEquals(
           List.of("build"),
-          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", "main").orElseThrow());
     }
 
     @Test
     void skipsRequiredStatusChecksRuleWithNullParameters() {
-      stubBaseRef("main");
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(List.of(new GitHubCheckRunClient.BranchRule("required_status_checks", null)));
@@ -675,14 +653,13 @@ class CiStatusEvaluatorTest {
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenThrow(new RuntimeException("Not Found, status code 404"));
 
-      var result = evaluator.resolveRequiredContexts("auth", "owner", "repo", 42);
+      var result = evaluator.resolveRequiredContexts("auth", "owner", "repo", "main");
       assertTrue(result.isPresent());
       assertTrue(result.orElseThrow().isEmpty());
     }
 
     @Test
     void skipsRequiredCheckWithNullContext() {
-      stubBaseRef("main");
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(List.of(statusCheckRule(check(null), check("build"))));
@@ -692,12 +669,11 @@ class CiStatusEvaluatorTest {
 
       assertEquals(
           List.of("build"),
-          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", "main").orElseThrow());
     }
 
     @Test
     void unionsRulesetAndClassicContextsWithoutDuplicates() {
-      stubBaseRef("main");
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(List.of(statusCheckRule(check("build"), check("lint"))));
@@ -706,18 +682,17 @@ class CiStatusEvaluatorTest {
 
       assertEquals(
           List.of("build", "lint", "deploy"),
-          evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).orElseThrow());
+          evaluator.resolveRequiredContexts("auth", "owner", "repo", "main").orElseThrow());
     }
 
     @Test
     void returnsEmptyWhenNeitherMechanismGovernsBranch() {
-      stubBaseRef("main");
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(null);
       stubClassic(null);
 
-      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", 42).isEmpty());
+      assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", "main").isEmpty());
     }
   }
 }
