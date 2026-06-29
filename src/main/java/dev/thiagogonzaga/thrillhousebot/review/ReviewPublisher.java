@@ -269,6 +269,12 @@ public class ReviewPublisher {
   private String noIssuesBody(ReviewResult result) {
     long unresolved = result.unresolvedPreviousCount();
     var sb = new StringBuilder();
+    // Offending checks and an unreadable CI source are independent hold reasons — a review can be
+    // held by both at once (one CI source failing while another is unreadable), so disclose each on
+    // its own rather than letting the offending branch suppress the unreadable note. This mirrors
+    // the
+    // summary table, which lists the two separately.
+    boolean ciHeld = false;
     if (!result.offendingCiChecks().isEmpty()) {
       sb.append(
           "ThrillhouseBot found no issues in this PR, but some checks are still pending or"
@@ -277,18 +283,17 @@ public class ReviewPublisher {
         String status = check.isFailing() ? "failed" : CI_PENDING;
         sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
       }
-      if (unresolved > 0) {
-        sb.append("\nAdditionally, ").append(ReviewResult.unresolvedPreviousMessage(unresolved));
-      }
-    } else if (result.ciUnreadable()) {
+      ciHeld = true;
+    }
+    if (result.ciUnreadable()) {
       sb.append(
           "ThrillhouseBot found no issues in this PR, but the CI status could not be read, so"
               + " approval is held until it can be confirmed.\n");
-      if (unresolved > 0) {
-        sb.append("\nAdditionally, ").append(ReviewResult.unresolvedPreviousMessage(unresolved));
-      }
-    } else if (unresolved > 0) {
-      sb.append(ReviewResult.unresolvedPreviousMessage(unresolved));
+      ciHeld = true;
+    }
+    if (unresolved > 0) {
+      sb.append(ciHeld ? "\nAdditionally, " : "")
+          .append(ReviewResult.unresolvedPreviousMessage(unresolved));
     }
     // The first-review summary comment carries the truncation banner; a follow-up posts no summary,
     // so disclose the partial review here instead — otherwise a truncation-only hold would surface
