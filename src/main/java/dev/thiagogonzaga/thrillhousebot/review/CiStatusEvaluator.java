@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import io.quarkus.logging.Log;
@@ -29,6 +30,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
+import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -46,7 +48,6 @@ public class CiStatusEvaluator {
   private static final String CI_SUCCESS = "success";
   private static final String CI_PENDING = "pending";
   private static final String CI_FAILING = "failing";
-  private static final String THRILLHOUSEBOT_TOKEN = "thrillhousebot";
   private static final Set<String> PASSING_CONCLUSIONS = Set.of(CI_SUCCESS, "skipped", "neutral");
 
   // GitHub serves 30 rows per page by default; request the 100 max and bound the page walk.
@@ -56,12 +57,29 @@ public class CiStatusEvaluator {
   private final GitHubCheckRunClient checkRunClient;
   private final GitHubPullRequestClient prClient;
 
+  // Bot-identity tokens (the slug of each "<slug>[bot]" login), derived from the shared BotIdentity
+  // bean so check/app matching honors the configured logins — including the alternate slug — rather
+  // than a single hardcoded literal.
+  private final Set<String> botTokens;
+
   @Inject
   public CiStatusEvaluator(
       @RestClient GitHubCheckRunClient checkRunClient,
-      @RestClient GitHubPullRequestClient prClient) {
+      @RestClient GitHubPullRequestClient prClient,
+      BotIdentity botIdentity) {
     this.checkRunClient = checkRunClient;
     this.prClient = prClient;
+    this.botTokens =
+        botIdentity.logins().stream()
+            .map(CiStatusEvaluator::loginToken)
+            .collect(Collectors.toUnmodifiableSet());
+  }
+
+  /**
+   * The slug part of a {@code <slug>[bot]} login, used as the substring token for check matching.
+   */
+  private static String loginToken(String login) {
+    return login.endsWith("[bot]") ? login.substring(0, login.length() - "[bot]".length()) : login;
   }
 
   /**
@@ -209,43 +227,27 @@ public class CiStatusEvaluator {
   }
 
   /**
-   * Pages through a CI list endpoint like {@link #collectPaged}, but reports whether the fetch was
-   * actually readable: {@code false} when it threw or returned a null body (GitHub returns an empty
-   * list, never null, past the last page), so the caller can tell "no checks" from "could not
-   * read".
+   * Pages through a GitHub CI list endpoint, applying {@code consume} to every row, and reports
+   * whether the fetch was actually readable. Stops on a short page (GitHub's last-page marker) or
+   * once {@link #CI_MAX_PAGES} is reached. Returns {@code false} when the call threw or a page came
+   * back as a null body (GitHub returns an empty list, never null, past the last page), so the
+   * caller can tell "no checks" from "could not read".
    */
   private <T> boolean collectReadable(
       IntFunction<List<T>> fetchPage, Consumer<T> consume, String what) {
-    var readable = new boolean[] {true};
     try {
-      collectPaged(
-          page -> {
-            var fetched = fetchPage.apply(page);
-            if (fetched == null) {
-              readable[0] = false;
-            }
-            return fetched;
-          },
-          consume);
+      List<T> page = null;
+      for (int p = 1; p <= CI_MAX_PAGES && (page == null || page.size() == CI_PER_PAGE); p++) {
+        page = fetchPage.apply(p);
+        if (page == null) {
+          return false;
+        }
+        page.forEach(consume);
+      }
+      return true;
     } catch (Exception e) {
       Log.warnf(e, "Failed to fetch %s", what);
       return false;
-    }
-    return readable[0];
-  }
-
-  /**
-   * Pages through a GitHub list endpoint, applying {@code consume} to every row. Stops on an empty
-   * or short page (GitHub's last-page marker) or once {@link #CI_MAX_PAGES} is reached.
-   */
-  private static <T> void collectPaged(IntFunction<List<T>> fetchPage, Consumer<T> consume) {
-    List<T> page = null;
-    for (int p = 1; p <= CI_MAX_PAGES && (page == null || page.size() == CI_PER_PAGE); p++) {
-      page = fetchPage.apply(p);
-      if (page == null) {
-        page = List.of();
-      }
-      page.forEach(consume);
     }
   }
 
@@ -255,15 +257,16 @@ public class CiStatusEvaluator {
       Set<String> seen,
       Set<String> offendingNames,
       List<ReviewResult.CiCheck> offending) {
-    if (isThrillhouseBotCheck(run.name(), run.app())
-        || isNotRequired(run.name(), requiredContexts)) {
-      return;
-    }
-    seen.add(run.name());
-    String ciStatus = classifyCheckRun(run.status(), run.conclusion());
-    if (!CI_SUCCESS.equals(ciStatus) && offendingNames.add(run.name())) {
-      offending.add(new ReviewResult.CiCheck(run.name(), "check-run", ciStatus, run.conclusion()));
-    }
+    addOffending(
+        run.name(),
+        isThrillhouseBotCheck(run.name(), run.app()),
+        classifyCheckRun(run.status(), run.conclusion()),
+        "check-run",
+        run.conclusion(),
+        requiredContexts,
+        seen,
+        offendingNames,
+        offending);
   }
 
   private void addOffendingStatus(
@@ -272,14 +275,40 @@ public class CiStatusEvaluator {
       Set<String> seen,
       Set<String> offendingNames,
       List<ReviewResult.CiCheck> offending) {
-    if (isThrillhouseBotCheck(status.context(), null)
-        || isNotRequired(status.context(), requiredContexts)) {
+    addOffending(
+        status.context(),
+        isThrillhouseBotCheck(status.context(), null),
+        classifyStatus(status.state()),
+        "status",
+        status.state(),
+        requiredContexts,
+        seen,
+        offendingNames,
+        offending);
+  }
+
+  /**
+   * Shared offending-check gating for both CI sources: skip the bot's own and non-required checks,
+   * record the context as seen (so the missing-check pass does not re-flag it), and add it to the
+   * offending list — deduped by name across the Check Runs and Commit Status APIs — unless it is a
+   * confirmed pass.
+   */
+  private void addOffending(
+      String name,
+      boolean isBotCheck,
+      String ciStatus,
+      String type,
+      String rawConclusion,
+      List<String> requiredContexts,
+      Set<String> seen,
+      Set<String> offendingNames,
+      List<ReviewResult.CiCheck> offending) {
+    if (isBotCheck || isNotRequired(name, requiredContexts)) {
       return;
     }
-    seen.add(status.context());
-    String ciStatus = classifyStatus(status.state());
-    if (!CI_SUCCESS.equals(ciStatus) && offendingNames.add(status.context())) {
-      offending.add(new ReviewResult.CiCheck(status.context(), "status", ciStatus, status.state()));
+    seen.add(name);
+    if (!CI_SUCCESS.equals(ciStatus) && offendingNames.add(name)) {
+      offending.add(new ReviewResult.CiCheck(name, type, ciStatus, rawConclusion));
     }
   }
 
@@ -335,7 +364,11 @@ public class CiStatusEvaluator {
     return app != null && (containsBotToken(app.slug()) || containsBotToken(app.name()));
   }
 
-  private static boolean containsBotToken(String value) {
-    return value != null && value.toLowerCase(Locale.ROOT).contains(THRILLHOUSEBOT_TOKEN);
+  private boolean containsBotToken(String value) {
+    if (value == null) {
+      return false;
+    }
+    var lower = value.toLowerCase(Locale.ROOT);
+    return botTokens.stream().anyMatch(lower::contains);
   }
 }

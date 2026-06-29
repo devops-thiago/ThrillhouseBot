@@ -19,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -44,7 +46,10 @@ class CiStatusEvaluatorTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    evaluator = new CiStatusEvaluator(checkRunClient, prClient);
+    // Empty set falls back to BotIdentity.DEFAULT_LOGINS (thrillhousebot[bot],
+    // thrillhouse-bot[bot]),
+    // so the bot-token detection keeps recognizing the "thrillhousebot" checks these tests use.
+    evaluator = new CiStatusEvaluator(checkRunClient, prClient, new BotIdentity(Set.of()));
   }
 
   @Nested
@@ -100,6 +105,35 @@ class CiStatusEvaluatorTest {
       assertTrue(result.offendingChecks().stream().anyMatch(c -> "lint".equals(c.name())));
       assertFalse(
           result.offendingChecks().stream().anyMatch(c -> c.name().contains("thrillhousebot")));
+    }
+
+    @Test
+    void usesConfiguredBotIdentityToIgnoreItsOwnChecks() {
+      // #9: bot detection is driven by the shared BotIdentity, not a hardcoded literal — a
+      // deployment under a custom slug recognizes its own app's checks (here "acme-reviewer"),
+      // which the old hardcoded "thrillhousebot" token would have missed.
+      var custom =
+          new CiStatusEvaluator(checkRunClient, prClient, BotIdentity.of("acme-reviewer[bot]"));
+      var botRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L,
+              "Some Check",
+              "completed",
+              "failure",
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
+                  1L, "acme-reviewer", "Acme Reviewer"));
+      var otherRun =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "build", "completed", "failure", null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(2, List.of(botRun, otherRun)));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      var result = custom.evaluateCiChecks("auth", "owner", "repo", "sha", null);
+
+      assertTrue(result.offendingChecks().stream().anyMatch(c -> "build".equals(c.name())));
+      assertFalse(result.offendingChecks().stream().anyMatch(c -> "Some Check".equals(c.name())));
     }
 
     @Test
