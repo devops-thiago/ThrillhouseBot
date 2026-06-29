@@ -654,6 +654,18 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void checkTitleForResultShouldNotCelebrateTruncatedButOtherwiseCleanReview() {
+      // A clean PR whose diff was truncated (#234) is held at COMMENT/neutral; the title must not
+      // show ✅ over that held conclusion. No findings, nothing unresolved, no offending CI, but
+      // omittedFiles > 0 → state COMMENT.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
+
+      assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+    }
+
+    @Test
     void shouldNotCelebrateWhenCiChecksAreOffendingDespiteNoFindings() {
       // No findings and nothing unresolved, but a required check is failing: the bot's own check
       // run must not show the green ✅ title nor the zero-issues celebration summary.

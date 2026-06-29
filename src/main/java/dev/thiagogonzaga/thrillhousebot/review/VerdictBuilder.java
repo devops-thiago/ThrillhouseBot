@@ -87,9 +87,12 @@ public class VerdictBuilder {
   }
 
   static String checkTitleForResult(ReviewResult result) {
-    if (!result.hasIssues()
-        && result.unresolvedPreviousCount() == 0
-        && result.offendingCiChecks().isEmpty()) {
+    // Derive the ✅ from the single verdict gate, not a parallel predicate: reviewState() is APPROVE
+    // only when nothing holds the review back — no findings, no unresolved previous findings, no
+    // offending CI, AND the diff was not truncated (#234). Re-deriving the "all clear" condition by
+    // hand here used to omit the truncation guard, so a truncated-but-clean PR showed ✅ over a
+    // neutral (held) conclusion.
+    if (result.reviewState() == ReviewState.APPROVE) {
       return CheckRunManager.CHECK_NAME + " ✅";
     }
     return CheckRunManager.CHECK_NAME;

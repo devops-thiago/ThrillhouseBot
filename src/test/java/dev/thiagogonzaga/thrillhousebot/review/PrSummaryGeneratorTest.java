@@ -16,14 +16,39 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class PrSummaryGeneratorTest {
 
-  private final PrSummaryGenerator generator = new PrSummaryGenerator();
+  private final PrSummaryGenerator generator = new PrSummaryGenerator(true);
+
+  @Test
+  void injectConstructorReadsDiagramEnabledFromConfig() {
+    // Exercises the production @Inject constructor (the other tests use the visible-for-tests
+    // boolean ctor): with the diagram feature enabled in config, a volunteered diagram renders.
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    var diagram = mock(ThrillhouseConfig.DiagramConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.diagram()).thenReturn(diagram);
+    when(diagram.enabled()).thenReturn(true);
+
+    var fromConfig = new PrSummaryGenerator(config);
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary =
+        fromConfig.generate(
+            1, 5, 0, List.of(), summaryWithDiagram("flowchart TD\n  A --> B"), result);
+
+    assertTrue(summary.contains("### Control-Flow Diagram"));
+  }
 
   @Test
   void shouldGenerateSummaryWithFindings() {
@@ -489,6 +514,21 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("```mermaid\nflowchart TD"));
     assertTrue(summary.contains("A[Start] --> B[End]"));
     assertTrue(summary.contains("</details>"));
+  }
+
+  @Test
+  void shouldNotRenderDiagramWhenFeatureDisabledEvenIfModelVolunteersOne() {
+    // The kill switch must hold at render too: a model that returns a walkthrough_diagram the
+    // prompt never requested must not produce a Control-Flow Diagram block when the feature is off.
+    var disabled = new PrSummaryGenerator(false);
+    var aiSummary = summaryWithDiagram("flowchart TD\n  A[Start] --> B[End]");
+    var result =
+        new ReviewResult(List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of());
+
+    var summary = disabled.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+    assertFalse(summary.contains("```mermaid"));
   }
 
   @Test

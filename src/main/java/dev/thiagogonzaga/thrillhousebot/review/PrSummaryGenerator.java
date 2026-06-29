@@ -15,8 +15,10 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -25,6 +27,21 @@ import java.util.stream.Collectors;
 /** Generates the PR summary comment posted on the first review. */
 @ApplicationScoped
 public class PrSummaryGenerator {
+
+  // The walkthrough-diagram master switch, read once. The render is gated on it as well as the
+  // prompt request, so the documented "no diagram is requested or rendered unless enabled" holds
+  // even if the model volunteers a walkthrough_diagram the prompt never asked for.
+  private final boolean diagramEnabled;
+
+  @Inject
+  public PrSummaryGenerator(ThrillhouseConfig config) {
+    this(config.review().diagram().enabled());
+  }
+
+  /** Visible for tests. */
+  PrSummaryGenerator(boolean diagramEnabled) {
+    this.diagramEnabled = diagramEnabled;
+  }
 
   /** The clean-review celebration; rendered inside the summary, never as a separate comment. */
   public static final String ZERO_ISSUES_MESSAGE =
@@ -286,8 +303,8 @@ public class PrSummaryGenerator {
    * raw Mermaid source (no fences); this validates it is a real diagram, neutralizes any stray code
    * fences so it cannot break out of the block, and drops anything oversized or unrecognized.
    */
-  private static void appendWalkthroughDiagram(StringBuilder sb, ReviewResponse.Summary aiSummary) {
-    if (aiSummary == null) {
+  private void appendWalkthroughDiagram(StringBuilder sb, ReviewResponse.Summary aiSummary) {
+    if (!diagramEnabled || aiSummary == null) {
       return;
     }
     String diagram = sanitizeDiagram(aiSummary.walkthroughDiagram());
