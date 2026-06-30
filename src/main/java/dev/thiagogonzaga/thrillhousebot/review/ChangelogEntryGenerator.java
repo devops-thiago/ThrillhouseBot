@@ -42,6 +42,14 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
   /** The assistant returns this sentinel when nothing in the diff warrants a CHANGELOG entry. */
   private static final String NONE = "NONE";
 
+  /** Markdown emphasis/quote/list markers stripped from the start before matching {@code NONE}. */
+  private static final String LEADING_MARKERS = "`*_>#-";
+
+  /**
+   * Markdown emphasis and trailing punctuation stripped from the end before matching {@code NONE}.
+   */
+  private static final String TRAILING_MARKERS = "`*_.!";
+
   static final String HEADER = "## 🤖 ThrillhouseBot — suggested CHANGELOG entry\n\n";
 
   static final String FOOTER =
@@ -111,7 +119,18 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
    * reply collapsing to {@code NONE} counts; a real entry that merely mentions the word does not.
    */
   private static boolean isNoneVerdict(String entry) {
-    String core = entry.replaceAll("^[\\s`*_>#-]+", "").replaceAll("[\\s`*_.!]++$", "");
-    return NONE.equalsIgnoreCase(core);
+    int start = 0;
+    int end = entry.length();
+    while (start < end && isTrimmable(entry.charAt(start), LEADING_MARKERS)) {
+      start++;
+    }
+    while (end > start && isTrimmable(entry.charAt(end - 1), TRAILING_MARKERS)) {
+      end--;
+    }
+    return NONE.equalsIgnoreCase(entry.substring(start, end));
+  }
+
+  private static boolean isTrimmable(char c, String markers) {
+    return Character.isWhitespace(c) || markers.indexOf(c) >= 0;
   }
 }

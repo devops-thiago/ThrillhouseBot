@@ -276,14 +276,28 @@ public class ReviewContextLoader {
     for (var comment : fetchIssueComments(auth, owner, repo, prNumber)) {
       var user = comment.user();
       var body = comment.body();
-      if (user != null
-          && botIdentity.matches(user.login())
-          && body != null
-          && body.stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING)) {
+      if (user != null && botIdentity.matches(user.login()) && isBotSummaryComment(body)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether an issue-comment body is the bot's PR summary. The heading may be preceded by the
+   * truncation blockquote banner ({@link ReviewResult#truncationNotice(int)}), so a
+   * starts-with-heading check alone would miss an already-posted summary on a large PR and re-post
+   * it on every re-review.
+   */
+  private static boolean isBotSummaryComment(String body) {
+    if (body == null) {
+      return false;
+    }
+    if (body.stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING)) {
+      return true;
+    }
+    return body.lines()
+        .anyMatch(line -> line.stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING));
   }
 
   List<GitHubCommentClient.IssueComment> fetchIssueComments(
