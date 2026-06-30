@@ -181,6 +181,21 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void truncatedCleanReviewReportsPartialReviewInsteadOfCelebrating() {
+    // A clean review whose diff was truncated (omittedFiles > 0) is held; the summary must say it
+    // is
+    // a partial review rather than claim the all-clear celebration over a partly-reviewed change.
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 2);
+
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(summary.contains("partial review"));
+  }
+
+  @Test
   void unresolvedStatusCasingDoesNotEnableCelebration() {
     var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "UNRESOLVED", "still"));
     var result =
@@ -323,6 +338,23 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("⏳ Pending"));
     assertTrue(summary.contains("**build**"));
     assertTrue(summary.contains("**test**"));
+  }
+
+  @Test
+  void cleanReviewHeldByBothCiAndTruncationReportsBoth() {
+    // When CI holds approval AND the diff was truncated, the summary must disclose both — the CI
+    // message must not mask the partial review.
+    var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks, 2);
+
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(summary.contains("required CI is not confirmed green"), summary);
+    assertTrue(summary.contains("too large to review in full"), summary);
+    assertTrue(summary.contains("partial review"), summary);
   }
 
   @Test
