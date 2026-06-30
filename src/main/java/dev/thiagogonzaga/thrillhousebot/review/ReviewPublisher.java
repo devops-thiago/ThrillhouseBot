@@ -25,6 +25,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -187,8 +188,18 @@ public class ReviewPublisher {
     if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
-    if (!inline.unanchored().isEmpty()) {
-      bodyParts.add(unanchoredFindingsBody(inline.unanchored()));
+    // On a first review the summary comment already lists the top findings, so drop those from the
+    // body to avoid reporting a finding twice — but keep any un-anchored finding the summary
+    // doesn't
+    // cover, so nothing is silently dropped. A follow-up posts no summary, so list them all.
+    var unanchoredToReport = inline.unanchored();
+    if (result.isFirstReview()) {
+      var summarized = new HashSet<>(result.keyFindings());
+      unanchoredToReport =
+          unanchoredToReport.stream().filter(f -> !summarized.contains(f)).toList();
+    }
+    if (!unanchoredToReport.isEmpty()) {
+      bodyParts.add(unanchoredFindingsBody(unanchoredToReport));
     }
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
@@ -465,7 +476,12 @@ public class ReviewPublisher {
       List<GitHubReviewClient.ReviewResponse> priorReviews) {
     try {
       for (var review : priorReviews) {
-        if ("PENDING".equals(review.state()) && botIdentity.matches(review.user().login())) {
+        // A review from a since-deleted account serializes as user:null; guard it (matching the
+        // first-visible-review check) so one ghost review can't NPE-abort the whole dismissal loop
+        // and leave the bot's own stale pending review undeleted.
+        if ("PENDING".equals(review.state())
+            && review.user() != null
+            && botIdentity.matches(review.user().login())) {
           reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
           Log.debugf(
               "Dismissed pending review %d on %s/%s #%d", review.id(), owner, repo, prNumber);
