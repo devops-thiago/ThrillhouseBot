@@ -87,4 +87,20 @@ class PrReviewPromptsContentTest {
         "config/IaC defect whose breakage is visible",
         "verifier severity calibration must let demonstrable config defects stand at high");
   }
+
+  @Test
+  void generatorPromptKeepsTheCrossLocationConsistencyGuard() {
+    String sys = PrReviewPrompts.SYSTEM;
+    // Regression: adding the config/IaC bullet once overwrote this bullet's opening line, orphaning
+    // its body and dropping the guard that forces the model to verify both sides of an "X does this
+    // but Y does not" claim before flagging it. Both header and body must remain, as one bullet.
+    assertContains(
+        sys,
+        "A claim that two places are inconsistent",
+        "the cross-location-inconsistency guard must remain a complete, headed bullet");
+    assertContains(
+        sys,
+        "both places verbatim from the provided material",
+        "the guard's body must stay attached to its header, not dangle as a fragment");
+  }
 }
