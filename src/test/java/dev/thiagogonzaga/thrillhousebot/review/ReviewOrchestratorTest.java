@@ -2877,13 +2877,23 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void firstReviewDoesNotRepeatAnUnanchoredFindingTheSummaryAlreadyLists() {
-      // On a first review the summary comment lists the top findings, so an un-anchored one among
-      // them must NOT also be listed in the review body (it would appear twice).
+    void firstReviewStillReportsAnUnanchoredTopFindingWithItsDescriptionInTheBody() {
+      // Even on a first review where the summary comment names a top finding, an un-anchored one
+      // must
+      // still be reported in the review body WITH its description: the summary's Key Findings is a
+      // brief TOC (no description), so the body is the only place the detail is surfaced. Repeating
+      // the title is the acceptable cost of never dropping the problem.
       var anchored =
           new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
       var floating =
-          new Finding(RiskLevel.CRITICAL, "missing.java", 99, "Floating bug", "f", null, null);
+          new Finding(
+              RiskLevel.CRITICAL,
+              "missing.java",
+              99,
+              "Floating bug",
+              "Null deref when the account is deleted.",
+              null,
+              null);
       var result =
           new ReviewResult(
               List.of(anchored, floating),
@@ -2893,7 +2903,8 @@ class ReviewOrchestratorTest {
               0,
               RiskLevel.CRITICAL,
               ReviewState.REQUEST_CHANGES,
-              true, // first review: summary comment carries the Key Findings
+              true, // first review: summary comment carries the Key Findings (brief, no
+              // description)
               "",
               List.of(),
               List.of(),
@@ -2918,7 +2929,8 @@ class ReviewOrchestratorTest {
               argThat(
                   req ->
                       req.body().contains("requested changes")
-                          && !req.body().contains("Floating bug")));
+                          && req.body().contains("Floating bug")
+                          && req.body().contains("Null deref when the account is deleted.")));
     }
 
     @Test
