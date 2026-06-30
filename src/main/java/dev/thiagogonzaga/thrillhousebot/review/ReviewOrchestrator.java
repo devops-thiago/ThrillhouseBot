@@ -219,7 +219,19 @@ public class ReviewOrchestrator {
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
-      reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
+      // The summary comment is first-review enrichment, not the review itself: a transient failure
+      // posting it must not abort before postReview and surface a hard FAILED check for a review
+      // that would otherwise post. Keep it best-effort; the review below is the critical step.
+      try {
+        reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
+      } catch (RuntimeException e) {
+        Log.warnf(
+            e,
+            "Failed to post the PR summary comment for %s/%s #%d — continuing to post the review",
+            req.owner(),
+            req.repo(),
+            req.prNumber());
+      }
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       reviewPublisher.postReview(
