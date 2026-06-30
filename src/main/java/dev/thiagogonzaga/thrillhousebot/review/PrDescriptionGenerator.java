@@ -18,7 +18,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistant;
-import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
@@ -77,30 +76,15 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
     if (inputs == null) {
       return null;
     }
-    String suggestion = callAssistant(inputs);
+    String suggestion =
+        callAssistant(
+            COMMAND,
+            () ->
+                describeAssistant.describe(
+                    PromptTemplateEscaper.fence(inputs.diff()),
+                    PromptTemplateEscaper.escape(inputs.title()),
+                    PromptTemplateEscaper.escape(inputs.body()),
+                    PromptTemplateEscaper.escape(inputs.instructions())));
     return suggestion == null ? null : HEADER + suggestion + FOOTER;
-  }
-
-  /**
-   * Calls the assistant with already-loaded inputs, fencing the diff and escaping the rest for
-   * templating. Null on failure.
-   */
-  private String callAssistant(Inputs inputs) {
-    try {
-      String suggestion =
-          describeAssistant.describe(
-              PromptTemplateEscaper.fence(inputs.diff()),
-              PromptTemplateEscaper.escape(inputs.title()),
-              PromptTemplateEscaper.escape(inputs.body()),
-              PromptTemplateEscaper.escape(inputs.instructions()));
-      if (suggestion == null || suggestion.isBlank()) {
-        Log.debug("Describe assistant produced an empty suggestion — posting nothing");
-        return null;
-      }
-      return suggestion.strip();
-    } catch (RuntimeException e) {
-      Log.warn("Describe assistant call failed — posting nothing", e);
-      return null;
-    }
   }
 }

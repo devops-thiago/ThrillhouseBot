@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import io.quarkus.logging.Log;
+import java.util.function.Supplier;
 
 /**
  * Shared loading for the on-request "suggestion from the diff" commands ({@code /describe}, {@code
@@ -77,6 +78,26 @@ public abstract class AbstractPrSuggestionGenerator {
                 instructionsResolver, owner, repo, defaultBranch, installationId, command)
             .content();
     return new Inputs(diff, title, body, instructions);
+  }
+
+  /**
+   * Runs an assistant call with the shared fail-soft contract: an empty/blank reply, or any {@link
+   * RuntimeException}, degrades to {@code null} (post nothing); a usable reply is returned
+   * stripped. {@code command} labels the operation in logs (e.g. {@code "/describe"}). Subclasses
+   * supply the actual call (and apply any command-specific post-filtering to the result).
+   */
+  protected String callAssistant(String command, Supplier<String> assistantCall) {
+    try {
+      String suggestion = assistantCall.get();
+      if (suggestion == null || suggestion.isBlank()) {
+        Log.debugf("%s assistant produced an empty suggestion — posting nothing", command);
+        return null;
+      }
+      return suggestion.strip();
+    } catch (RuntimeException e) {
+      Log.warnf(e, "%s assistant call failed — posting nothing", command);
+      return null;
+    }
   }
 
   private String fetchDiff(String auth, String owner, String repo, int prNumber, String command) {
