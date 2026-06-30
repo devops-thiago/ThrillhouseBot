@@ -393,10 +393,9 @@ public class ReviewPublisher {
     // that case post the finding without the suggestion: the problem is still reported, just not as
     // a
     // one-click fix.
+    // hasSuggestion() already guarantees a non-blank suggestionOld, so the newline check is safe.
     var multiLineSuggestion =
-        finding.hasSuggestion()
-            && finding.suggestionOld() != null
-            && finding.suggestionOld().strip().contains("\n");
+        finding.hasSuggestion() && finding.suggestionOld().strip().contains("\n");
     var includeSuggestion = finding.hasSuggestion() && (!multiLineSuggestion || range.isPresent());
 
     if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion)
