@@ -2780,10 +2780,56 @@ class ReviewOrchestratorTest {
       verify(reviewClient, times(1))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-      // The over-cap finding is not posted inline, but it's returned as unanchored so the review
-      // body still reports it — capped on inline noise, never silently dropped.
-      assertEquals(1, inline.unanchored().size());
-      assertEquals("Two", inline.unanchored().get(0).title());
+      // The over-cap finding is not posted inline, but it's returned as capSkipped so the review
+      // body still reports it with the right reason — capped on inline noise, never silently
+      // dropped
+      // or mislabeled as un-anchorable.
+      assertTrue(inline.unanchored().isEmpty());
+      assertEquals(1, inline.capSkipped().size());
+      assertEquals("Two", inline.capSkipped().get(0).title());
+    }
+
+    @Test
+    void shouldDiscloseCapSkippedFindingsInReviewBodyWithCapReasonNotAnchoringReason() {
+      when(reviewConfig.maxReviewComments()).thenReturn(1);
+      var first = new Finding(RiskLevel.MEDIUM, "src/A.java", 10, "One", "desc one", null, null);
+      var second = new Finding(RiskLevel.HIGH, "src/B.java", 20, "Two", "desc two", null, null);
+      var result =
+          new ReviewResult(
+              List.of(first, second),
+              0,
+              0,
+              2,
+              0,
+              RiskLevel.HIGH,
+              ReviewState.REQUEST_CHANGES,
+              false,
+              "",
+              List.of(),
+              List.of(),
+              0);
+      var resolver =
+          new DiffLineResolver(
+              Map.of(
+                  "src/A.java", fileDiffWithLine("src/A.java", 10).patch(),
+                  "src/B.java", fileDiffWithLine("src/B.java", 20).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), eq(true), anyInt())).thenReturn("body");
+
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("comment cap was reached")
+                          && req.body().contains("Two")
+                          && req.body().contains("desc two")
+                          && !req.body().contains("could not be anchored")));
     }
 
     @Test
