@@ -152,12 +152,7 @@ public class PrSummaryGenerator {
   private static void appendFindingsOrCelebration(StringBuilder sb, ReviewResult result) {
     if (result.hasIssues()) {
       sb.append("### Key Findings\n");
-      List<Finding> topFindings =
-          result.findings().stream()
-              .sorted((a, b) -> a.risk().compareTo(b.risk()))
-              .limit(5)
-              .toList();
-      for (Finding f : topFindings) {
+      for (Finding f : result.keyFindings()) {
         sb.append("- **")
             .append(f.risk().name())
             .append(":** ")

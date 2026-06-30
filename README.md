@@ -74,7 +74,7 @@ mention form, e.g. `@Thrillhousebot review`.
 | `/summary` | Post the PR summary, but only if one has not been generated yet (otherwise no-op) | write |
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
-| `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions | write |
+| `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a declaration can't be anchored) | write |
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
@@ -92,7 +92,9 @@ ignores `/review`, `/summary`, `/describe`, `/changelog`, and `/add-docs`, and d
 **`/add-docs`** — on demand, the bot reads the diff and proposes documentation comments for
 the public symbols changed in the PR, honoring the repository instructions and each file's
 language. Each suggestion is a committable `suggestion` block placed on the symbol's
-declaration line, so it only inserts docs without rewriting code. It spends AI budget per
+declaration (spanning the whole signature when it wraps), so it only inserts docs without
+rewriting code. When a declaration can't be anchored cleanly to the diff, the bot still posts
+a note with the drafted docs to add manually rather than dropping it. It spends AI budget per
 run; operators can turn it off with `REVIEW_ADD_DOCS_ENABLED=false`.
 
 ## Quick start
