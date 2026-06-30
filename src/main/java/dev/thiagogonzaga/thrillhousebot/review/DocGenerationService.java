@@ -135,11 +135,11 @@ public class DocGenerationService {
         return;
       }
 
-      int posted = postSuggestions(auth, task, pr.head().sha(), reviewable, response);
-      postComment(auth, task, summaryMessage(response, posted));
+      var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, response);
+      postComment(auth, task, summaryMessage(response, outcome));
       Log.infof(
-          "/add-docs posted %d documentation suggestion(s) on %s/%s #%d",
-          posted, task.owner(), task.repo(), task.prNumber());
+          "/add-docs posted %d suggestion(s) and %d note(s) on %s/%s #%d",
+          outcome.suggestions(), outcome.notes(), task.owner(), task.repo(), task.prNumber());
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Failed to handle /add-docs on %s/%s #%d", task.owner(), task.repo(), task.prNumber());
@@ -190,8 +190,23 @@ public class DocGenerationService {
     return parser.parse(raw);
   }
 
-  /** Posts each postable suggestion that anchors cleanly to the diff; returns how many landed. */
-  int postSuggestions(
+  /** How many /add-docs comments landed, split into committable suggestions and plain notes. */
+  record DocPostOutcome(int suggestions, int notes) {
+    int total() {
+      return suggestions + notes;
+    }
+  }
+
+  private enum DocPostResult {
+    SUGGESTION,
+    NOTE,
+    SKIPPED
+  }
+
+  /**
+   * Posts each postable suggestion that anchors cleanly to the diff; returns the per-kind counts.
+   */
+  DocPostOutcome postSuggestions(
       String auth,
       DocTask task,
       String commitSha,
@@ -202,76 +217,90 @@ public class DocGenerationService {
     // that trusts that filter rather than re-walking the glob here.
     var lineResolver = new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewable));
     int cap = config.review().maxReviewComments();
-    int posted = 0;
+    int suggestions = 0;
+    int notes = 0;
     for (DocGenerationResponse.DocSuggestion doc : response.docs()) {
-      if (posted >= cap) {
+      if (suggestions + notes >= cap) {
         Log.debugf(
-            "/add-docs reached the %d-suggestion cap on %s/%s #%d",
+            "/add-docs reached the %d-comment cap on %s/%s #%d",
             cap, task.owner(), task.repo(), task.prNumber());
         break;
       }
-      if (doc.isPostable() && postDoc(auth, task, commitSha, doc, lineResolver)) {
-        posted++;
+      if (!doc.isPostable()) {
+        continue;
+      }
+      switch (postDoc(auth, task, commitSha, doc, lineResolver)) {
+        case SUGGESTION -> suggestions++;
+        case NOTE -> notes++;
+        case SKIPPED -> {
+          // Not posted — nothing to count.
+        }
       }
     }
-    return posted;
+    return new DocPostOutcome(suggestions, notes);
   }
 
-  private boolean postDoc(
+  private DocPostResult postDoc(
       String auth,
       DocTask task,
       String commitSha,
       DocGenerationResponse.DocSuggestion doc,
       DiffLineResolver lineResolver) {
+    boolean multiLine = doc.suggestionOld().strip().contains("\n");
     var resolved = lineResolver.resolveRightSideLine(doc.file(), doc.line());
-    // Require the exact declaration line: a docstring placed on a snapped-to neighbour would
-    // rewrite the wrong line on commit, so a near miss is dropped rather than guessed.
-    if (resolved.isEmpty() || resolved.getAsInt() != doc.line()) {
+    // A single-line docstring is anchored at doc.line() itself, so a snapped-to neighbour would
+    // rewrite the wrong line on commit — drop a near miss. A multi-line declaration is anchored by
+    // its verbatim range (below), so the exact line isn't required; only that the file is in the
+    // diff, which also gives the note fallback a valid line to attach to.
+    if (resolved.isEmpty() || (!multiLine && resolved.getAsInt() != doc.line())) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — declaration line is not in the diff",
           doc.file(), doc.line());
-      return false;
+      return DocPostResult.SKIPPED;
     }
     if (!preservesExistingCode(doc)) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — replacement would not keep the existing line",
           doc.file(), doc.line());
-      return false;
+      return DocPostResult.SKIPPED;
     }
     // A wrapped declaration spans several lines, so a committable suggestion must overwrite the
     // whole span, not just doc.line() — otherwise the commit replaces only the first line and
     // leaves
     // the rest in place, corrupting the file. Resolve the range from the verbatim old code's
-    // position in the diff (#71).
-    boolean multiLine = doc.suggestionOld().strip().contains("\n");
+    // position in the diff (#71), which also anchors it independently of doc.line().
     var range =
         multiLine
             ? lineResolver.resolveSuggestionRange(doc.file(), doc.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
     if (multiLine && range.isEmpty()) {
       // The multi-line declaration can't be anchored to a single hunk, so a committable suggestion
-      // would mis-apply. Still surface the missing-docs problem: post a note with the drafted docs
-      // to add manually, rather than dropping it silently.
-      return postInline(
-          auth,
-          task,
-          commitSha,
-          doc.file(),
-          doc.line(),
-          null,
-          suggestionFormatter.formatDocNote(doc.symbol(), doc.suggestionNew()));
+      // would mis-apply. Still surface the missing-docs problem: post a note (anchored at the
+      // nearest in-diff line) with the drafted docs to add manually, rather than dropping it.
+      boolean posted =
+          postInline(
+              auth,
+              task,
+              commitSha,
+              doc.file(),
+              resolved.getAsInt(),
+              null,
+              suggestionFormatter.formatDocNote(doc.symbol(), doc.suggestionNew()));
+      return posted ? DocPostResult.NOTE : DocPostResult.SKIPPED;
     }
     Integer startLine = range.map(DiffLineResolver.LineRange::startLine).orElse(null);
     int endLine = range.map(DiffLineResolver.LineRange::endLine).orElse(doc.line());
-    return postInline(
-        auth,
-        task,
-        commitSha,
-        doc.file(),
-        endLine,
-        startLine,
-        suggestionFormatter.formatDocComment(
-            doc.symbol(), doc.suggestionOld(), doc.suggestionNew()));
+    boolean posted =
+        postInline(
+            auth,
+            task,
+            commitSha,
+            doc.file(),
+            endLine,
+            startLine,
+            suggestionFormatter.formatDocComment(
+                doc.symbol(), doc.suggestionOld(), doc.suggestionNew()));
+    return posted ? DocPostResult.SUGGESTION : DocPostResult.SKIPPED;
   }
 
   /**
@@ -314,12 +343,31 @@ public class DocGenerationService {
     return doc.suggestionNew().contains(doc.suggestionOld().strip());
   }
 
-  private String summaryMessage(DocGenerationResponse response, int posted) {
-    if (posted > 0) {
+  private String summaryMessage(DocGenerationResponse response, DocPostOutcome outcome) {
+    int suggestions = outcome.suggestions();
+    int notes = outcome.notes();
+    if (suggestions > 0 && notes > 0) {
       return "📝 ThrillhouseBot added **"
-          + posted
+          + suggestions
+          + "** committable documentation suggestion(s) and drafted **"
+          + notes
+          + "** more it couldn't post as committable suggestions (declarations that don't map"
+          + " cleanly onto the diff — each note has the docs to add manually). Review each one and"
+          + " commit the suggestions you want to keep.";
+    }
+    if (suggestions > 0) {
+      return "📝 ThrillhouseBot added **"
+          + suggestions
           + "** documentation suggestion(s) for changed symbols. "
           + "Review each one and commit the suggestions you want to keep.";
+    }
+    if (notes > 0) {
+      // Notes have no committable ```suggestion block, so don't tell the maintainer to "commit"
+      // them.
+      return "📝 ThrillhouseBot drafted documentation for **"
+          + notes
+          + "** symbol(s) it couldn't post as committable suggestions (the declaration doesn't map"
+          + " cleanly onto the diff). Each note has the docs to add manually.";
     }
     return response.docs().isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
   }

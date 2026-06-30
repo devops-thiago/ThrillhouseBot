@@ -2168,6 +2168,28 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldDismissBotPendingReviewDespiteAGhostReviewWithNullUser() {
+      // A prior review from a since-deleted account serializes with user:null. It must not
+      // NPE-abort
+      // the loop — otherwise the bot's own pending review (ordered after it) is never dismissed and
+      // the next review hits GitHub's one-pending-review-per-user limit.
+      var ghost = new GitHubReviewClient.ReviewResponse(5L, "", "PENDING", "sha", null);
+      var botPending =
+          new GitHubReviewClient.ReviewResponse(
+              99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
+
+      reviewPublisher.dismissPendingBotReviews(
+          "Bearer tok", "owner", "repo", 7, List.of(ghost, botPending));
+
+      verify(reviewClient)
+          .deletePendingReview(
+              eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), eq(99L));
+      verify(reviewClient, never())
+          .deletePendingReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), eq(5L));
+    }
+
+    @Test
     void shouldContinueWhenDismissPendingReviewsFails() {
       var pending =
           new GitHubReviewClient.ReviewResponse(
@@ -2786,6 +2808,99 @@ class ReviewOrchestratorTest {
                           && req.body().contains("missing.java:99")
                           && req.body().contains("Null deref when the account is deleted.")
                           && !req.body().contains("Anchored bug")));
+    }
+
+    @Test
+    void firstReviewDoesNotRepeatAnUnanchoredFindingTheSummaryAlreadyLists() {
+      // On a first review the summary comment lists the top findings, so an un-anchored one among
+      // them must NOT also be listed in the review body (it would appear twice).
+      var anchored =
+          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
+      var floating =
+          new Finding(RiskLevel.CRITICAL, "missing.java", 99, "Floating bug", "f", null, null);
+      var result =
+          new ReviewResult(
+              List.of(anchored, floating),
+              1,
+              1,
+              0,
+              0,
+              RiskLevel.CRITICAL,
+              ReviewState.REQUEST_CHANGES,
+              true, // first review: summary comment carries the Key Findings
+              "",
+              List.of(),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("requested changes")
+                          && !req.body().contains("Floating bug")));
+    }
+
+    @Test
+    void firstReviewStillListsAnUnanchoredFindingBeyondTheSummaryTopFive() {
+      // The summary lists only the top 5; an un-anchored finding beyond that is not in the summary,
+      // so it must still be reported in the review body — deduping must not drop it.
+      var findings = new java.util.ArrayList<Finding>();
+      // Five high-risk findings that anchor cleanly fill the summary's Key Findings...
+      for (int i = 1; i <= 5; i++) {
+        findings.add(new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Top " + i, "d", null, null));
+      }
+      // ...and a sixth, lower-risk finding whose line is outside the diff (un-anchored, beyond top
+      // 5).
+      var beyond =
+          new Finding(RiskLevel.LOW, "missing.java", 99, "Beyond top five", "d", null, null);
+      findings.add(beyond);
+      var result =
+          new ReviewResult(
+              findings,
+              0,
+              5,
+              0,
+              1,
+              RiskLevel.HIGH,
+              ReviewState.REQUEST_CHANGES,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.body().contains("Beyond top five")));
     }
 
     @Test

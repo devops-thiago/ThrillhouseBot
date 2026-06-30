@@ -75,8 +75,23 @@ public record ReviewResult(
         false);
   }
 
+  /** How many findings the PR summary lists under "Key Findings". */
+  public static final int KEY_FINDINGS_COUNT = 5;
+
   public boolean hasIssues() {
     return !findings.isEmpty();
+  }
+
+  /**
+   * The highest-risk findings the first-review summary comment lists under "Key Findings" (top
+   * {@value #KEY_FINDINGS_COUNT} by risk). Shared with the review-body fallback so it can avoid
+   * re-listing findings the summary already shows.
+   */
+  public List<Finding> keyFindings() {
+    return findings.stream()
+        .sorted((a, b) -> a.risk().compareTo(b.risk()))
+        .limit(KEY_FINDINGS_COUNT)
+        .toList();
   }
 
   /** True when CI holds approval back: a required check is offending, or CI could not be read. */

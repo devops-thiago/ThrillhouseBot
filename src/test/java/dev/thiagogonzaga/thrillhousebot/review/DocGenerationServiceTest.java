@@ -209,6 +209,39 @@ class DocGenerationServiceTest {
     assertFalse(inline.body().contains("```suggestion"), inline.body());
     assertTrue(inline.body().contains("missing documentation"), inline.body());
     assertTrue(inline.body().contains("bar"), inline.body());
+    // The summary must not tell the maintainer to "commit" a note — it has no committable block.
+    assertTrue(postedSummary().contains("add manually"), postedSummary());
+    assertFalse(
+        postedSummary().contains("commit the suggestions you want to keep"), postedSummary());
+  }
+
+  @Test
+  void anchorsAMultiLineSuggestionByContentWhenTheReportedLineIsOffByOne() {
+    // The model reports doc.line()=10, but the wrapped declaration is on right-side lines 11-13.
+    // The exact-line gate must not drop a multi-line suggestion — its verbatim block still resolves
+    // a committable range, so it anchors 11..13 rather than being silently dropped (#6).
+    var patch =
+        """
+        @@ -10,0 +11,3 @@
+        +public int wrap(
+        +    int x,
+        +    int y) {
+        """;
+    prWithFiles(new FileDiff("src/Wrap.java", "added", 3, 0, 3, patch));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Wrap.java","line":10,"symbol":"wrap",
+            "suggestion_old":"public int wrap(\\n    int x,\\n    int y) {",
+            "suggestion_new":"/** Adds x and y. */\\npublic int wrap(\\n    int x,\\n    int y) {"}]}
+            """);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals(13, inline.line());
+    assertEquals(11, inline.startLine());
+    assertTrue(inline.body().contains("```suggestion"), inline.body());
   }
 
   @Test
