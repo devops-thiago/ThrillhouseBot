@@ -340,6 +340,9 @@ public class CiStatusEvaluator {
     return app != null && (containsBotToken(app.slug()) || containsBotToken(app.name()));
   }
 
+  // Deliberately a substring test, not BotIdentity.matches (exact login set): a check's app slug or
+  // name lacks the "[bot]" suffix that BotIdentity strips, so an exact match would never recognise
+  // the bot's own check. This is why identity matching is not reused here.
   private boolean containsBotToken(String value) {
     if (value == null) {
       return false;

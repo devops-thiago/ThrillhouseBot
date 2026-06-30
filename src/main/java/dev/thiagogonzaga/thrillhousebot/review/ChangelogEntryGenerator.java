@@ -85,37 +85,23 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
     if (inputs == null) {
       return null;
     }
-    String entry = callAssistant(inputs, prNumber);
-    return entry == null ? null : HEADER + entry + FOOTER;
-  }
-
-  /**
-   * Calls the assistant with already-loaded inputs, fencing the diff and escaping the rest for
-   * templating. Null on failure.
-   */
-  private String callAssistant(Inputs inputs, int prNumber) {
-    try {
-      String entry =
-          changelogAssistant.draft(
-              PromptTemplateEscaper.fence(inputs.diff()),
-              String.valueOf(prNumber),
-              PromptTemplateEscaper.escape(inputs.title()),
-              PromptTemplateEscaper.escape(inputs.body()),
-              PromptTemplateEscaper.escape(inputs.instructions()));
-      if (entry == null || entry.isBlank()) {
-        Log.debug("Changelog assistant produced an empty entry — posting nothing");
-        return null;
-      }
-      entry = entry.strip();
-      if (isNoneVerdict(entry)) {
+    String entry =
+        callAssistant(
+            COMMAND,
+            () ->
+                changelogAssistant.draft(
+                    PromptTemplateEscaper.fence(inputs.diff()),
+                    String.valueOf(prNumber),
+                    PromptTemplateEscaper.escape(inputs.title()),
+                    PromptTemplateEscaper.escape(inputs.body()),
+                    PromptTemplateEscaper.escape(inputs.instructions())));
+    if (entry == null || isNoneVerdict(entry)) {
+      if (entry != null) {
         Log.debug("Changelog assistant judged the change not changelog-worthy — posting nothing");
-        return null;
       }
-      return entry;
-    } catch (RuntimeException e) {
-      Log.warn("Changelog assistant call failed — posting nothing", e);
       return null;
     }
+    return HEADER + entry + FOOTER;
   }
 
   /**
