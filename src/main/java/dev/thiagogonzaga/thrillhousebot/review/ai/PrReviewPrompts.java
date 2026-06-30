@@ -141,6 +141,7 @@ public final class PrReviewPrompts {
               schema or constraint it violates. Such a finding needs no runtime input trace; but if
               the rule it cites cannot be confirmed from the diff and provided context, it is a
               confidence "medium"/"low" finding phrased as a verification request, not "high".
+            - A claim that two places are inconsistent ("X does this but Y does not") must quote
               both places verbatim from the provided material and confirm they belong to the
               same enclosing unit (the same function, block, or scope). When the two places are
               in different units, first verify the units are genuinely equivalent; when the
