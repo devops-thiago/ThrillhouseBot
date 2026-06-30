@@ -170,7 +170,11 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
-      if (result.ciHoldsApproval()) {
+      if (result.ciHoldsApproval() && result.truncated()) {
+        // Both holds apply — report both so a truncated review isn't masked by the CI message.
+        sb.append(
+            "No new issues found in the reviewed portion of this PR, but it cannot be approved: required CI is not confirmed green, and the diff was too large to review in full (a partial review).\n\n");
+      } else if (result.ciHoldsApproval()) {
         sb.append(
             "No new issues found in this PR, but the review cannot be approved until required CI is confirmed green.\n\n");
       } else if (result.truncated()) {

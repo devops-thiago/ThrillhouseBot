@@ -110,15 +110,25 @@ public class VerdictBuilder {
           result.mediumCount(),
           result.lowCount());
     }
-    // No new findings — surface CI gating first, since it also holds approval back.
+    // No new findings — surface CI gating first, since it also holds approval back. When the diff
+    // was also truncated, append that so a partial review is disclosed on this surface too (#234).
+    var truncationSuffix =
+        result.truncated()
+            ? String.format(
+                " The diff was also too large to review in full (%d file(s) omitted) — partial"
+                    + " review.",
+                result.omittedFiles())
+            : "";
     if (!result.offendingCiChecks().isEmpty()) {
       return String.format(
-          "No new issues found, but %d required CI check(s) are still pending or failing.",
-          result.offendingCiChecks().size());
+              "No new issues found, but %d required CI check(s) are still pending or failing.",
+              result.offendingCiChecks().size())
+          + truncationSuffix;
     }
     if (result.ciUnreadable()) {
       return "No new issues found, but the CI status could not be read — holding approval until it"
-          + " can be confirmed.";
+          + " can be confirmed."
+          + truncationSuffix;
     }
     // A truncated diff holds approval at neutral (#234); the summary must say so rather than fall
     // through to the all-clear celebration, which would caption a held check run as "no issues".
