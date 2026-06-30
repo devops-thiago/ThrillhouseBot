@@ -25,8 +25,8 @@ import jakarta.inject.Inject;
  * Turns a loaded {@link ReviewContextLoader.ReviewContext} into the {@link
  * AiReviewService.PromptInputs} the model is called with — fencing the diff, escaping the prose
  * slots, and assembling the trailing guidance (labels + diagram request + repository instructions)
- * into the single {@code repoInstructions} slot. Extracted from {@code ReviewOrchestrator} (#250)
- * as the pure prompt-shaping transform.
+ * into the single {@code repoInstructions} slot. Extracted from {@code ReviewOrchestrator} as the
+ * pure prompt-shaping transform.
  */
 @ApplicationScoped
 public class ReviewPromptAssembler {

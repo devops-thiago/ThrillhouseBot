@@ -32,9 +32,7 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 /**
  * Posts a review's outcome to GitHub — inline finding comments, the review verdict (or no-issues
  * body), dismissal of the bot's stale pending review, and resolution of addressed finding threads.
- * Extracted from {@code ReviewOrchestrator} (#250) as the write side of the pipeline; the #215
- * fallback (surface findings in the review body when no inline comment anchors) and #74 (reuse the
- * already-fetched reviews for dismissal) behaviours move verbatim.
+ * The write side of the pipeline.
  */
 @ApplicationScoped
 public class ReviewPublisher {
@@ -252,13 +250,18 @@ public class ReviewPublisher {
     }
     // A COMMENT held back only by pending/failed CI (no findings, nothing unresolved) merely
     // restates the summary comment the first review already posts, so emitting it too would
-    // duplicate that message. Skip it on the first review and let the summary stand alone.
+    // duplicate that message. Skip it on the first review and let the summary stand alone — EXCEPT
+    // when the hold is (also) a truncated diff: the summary comment is posted best-effort, so
+    // a transient failure would leave the partial review disclosed nowhere on the PR (CI holds stay
+    // visible via the red checks themselves; truncation has no other PR surface). Post the body for
+    // a truncated review so the partial-review notice is never lost.
     // Unresolved previous findings are excluded — their COMMENT carries distinct "reply on the
     // thread" guidance the summary lacks, so it still posts. Follow-ups post no summary, so the
     // COMMENT is their only signal; REQUEST_CHANGES always posts; the merge gate is the check run.
     if (result.reviewState() == ReviewState.COMMENT
         && result.isFirstReview()
-        && result.unresolvedPreviousCount() == 0) {
+        && result.unresolvedPreviousCount() == 0
+        && !result.truncated()) {
       return;
     }
     // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
@@ -310,10 +313,11 @@ public class ReviewPublisher {
       sb.append(ciHeld ? "\nAdditionally, " : "")
           .append(ReviewResult.unresolvedPreviousMessage(unresolved));
     }
-    // The first-review summary comment carries the truncation banner; a follow-up posts no summary,
-    // so disclose the partial review here instead — otherwise a truncation-only hold would surface
-    // no reason at all (and used to misreport "0 previous finding(s) remain unresolved").
-    if (result.truncated() && !result.isFirstReview()) {
+    // Disclose the partial review here whenever the diff was truncated — on follow-ups (which post
+    // no summary) and on first reviews too: the first-review summary banner is posted best-effort,
+    // so relying on it alone would lose the only PR-visible notice if that post fails. The
+    // summary may repeat it; a duplicated notice is the acceptable cost of never dropping it.
+    if (result.truncated()) {
       if (!sb.isEmpty()) {
         sb.append("\n\n");
       }
@@ -382,7 +386,7 @@ public class ReviewPublisher {
     }
 
     // A suggestion whose old code spans several lines is posted as a multi-line comment so the
-    // GitHub suggestion overwrites the whole range, not just the anchor line (#71). The range is
+    // GitHub suggestion overwrites the whole range, not just the anchor line. The range is
     // resolved from the verbatim old code's position in the diff; a blank/single-line/unresolvable
     // anchor leaves it empty and the comment stays single-line.
     var range =
@@ -391,14 +395,12 @@ public class ReviewPublisher {
             : Optional.<DiffLineResolver.LineRange>empty();
 
     // A multi-line suggestion must overwrite its whole range. When that range can't be resolved
-    // (the
-    // old code doesn't match the diff verbatim, is ambiguous, or straddles a hunk), attaching the
-    // suggestion would post it against a single line — applying it then overwrites only the anchor
-    // line and leaves the rest of the quoted block in place (the same #71 multi-line corruption).
-    // In
-    // that case post the finding without the suggestion: the problem is still reported, just not as
-    // a
-    // one-click fix.
+    // (the old code doesn't match the diff verbatim, is ambiguous, or straddles a hunk), attaching
+    // the suggestion would post it against a single line — applying it then overwrites only the
+    // anchor line and leaves the rest of the quoted block in place (the same multi-line
+    // corruption).
+    // In that case post the finding without the suggestion: the problem is still reported, just not
+    // as a one-click fix.
     // hasSuggestion() already guarantees a non-blank suggestionOld, so the newline check is safe.
     var multiLineSuggestion =
         finding.hasSuggestion() && finding.suggestionOld().strip().contains("\n");
