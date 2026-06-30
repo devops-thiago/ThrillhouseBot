@@ -3944,6 +3944,41 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void reviewSurvivesAPriorReviewFromADeletedAccount() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+        // A prior review whose author account was deleted serializes as user=null. The
+        // first-visible-review check must not NPE on it (it simply isn't the bot's review).
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.ReviewResponse(
+                        9L, "ghost", "COMMENTED", "abcdefgh", null)));
+
+        orchestrator.review(request());
+
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+      }
+    }
+
+    @Test
     void reviewShouldDowngradeToNeutralAndPostOnlySummaryWhenRequiredCheckFails() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);

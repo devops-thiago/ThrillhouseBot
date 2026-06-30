@@ -60,6 +60,16 @@ class DocGenerationServiceTest {
       +  return y + 1;
       +}""";
 
+  // A method whose signature wraps across right-side lines 1-3.
+  private static final String WRAP_PATCH =
+      """
+      @@ -0,0 +1,5 @@
+      +public int wrap(
+      +    int x,
+      +    int y) {
+      +  return x + y;
+      +}""";
+
   @Mock private GitHubAuthClient authClient;
   @Mock private GitHubPullRequestClient prClient;
   @Mock private GitHubReviewClient reviewClient;
@@ -152,6 +162,47 @@ class DocGenerationServiceTest {
     assertTrue(inline.body().contains("public int bar(int x) {"), inline.body());
     assertTrue(inline.body().contains("bar(int)"), inline.body());
     assertTrue(postedSummary().contains("**1**"));
+  }
+
+  @Test
+  void postsMultiLineSuggestionAnchoredToTheWholeDeclarationRange() {
+    // A wrapped signature (3 lines) must post as a multi-line suggestion spanning start_line..line,
+    // so applying it overwrites the whole declaration — not just line 1, which would corrupt the
+    // file (the #71 multi-line anchoring the review path already does).
+    prWithFiles(new FileDiff("src/Wrap.java", "added", 5, 0, 5, WRAP_PATCH));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Wrap.java","line":1,"symbol":"wrap",
+            "suggestion_old":"public int wrap(\\n    int x,\\n    int y) {",
+            "suggestion_new":"/** Adds x and y. */\\npublic int wrap(\\n    int x,\\n    int y) {"}]}
+            """);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals(3, inline.line());
+    assertEquals(1, inline.startLine());
+    assertEquals("RIGHT", inline.startSide());
+  }
+
+  @Test
+  void skipsMultiLineSuggestionThatCannotBeAnchored() {
+    // A multi-line suggestion whose old code does not match the diff contiguously can't be anchored
+    // to a single hunk range; it must be dropped rather than mis-anchored to one line.
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {\\n  return x * 99;",
+            "suggestion_new":"/** Doubles. */\\npublic int bar(int x) {\\n  return x * 99;"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
