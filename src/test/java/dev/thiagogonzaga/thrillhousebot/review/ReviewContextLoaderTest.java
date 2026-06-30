@@ -464,6 +464,16 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void shouldDetectSummaryCommentWithTruncationBannerPrepended() {
+      stubComments(
+          comment(
+              ReviewResult.truncationNotice(87) + PrSummaryGenerator.SUMMARY_HEADING + "\n\nbody",
+              "thrillhousebot[bot]"));
+
+      assertTrue(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
     void shouldIgnoreASummaryHeadingPostedBySomeoneElse() {
       // A human (or another bot) quoting the heading must not be mistaken for the bot's own
       // summary.
