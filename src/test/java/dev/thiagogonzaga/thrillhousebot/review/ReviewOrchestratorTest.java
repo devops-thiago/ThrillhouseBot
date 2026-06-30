@@ -248,8 +248,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertNotNull(result);
@@ -272,8 +271,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       // The verdict is held back from APPROVE — a partial review must not gate-approve the PR...
@@ -299,8 +297,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       var summary = result.summaryMarkdown();
@@ -321,8 +318,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
       assertEquals(ReviewState.COMMENT, result.reviewState());
 
@@ -439,8 +435,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertNotNull(result);
@@ -473,8 +468,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(1, result.criticalCount());
@@ -505,8 +499,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(1, result.totalFindings());
@@ -539,8 +532,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(1, result.highCount());
@@ -571,8 +563,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(1, result.mediumCount());
@@ -603,8 +594,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(1, result.lowCount());
@@ -632,8 +622,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(4, result.totalFindings());
@@ -674,8 +663,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(2, result.previousStatuses().size());
@@ -702,8 +690,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(4, 120, 45),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertTrue(result.summaryMarkdown().contains("Test summary content"));
@@ -723,8 +710,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals("Clean summary with celebration", result.summaryMarkdown());
@@ -754,8 +740,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(1, result.lowCount());
@@ -813,10 +798,9 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkSummaryForResultShouldDiscloseUnreadableCiAlongsideAnOffendingCheck() {
-      // An offending check AND an unreadable CI source are independent holds that can both apply;
-      // the
-      // caption must disclose both, not let the offending branch suppress the unreadable note — the
-      // PR review comment already discloses both, so the check-run caption must agree.
+      // An offending check and an unreadable CI source are independent holds that can both apply.
+      // The caption must disclose both, not let the offending branch suppress the unreadable note
+      // — the PR review comment already discloses both, so the check-run caption must agree.
       var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
       var result =
           new ReviewResult(
@@ -897,8 +881,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(1, 1, 0),
               List.of(),
               List.of(),
-              List.of(),
-              true, // ciUnreadable
+              new CiStatusEvaluator.CiEvaluation(List.of(), true),
               List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
@@ -3654,8 +3637,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               unresolvedPrevious,
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
@@ -3680,8 +3662,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               unresolvedPrevious,
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
@@ -3700,8 +3681,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
@@ -3722,8 +3702,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              List.of(),
-              false,
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
       assertEquals(ReviewState.APPROVE, result.reviewState());
@@ -3854,8 +3833,7 @@ class ReviewOrchestratorTest {
           new VerdictBuilder.DiffStats(0, 0, 0),
           List.of(), // changedFiles
           List.of(),
-          List.of(),
-          false, // ciUnreadable
+          new CiStatusEvaluator.CiEvaluation(List.of(), false),
           backstop);
     }
 
@@ -4691,8 +4669,7 @@ class ReviewOrchestratorTest {
               new VerdictBuilder.DiffStats(0, 0, 0),
               List.of(),
               List.of(),
-              offending,
-              false,
+              new CiStatusEvaluator.CiEvaluation(offending, false),
               List.of());
 
       assertEquals(ReviewState.COMMENT, result.reviewState());

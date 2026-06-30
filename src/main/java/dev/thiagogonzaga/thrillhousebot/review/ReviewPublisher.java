@@ -199,11 +199,6 @@ public class ReviewPublisher {
     }
   }
 
-  /**
-   * A review-body list of findings, used when none could be anchored as inline comments (their
-   * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
-   * which posts no summary comment — without it the findings would surface only as a red check run.
-   */
   /** Review-body sections for findings not posted inline — un-anchored and/or cap-skipped. */
   private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
     var parts = new ArrayList<String>();
@@ -230,8 +225,11 @@ public class ReviewPublisher {
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
         .append(
-            " issue(s) not posted inline because the per-run comment cap was reached — re-run"
-                + " `/review` or raise the comment cap:\n\n");
+            """
+             issue(s) not posted inline because the per-run comment cap was reached — re-run \
+            `/review` or raise the comment cap:
+
+            """);
     appendFindingList(sb, findings);
     return sb.toString();
   }
@@ -535,7 +533,9 @@ public class ReviewPublisher {
     try {
       reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, req);
     } catch (RuntimeException e) {
-      if (req.comments() == null || req.comments().isEmpty()) {
+      // CreateReviewRequest's compact constructor normalizes a null comments list to List.of(), so
+      // only the isEmpty() check is ever reachable here.
+      if (req.comments().isEmpty()) {
         throw new ReviewPostException(
             "GitHub review rejected for " + owner + "/" + repo + " #" + prNumber, e);
       }

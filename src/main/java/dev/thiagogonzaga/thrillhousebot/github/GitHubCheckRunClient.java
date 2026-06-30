@@ -109,9 +109,10 @@ public interface GitHubCheckRunClient {
 
   /**
    * All check runs for {@code ref}, paging through {@link #getCheckRuns} (full page → fetch the
-   * next, short page → stop) and bounded by {@link #CI_MAX_PAGES}. Returns {@code null} if a page
-   * response body is {@code null} — the "could not read" signal callers need to distinguish from
-   * "no checks" (GitHub returns an empty list, never null, past the last page).
+   * next, short page → stop) and bounded by {@link #CI_MAX_PAGES}. Throws if a page response body
+   * is {@code null} — the "could not read" signal callers need to distinguish from "no checks"
+   * (GitHub returns an empty list, never null, past the last page) — so the caller's existing
+   * exception handling reports it as unreadable.
    */
   default List<CheckRunsResponse.CheckRun> getAllCheckRuns(
       String auth, String accept, String owner, String repo, String ref) {
@@ -119,7 +120,7 @@ public interface GitHubCheckRunClient {
     for (int page = 1; page <= CI_MAX_PAGES; page++) {
       var resp = getCheckRuns(auth, accept, owner, repo, ref, CI_PER_PAGE, page);
       if (resp == null) {
-        return null;
+        throw new IllegalStateException("Null check runs response for " + ref + " page " + page);
       }
       var batch = resp.checkRuns();
       all.addAll(batch);
@@ -132,7 +133,7 @@ public interface GitHubCheckRunClient {
 
   /**
    * All commit-status details for {@code ref}, paging through {@link #getCombinedStatus} the same
-   * way as {@link #getAllCheckRuns} and with the same {@code null}-means-unreadable contract.
+   * way as {@link #getAllCheckRuns} and with the same null-body-throws-unreadable contract.
    */
   default List<CombinedStatus.StatusDetail> getAllCombinedStatus(
       String auth, String accept, String owner, String repo, String ref) {
@@ -140,7 +141,8 @@ public interface GitHubCheckRunClient {
     for (int page = 1; page <= CI_MAX_PAGES; page++) {
       var resp = getCombinedStatus(auth, accept, owner, repo, ref, CI_PER_PAGE, page);
       if (resp == null) {
-        return null;
+        throw new IllegalStateException(
+            "Null combined status response for " + ref + " page " + page);
       }
       var batch = resp.statuses();
       all.addAll(batch);

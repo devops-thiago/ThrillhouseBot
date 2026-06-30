@@ -207,8 +207,11 @@ public class PrSummaryGenerator {
     if (result.ciUnreadable()) {
       sb.append("### ⚠️ CI Status Unavailable\n");
       sb.append(
-          "The CI status could not be read from GitHub, so approval is held until it can be"
-              + " confirmed.\n\n");
+          """
+          The CI status could not be read from GitHub, so approval is held until it can be \
+          confirmed.
+
+          """);
     }
   }
 

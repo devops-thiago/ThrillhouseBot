@@ -48,6 +48,7 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class DocGenerationService {
 
   private static final String ACCEPT = "application/vnd.github+json";
+  private static final String COMMAND = "/add-docs";
 
   static final String NO_PR_DETAILS =
       "📝 ThrillhouseBot could not load this pull request to generate documentation. "
@@ -115,15 +116,14 @@ public class DocGenerationService {
       var auth = authClient.getAuthHeader(task.installationId());
       var pr =
           SoftLoaders.pullRequest(
-              prClient, auth, task.owner(), task.repo(), task.prNumber(), "/add-docs");
+              prClient, auth, task.owner(), task.repo(), task.prNumber(), COMMAND);
       if (pr == null || pr.head() == null || isBlank(pr.head().sha())) {
         postComment(auth, task, NO_PR_DETAILS);
         return;
       }
 
       var files =
-          SoftLoaders.files(
-              prClient, auth, task.owner(), task.repo(), task.prNumber(), "/add-docs");
+          SoftLoaders.files(prClient, auth, task.owner(), task.repo(), task.prNumber(), COMMAND);
       var reviewable = diffFormatter.reviewableFiles(files);
       if (reviewable.isEmpty()) {
         postComment(auth, task, NO_FILES);
@@ -181,7 +181,7 @@ public class DocGenerationService {
             task.repo(),
             task.defaultBranch(),
             task.installationId(),
-            "/add-docs");
+            COMMAND);
     String instructions = buildInstructionsSection(task);
 
     String raw =
@@ -232,14 +232,13 @@ public class DocGenerationService {
         break;
       }
       var doc = docs.get(i);
-      if (!doc.isPostable()) {
-        continue;
-      }
-      switch (postDoc(auth, task, commitSha, doc, lineResolver)) {
-        case SUGGESTION -> suggestions++;
-        case NOTE -> notes++;
-        case SKIPPED -> {
-          // Not posted — nothing to count.
+      if (doc.isPostable()) {
+        switch (postDoc(auth, task, commitSha, doc, lineResolver)) {
+          case SUGGESTION -> suggestions++;
+          case NOTE -> notes++;
+          case SKIPPED -> {
+            // Not posted — nothing to count.
+          }
         }
       }
     }
@@ -414,7 +413,7 @@ public class DocGenerationService {
             task.repo(),
             task.defaultBranch(),
             task.installationId(),
-            "/add-docs");
+            COMMAND);
     return PromptSections.instructionsSection(instructions, INSTRUCTIONS_GUIDANCE);
   }
 

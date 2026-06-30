@@ -212,9 +212,7 @@ public class ReviewOrchestrator {
 
       CiStatusEvaluator.CiEvaluation ciEvaluation = ciFuture.join();
 
-      var result =
-          verdictBuilder.build(
-              ctx, aiResponse, ciEvaluation.offendingChecks(), ciEvaluation.unreadable());
+      var result = verdictBuilder.build(ctx, aiResponse, ciEvaluation);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
@@ -222,16 +220,7 @@ public class ReviewOrchestrator {
       // The summary comment is first-review enrichment, not the review itself: a transient failure
       // posting it must not abort before postReview and surface a hard FAILED check for a review
       // that would otherwise post. Keep it best-effort; the review below is the critical step.
-      try {
-        reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
-      } catch (RuntimeException e) {
-        Log.warnf(
-            e,
-            "Failed to post the PR summary comment for %s/%s #%d — continuing to post the review",
-            req.owner(),
-            req.repo(),
-            req.prNumber());
-      }
+      publishSummaryBestEffort(auth, req, result);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       reviewPublisher.postReview(
@@ -302,6 +291,24 @@ public class ReviewOrchestrator {
       } else {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
+    }
+  }
+
+  /**
+   * Posts the PR summary comment, swallowing any failure: it is first-review enrichment, not the
+   * review itself, so a transient failure here must not abort before {@code postReview} and surface
+   * a hard FAILED check for a review that would otherwise post.
+   */
+  private void publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
+    try {
+      reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to post the PR summary comment for %s/%s #%d — continuing to post the review",
+          req.owner(),
+          req.repo(),
+          req.prNumber());
     }
   }
 
