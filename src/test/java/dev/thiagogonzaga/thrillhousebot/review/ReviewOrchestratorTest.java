@@ -284,6 +284,31 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void truncatedCleanSummaryBodyDoesNotCelebrateEndToEnd() {
+      // Regression (#1): buildResult handed omittedFiles=0 to the summary generator, so the body's
+      // truncated() branch was dead and emitted the all-clear celebration directly under the
+      // partial-review banner. Exercise the REAL generator end-to-end (the mocked one returns "")
+      // and assert the body no longer contradicts the banner.
+      var realVerdict = new VerdictBuilder(new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID);
+      var aiResponse = new ReviewResponse(List.of(), List.of(), null);
+
+      var result =
+          realVerdict.buildResult(
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
+              List.of(),
+              List.of(),
+              List.of(),
+              false,
+              List.of());
+
+      var summary = result.summaryMarkdown();
+      assertFalse(summary.contains("Everything's coming up Thrillhouse"), summary);
+      assertTrue(summary.contains("partial review"), summary);
+    }
+
+    @Test
     void truncatedFollowUpReviewBodyDisclosesPartialAndOmitsZeroUnresolved() {
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
       // A follow-up (not first review) clean review with 7 files omitted by the line budget: held
