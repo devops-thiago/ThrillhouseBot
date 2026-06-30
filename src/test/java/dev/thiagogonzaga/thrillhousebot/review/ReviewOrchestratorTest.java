@@ -786,6 +786,35 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void checkSummaryForResultShouldDiscloseUnreadableCiAlongsideAnOffendingCheck() {
+      // An offending check AND an unreadable CI source are independent holds that can both apply;
+      // the
+      // caption must disclose both, not let the offending branch suppress the unreadable note — the
+      // PR review comment already discloses both, so the check-run caption must agree.
+      var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              checks,
+              0,
+              true);
+
+      String summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertTrue(summary.contains("required CI check(s)"), summary);
+      assertTrue(summary.contains("could not be read"), summary);
+    }
+
+    @Test
     void checkSummaryForResultShouldSummarizeFindingCountsWhenIssuesPresent() {
       var result =
           new ReviewResult(
@@ -2732,12 +2761,15 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldPointToSummaryInReviewBodyWhenNoneAnchorInlineOnFirstReview() {
-      // The finding's file is not in the diff, so no inline comment anchors (posted == 0). On a
-      // first review the findings are in the summary comment, so the review body points there — but
+    void shouldListFindingsWithDescriptionsInReviewBodyWhenNoneAnchorInlineOnFirstReview() {
+      // The finding's file is not in the diff, so no inline comment anchors (posted == 0). Even on
       // a
-      // review event is still posted so the findings never vanish behind a bare check.
-      var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
+      // first review the body must LIST the findings with their descriptions, not point at the PR
+      // summary comment: the summary is posted best-effort (a transient failure leaves no such
+      // comment) and its Key Findings carries no descriptions, so the body is the one place the
+      // detail is guaranteed to appear.
+      var finding =
+          new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "the X path NPEs", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
 
       reviewPublisher.postReview(
@@ -2759,8 +2791,10 @@ class ReviewOrchestratorTest {
               argThat(
                   req ->
                       "COMMENT".equals(req.event())
-                          && req.body().contains("could not be anchored")
-                          && req.body().contains("PR summary")));
+                          && req.body().contains("Bug")
+                          && req.body().contains("missing.java:10")
+                          && req.body().contains("the X path NPEs")
+                          && !req.body().contains("PR summary")));
     }
 
     @Test

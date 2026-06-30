@@ -119,10 +119,21 @@ public class VerdictBuilder {
                     + " review.",
                 result.omittedFiles())
             : "";
+    // An offending check and an unreadable CI source are independent hold reasons that can both
+    // apply at once; disclose the unreadable one alongside the offending message rather than
+    // letting
+    // the offending branch suppress it, matching the PR review comment
+    // (ReviewPublisher.noIssuesBody).
+    var unreadableSuffix =
+        result.ciUnreadable()
+            ? " The CI status for some checks could not be read — holding approval until it can be"
+                + " confirmed."
+            : "";
     if (!result.offendingCiChecks().isEmpty()) {
       return String.format(
               "No new issues found, but %d required CI check(s) are still pending or failing.",
               result.offendingCiChecks().size())
+          + unreadableSuffix
           + truncationSuffix;
     }
     if (result.ciUnreadable()) {

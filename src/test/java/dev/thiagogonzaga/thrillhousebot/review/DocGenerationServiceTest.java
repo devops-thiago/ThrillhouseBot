@@ -310,6 +310,9 @@ class DocGenerationServiceTest {
     // Only one inline comment despite two candidates.
     verify(reviewClient, times(1))
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    // ...and the cap-dropped doc is disclosed, not silently withheld.
+    assertTrue(postedSummary().contains("1 more changed symbol"), postedSummary());
+    assertTrue(postedSummary().contains("re-run"), postedSummary());
   }
 
   @ParameterizedTest(name = "{0}")
