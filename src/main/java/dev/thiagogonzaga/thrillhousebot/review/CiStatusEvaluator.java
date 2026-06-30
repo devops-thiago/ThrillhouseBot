@@ -35,8 +35,7 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 /**
  * Resolves a PR's required status-check contexts and evaluates which CI checks on a commit are
  * offending (pending, failing, or missing) — the deterministic, read-only input the review verdict
- * uses to hold approval back until required CI is green. Extracted from {@code ReviewOrchestrator}
- * as the self-contained CI-status subsystem.
+ * uses to hold approval back until required CI is green.
  */
 @ApplicationScoped
 public class CiStatusEvaluator {
@@ -160,7 +159,7 @@ public class CiStatusEvaluator {
    * The outcome of evaluating a commit's CI: the <em>offending</em> checks (pending, failing, or
    * missing) and whether a CI source could not be read at all. Both hold the APPROVE decision back,
    * but they are distinct concepts — unreadable is not a check — so the verdict and the rendered
-   * summary can treat them separately (#253/#6).
+   * summary can treat them separately.
    */
   record CiEvaluation(List<ReviewResult.CiCheck> offendingChecks, boolean unreadable) {}
 
@@ -195,13 +194,13 @@ public class CiStatusEvaluator {
 
     addMissingRequiredChecks(requiredContexts, seen, offending);
 
-    // Fail closed for the APPROVE decision (#253/#5): if either CI source could not be read (an
+    // Fail closed for the APPROVE decision: if either CI source could not be read (an
     // exception or a null body — GitHub returns an empty list, never null, past the last page) we
-    // cannot confirm CI is green, so the verdict must not approve over CI we never saw (#217). This
+    // cannot confirm CI is green, so the verdict must not approve over CI we never saw. This
     // holds in BOTH gate modes: gate-specific is not automatically safe, because
-    // addMissingRequired-
-    // Checks only catches required contexts that did not report — a source going unread can still
-    // hide a required check's true state. Reported as a first-class signal, not a synthetic check.
+    // addMissingRequiredChecks only catches required contexts that did not report — a source going
+    // unread can still hide a required check's true state. Reported as a first-class signal, not a
+    // synthetic check.
     boolean unreadable = !checkRunsReadable || !statusReadable;
     return new CiEvaluation(offending, unreadable);
   }
@@ -326,8 +325,8 @@ public class CiStatusEvaluator {
       return CI_FAILING;
     }
     // "pending", null, or any unrecognized state is not a confirmed pass: classify it as pending so
-    // an indeterminate required check holds the approval rather than being mistaken for success
-    // . Only an explicit "success" clears the gate.
+    // an indeterminate required check holds the approval rather than being mistaken for success.
+    // Only an explicit "success" clears the gate.
     return CI_PENDING;
   }
 

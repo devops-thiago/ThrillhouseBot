@@ -32,8 +32,8 @@ import java.util.List;
 /**
  * The post-AI finding chain: validate quotes, dedupe, verify against the diff, drop already-replied
  * duplicates, backfill missing content anchors, and persist the response. Extracted from {@code
- * ReviewOrchestrator} (#250); the ordering is preserved verbatim — quote validation runs before
- * dedupe so a merged finding cannot inherit a phantom quote while a verbatim sibling is discarded.
+ * ReviewOrchestrator}; the ordering is preserved verbatim — quote validation runs before dedupe so
+ * a merged finding cannot inherit a phantom quote while a verbatim sibling is discarded.
  */
 @ApplicationScoped
 public class FindingPipeline {

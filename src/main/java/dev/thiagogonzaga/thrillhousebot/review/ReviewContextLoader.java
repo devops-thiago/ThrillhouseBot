@@ -34,8 +34,8 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * Loads everything a review reads from GitHub and persistence before the AI is called — the diff,
  * base comparison, prior reviews/comments, persisted prior findings, repository instructions,
  * existing labels, and project stack — and computes the first-visible / has-context signals.
- * Extracted from {@code ReviewOrchestrator} (#250) as the read side of the pipeline; every fetch
- * fails soft exactly as before, except the PR-files fetch whose failure must reach the caller.
+ * Extracted from {@code ReviewOrchestrator} as the read side of the pipeline; every fetch fails
+ * soft exactly as before, except the PR-files fetch whose failure must reach the caller.
  */
 @ApplicationScoped
 public class ReviewContextLoader {
@@ -121,7 +121,7 @@ public class ReviewContextLoader {
     var diffResult = diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
     var baseComparisonResult =
         buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
-    // Only the PR diff's omitted files gate the verdict (#234): the base↔head comparison is
+    // Only the PR diff's omitted files gate the verdict: the base↔head comparison is
     // supplementary regression context, so trimming it must not hold APPROVE or claim a partial
     // review when the PR diff itself was reviewed in full.
     var omittedFiles = diffResult.omittedFiles();

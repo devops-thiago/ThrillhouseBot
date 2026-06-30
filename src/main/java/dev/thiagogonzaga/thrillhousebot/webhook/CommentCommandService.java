@@ -395,8 +395,6 @@ public class CommentCommandService {
    */
   private List<Long> botRootCommentIds(String auth, CommandContext ctx) {
     var ids = new ArrayList<Long>();
-    // The client walks every page, so a PR with many comments does not leave later-page bot threads
-    // unresolved.
     for (var c :
         reviewClient.listPullRequestComments(
             auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber())) {

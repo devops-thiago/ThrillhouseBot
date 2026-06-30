@@ -283,7 +283,7 @@ public final class DiffLineResolver {
   /**
    * Resolves the right-side line range a finding's {@code suggestion_old} (the verbatim code it
    * replaces) occupies in the diff, so a multi-line replacement can be posted as a multi-line
-   * GitHub suggestion that overwrites the whole range rather than a single anchor line (#71).
+   * GitHub suggestion that overwrites the whole range rather than a single anchor line.
    *
    * <p>The anchor's trimmed, non-blank lines must appear as a contiguous, in-order run of
    * right-side lines (the same matching {@link #isFindingPresent} uses); the range spans the first
@@ -373,8 +373,8 @@ public final class DiffLineResolver {
    * test the anchor as a contiguous run; blank lines are dropped from both sides so a blank line
    * inside a block never breaks an otherwise-adjacent match. {@code textLineNumbers} runs parallel
    * to {@code text}, carrying the right-side line number of each retained line so a matched anchor
-   * run can be mapped back to a concrete line range (#71). {@code hunkStarts} holds each hunk's
-   * 1-based right-side start line, so a resolved range can be confined to a single hunk.
+   * run can be mapped back to a concrete line range. {@code hunkStarts} holds each hunk's 1-based
+   * right-side start line, so a resolved range can be confined to a single hunk.
    */
   private record RightSide(
       TreeSet<Integer> lines,
