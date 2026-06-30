@@ -172,7 +172,7 @@ public class ReviewPublisher {
           repo,
           prNumber,
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha, unanchoredFindingsBody(inline.unanchored()), event, List.of()));
+              commitSha, String.join("\n\n", skippedFindingsBodyParts(inline)), event, List.of()));
       return;
     }
 
@@ -187,9 +187,7 @@ public class ReviewPublisher {
     // comment also names it. The summary's Key Findings is a brief table of contents (risk, title,
     // location — no description), so this body is the only place an un-anchored finding's detail is
     // surfaced; repeating the title here is the acceptable cost of never dropping the problem.
-    if (!inline.unanchored().isEmpty()) {
-      bodyParts.add(unanchoredFindingsBody(inline.unanchored()));
-    }
+    bodyParts.addAll(skippedFindingsBodyParts(inline));
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
           auth,
@@ -206,11 +204,39 @@ public class ReviewPublisher {
    * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
    * which posts no summary comment — without it the findings would surface only as a red check run.
    */
+  /** Review-body sections for findings not posted inline — un-anchored and/or cap-skipped. */
+  private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
+    var parts = new ArrayList<String>();
+    if (!inline.unanchored().isEmpty()) {
+      parts.add(unanchoredFindingsBody(inline.unanchored()));
+    }
+    if (!inline.capSkipped().isEmpty()) {
+      parts.add(capSkippedFindingsBody(inline.capSkipped()));
+    }
+    return parts;
+  }
+
   private static String unanchoredFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
         .append(" issue(s) that could not be anchored to the current diff:\n\n");
+    appendFindingList(sb, findings);
+    return sb.toString();
+  }
+
+  private static String capSkippedFindingsBody(List<Finding> findings) {
+    var sb = new StringBuilder();
+    sb.append("ThrillhouseBot found ")
+        .append(findings.size())
+        .append(
+            " issue(s) not posted inline because the per-run comment cap was reached — re-run"
+                + " `/review` or raise the comment cap:\n\n");
+    appendFindingList(sb, findings);
+    return sb.toString();
+  }
+
+  private static void appendFindingList(StringBuilder sb, List<Finding> findings) {
     for (Finding f : findings) {
       sb.append("- **")
           .append(f.risk().name())
@@ -228,7 +254,6 @@ public class ReviewPublisher {
       }
       sb.append("\n");
     }
-    return sb.toString();
   }
 
   /**
@@ -326,8 +351,11 @@ public class ReviewPublisher {
     return sb.toString();
   }
 
-  /** How many findings anchored as inline comments, and the ones that could not be. */
-  record InlineCommentResult(int posted, List<Finding> unanchored) {}
+  /**
+   * How many findings anchored as inline comments, the ones that could not be anchored, and the
+   * ones skipped because {@code maxReviewComments} was reached (never tried for anchoring).
+   */
+  record InlineCommentResult(int posted, List<Finding> unanchored, List<Finding> capSkipped) {}
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
@@ -346,22 +374,27 @@ public class ReviewPublisher {
     var target = new CommentTarget(auth, owner, repo, prNumber, commitSha);
     var posted = 0;
     var unanchored = new ArrayList<Finding>();
+    var capSkipped = new ArrayList<Finding>();
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size(); i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the
       // hidden comment marker, keeping thread matching deterministic on follow-up reviews
       var finding = result.findings().get(i);
-      // The cap limits inline comments, not findings: once it's reached, remaining findings (and
-      // any
-      // that couldn't anchor) are returned as unanchored so the caller still reports them in the
-      // review body — capped on noise, but never silently dropped.
-      if (posted < maxComments && postFindingComment(target, finding, i + 1, lineResolver)) {
+      // The cap limits inline comments, not findings: once it's reached, remaining findings are
+      // returned as capSkipped (never tried for anchoring) so the caller reports them with the
+      // right
+      // reason — capped on noise, but never silently dropped or mislabeled as un-anchorable.
+      if (posted >= maxComments) {
+        capSkipped.add(finding);
+        continue;
+      }
+      if (postFindingComment(target, finding, i + 1, lineResolver)) {
         posted++;
       } else {
         unanchored.add(finding);
       }
     }
-    return new InlineCommentResult(posted, List.copyOf(unanchored));
+    return new InlineCommentResult(posted, List.copyOf(unanchored), List.copyOf(capSkipped));
   }
 
   /** PR coordinates shared by every inline comment of one review. */
