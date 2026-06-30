@@ -136,6 +136,20 @@ class ChangelogEntryGeneratorTest {
   }
 
   @Test
+  void postsDecorationOnlyReplyThatStripsToAnEmptyCore() {
+    // Trimming the markdown markers can leave an empty core (e.g. "---"). An empty core is not the
+    // NONE sentinel, so — like any non-decline reply — it is posted verbatim rather than dropped.
+    // This also drives the trim loops until the whole reply is consumed.
+    diffReturns("## Overview\ndiff");
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn("---");
+
+    assertEquals(
+        ChangelogEntryGenerator.HEADER + "---" + ChangelogEntryGenerator.FOOTER, generate());
+  }
+
+  @Test
   void returnsNullWhenAssistantThrows() {
     diffReturns("## Overview\ndiff");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
