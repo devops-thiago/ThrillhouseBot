@@ -238,26 +238,55 @@ public class DocGenerationService {
           doc.file(), doc.line());
       return false;
     }
-    // A wrapped declaration spans several lines, so the GitHub suggestion must overwrite the whole
-    // span, not just doc.line() — otherwise the commit replaces only the first line and leaves the
-    // rest in place, corrupting the file. Resolve the range from the verbatim old code's position
-    // in
-    // the diff (#71); when a multi-line declaration can't be anchored to a single hunk, drop the
-    // suggestion rather than mis-anchor a multi-line replacement to one line.
+    // A wrapped declaration spans several lines, so a committable suggestion must overwrite the
+    // whole span, not just doc.line() — otherwise the commit replaces only the first line and
+    // leaves
+    // the rest in place, corrupting the file. Resolve the range from the verbatim old code's
+    // position in the diff (#71).
     boolean multiLine = doc.suggestionOld().strip().contains("\n");
     var range =
         multiLine
             ? lineResolver.resolveSuggestionRange(doc.file(), doc.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
     if (multiLine && range.isEmpty()) {
-      Log.debugf(
-          "Skipping /add-docs suggestion for %s:%d — multi-line declaration could not be anchored",
-          doc.file(), doc.line());
-      return false;
+      // The multi-line declaration can't be anchored to a single hunk, so a committable suggestion
+      // would mis-apply. Still surface the missing-docs problem: post a note with the drafted docs
+      // to add manually, rather than dropping it silently.
+      return postInline(
+          auth,
+          task,
+          commitSha,
+          doc.file(),
+          doc.line(),
+          null,
+          suggestionFormatter.formatDocNote(doc.symbol(), doc.suggestionNew()));
     }
     Integer startLine = range.map(DiffLineResolver.LineRange::startLine).orElse(null);
-    String startSide = startLine != null ? "RIGHT" : null;
     int endLine = range.map(DiffLineResolver.LineRange::endLine).orElse(doc.line());
+    return postInline(
+        auth,
+        task,
+        commitSha,
+        doc.file(),
+        endLine,
+        startLine,
+        suggestionFormatter.formatDocComment(
+            doc.symbol(), doc.suggestionOld(), doc.suggestionNew()));
+  }
+
+  /**
+   * Posts one inline /add-docs comment, anchored at {@code line} (and {@code startLine}..{@code
+   * line} when a multi-line range was resolved). Returns {@code false} if GitHub rejects it.
+   */
+  private boolean postInline(
+      String auth,
+      DocTask task,
+      String commitSha,
+      String file,
+      int line,
+      Integer startLine,
+      String body) {
+    String startSide = startLine != null ? "RIGHT" : null;
     try {
       reviewClient.createPullRequestComment(
           auth,
@@ -266,17 +295,10 @@ public class DocGenerationService {
           task.repo(),
           task.prNumber(),
           new GitHubReviewClient.CreatePullRequestCommentRequest(
-              commitSha,
-              suggestionFormatter.formatDocComment(
-                  doc.symbol(), doc.suggestionOld(), doc.suggestionNew()),
-              doc.file(),
-              endLine,
-              "RIGHT",
-              startLine,
-              startSide));
+              commitSha, body, file, line, "RIGHT", startLine, startSide));
       return true;
     } catch (RuntimeException e) {
-      Log.debugf(e, "GitHub rejected /add-docs suggestion for %s:%d", doc.file(), doc.line());
+      Log.debugf(e, "GitHub rejected /add-docs comment for %s:%d", file, line);
       return false;
     }
   }

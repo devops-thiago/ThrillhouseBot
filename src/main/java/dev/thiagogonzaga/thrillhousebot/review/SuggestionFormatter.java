@@ -58,6 +58,25 @@ public class SuggestionFormatter {
   }
 
   /**
+   * Builds an {@code /add-docs} comment that flags an undocumented symbol without a committable
+   * suggestion — used when the documentation cannot be anchored as one (e.g. a multi-line
+   * declaration that does not map cleanly onto the diff). It states the missing-docs problem and
+   * shows the drafted documentation as a plain block to add manually, so the gap is still surfaced.
+   */
+  public String formatDocNote(String symbol, String suggestionNew) {
+    var sb = new StringBuilder("**📝 Documentation");
+    if (symbol != null && !symbol.isBlank()) {
+      sb.append(" for `").append(symbol.strip()).append("`");
+    }
+    sb.append("**\n");
+    sb.append("This symbol is missing documentation. Suggested:\n");
+    sb.append("\n```\n")
+        .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
+        .append("\n```\n");
+    return sb.toString();
+  }
+
+  /**
    * Builds a full review comment body for a single finding. Includes the risk emoji, title,
    * description, and suggestion block (if applicable).
    */

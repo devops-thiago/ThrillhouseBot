@@ -187,9 +187,11 @@ class DocGenerationServiceTest {
   }
 
   @Test
-  void skipsMultiLineSuggestionThatCannotBeAnchored() {
-    // A multi-line suggestion whose old code does not match the diff contiguously can't be anchored
-    // to a single hunk range; it must be dropped rather than mis-anchored to one line.
+  void flagsMultiLineSuggestionThatCannotBeAnchoredWithoutACommittableSuggestion() {
+    // A multi-line suggestion whose old code does not match the diff contiguously can't be a
+    // committable suggestion (it would mis-apply), so it posts a single-line note that describes
+    // the
+    // missing-docs problem instead of dropping it silently — and without a ```suggestion block.
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
@@ -201,8 +203,12 @@ class DocGenerationServiceTest {
 
     service.handle(task());
 
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var inline = capturedInlineComment();
+    assertEquals(1, inline.line());
+    assertNull(inline.startLine());
+    assertFalse(inline.body().contains("```suggestion"), inline.body());
+    assertTrue(inline.body().contains("missing documentation"), inline.body());
+    assertTrue(inline.body().contains("bar"), inline.body());
   }
 
   @Test
