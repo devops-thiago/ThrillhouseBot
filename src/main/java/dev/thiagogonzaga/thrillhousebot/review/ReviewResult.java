@@ -84,8 +84,8 @@ public record ReviewResult(
 
   /**
    * The highest-risk findings the first-review summary comment lists under "Key Findings" (top
-   * {@value #KEY_FINDINGS_COUNT} by risk). Shared with the review-body fallback so it can avoid
-   * re-listing findings the summary already shows.
+   * {@value #KEY_FINDINGS_COUNT} by risk). Used by {@code PrSummaryGenerator} to render that
+   * section.
    */
   public List<Finding> keyFindings() {
     return findings.stream()

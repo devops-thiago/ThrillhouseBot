@@ -310,6 +310,32 @@ class DocGenerationServiceTest {
     // Only one inline comment despite two candidates.
     verify(reviewClient, times(1))
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    // ...and the cap-dropped doc is disclosed, not silently withheld.
+    assertTrue(postedSummary().contains("1 more changed symbol"), postedSummary());
+    assertTrue(postedSummary().contains("re-run"), postedSummary());
+  }
+
+  @Test
+  void disclosesCapDropEvenWhenNothingWasPosted() {
+    // cap=0 → no docs posted at all, but postable docs were skipped. The summary must still
+    // disclose
+    // the cap, not fall back to the generic could-not-anchor message (which would misattribute it).
+    when(reviewConfig.maxReviewComments()).thenReturn(0);
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+             "suggestion_old":"public int bar(int x) {",
+             "suggestion_new":"/** a */\\npublic int bar(int x) {"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("comment cap was reached"), postedSummary());
+    assertFalse(postedSummary().contains("could not anchor"), postedSummary());
   }
 
   @ParameterizedTest(name = "{0}")
