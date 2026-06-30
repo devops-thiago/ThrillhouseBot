@@ -729,6 +729,22 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void checkSummaryForResultShouldDiscloseTruncationInsteadOfCelebrating() {
+      // A clean-but-truncated review is held at neutral (#234); the check-run summary must say it
+      // is
+      // a partial review, not caption the held conclusion with the all-clear celebration.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
+
+      String summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+      assertTrue(summary.contains("partial review"));
+      assertTrue(summary.contains("3 file(s) omitted"));
+    }
+
+    @Test
     void checkSummaryForResultShouldSummarizeFindingCountsWhenIssuesPresent() {
       var result =
           new ReviewResult(

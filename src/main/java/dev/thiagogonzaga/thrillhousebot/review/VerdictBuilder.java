@@ -120,6 +120,14 @@ public class VerdictBuilder {
       return "No new issues found, but the CI status could not be read — holding approval until it"
           + " can be confirmed.";
     }
+    // A truncated diff holds approval at neutral (#234); the summary must say so rather than fall
+    // through to the all-clear celebration, which would caption a held check run as "no issues".
+    if (result.truncated()) {
+      return String.format(
+          "No new issues found, but the diff was too large to review in full (%d file(s) omitted) —"
+              + " this is a partial review, so approval is held.",
+          result.omittedFiles());
+    }
     var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
       return PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
