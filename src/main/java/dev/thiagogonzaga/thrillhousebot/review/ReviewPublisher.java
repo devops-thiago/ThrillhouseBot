@@ -159,24 +159,22 @@ public class ReviewPublisher {
 
     if (inline.posted() == 0) {
       // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
-      // force-push). Surface them in the review body so they are not invisible: a follow-up review
-      // posts no summary comment, so without this the findings would show only as a red check run.
+      // force-push). List them in the review body with their descriptions so they are never
+      // invisible. This does not point at the PR summary comment even on a first review: the
+      // summary
+      // is posted best-effort (a transient failure leaves no such comment), and its Key Findings is
+      // only a brief TOC without descriptions — so the body is the one place the detail is sure to
+      // appear.
       Log.warnf(
           "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
           owner, repo, prNumber);
-      String body =
-          result.isFirstReview()
-              ? "ThrillhouseBot found "
-                  + result.findings().size()
-                  + " issue(s) that could not be anchored to the current diff — see the PR summary"
-                  + " comment above for details."
-              : unanchoredFindingsBody(inline.unanchored());
       createReviewWithFallback(
           auth,
           owner,
           repo,
           prNumber,
-          new GitHubReviewClient.CreateReviewRequest(commitSha, body, event, List.of()));
+          new GitHubReviewClient.CreateReviewRequest(
+              commitSha, unanchoredFindingsBody(inline.unanchored()), event, List.of()));
       return;
     }
 

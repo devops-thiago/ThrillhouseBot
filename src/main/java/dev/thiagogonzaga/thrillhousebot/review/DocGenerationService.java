@@ -194,7 +194,7 @@ public class DocGenerationService {
   }
 
   /** How many /add-docs comments landed, split into committable suggestions and plain notes. */
-  record DocPostOutcome(int suggestions, int notes) {}
+  record DocPostOutcome(int suggestions, int notes, int skippedByCap) {}
 
   private enum DocPostResult {
     SUGGESTION,
@@ -218,13 +218,20 @@ public class DocGenerationService {
     int cap = config.review().maxReviewComments();
     int suggestions = 0;
     int notes = 0;
-    for (DocGenerationResponse.DocSuggestion doc : response.docs()) {
+    int skippedByCap = 0;
+    var docs = response.docs();
+    for (int i = 0; i < docs.size(); i++) {
       if (suggestions + notes >= cap) {
+        // Count the postable docs we're dropping because the cap is reached, so the summary can
+        // disclose them rather than silently under-documenting the PR.
+        skippedByCap =
+            (int) docs.subList(i, docs.size()).stream().filter(d -> d.isPostable()).count();
         Log.debugf(
-            "/add-docs reached the %d-comment cap on %s/%s #%d",
-            cap, task.owner(), task.repo(), task.prNumber());
+            "/add-docs reached the %d-comment cap on %s/%s #%d — %d further doc(s) not posted",
+            cap, task.owner(), task.repo(), task.prNumber(), skippedByCap);
         break;
       }
+      var doc = docs.get(i);
       if (!doc.isPostable()) {
         continue;
       }
@@ -236,7 +243,7 @@ public class DocGenerationService {
         }
       }
     }
-    return new DocPostOutcome(suggestions, notes);
+    return new DocPostOutcome(suggestions, notes, skippedByCap);
   }
 
   private DocPostResult postDoc(
@@ -345,6 +352,15 @@ public class DocGenerationService {
   private String summaryMessage(DocGenerationResponse response, DocPostOutcome outcome) {
     int suggestions = outcome.suggestions();
     int notes = outcome.notes();
+    // When the per-run comment cap stopped further docs, disclose it rather than silently
+    // under-documenting the PR — the maintainer needs to know to re-run after addressing these.
+    String capSuffix =
+        outcome.skippedByCap() > 0
+            ? " "
+                + outcome.skippedByCap()
+                + " more changed symbol(s) were not documented because the per-run comment cap was"
+                + " reached — re-run `/add-docs` after addressing these."
+            : "";
     if (suggestions > 0 && notes > 0) {
       return "📝 ThrillhouseBot added **"
           + suggestions
@@ -352,13 +368,15 @@ public class DocGenerationService {
           + notes
           + "** more it couldn't post as committable suggestions (declarations that don't map"
           + " cleanly onto the diff — each note has the docs to add manually). Review each one and"
-          + " commit the suggestions you want to keep.";
+          + " commit the suggestions you want to keep."
+          + capSuffix;
     }
     if (suggestions > 0) {
       return "📝 ThrillhouseBot added **"
           + suggestions
           + "** documentation suggestion(s) for changed symbols. "
-          + "Review each one and commit the suggestions you want to keep.";
+          + "Review each one and commit the suggestions you want to keep."
+          + capSuffix;
     }
     if (notes > 0) {
       // Notes have no committable ```suggestion block, so don't tell the maintainer to "commit"
@@ -366,7 +384,15 @@ public class DocGenerationService {
       return "📝 ThrillhouseBot drafted documentation for **"
           + notes
           + "** symbol(s) it couldn't post as committable suggestions (the declaration doesn't map"
-          + " cleanly onto the diff). Each note has the docs to add manually.";
+          + " cleanly onto the diff). Each note has the docs to add manually."
+          + capSuffix;
+    }
+    if (outcome.skippedByCap() > 0) {
+      // Nothing posted, but the cap (e.g. maxReviewComments=0) stopped postable docs. Disclose the
+      // cap rather than falling through to COULD_NOT_PLACE, which would wrongly blame anchoring.
+      return "📝 ThrillhouseBot posted no documentation: the per-run comment cap was reached, so **"
+          + outcome.skippedByCap()
+          + "** changed symbol(s) were not documented. Raise the comment cap or re-run `/add-docs`.";
     }
     return response.docs().isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
   }
