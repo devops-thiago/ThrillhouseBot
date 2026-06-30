@@ -130,7 +130,7 @@ public class DocGenerationService {
         return;
       }
 
-      var response = generateOrReportFailure(auth, task, files, pr);
+      var response = generateOrReportFailure(auth, task, files, reviewable, pr);
       if (response == null) {
         return;
       }
@@ -154,9 +154,10 @@ public class DocGenerationService {
       String auth,
       DocTask task,
       List<GitHubPullRequestClient.FileDiff> files,
+      List<GitHubPullRequestClient.FileDiff> reviewable,
       GitHubPullRequestClient.PullRequestDetails pr) {
     try {
-      return generate(task, files, pr);
+      return generate(task, files, reviewable, pr);
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Doc generation failed for %s/%s #%d", task.owner(), task.repo(), task.prNumber());
@@ -168,8 +169,10 @@ public class DocGenerationService {
   private DocGenerationResponse generate(
       DocTask task,
       List<GitHubPullRequestClient.FileDiff> files,
+      List<GitHubPullRequestClient.FileDiff> reviewable,
       GitHubPullRequestClient.PullRequestDetails pr) {
-    String diff = diffFormatter.buildDiffString(files);
+    // Reuse the caller's already-filtered reviewable list rather than re-walking the ignore glob.
+    String diff = diffFormatter.buildDiffStringWithStats(files, reviewable).text();
     String prContext = PromptSections.prContext(pr.title(), pr.body());
     String stack =
         SoftLoaders.projectStack(
@@ -191,11 +194,7 @@ public class DocGenerationService {
   }
 
   /** How many /add-docs comments landed, split into committable suggestions and plain notes. */
-  record DocPostOutcome(int suggestions, int notes) {
-    int total() {
-      return suggestions + notes;
-    }
-  }
+  record DocPostOutcome(int suggestions, int notes) {}
 
   private enum DocPostResult {
     SUGGESTION,

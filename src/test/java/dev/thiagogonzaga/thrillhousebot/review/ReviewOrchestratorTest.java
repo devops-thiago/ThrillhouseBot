@@ -1248,6 +1248,69 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void summaryCommentFailureDoesNotAbortTheReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        // A first review with a non-blank summary, so publishSummary tries to post the comment...
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+            .thenReturn("## PR summary");
+        // ...and that comment post fails transiently.
+        doThrow(new RuntimeException("comment 500"))
+            .when(commentClient)
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // The summary comment is enrichment: its failure must not abort the review before it is
+        // posted. The review still lands and the session completes — no hard FAILED check.
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+      }
+    }
+
+    @Test
     void postReviewFailureMarksReviewFailedInsteadOfLeavingAConcludedCheckRun() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -2654,15 +2717,18 @@ class ReviewOrchestratorTest {
                   "src/B.java", fileDiffWithLine("src/B.java", 20).patch()));
       when(suggestionFormatter.formatReviewComment(any(), eq(true))).thenReturn("body");
 
-      var posted =
-          reviewPublisher
-              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
-              .posted();
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
-      assertEquals(1, posted);
+      assertEquals(1, inline.posted());
       verify(reviewClient, times(1))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      // The over-cap finding is not posted inline, but it's returned as unanchored so the review
+      // body still reports it — capped on inline noise, never silently dropped.
+      assertEquals(1, inline.unanchored().size());
+      assertEquals("Two", inline.unanchored().get(0).title());
     }
 
     @Test
