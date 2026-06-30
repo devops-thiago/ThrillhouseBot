@@ -387,6 +387,13 @@ public class DocGenerationService {
           + " cleanly onto the diff). Each note has the docs to add manually."
           + capSuffix;
     }
+    if (outcome.skippedByCap() > 0) {
+      // Nothing posted, but the cap (e.g. maxReviewComments=0) stopped postable docs. Disclose the
+      // cap rather than falling through to COULD_NOT_PLACE, which would wrongly blame anchoring.
+      return "📝 ThrillhouseBot posted no documentation: the per-run comment cap was reached, so **"
+          + outcome.skippedByCap()
+          + "** changed symbol(s) were not documented. Raise the comment cap or re-run `/add-docs`.";
+    }
     return response.docs().isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
   }
 
