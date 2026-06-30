@@ -41,8 +41,13 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
   static final String HEADER = "## 🤖 ThrillhouseBot — suggested title & description\n\n";
 
   static final String FOOTER =
-      "\n\n---\n*Suggestion only — your PR was not modified. Copy whatever is useful into the "
-          + "title and description. Re-run with `/describe`.*\n";
+      """
+
+
+      ---
+      *Suggestion only — your PR was not modified. Copy whatever is useful into the title and \
+      description. Re-run with `/describe`.*
+      """;
 
   private final PrDescribeAssistant describeAssistant;
 

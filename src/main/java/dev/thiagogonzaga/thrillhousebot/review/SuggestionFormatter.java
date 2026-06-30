@@ -22,6 +22,8 @@ import java.util.Locale;
 @ApplicationScoped
 public class SuggestionFormatter {
 
+  private static final String CODE_FENCE_CLOSE = "\n```\n";
+
   /**
    * Wraps suggestion_old and suggestion_new in a GitHub suggestion block.
    *
@@ -30,7 +32,7 @@ public class SuggestionFormatter {
    */
   public String formatSuggestionBlock(String suggestionOld, String suggestionNew) {
     if (suggestionOld == null || suggestionNew == null) return "";
-    return "\n```suggestion\n" + suggestionNew.stripTrailing() + "\n```\n";
+    return "\n```suggestion\n" + suggestionNew.stripTrailing() + CODE_FENCE_CLOSE;
   }
 
   /**
@@ -70,9 +72,9 @@ public class SuggestionFormatter {
     }
     sb.append("**\n");
     sb.append("This symbol is missing documentation. Suggested:\n");
-    sb.append("\n```\n")
+    sb.append(CODE_FENCE_CLOSE)
         .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
-        .append("\n```\n");
+        .append(CODE_FENCE_CLOSE);
     return sb.toString();
   }
 

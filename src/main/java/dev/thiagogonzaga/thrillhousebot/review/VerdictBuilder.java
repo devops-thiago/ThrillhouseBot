@@ -56,8 +56,7 @@ public class VerdictBuilder {
   ReviewResult build(
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
-      List<ReviewResult.CiCheck> offendingCiChecks,
-      boolean ciUnreadable) {
+      CiStatusEvaluator.CiEvaluation ciEvaluation) {
     var diffStats = DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles());
     var changedFiles = toChangedFiles(ctx.reviewableFiles());
     var unresolvedPrevious =
@@ -78,8 +77,7 @@ public class VerdictBuilder {
         diffStats,
         changedFiles,
         unresolvedPrevious,
-        offendingCiChecks,
-        ciUnreadable,
+        ciEvaluation,
         backstopUnresolved);
   }
 
@@ -191,9 +189,10 @@ public class VerdictBuilder {
       DiffStats diffStats,
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       List<Finding> unresolvedPrevious,
-      List<ReviewResult.CiCheck> offendingCiChecks,
-      boolean ciUnreadable,
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+    var offendingCiChecks = ciEvaluation.offendingChecks();
+    var ciUnreadable = ciEvaluation.unreadable();
     var tally = tallyFindings(aiResponse);
 
     // The review may only approve when nothing is outstanding: new findings AND previous

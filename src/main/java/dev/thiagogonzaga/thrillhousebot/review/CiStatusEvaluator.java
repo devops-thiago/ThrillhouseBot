@@ -180,16 +180,17 @@ public class CiStatusEvaluator {
     // and the Commit Status API is not listed twice.
     var offendingNames = new HashSet<String>();
 
+    var tracker = new OffendingTracker(requiredContexts, seen, offendingNames, offending);
     var checkRunsReadable =
         collectReadable(
             () -> checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha),
-            run -> addOffendingCheckRun(run, requiredContexts, seen, offendingNames, offending),
+            run -> addOffendingCheckRun(run, tracker),
             "check runs for commit " + commitSha);
 
     var statusReadable =
         collectReadable(
             () -> checkRunClient.getAllCombinedStatus(auth, ACCEPT, owner, repo, commitSha),
-            status -> addOffendingStatus(status, requiredContexts, seen, offendingNames, offending),
+            status -> addOffendingStatus(status, tracker),
             "combined status for commit " + commitSha);
 
     addMissingRequiredChecks(requiredContexts, seen, offending);
@@ -207,18 +208,14 @@ public class CiStatusEvaluator {
 
   /**
    * Applies {@code consume} to every row from {@code fetchAll} (the client's paging helper) and
-   * reports whether the fetch was actually readable. Returns {@code false} when the call threw or
-   * came back {@code null} — the client's "could not read" signal — so the caller can tell "no
-   * checks" from "could not read" (GitHub returns an empty list, never null, when there are none).
+   * reports whether the fetch was actually readable. Returns {@code false} when the call throws —
+   * including the client's null-body-means-unreadable signal — so the caller can tell "no checks"
+   * from "could not read" (GitHub returns an empty list, never null, when there are none).
    */
   private <T> boolean collectReadable(
       Supplier<List<T>> fetchAll, Consumer<T> consume, String what) {
     try {
-      var all = fetchAll.get();
-      if (all == null) {
-        return false;
-      }
-      all.forEach(consume);
+      fetchAll.get().forEach(consume);
       return true;
     } catch (Exception e) {
       Log.warnf(e, "Failed to fetch %s", what);
@@ -226,40 +223,38 @@ public class CiStatusEvaluator {
     }
   }
 
-  private void addOffendingCheckRun(
-      GitHubCheckRunClient.CheckRunsResponse.CheckRun run,
+  /**
+   * Mutable state threaded through one {@link #evaluateCiChecks} call as both CI sources are
+   * walked: the required contexts to gate against, the contexts seen in any state (so the
+   * missing-check pass does not re-flag them), the names already recorded as offending (deduped
+   * across the Check Runs and Commit Status APIs), and the offending list itself.
+   */
+  private record OffendingTracker(
       List<String> requiredContexts,
       Set<String> seen,
       Set<String> offendingNames,
-      List<ReviewResult.CiCheck> offending) {
+      List<ReviewResult.CiCheck> offending) {}
+
+  private void addOffendingCheckRun(
+      GitHubCheckRunClient.CheckRunsResponse.CheckRun run, OffendingTracker tracker) {
     addOffending(
         run.name(),
         isThrillhouseBotCheck(run.name(), run.app()),
         classifyCheckRun(run.status(), run.conclusion()),
         "check-run",
         run.conclusion(),
-        requiredContexts,
-        seen,
-        offendingNames,
-        offending);
+        tracker);
   }
 
   private void addOffendingStatus(
-      GitHubCheckRunClient.CombinedStatus.StatusDetail status,
-      List<String> requiredContexts,
-      Set<String> seen,
-      Set<String> offendingNames,
-      List<ReviewResult.CiCheck> offending) {
+      GitHubCheckRunClient.CombinedStatus.StatusDetail status, OffendingTracker tracker) {
     addOffending(
         status.context(),
         isThrillhouseBotCheck(status.context(), null),
         classifyStatus(status.state()),
         "status",
         status.state(),
-        requiredContexts,
-        seen,
-        offendingNames,
-        offending);
+        tracker);
   }
 
   /**
@@ -274,16 +269,13 @@ public class CiStatusEvaluator {
       String ciStatus,
       String type,
       String rawConclusion,
-      List<String> requiredContexts,
-      Set<String> seen,
-      Set<String> offendingNames,
-      List<ReviewResult.CiCheck> offending) {
-    if (isBotCheck || isNotRequired(name, requiredContexts)) {
+      OffendingTracker tracker) {
+    if (isBotCheck || isNotRequired(name, tracker.requiredContexts())) {
       return;
     }
-    seen.add(name);
-    if (!CI_SUCCESS.equals(ciStatus) && offendingNames.add(name)) {
-      offending.add(new ReviewResult.CiCheck(name, type, ciStatus, rawConclusion));
+    tracker.seen().add(name);
+    if (!CI_SUCCESS.equals(ciStatus) && tracker.offendingNames().add(name)) {
+      tracker.offending().add(new ReviewResult.CiCheck(name, type, ciStatus, rawConclusion));
     }
   }
 

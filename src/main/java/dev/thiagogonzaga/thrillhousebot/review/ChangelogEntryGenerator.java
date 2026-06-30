@@ -111,7 +111,7 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
    * reply collapsing to {@code NONE} counts; a real entry that merely mentions the word does not.
    */
   private static boolean isNoneVerdict(String entry) {
-    String core = entry.replaceAll("^[\\s`*_>#-]+", "").replaceAll("[\\s`*_.!]+$", "");
+    String core = entry.replaceAll("^[\\s`*_>#-]+", "").replaceAll("[\\s`*_.!]++$", "");
     return NONE.equalsIgnoreCase(core);
   }
 }
