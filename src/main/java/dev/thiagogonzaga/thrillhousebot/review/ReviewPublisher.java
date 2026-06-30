@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -152,20 +153,11 @@ public class ReviewPublisher {
       return;
     }
 
-    var posted = postInlineComments(auth, owner, repo, prNumber, commitSha, result, lineResolver);
+    var inline = postInlineComments(auth, owner, repo, prNumber, commitSha, result, lineResolver);
+    var event =
+        result.reviewState() == ReviewState.REQUEST_CHANGES ? EVENT_REQUEST_CHANGES : EVENT_COMMENT;
 
-    if (result.reviewState() == ReviewState.REQUEST_CHANGES && posted > 0) {
-      createReviewWithFallback(
-          auth,
-          owner,
-          repo,
-          prNumber,
-          new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              "ThrillhouseBot requested changes — see inline comments on the diff.",
-              EVENT_REQUEST_CHANGES,
-              List.of()));
-    } else if (posted == 0) {
+    if (inline.posted() == 0) {
       // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
       // force-push). Surface them in the review body so they are not invisible: a follow-up review
       // posts no summary comment, so without this the findings would show only as a red check run.
@@ -178,19 +170,34 @@ public class ReviewPublisher {
                   + result.findings().size()
                   + " issue(s) that could not be anchored to the current diff — see the PR summary"
                   + " comment above for details."
-              : unanchoredFindingsBody(result);
+              : unanchoredFindingsBody(inline.unanchored());
+      createReviewWithFallback(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          new GitHubReviewClient.CreateReviewRequest(commitSha, body, event, List.of()));
+      return;
+    }
+
+    // Some findings anchored inline. Still post a review body when there are changes to flag and/or
+    // findings that could not be anchored — so a finding whose line fell outside the diff is
+    // reported (with its description), not silently dropped just because its siblings anchored.
+    var bodyParts = new ArrayList<String>();
+    if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
+      bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
+    }
+    if (!inline.unanchored().isEmpty()) {
+      bodyParts.add(unanchoredFindingsBody(inline.unanchored()));
+    }
+    if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
           auth,
           owner,
           repo,
           prNumber,
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              body,
-              result.reviewState() == ReviewState.REQUEST_CHANGES
-                  ? EVENT_REQUEST_CHANGES
-                  : EVENT_COMMENT,
-              List.of()));
+              commitSha, String.join("\n\n", bodyParts), event, List.of()));
     }
   }
 
@@ -199,12 +206,12 @@ public class ReviewPublisher {
    * lines fell outside the current diff). It keeps the findings visible on a follow-up review,
    * which posts no summary comment — without it the findings would surface only as a red check run.
    */
-  private static String unanchoredFindingsBody(ReviewResult result) {
+  private static String unanchoredFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
-        .append(result.findings().size())
+        .append(findings.size())
         .append(" issue(s) that could not be anchored to the current diff:\n\n");
-    for (Finding f : result.findings()) {
+    for (Finding f : findings) {
       sb.append("- **")
           .append(f.risk().name())
           .append(":** ")
@@ -213,7 +220,13 @@ public class ReviewPublisher {
           .append(f.file())
           .append(":")
           .append(f.line())
-          .append("`)\n");
+          .append("`)");
+      // No inline comment carries the detail here, so include the description to still explain the
+      // problem (a suggestion can't be placed, but the issue is reported).
+      if (f.description() != null && !f.description().isBlank()) {
+        sb.append("\n  ").append(f.description().strip().replace("\n", "\n  "));
+      }
+      sb.append("\n");
     }
     return sb.toString();
   }
@@ -307,11 +320,16 @@ public class ReviewPublisher {
     return sb.toString();
   }
 
+  /** How many findings anchored as inline comments, and the ones that could not be. */
+  record InlineCommentResult(int posted, List<Finding> unanchored) {}
+
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
-   * survive 422s that would reject an entire batched review.
+   * survive 422s that would reject an entire batched review. Findings whose line falls outside the
+   * diff (or are otherwise rejected) are returned as {@code unanchored} so the caller can still
+   * report them in the review body rather than dropping them.
    */
-  int postInlineComments(
+  InlineCommentResult postInlineComments(
       String auth,
       String owner,
       String repo,
@@ -321,15 +339,19 @@ public class ReviewPublisher {
       DiffLineResolver lineResolver) {
     var target = new CommentTarget(auth, owner, repo, prNumber, commitSha);
     var posted = 0;
+    var unanchored = new ArrayList<Finding>();
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size() && posted < maxComments; i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the
       // hidden comment marker, keeping thread matching deterministic on follow-up reviews
-      if (postFindingComment(target, result.findings().get(i), i + 1, lineResolver)) {
+      var finding = result.findings().get(i);
+      if (postFindingComment(target, finding, i + 1, lineResolver)) {
         posted++;
+      } else {
+        unanchored.add(finding);
       }
     }
-    return posted;
+    return new InlineCommentResult(posted, List.copyOf(unanchored));
   }
 
   /** PR coordinates shared by every inline comment of one review. */
@@ -362,8 +384,22 @@ public class ReviewPublisher {
             ? lineResolver.resolveSuggestionRange(finding.file(), finding.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
 
-    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, true)
-        || (finding.hasSuggestion()
+    // A multi-line suggestion must overwrite its whole range. When that range can't be resolved
+    // (the
+    // old code doesn't match the diff verbatim, is ambiguous, or straddles a hunk), attaching the
+    // suggestion would post it against a single line — applying it then overwrites only the anchor
+    // line and leaves the rest of the quoted block in place (the same #71 multi-line corruption).
+    // In
+    // that case post the finding without the suggestion: the problem is still reported, just not as
+    // a
+    // one-click fix.
+    // hasSuggestion() already guarantees a non-blank suggestionOld, so the newline check is safe.
+    var multiLineSuggestion =
+        finding.hasSuggestion() && finding.suggestionOld().strip().contains("\n");
+    var includeSuggestion = finding.hasSuggestion() && (!multiLineSuggestion || range.isPresent());
+
+    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion)
+        || (includeSuggestion
             && tryPostInlineComment(
                 target, finding, findingId, resolvedLine, Optional.empty(), false))) {
       return true;

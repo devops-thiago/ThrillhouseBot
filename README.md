@@ -85,7 +85,7 @@ the repository (or to be named in
 AI budget.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
-ignores `/review`, `/summary`, `/describe`, and `/add-docs`, and does not answer
+ignores `/review`, `/summary`, `/describe`, `/changelog`, and `/add-docs`, and does not answer
 `@thrillhousebot` mentions (it replies once to say it is paused). `/resume` lifts the pause.
 `/help` and `/resolve` keep working while paused.
 
@@ -203,6 +203,7 @@ variables are the ones you will change per provider:
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
+| `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |

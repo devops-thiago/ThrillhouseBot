@@ -2454,8 +2454,9 @@ class ReviewOrchestratorTest {
       var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(0, posted);
       verify(reviewClient, never())
@@ -2474,8 +2475,9 @@ class ReviewOrchestratorTest {
       when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment body");
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(1, posted);
       verify(reviewClient)
@@ -2508,8 +2510,9 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(1, posted);
       verify(reviewClient, times(2))
@@ -2533,11 +2536,47 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(0, posted);
       verify(reviewClient, times(2))
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldPostWithoutSuggestionWhenAMultiLineSuggestionCannotResolveItsRange() {
+      // A multi-line suggestion whose old code doesn't match the diff verbatim can't resolve a
+      // range. Posting it as a single-line suggestion would overwrite only the anchor line and
+      // corrupt the rest of the quoted block, so the finding is posted without the suggestion — the
+      // problem is still reported.
+      var finding =
+          new Finding(
+              RiskLevel.HIGH,
+              "src/Main.java",
+              10,
+              "Bug",
+              "desc",
+              "unmatched old line one\nunmatched old line two",
+              "new one\nnew two");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(eq(finding), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var posted =
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
+
+      assertEquals(1, posted);
+      verify(suggestionFormatter).formatReviewComment(eq(finding), eq(false), anyInt());
+      verify(suggestionFormatter, never()).formatReviewComment(eq(finding), eq(true), anyInt());
+      verify(reviewClient, times(1))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }
@@ -2569,8 +2608,9 @@ class ReviewOrchestratorTest {
       when(suggestionFormatter.formatReviewComment(any(), eq(true))).thenReturn("body");
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(1, posted);
       verify(reviewClient, times(1))
@@ -2617,12 +2657,18 @@ class ReviewOrchestratorTest {
       // check run.
       var finding =
           new Finding(RiskLevel.CRITICAL, "missing.java", 10, "Auth bypass", "desc", null, null);
+      // Findings with a blank or null description must still be listed (just without a detail
+      // line).
+      var blankDescription =
+          new Finding(RiskLevel.MEDIUM, "gone.java", 20, "Dead code", "  ", null, null);
+      var nullDescription =
+          new Finding(RiskLevel.LOW, "old.java", 30, "Unused import", null, null, null);
       var result =
           new ReviewResult(
-              List.of(finding),
+              List.of(finding, blankDescription, nullDescription),
               1,
-              0,
-              0,
+              1,
+              1,
               0,
               RiskLevel.CRITICAL,
               ReviewState.REQUEST_CHANGES,
@@ -2652,7 +2698,69 @@ class ReviewOrchestratorTest {
                   req ->
                       "REQUEST_CHANGES".equals(req.event())
                           && req.body().contains("Auth bypass")
-                          && req.body().contains("missing.java:10")));
+                          && req.body().contains("missing.java:10")
+                          && req.body().contains("Dead code")
+                          && req.body().contains("gone.java:20")
+                          && req.body().contains("Unused import")
+                          && req.body().contains("old.java:30")));
+    }
+
+    @Test
+    void shouldSurfaceAnUnanchoredFindingInBodyEvenWhenOthersAnchorInline() {
+      // Two findings: one on a line in the diff (anchors inline) and one whose line is outside it.
+      // The un-anchorable one must still be reported in the review body with its description — not
+      // dropped just because a sibling anchored (a suggestion can't be placed, but the problem is).
+      var anchored =
+          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
+      var floating =
+          new Finding(
+              RiskLevel.CRITICAL,
+              "missing.java",
+              99,
+              "Floating bug",
+              "Null deref when the account is deleted.",
+              null,
+              null);
+      var result =
+          new ReviewResult(
+              List.of(anchored, floating),
+              1,
+              1,
+              0,
+              0,
+              RiskLevel.CRITICAL,
+              ReviewState.REQUEST_CHANGES,
+              false,
+              "",
+              List.of(),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("Floating bug")
+                          && req.body().contains("missing.java:99")
+                          && req.body().contains("Null deref when the account is deleted.")
+                          && !req.body().contains("Anchored bug")));
     }
 
     @Test
@@ -2737,8 +2845,9 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(0, posted);
       verify(reviewClient, times(1))
@@ -2770,8 +2879,9 @@ class ReviewOrchestratorTest {
       var resolver = new DiffLineResolver(Map.of("src/Main.java", patch));
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(1, posted);
       // The suggestion's old code spans lines 11-13, so the comment is posted as that range.
@@ -2814,8 +2924,9 @@ class ReviewOrchestratorTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
       var posted =
-          reviewPublisher.postInlineComments(
-              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
 
       assertEquals(1, posted);
       // First attempt is the multi-line range [11, 12] ...
@@ -3972,6 +4083,49 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> "APPROVE".equals(req.event())));
+      }
+    }
+
+    @Test
+    void reviewSurvivesAPriorReviewFromADeletedAccount() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        stubCommonReviewMocks(
+            new GitHubCheckRunClient.CheckRunsResponse(
+                1,
+                List.of(
+                    new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                        1L, "build", "completed", "success", null))));
+        // A prior review whose author account was deleted serializes as user=null. The
+        // first-visible-review check must not NPE on it (it simply isn't the bot's review); a
+        // normal
+        // review with a non-null author is also present so both sides of the null guard execute.
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.ReviewResponse(
+                        9L, "ghost", "COMMENTED", "abcdefgh", null),
+                    new GitHubReviewClient.ReviewResponse(
+                        10L,
+                        "lgtm",
+                        "APPROVED",
+                        "abcdefgh",
+                        new GitHubReviewClient.ReviewResponse.User("some-user"))));
+
+        orchestrator.review(request());
+
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
       }
     }
 
