@@ -384,8 +384,23 @@ public class ReviewPublisher {
             ? lineResolver.resolveSuggestionRange(finding.file(), finding.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
 
-    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, true)
-        || (finding.hasSuggestion()
+    // A multi-line suggestion must overwrite its whole range. When that range can't be resolved
+    // (the
+    // old code doesn't match the diff verbatim, is ambiguous, or straddles a hunk), attaching the
+    // suggestion would post it against a single line — applying it then overwrites only the anchor
+    // line and leaves the rest of the quoted block in place (the same #71 multi-line corruption).
+    // In
+    // that case post the finding without the suggestion: the problem is still reported, just not as
+    // a
+    // one-click fix.
+    var multiLineSuggestion =
+        finding.hasSuggestion()
+            && finding.suggestionOld() != null
+            && finding.suggestionOld().strip().contains("\n");
+    var includeSuggestion = finding.hasSuggestion() && (!multiLineSuggestion || range.isPresent());
+
+    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion)
+        || (includeSuggestion
             && tryPostInlineComment(
                 target, finding, findingId, resolvedLine, Optional.empty(), false))) {
       return true;

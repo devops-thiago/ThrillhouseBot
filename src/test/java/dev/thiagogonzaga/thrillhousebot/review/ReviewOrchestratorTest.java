@@ -2515,6 +2515,41 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldPostWithoutSuggestionWhenAMultiLineSuggestionCannotResolveItsRange() {
+      // A multi-line suggestion whose old code doesn't match the diff verbatim can't resolve a
+      // range. Posting it as a single-line suggestion would overwrite only the anchor line and
+      // corrupt the rest of the quoted block, so the finding is posted without the suggestion — the
+      // problem is still reported.
+      var finding =
+          new Finding(
+              RiskLevel.HIGH,
+              "src/Main.java",
+              10,
+              "Bug",
+              "desc",
+              "unmatched old line one\nunmatched old line two",
+              "new one\nnew two");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(eq(finding), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var posted =
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
+
+      assertEquals(1, posted);
+      verify(suggestionFormatter).formatReviewComment(eq(finding), eq(false), anyInt());
+      verify(suggestionFormatter, never()).formatReviewComment(eq(finding), eq(true), anyInt());
+      verify(reviewClient, times(1))
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
     void shouldRespectMaxReviewCommentsLimit() {
       when(reviewConfig.maxReviewComments()).thenReturn(1);
       var first = new Finding(RiskLevel.MEDIUM, "src/A.java", 10, "One", "desc", null, null);
@@ -2590,12 +2625,18 @@ class ReviewOrchestratorTest {
       // check run.
       var finding =
           new Finding(RiskLevel.CRITICAL, "missing.java", 10, "Auth bypass", "desc", null, null);
+      // Findings with a blank or null description must still be listed (just without a detail
+      // line).
+      var blankDescription =
+          new Finding(RiskLevel.MEDIUM, "gone.java", 20, "Dead code", "  ", null, null);
+      var nullDescription =
+          new Finding(RiskLevel.LOW, "old.java", 30, "Unused import", null, null, null);
       var result =
           new ReviewResult(
-              List.of(finding),
+              List.of(finding, blankDescription, nullDescription),
               1,
-              0,
-              0,
+              1,
+              1,
               0,
               RiskLevel.CRITICAL,
               ReviewState.REQUEST_CHANGES,
@@ -2625,7 +2666,11 @@ class ReviewOrchestratorTest {
                   req ->
                       "REQUEST_CHANGES".equals(req.event())
                           && req.body().contains("Auth bypass")
-                          && req.body().contains("missing.java:10")));
+                          && req.body().contains("missing.java:10")
+                          && req.body().contains("Dead code")
+                          && req.body().contains("gone.java:20")
+                          && req.body().contains("Unused import")
+                          && req.body().contains("old.java:30")));
     }
 
     @Test
