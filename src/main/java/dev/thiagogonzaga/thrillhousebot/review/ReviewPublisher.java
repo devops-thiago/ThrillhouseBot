@@ -252,13 +252,19 @@ public class ReviewPublisher {
     }
     // A COMMENT held back only by pending/failed CI (no findings, nothing unresolved) merely
     // restates the summary comment the first review already posts, so emitting it too would
-    // duplicate that message. Skip it on the first review and let the summary stand alone.
+    // duplicate that message. Skip it on the first review and let the summary stand alone — EXCEPT
+    // when the hold is (also) a truncated diff: the summary comment is posted best-effort (#282),
+    // so
+    // a transient failure would leave the partial review disclosed nowhere on the PR (CI holds stay
+    // visible via the red checks themselves; truncation has no other PR surface). Post the body for
+    // a truncated review so the partial-review notice is never lost.
     // Unresolved previous findings are excluded — their COMMENT carries distinct "reply on the
     // thread" guidance the summary lacks, so it still posts. Follow-ups post no summary, so the
     // COMMENT is their only signal; REQUEST_CHANGES always posts; the merge gate is the check run.
     if (result.reviewState() == ReviewState.COMMENT
         && result.isFirstReview()
-        && result.unresolvedPreviousCount() == 0) {
+        && result.unresolvedPreviousCount() == 0
+        && !result.truncated()) {
       return;
     }
     // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
@@ -310,10 +316,11 @@ public class ReviewPublisher {
       sb.append(ciHeld ? "\nAdditionally, " : "")
           .append(ReviewResult.unresolvedPreviousMessage(unresolved));
     }
-    // The first-review summary comment carries the truncation banner; a follow-up posts no summary,
-    // so disclose the partial review here instead — otherwise a truncation-only hold would surface
-    // no reason at all (and used to misreport "0 previous finding(s) remain unresolved").
-    if (result.truncated() && !result.isFirstReview()) {
+    // Disclose the partial review here whenever the diff was truncated — on follow-ups (which post
+    // no summary) and on first reviews too: the first-review summary banner is posted best-effort
+    // (#282), so relying on it alone would lose the only PR-visible notice if that post fails. The
+    // summary may repeat it; a duplicated notice is the acceptable cost of never dropping it.
+    if (result.truncated()) {
       if (!sb.isEmpty()) {
         sb.append("\n\n");
       }

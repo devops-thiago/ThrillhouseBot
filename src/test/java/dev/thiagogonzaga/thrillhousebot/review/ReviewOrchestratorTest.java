@@ -373,10 +373,11 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void truncatedFirstReviewBodyOmitsBannerSinceSummaryCarriesIt() {
-      // On a FIRST review the summary comment carries the truncation banner, so the review body
-      // must
-      // not repeat it — even when the body is posted for unresolved previous findings.
+    void truncatedFirstReviewBodyNowDisclosesPartialReview() {
+      // Even on a FIRST review the body must disclose the truncation. The summary comment that used
+      // to carry the banner is posted best-effort (#282), so relying on it alone could lose the
+      // only
+      // PR-visible notice if that post fails — a duplicated notice is the acceptable cost.
       var result =
           new ReviewResult(
               List.of(),
@@ -399,7 +400,32 @@ class ReviewOrchestratorTest {
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
       assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
-      assertFalse(body.contains("partial review"), body);
+      assertTrue(body.contains("partial review"), body);
+      assertTrue(body.contains("7 file"), body);
+    }
+
+    @Test
+    void truncationOnlyHeldFirstReviewStillPostsThePartialReviewBody() {
+      // Regression (Sonnet final review): a clean-but-truncated FIRST review (no findings, no CI
+      // hold, nothing unresolved) is demoted to COMMENT, but postNoIssuesReview used to
+      // early-return
+      // and rely on the best-effort summary comment for the truncation banner. If that summary post
+      // failed, the partial review was disclosed nowhere on the PR comment surface. It must now
+      // post
+      // a review body carrying the truncation notice.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 4);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("partial review"), body);
+      assertTrue(body.contains("4 file"), body);
+      assertEquals("COMMENT", captor.getValue().event());
     }
 
     @Test
