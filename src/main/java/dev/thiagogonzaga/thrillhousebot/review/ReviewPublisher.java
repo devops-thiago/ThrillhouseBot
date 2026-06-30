@@ -352,11 +352,15 @@ public class ReviewPublisher {
     var posted = 0;
     var unanchored = new ArrayList<Finding>();
     var maxComments = config.review().maxReviewComments();
-    for (var i = 0; i < result.findings().size() && posted < maxComments; i++) {
+    for (var i = 0; i < result.findings().size(); i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the
       // hidden comment marker, keeping thread matching deterministic on follow-up reviews
       var finding = result.findings().get(i);
-      if (postFindingComment(target, finding, i + 1, lineResolver)) {
+      // The cap limits inline comments, not findings: once it's reached, remaining findings (and
+      // any
+      // that couldn't anchor) are returned as unanchored so the caller still reports them in the
+      // review body — capped on noise, but never silently dropped.
+      if (posted < maxComments && postFindingComment(target, finding, i + 1, lineResolver)) {
         posted++;
       } else {
         unanchored.add(finding);

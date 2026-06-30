@@ -245,6 +245,51 @@ class DocGenerationServiceTest {
   }
 
   @Test
+  void aNoteThatGitHubRejectsIsNotCounted() {
+    // The note fallback can itself be rejected by GitHub; it must not be counted, leaving the
+    // could-not-place summary rather than claiming a note was drafted.
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {\\n  return x * 99;",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {\\n  return x * 99;"}]}
+            """);
+    doThrow(new RuntimeException("422 Unprocessable Entity"))
+        .when(reviewClient)
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+  }
+
+  @Test
+  void summaryReportsBothCommittableSuggestionsAndNotes() {
+    // One symbol anchors as a committable suggestion; another (multi-line, can't anchor) posts a
+    // note. The summary must mention both kinds, not just "committable suggestions".
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[
+              {"file":"src/Foo.java","line":1,"symbol":"bar",
+               "suggestion_old":"public int bar(int x) {",
+               "suggestion_new":"/** a */\\npublic int bar(int x) {"},
+              {"file":"src/Foo.java","line":4,"symbol":"baz",
+               "suggestion_old":"public int baz(int y) {\\n  return y + 99;",
+               "suggestion_new":"/** b */\\npublic int baz(int y) {\\n  return y + 99;"}]}
+            """);
+
+    service.handle(task());
+
+    var summary = postedSummary();
+    assertTrue(summary.contains("committable documentation suggestion"), summary);
+    assertTrue(summary.contains("add manually"), summary);
+  }
+
+  @Test
   void capsAtMaxReviewComments() {
     when(reviewConfig.maxReviewComments()).thenReturn(1);
     prWithFiles(fooWithPatch());
