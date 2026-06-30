@@ -274,7 +274,7 @@ public class DocGenerationService {
     // whole span, not just doc.line() — otherwise the commit replaces only the first line and
     // leaves
     // the rest in place, corrupting the file. Resolve the range from the verbatim old code's
-    // position in the diff (#71), which also anchors it independently of doc.line().
+    // position in the diff, which also anchors it independently of doc.line().
     var range =
         multiLine
             ? lineResolver.resolveSuggestionRange(doc.file(), doc.suggestionOld())

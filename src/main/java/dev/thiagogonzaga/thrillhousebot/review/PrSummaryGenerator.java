@@ -203,7 +203,7 @@ public class PrSummaryGenerator {
       sb.append("\n");
     }
     // Unreadable CI is a distinct hold from an offending check: render it as its own note rather
-    // than as a counterfeit row in the required-checks table (#253/#6).
+    // than as a counterfeit row in the required-checks table.
     if (result.ciUnreadable()) {
       sb.append("### ⚠️ CI Status Unavailable\n");
       sb.append(

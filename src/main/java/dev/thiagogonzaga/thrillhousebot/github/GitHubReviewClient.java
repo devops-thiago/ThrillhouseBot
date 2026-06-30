@@ -170,8 +170,8 @@ public interface GitHubReviewClient {
 
   /**
    * A pull request review comment. When {@code startLine} is set, the comment spans the inclusive
-   * range {@code start_line}..{@code line} so a GitHub suggestion replaces every line in it (#71);
-   * a single-line comment leaves both range fields null and they are omitted from the payload.
+   * range {@code start_line}..{@code line} so a GitHub suggestion replaces every line in it; a
+   * single-line comment leaves both range fields null and they are omitted from the payload.
    */
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record CreatePullRequestCommentRequest(
