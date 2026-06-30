@@ -109,6 +109,10 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
    * markdown emphasis/quote markers and trailing punctuation (e.g. {@code **NONE**}, {@code
    * NONE.}), so a decorated decline is never posted as a literal changelog entry. Only the entire
    * reply collapsing to {@code NONE} counts; a real entry that merely mentions the word does not.
+   *
+   * <p>The trailing trim uses a possessive quantifier ({@code ++}) so a mismatch fails at the first
+   * non-matching character instead of backtracking one character at a time back to the anchor —
+   * same match result, no backtrack-and-fail scan.
    */
   private static boolean isNoneVerdict(String entry) {
     String core = entry.replaceAll("^[\\s`*_>#-]+", "").replaceAll("[\\s`*_.!]++$", "");

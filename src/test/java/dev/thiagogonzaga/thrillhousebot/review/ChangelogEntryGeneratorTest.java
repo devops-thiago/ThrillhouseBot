@@ -109,7 +109,20 @@ class ChangelogEntryGeneratorTest {
   // markers and trailing punctuation) or returned a blank answer — post nothing rather than noise.
   // One parameterized test covers each "nothing usable".
   @ParameterizedTest
-  @ValueSource(strings = {"NONE", " none ", "**NONE**", "`NONE`", "NONE.", "> NONE", "   "})
+  @ValueSource(
+      strings = {
+        "NONE",
+        " none ",
+        "**NONE**",
+        "`NONE`",
+        "NONE.",
+        "> NONE",
+        "   ",
+        "_NONE_",
+        "#NONE!",
+        "\tNONE\t",
+        "\nNONE\n"
+      })
   void returnsNullWhenAssistantProducesNothingUsable(String draft) {
     diffReturns("## Overview\ndiff");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
