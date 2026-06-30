@@ -729,6 +729,38 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void checkSummaryForResultShouldDiscloseTruncationInsteadOfCelebrating() {
+      // A clean-but-truncated review is held at neutral (#234); the check-run summary must say it
+      // is
+      // a partial review, not caption the held conclusion with the all-clear celebration.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
+
+      String summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+      assertTrue(summary.contains("partial review"));
+      assertTrue(summary.contains("3 file(s) omitted"));
+    }
+
+    @Test
+    void checkSummaryForResultShouldDiscloseTruncationAlongsideACiHold() {
+      // CI holds approval AND the diff was truncated: the caption surfaces CI first but must still
+      // disclose the partial review, not drop it.
+      var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), checks, 2);
+
+      String summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertTrue(summary.contains("required CI check(s)"), summary);
+      assertTrue(summary.contains("too large to review in full"), summary);
+      assertTrue(summary.contains("2 file(s) omitted"), summary);
+    }
+
+    @Test
     void checkSummaryForResultShouldSummarizeFindingCountsWhenIssuesPresent() {
       var result =
           new ReviewResult(
