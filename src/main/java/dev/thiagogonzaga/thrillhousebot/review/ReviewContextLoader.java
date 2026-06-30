@@ -121,7 +121,10 @@ public class ReviewContextLoader {
     var diffResult = diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
     var baseComparisonResult =
         buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
-    var omittedFiles = diffResult.omittedFiles() + baseComparisonResult.omittedFiles();
+    // Only the PR diff's omitted files gate the verdict (#234): the base↔head comparison is
+    // supplementary regression context, so trimming it must not hold APPROVE or claim a partial
+    // review when the PR diff itself was reviewed in full.
+    var omittedFiles = diffResult.omittedFiles();
     // Built once here and shared via the context: the finding pipeline (anchor backfill), the
     // verdict backstop, and the publisher's inline comments all resolve against the same diff.
     var lineResolver =
@@ -143,7 +146,8 @@ public class ReviewContextLoader {
     List<String> priorAiResponseJsons =
         sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
     var isFirstVisibleReview =
-        priorReviews.stream().noneMatch(r -> botIdentity.matches(r.user().login()))
+        priorReviews.stream()
+                .noneMatch(r -> r.user() != null && botIdentity.matches(r.user().login()))
             && !botSummaryCommentExists(auth, req.owner(), req.repo(), req.prNumber());
     var hasContext = !priorAiResponseJsons.isEmpty();
     String previousAiResponseJson =

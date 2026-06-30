@@ -129,4 +129,28 @@ class SuggestionFormatterTest {
       assertTrue(comment.contains("```suggestion"), comment);
     }
   }
+
+  @Test
+  void shouldFormatDocNoteStatingTheGapWithoutACommittableSuggestion() {
+    var note = formatter.formatDocNote("Foo.bar(int)", "/** doc */");
+
+    assertTrue(note.contains("📝 Documentation for `Foo.bar(int)`"), note);
+    assertTrue(note.contains("missing documentation"), note);
+    assertTrue(note.contains("/** doc */"), note);
+    // It's a note describing the gap, not a committable suggestion.
+    assertFalse(note.contains("```suggestion"), note);
+  }
+
+  @Test
+  void shouldFormatDocNoteWithoutSymbolAndWithNullDraft() {
+    var blank = formatter.formatDocNote(" ", null);
+    var nullSymbol = formatter.formatDocNote(null, "/** doc */");
+
+    for (var note : new String[] {blank, nullSymbol}) {
+      assertTrue(note.contains("📝 Documentation**"), note);
+      assertFalse(note.contains("for `"), note);
+    }
+    // A null draft renders an empty block rather than the literal "null".
+    assertFalse(blank.contains("null"), blank);
+  }
 }
