@@ -25,10 +25,9 @@ import java.util.List;
 
 /**
  * Builds the {@link ReviewResult} verdict from the model response and the review's gating inputs,
- * and derives the check-run conclusion/title/summary. Extracted from {@code ReviewOrchestrator}
- * (#250) as the decision core: the APPROVE-gating guards move here <em>verbatim</em> — a review
- * approves only when there are no outstanding new findings AND no unresolved previous findings
- * (#118/#130/#143 backstop), no offending CI checks (#217), and the diff was not truncated (#234).
+ * and derives the check-run conclusion/title/summary. The decision core: a review approves only
+ * when there are no outstanding new findings AND no unresolved previous findings (backstop), no
+ * offending CI checks, and the diff was not truncated.
  */
 @ApplicationScoped
 public class VerdictBuilder {
@@ -91,7 +90,7 @@ public class VerdictBuilder {
   static String checkTitleForResult(ReviewResult result) {
     // Derive the ✅ from the single verdict gate, not a parallel predicate: reviewState() is APPROVE
     // only when nothing holds the review back — no findings, no unresolved previous findings, no
-    // offending CI, AND the diff was not truncated (#234). Re-deriving the "all clear" condition by
+    // offending CI, AND the diff was not truncated. Re-deriving the "all clear" condition by
     // hand here used to omit the truncation guard, so a truncated-but-clean PR showed ✅ over a
     // neutral (held) conclusion.
     if (result.reviewState() == ReviewState.APPROVE) {
@@ -111,7 +110,7 @@ public class VerdictBuilder {
           result.lowCount());
     }
     // No new findings — surface CI gating first, since it also holds approval back. When the diff
-    // was also truncated, append that so a partial review is disclosed on this surface too (#234).
+    // was also truncated, append that so a partial review is disclosed on this surface too.
     var truncationSuffix =
         result.truncated()
             ? String.format(
@@ -121,8 +120,7 @@ public class VerdictBuilder {
             : "";
     // An offending check and an unreadable CI source are independent hold reasons that can both
     // apply at once; disclose the unreadable one alongside the offending message rather than
-    // letting
-    // the offending branch suppress it, matching the PR review comment
+    // letting the offending branch suppress it, matching the PR review comment
     // (ReviewPublisher.noIssuesBody).
     var unreadableSuffix =
         result.ciUnreadable()
@@ -141,7 +139,7 @@ public class VerdictBuilder {
           + " can be confirmed."
           + truncationSuffix;
     }
-    // A truncated diff holds approval at neutral (#234); the summary must say so rather than fall
+    // A truncated diff holds approval at neutral; the summary must say so rather than fall
     // through to the all-clear celebration, which would caption a held check run as "no issues".
     if (result.truncated()) {
       return String.format(
@@ -219,7 +217,7 @@ public class VerdictBuilder {
     }
 
     // CI holds approval back when a required check is offending OR a CI source could not be read at
-    // all — an unread source means we cannot confirm CI is green, so we fail closed (#253/#5).
+    // all — an unread source means we cannot confirm CI is green, so we fail closed.
     if (state == ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
       state = ReviewState.COMMENT;
     }

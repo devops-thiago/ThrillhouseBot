@@ -237,11 +237,11 @@ public class ReviewOrchestrator {
       reviewPublisher.postReview(
           auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, lineResolver);
 
-      // The review and its comments are on the PR now (#254). Everything past this point is
+      // The review and its comments are on the PR now. Everything past this point is
       // best-effort and independent: each step runs in isolation so one failure can't abort the
       // rest. In particular a failure in an earlier step must not skip the session completion and
       // broadcast, which would otherwise leave the session stuck IN_PROGRESS in the dashboard even
-      // though the review was posted (#253/#254 follow-up).
+      // though the review was posted.
       resultSurfaced = true;
       final var doneReq = req;
       final var concludedCheckRunId = checkRunId;
@@ -308,8 +308,8 @@ public class ReviewOrchestrator {
   /**
    * Resolves the CI evaluation for a request: the required-context lookup unioned across rulesets
    * and classic protection, then the per-check evaluation on the head commit. Runs off the review
-   * executor concurrently with the blocking AI call (#10) — it depends only on the commit and base
-   * branch carried on the request, not the model response.
+   * executor concurrently with the blocking AI call — it depends only on the commit and base branch
+   * carried on the request, not the model response.
    */
   private CiStatusEvaluator.CiEvaluation resolveCiEvaluation(String auth, ReviewRequest req) {
     List<String> requiredContexts =

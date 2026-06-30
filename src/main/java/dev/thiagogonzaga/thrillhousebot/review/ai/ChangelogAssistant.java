@@ -31,7 +31,7 @@ public interface ChangelogAssistant {
   // @UserMessage MUST be on the method, not a parameter: on a parameter quarkus-langchain4j sends
   // only that parameter's raw value as the user message and never renders this template, silently
   // dropping prNumber, currentTitle, currentDescription and repoInstructions (see
-  // AiServicePromptRenderingTest and the #186 regression).
+  // AiServicePromptRenderingTest).
   @SystemMessage(ChangelogAssistantPrompts.SYSTEM)
   @UserMessage(PrSuggestionPrompts.USER)
   String draft(
