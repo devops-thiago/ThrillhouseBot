@@ -25,7 +25,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -188,18 +187,12 @@ public class ReviewPublisher {
     if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
-    // On a first review the summary comment already lists the top findings, so drop those from the
-    // body to avoid reporting a finding twice — but keep any un-anchored finding the summary
-    // doesn't
-    // cover, so nothing is silently dropped. A follow-up posts no summary, so list them all.
-    var unanchoredToReport = inline.unanchored();
-    if (result.isFirstReview()) {
-      var summarized = new HashSet<>(result.keyFindings());
-      unanchoredToReport =
-          unanchoredToReport.stream().filter(f -> !summarized.contains(f)).toList();
-    }
-    if (!unanchoredToReport.isEmpty()) {
-      bodyParts.add(unanchoredFindingsBody(unanchoredToReport));
+    // List every un-anchored finding with its description, even on a first review where the summary
+    // comment also names it. The summary's Key Findings is a brief table of contents (risk, title,
+    // location — no description), so this body is the only place an un-anchored finding's detail is
+    // surfaced; repeating the title here is the acceptable cost of never dropping the problem.
+    if (!inline.unanchored().isEmpty()) {
+      bodyParts.add(unanchoredFindingsBody(inline.unanchored()));
     }
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
