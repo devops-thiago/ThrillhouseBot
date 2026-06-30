@@ -236,7 +236,10 @@ public class VerdictBuilder {
                 "",
                 previousStatuses,
                 offendingCiChecks,
-                0,
+                // Carry the real omitted-file count so the summary body's truncated() branch fires
+                // and reports a partial review instead of the all-clear celebration; passing 0 here
+                // made that branch dead and let the celebration contradict the truncation banner.
+                diffStats.omittedFiles(),
                 ciUnreadable));
     if (diffStats.truncated()) {
       summaryMarkdown = ReviewResult.truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
