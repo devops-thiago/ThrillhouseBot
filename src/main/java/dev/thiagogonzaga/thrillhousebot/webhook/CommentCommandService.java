@@ -38,8 +38,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Executes the comment commands beyond {@code /review} — {@code /help}, {@code /summary}, {@code
- * /resolve}, {@code /pause}, {@code /resume}. Work runs on the shared review executor so the
- * webhook 200-ack thread is never blocked by GitHub API calls.
+ * /describe}, {@code /changelog}, {@code /add-docs}, {@code /resolve}, {@code /pause}, {@code
+ * /resume}. Work runs on the shared review executor so the webhook 200-ack thread is never blocked
+ * by GitHub API calls.
  */
 @ApplicationScoped
 public class CommentCommandService {

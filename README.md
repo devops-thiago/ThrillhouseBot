@@ -39,7 +39,7 @@ code review.
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
 - Follow-up reviews track whether earlier findings were addressed or justified
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
-- A summary comment on the first run, with a risk breakdown
+- A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics

@@ -2,7 +2,7 @@
 
 All notable changes to ThrillhouseBot.
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-06-30
 
 ### Added
 
@@ -28,6 +28,10 @@ All notable changes to ThrillhouseBot.
 - **No more green ✅ over a held conclusion on a truncated PR**: the check-run title re-derived "all clear" by hand and omitted the truncation guard, so a clean PR whose diff was truncated showed a `✅` title over a `neutral` (held) conclusion. The title is now derived from the single verdict gate, so it celebrates only when the review actually approves (#234)
 - **A truncated review no longer shows the all-clear celebration**: a clean review whose diff was too large to read in full is held to a comment, but the check-run summary and the PR summary comment still rendered the "no issues found" celebration, hiding that only part of the change was reviewed. Both now report a partial review (#234)
 - **Unreadable CI status no longer allows an approval**: the CI gate works off the *offending* checks, and an empty list meant "nothing blocks". But when the Check Runs / Combined Status API threw or returned a null body, that empty list was indistinguishable from "CI all green", so a PR whose CI was actually failing or still pending could receive an APPROVE on a transient GitHub hiccup. An unread CI source now holds the verdict to a comment (findings still post, only the approval is held) and is disclosed in the summary, instead of being mistaken for green (#253)
+
+### Dependencies
+
+- Bumped the Quarkus platform (`quarkus-bom` and `quarkus-maven-plugin`) from 3.36.3 to 3.37.0 (#263), the frontend `@types/node` to 26.0.1 (#262), and the GitHub Actions `actions/checkout` (7.0.0), `actions/cache` (6.0.0), and `actions/setup-java` (5.4.0) (#265, #266, #267)
 
 ## [0.2.1] — 2026-06-24
 
