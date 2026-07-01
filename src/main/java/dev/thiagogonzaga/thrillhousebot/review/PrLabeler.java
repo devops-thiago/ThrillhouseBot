@@ -293,8 +293,10 @@ public class PrLabeler {
    * Lower-cased names of every label currently on the PR, used to keep additive re-reviews from
    * exceeding max-labels. GitHub paginates issue labels at {@value #LABELS_PER_PAGE} per page, so
    * we walk pages up to {@link #MAX_LABEL_PAGES} — a label beyond page one still counts against the
-   * per-PR budget. Best-effort: if the lookup fails we return an empty set, which simply falls back
-   * to applying the reconciled suggestions for this review.
+   * per-PR budget. Best-effort: on a fetch failure we keep the pages we already read rather than
+   * discarding them — dropping page-one labels when a later page fails would under-count the
+   * current set and let {@link #applyLabels} over-apply past max-labels. If even the first page
+   * fails the set is empty, which falls back to applying this review's reconciled suggestions.
    */
   private Set<String> currentLabelKeys(LabelRequest request) {
     var keys = new HashSet<String>();
@@ -322,16 +324,16 @@ public class PrLabeler {
           }
         }
       }
-      return keys;
     } catch (RuntimeException e) {
       Log.debugf(
           e,
-          "Could not read current labels for %s/%s #%d; applying suggestions without a cap check",
+          "Could not read all current labels for %s/%s #%d; capping against the %d already read",
           request.owner(),
           request.repo(),
-          request.prNumber());
-      return Set.of();
+          request.prNumber(),
+          keys.size());
     }
+    return keys;
   }
 
   /**

@@ -423,6 +423,29 @@ class PrLabelerTest {
           .listIssueLabels(
               anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
     }
+
+    @Test
+    void shouldKeepEarlierPageLabelsWhenALaterPageFails() {
+      when(labelsConfig.maxLabels()).thenReturn(3);
+      // Page 1 already fills the budget; a transient failure fetching page 2 must not discard the
+      // page-1 labels, or the current count would collapse to zero and re-open the budget — adding
+      // labels to a PR that already sits well past max. The pages read so far still apply the cap.
+      var fullFirstPage = new java.util.ArrayList<GitHubLabelClient.Label>();
+      for (int i = 0; i < 100; i++) {
+        fullFirstPage.add(label("page1-" + i));
+      }
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(1)))
+          .thenReturn(fullFirstPage);
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(2)))
+          .thenThrow(new RuntimeException("rate limited"));
+
+      labeler.applyOrSuggest(request(false, List.of("docs"), List.of(label("docs"))));
+
+      verify(labelClient, never())
+          .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
   }
 
   @Nested
