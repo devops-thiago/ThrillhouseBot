@@ -176,6 +176,40 @@ class MaintainerReplyServiceTest {
   }
 
   @Test
+  void nestedReplyToAReplyIsIncludedInThreadContext() {
+    authorize();
+    // Three-level thread: bot finding (root 99) → maintainer reply (500) → reply-to-reply (700),
+    // with the triggering comment (1000) nested one deeper still. On GitHub a reply-to-reply
+    // carries in_reply_to_id of its immediate parent, not the root, so the chain must be walked for
+    // the nested reply to reach the assistant and for the deeply nested trigger to be recognized.
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                comment(99L, null, BOT, "**CRITICAL — possible NPE** on user lookup"),
+                comment(500L, 99L, "maintainer", "are you sure?"),
+                comment(700L, 500L, BOT, "yes — foo is unchecked here"),
+                comment(1000L, 700L, "octocat", "Why is this flagged?")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any()))
+        .thenReturn("Because foo can be null.");
+
+    service.handle(reviewThreadTask(false));
+
+    var thread = ArgumentCaptor.forClass(String.class);
+    verify(replyAssistant).reply(any(), any(), any(), any(), thread.capture());
+    assertTrue(thread.getValue().contains("are you sure?"), "direct reply is in the thread");
+    assertTrue(
+        thread.getValue().contains("foo is unchecked here"),
+        "nested reply-to-reply is in the thread");
+    assertFalse(
+        thread.getValue().contains("Why is this flagged?"),
+        "triggering comment excluded even when deeply nested");
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
   void replyOnHumanThreadWithoutMentionPostsNothing() {
     authorize();
     when(reviewClient.listPullRequestComments(

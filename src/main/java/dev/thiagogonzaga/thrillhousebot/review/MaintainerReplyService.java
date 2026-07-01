@@ -26,6 +26,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.util.HashSet;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -253,18 +254,35 @@ public class MaintainerReplyService {
 
   /**
    * Replies already on this thread, oldest first, excluding the message that triggered the reply.
+   *
+   * <p>Collects the whole thread by walking the reply chain, not just comments that point straight
+   * at the root. GitHub review threads are usually flat — every reply's {@code in_reply_to_id} is
+   * the root comment — but a reply to a reply points at its immediate parent, so a filter keyed
+   * only on the root drops those nested replies (a maintainer clarifying or disputing mid-thread)
+   * from the context handed to the assistant. Following the chain is correct under both models: a
+   * flat thread yields exactly the direct replies, a nested one additionally yields the deeper
+   * ones.
+   *
+   * <p>Relies on the chronological (oldest-first) order the comment list arrives in — a reply is
+   * always created after its parent — so a single forward pass sees each parent before its replies.
    */
   private static String renderThread(
       List<GitHubReviewClient.PullRequestComment> comments,
       long rootCommentId,
       long triggeringCommentId) {
+    var threadIds = new HashSet<Long>();
+    threadIds.add(rootCommentId);
     var sb = new StringBuilder();
     for (var c : comments) {
-      // Keep only the other replies on this thread: skip non-replies, replies to a different root,
-      // and the message that triggered this reply.
-      if (c.inReplyToId() == null
-          || c.inReplyToId() != rootCommentId
-          || c.id() == triggeringCommentId) {
+      // A comment joins the thread when it replies, directly or transitively, to something already
+      // in it; record its id so its own nested replies are picked up on a later iteration.
+      if (c.inReplyToId() == null || !threadIds.contains(c.inReplyToId())) {
+        continue;
+      }
+      threadIds.add(c.id());
+      // The triggering comment anchors this reply (and any descendants), but is shown only as the
+      // question — never repeated in the rendered thread.
+      if (c.id() == triggeringCommentId) {
         continue;
       }
       String author = c.user() != null ? c.user().login() : "unknown";
