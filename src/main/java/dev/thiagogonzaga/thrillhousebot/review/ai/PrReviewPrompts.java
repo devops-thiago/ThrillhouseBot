@@ -283,25 +283,42 @@ public final class PrReviewPrompts {
    * the prompt's {@code repoInstructions} slot only when the diagram feature is enabled, so the
    * model self-gates the {@code walkthrough_diagram} field on its presence (mirroring how the label
    * section gates {@code suggested_labels}). No extra AI call — it rides the existing review pass.
+   *
+   * <p>Built via {@link #diagramRequest()} rather than an inline literal so this large block is not
+   * a compile-time constant: it is used in a method body (the assembler), and an inline constant
+   * would be copied verbatim into that class file (HSC_HUGE_SHARED_STRING_CONSTANT).
    */
-  public static final String DIAGRAM_REQUEST =
-      """
+  public static final String DIAGRAM_REQUEST = diagramRequest();
+
+  private static String diagramRequest() {
+    return """
             ## Control-Flow Diagram Request
             When — and only when — this change is non-trivial (it alters control flow, adds or
             reorders interactions between components, or introduces a new multi-step path),
             populate summary.walkthrough_diagram with a single Mermaid diagram of the AFFECTED
             control flow:
-            - Use a `flowchart TD` or a `sequenceDiagram` — nothing else. Prefer simple rectangle
-              and rhombus nodes; avoid exotic shapes.
-            - ALWAYS wrap node label text in double quotes, whatever the shape — `A["call foo()"]`,
-              `B{"ready?"}`, `C(["Fetch & merge"])`. GitHub's Mermaid parser rejects unquoted
-              parentheses, ampersands, colons, slashes and the like inside a label and then fails to
-              render the whole diagram; write a literal double quote as `#quot;`.
+            - Prefer a `flowchart TD`; use a `sequenceDiagram` only when the change is fundamentally
+              about the ORDER of calls between components. Nothing else. Prefer simple rectangle and
+              rhombus nodes; avoid exotic shapes.
+            - flowchart ONLY: ALWAYS wrap node label text in double quotes, whatever the shape —
+              `A["call foo()"]`, `B{"ready?"}`, `C(["Fetch & merge"])`. GitHub's Mermaid parser
+              rejects unquoted parentheses, ampersands, colons, slashes and the like inside a label
+              and then fails to render the whole diagram; write a literal double quote as `#quot;`.
+            - sequenceDiagram ONLY: declare each participant as `participant Alias as Display Name`.
+              Do NOT bracket- or quote-wrap the name (`participant O["ReviewOrchestrator"]` is
+              flowchart syntax and is a parse error here that drops the whole diagram), and write
+              message text plainly after the colon with no wrapping quotes, e.g.
+                  sequenceDiagram
+                    participant O as ReviewOrchestrator
+                    participant L as ReviewContextLoader
+                    O->>L: load()
+                    L-->>O: ReviewContext
             - Keep it small: at most ~12 nodes / participants, modelling only the changed path,
               not the whole system.
             - Emit ONLY the raw Mermaid source: no ``` fences, no prose, no Markdown around it.
             - For trivial changes (small local edits, dependency bumps, doc-only changes), leave
               walkthrough_diagram as an empty string.""";
+  }
 
   private PrReviewPrompts() {}
 }

@@ -2,6 +2,12 @@
 
 All notable changes to ThrillhouseBot.
 
+## [Unreleased]
+
+### Fixed
+
+- **Mermaid `sequenceDiagram` in the PR summary now renders on GitHub**: the opt-in control-flow diagram (#181) could emit a sequence diagram that declared participants with flowchart bracket-label syntax (`participant O["ReviewOrchestrator"]`) and quoted its message text — a side effect of the "quote every node label, whatever the shape" guidance that had been added for flowcharts (#299). Bracket labels are a parse error in a sequence diagram, so GitHub silently dropped the whole diagram. The diagram prompt now scopes the double-quote rule to flowchart node labels and gives sequence diagrams their own syntax (`participant X as Label`, plain message text after the colon); as a defensive backstop the summary now drops — rather than posts — a sequence diagram whose participant/actor lines still carry a bracket label (#311)
+
 ## [0.3.0] — 2026-06-30
 
 ### Added
