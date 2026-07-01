@@ -284,14 +284,13 @@ public final class PrReviewPrompts {
    * model self-gates the {@code walkthrough_diagram} field on its presence (mirroring how the label
    * section gates {@code suggested_labels}). No extra AI call — it rides the existing review pass.
    *
-   * <p>Built via {@link #diagramRequest()} rather than an inline literal so this large block is not
-   * a compile-time constant: it is used in a method body (the assembler), and an inline constant
-   * would be copied verbatim into that class file (HSC_HUGE_SHARED_STRING_CONSTANT).
+   * <p>Terminated with {@link String#stripIndent()} so the value is not a compile-time constant: it
+   * is referenced from a method body (the assembler), and a plain inline literal this large would
+   * be copied verbatim into that class file (SpotBugs HSC_HUGE_SHARED_STRING_CONSTANT). The call is
+   * a no-op on the already-dedented text block — it exists only to defeat constant folding.
    */
-  public static final String DIAGRAM_REQUEST = diagramRequest();
-
-  private static String diagramRequest() {
-    return """
+  public static final String DIAGRAM_REQUEST =
+      """
             ## Control-Flow Diagram Request
             When — and only when — this change is non-trivial (it alters control flow, adds or
             reorders interactions between components, or introduces a new multi-step path),
@@ -317,8 +316,8 @@ public final class PrReviewPrompts {
               not the whole system.
             - Emit ONLY the raw Mermaid source: no ``` fences, no prose, no Markdown around it.
             - For trivial changes (small local edits, dependency bumps, doc-only changes), leave
-              walkthrough_diagram as an empty string.""";
-  }
+              walkthrough_diagram as an empty string."""
+          .stripIndent();
 
   private PrReviewPrompts() {}
 }

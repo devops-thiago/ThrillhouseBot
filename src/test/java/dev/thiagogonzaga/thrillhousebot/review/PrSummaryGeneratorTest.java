@@ -722,8 +722,13 @@ class PrSummaryGeneratorTest {
     // render as a normal collapsible block.
     var aiSummary =
         summaryWithDiagram(
-            "sequenceDiagram\n  participant O as ReviewOrchestrator\n"
-                + "  participant L as ReviewContextLoader\n  O->>L: load()\n  L-->>O: ReviewContext");
+            """
+            sequenceDiagram
+              participant O as ReviewOrchestrator
+              participant L as ReviewContextLoader
+              O->>L: load()
+              L-->>O: ReviewContext
+            """);
     var result =
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
@@ -742,8 +747,12 @@ class PrSummaryGeneratorTest {
     // diagram rather than post an unrenderable block.
     var aiSummary =
         summaryWithDiagram(
-            "sequenceDiagram\n  participant O[\"ReviewOrchestrator\"]\n"
-                + "  participant L[\"ReviewContextLoader\"]\n  O->>L: \"load()\"");
+            """
+            sequenceDiagram
+              participant O["ReviewOrchestrator"]
+              participant L["ReviewContextLoader"]
+              O->>L: "load()"
+            """);
     var result =
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
