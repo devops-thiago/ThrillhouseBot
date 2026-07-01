@@ -165,27 +165,47 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
-      // Drop "required" in fail-closed gate-all mode: CI holds approval because the required set
-      // was
-      // unknown (gating all checks), not because branch protection named these checks (#302).
-      String ciPhrase = result.requiredContextsKnown() ? "required CI" : "CI";
-      if (result.ciHoldsApproval() && result.truncated()) {
-        // Both holds apply — report both so a truncated review isn't masked by the CI message.
-        sb.append(
-                "No new issues found in the reviewed portion of this PR, but it cannot be approved: ")
-            .append(ciPhrase)
-            .append(
-                " is not confirmed green, and the diff was too large to review in full (a partial review).\n\n");
-      } else if (result.ciHoldsApproval()) {
-        sb.append("No new issues found in this PR, but the review cannot be approved until ")
-            .append(ciPhrase)
-            .append(" is confirmed green.\n\n");
+      if (result.ciHoldsApproval()) {
+        appendCiHold(sb, result);
       } else if (result.truncated()) {
         sb.append(
             "No new issues found in the reviewed portion of this PR — but the diff was too large to review in full, so this is a partial review.\n\n");
       } else {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       }
+    }
+  }
+
+  /**
+   * Renders the celebration-replacement line when CI holds approval (optionally alongside a
+   * truncated diff). The two CI holds read differently: an offending check is pending/failing, so
+   * it is phrased as CI "not confirmed green" — with neutral "CI"/"required CI" wording per whether
+   * the required set was resolved (#302). An unreadable source is NOT a not-green result — it could
+   * not be read — so it gets "could not be read" wording, matching {@code
+   * VerdictBuilder.checkSummaryForResult} and the "CI Status Unavailable" section rather than
+   * misreporting an unread status as failing. Reached only via {@link
+   * ReviewResult#ciHoldsApproval}, so no offending check implies the hold is an unreadable source.
+   */
+  private static void appendCiHold(StringBuilder sb, ReviewResult result) {
+    boolean offending = !result.offendingCiChecks().isEmpty();
+    boolean truncated = result.truncated();
+    String ciPhrase = result.requiredContextsKnown() ? "required CI" : "CI";
+    if (offending && truncated) {
+      sb.append(
+              "No new issues found in the reviewed portion of this PR, but it cannot be approved: ")
+          .append(ciPhrase)
+          .append(
+              " is not confirmed green, and the diff was too large to review in full (a partial review).\n\n");
+    } else if (offending) {
+      sb.append("No new issues found in this PR, but the review cannot be approved until ")
+          .append(ciPhrase)
+          .append(" is confirmed green.\n\n");
+    } else if (truncated) {
+      sb.append(
+          "No new issues found in the reviewed portion of this PR, but it cannot be approved: the CI status could not be read, and the diff was too large to review in full (a partial review).\n\n");
+    } else {
+      sb.append(
+          "No new issues found in this PR, but the CI status could not be read, so the review cannot be approved until it can be confirmed.\n\n");
     }
   }
 
