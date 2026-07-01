@@ -85,6 +85,14 @@ public class PrSummaryGenerator {
           "journey",
           "gantt");
 
+  /**
+   * Renders the summary comment. {@code filesChanged}/{@code additions}/{@code deletions} are
+   * GitHub's authoritative PR-level totals (or the diff-derived fallback), so the "Changes
+   * Overview" reflects the whole PR even when files are dropped by the ignore-glob. {@code
+   * changedFiles} is the reviewable (non-ignored) file list rendered as the walkthrough table; its
+   * rollup "…and N more" note is derived from {@code filesChanged} so it, too, matches the
+   * authoritative total.
+   */
   public String generate(
       int filesChanged,
       int additions,
@@ -104,7 +112,7 @@ public class PrSummaryGenerator {
     sb.append("- **Lines added:** ").append(signed('+', additions)).append("\n");
     sb.append("- **Lines removed:** ").append(signed('-', deletions)).append("\n\n");
 
-    appendChangedFiles(sb, changedFiles, aiSummary);
+    appendChangedFiles(sb, filesChanged, changedFiles, aiSummary);
 
     sb.append("### Risk Assessment\n");
     sb.append("| Risk | Count |\n");
@@ -251,10 +259,18 @@ public class PrSummaryGenerator {
    * Renders the file-by-file walkthrough as a table of (file, change type, one-line summary). The
    * change type comes from the diff (authoritative); the summary is the model's per-file note,
    * matched by path. Files without a model summary still appear, so the table always mirrors the
-   * actual change set. Bounded to {@link #MAX_FILE_ROWS} rows to respect the comment-size budget.
+   * reviewable change set. Bounded to {@link #MAX_FILE_ROWS} rows to respect the comment-size
+   * budget.
+   *
+   * <p>The trailing "…and N more file(s)" rollup is measured against {@code totalFilesChanged}
+   * (GitHub's authoritative total), not the reviewable-row count, so it also accounts for files the
+   * ignore-glob dropped from the table — matching the "Changes Overview" total above it (#298).
    */
   private static void appendChangedFiles(
-      StringBuilder sb, List<ChangedFile> changedFiles, ReviewResponse.Summary aiSummary) {
+      StringBuilder sb,
+      int totalFilesChanged,
+      List<ChangedFile> changedFiles,
+      ReviewResponse.Summary aiSummary) {
     if (changedFiles == null || changedFiles.isEmpty()) {
       return;
     }
@@ -273,7 +289,8 @@ public class PrSummaryGenerator {
           .append(summary.isBlank() ? "-" : escapeTableCell(summary.strip()))
           .append(" |\n");
     }
-    int overflow = changedFiles.size() - MAX_FILE_ROWS;
+    int rowsShown = Math.min(changedFiles.size(), MAX_FILE_ROWS);
+    int overflow = totalFilesChanged - rowsShown;
     if (overflow > 0) {
       sb.append("\n_…and ").append(overflow).append(" more file(s)._\n");
     }
