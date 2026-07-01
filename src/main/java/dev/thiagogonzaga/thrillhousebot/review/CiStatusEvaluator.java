@@ -157,11 +157,26 @@ public class CiStatusEvaluator {
 
   /**
    * The outcome of evaluating a commit's CI: the <em>offending</em> checks (pending, failing, or
-   * missing) and whether a CI source could not be read at all. Both hold the APPROVE decision back,
-   * but they are distinct concepts — unreadable is not a check — so the verdict and the rendered
-   * summary can treat them separately.
+   * missing), whether a CI source could not be read at all, and whether the required-context set
+   * was actually resolved. The first two both hold the APPROVE decision back but are distinct
+   * concepts — unreadable is not a check — so the verdict and the rendered summary can treat them
+   * separately. {@code requiredContextsKnown} is false in fail-closed gate-all mode (the required
+   * set could not be resolved, so every check is gated): the rendered copy then drops the word
+   * "required", which would misdescribe checks branch protection never named (#302).
    */
-  record CiEvaluation(List<ReviewResult.CiCheck> offendingChecks, boolean unreadable) {}
+  record CiEvaluation(
+      List<ReviewResult.CiCheck> offendingChecks,
+      boolean unreadable,
+      boolean requiredContextsKnown) {
+
+    /**
+     * Convenience for callers/tests that predate the required-context flag: assumes the required
+     * set was resolved, so rendered copy keeps the accurate "required" wording.
+     */
+    CiEvaluation(List<ReviewResult.CiCheck> offendingChecks, boolean unreadable) {
+      this(offendingChecks, unreadable, true);
+    }
+  }
 
   /**
    * Evaluates the CI checks on {@code commitSha}: the <em>offending</em> ones — pending, failing,
@@ -203,7 +218,12 @@ public class CiStatusEvaluator {
     // unread can still hide a required check's true state. Reported as a first-class signal, not a
     // synthetic check.
     boolean unreadable = !checkRunsReadable || !statusReadable;
-    return new CiEvaluation(offending, unreadable);
+    // requiredContexts == null means the required set could not be resolved and we are gating on
+    // every check; the rendered copy then uses neutral "CI check(s)" wording rather than calling
+    // checks "required" when branch protection never named them (#302). A resolved list (even
+    // empty)
+    // keeps the accurate "required" wording.
+    return new CiEvaluation(offending, unreadable, requiredContexts != null);
   }
 
   /**

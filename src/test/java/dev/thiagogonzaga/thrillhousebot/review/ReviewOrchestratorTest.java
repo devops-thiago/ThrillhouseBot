@@ -907,6 +907,36 @@ class ReviewOrchestratorTest {
       assertFalse(summary.contains("Everything's coming up Thrillhouse"));
       assertTrue(summary.contains("required CI check(s) are still pending or failing"));
     }
+
+    @Test
+    void checkSummaryUsesNeutralCiWordingWhenRequiredSetUnknown() {
+      // #302: in fail-closed gate-all mode (required set unresolved) the offending checks are gated
+      // because the required set was unknown, not because branch protection named them required —
+      // so
+      // the caption drops the word "required" and calls them plain "CI check(s)".
+      var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              offending,
+              0,
+              false,
+              false);
+
+      String summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertTrue(summary.contains("1 CI check(s) are still pending or failing"), summary);
+      assertFalse(summary.contains("required CI check(s)"), summary);
+    }
   }
 
   @Nested

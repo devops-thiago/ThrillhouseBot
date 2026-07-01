@@ -33,7 +33,11 @@ public record ReviewResult(
     List<PreviousFindingStatus> previousStatuses,
     List<CiCheck> offendingCiChecks,
     int omittedFiles,
-    boolean ciUnreadable) {
+    boolean ciUnreadable,
+    // False in fail-closed gate-all mode: the required-context set could not be resolved, so every
+    // check is gated. The rendered CI copy then drops "required", which would misdescribe checks
+    // branch protection never named (#302).
+    boolean requiredContextsKnown) {
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
@@ -73,6 +77,43 @@ public record ReviewResult(
         offendingCiChecks,
         omittedFiles,
         false);
+  }
+
+  /**
+   * Convenience constructor for results built before the required-context flag existed (and tests):
+   * assumes the required set was resolved, so rendered CI copy keeps the accurate "required"
+   * wording. The production path ({@code VerdictBuilder}) passes the real flag through the
+   * canonical constructor.
+   */
+  public ReviewResult(
+      List<Finding> findings,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      RiskLevel highestRisk,
+      ReviewState reviewState,
+      boolean isFirstReview,
+      String summaryMarkdown,
+      List<PreviousFindingStatus> previousStatuses,
+      List<CiCheck> offendingCiChecks,
+      int omittedFiles,
+      boolean ciUnreadable) {
+    this(
+        findings,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        highestRisk,
+        reviewState,
+        isFirstReview,
+        summaryMarkdown,
+        previousStatuses,
+        offendingCiChecks,
+        omittedFiles,
+        ciUnreadable,
+        true);
   }
 
   /** How many findings the PR summary lists under "Key Findings". */

@@ -165,13 +165,21 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
+      // Drop "required" in fail-closed gate-all mode: CI holds approval because the required set
+      // was
+      // unknown (gating all checks), not because branch protection named these checks (#302).
+      String ciPhrase = result.requiredContextsKnown() ? "required CI" : "CI";
       if (result.ciHoldsApproval() && result.truncated()) {
         // Both holds apply — report both so a truncated review isn't masked by the CI message.
         sb.append(
-            "No new issues found in the reviewed portion of this PR, but it cannot be approved: required CI is not confirmed green, and the diff was too large to review in full (a partial review).\n\n");
+                "No new issues found in the reviewed portion of this PR, but it cannot be approved: ")
+            .append(ciPhrase)
+            .append(
+                " is not confirmed green, and the diff was too large to review in full (a partial review).\n\n");
       } else if (result.ciHoldsApproval()) {
-        sb.append(
-            "No new issues found in this PR, but the review cannot be approved until required CI is confirmed green.\n\n");
+        sb.append("No new issues found in this PR, but the review cannot be approved until ")
+            .append(ciPhrase)
+            .append(" is confirmed green.\n\n");
       } else if (result.truncated()) {
         sb.append(
             "No new issues found in the reviewed portion of this PR — but the diff was too large to review in full, so this is a partial review.\n\n");
@@ -183,8 +191,15 @@ public class PrSummaryGenerator {
 
   private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
     if (!result.offendingCiChecks().isEmpty()) {
-      sb.append("### ⚠️ Required CI Checks Status\n");
-      sb.append("Some required checks are still pending or have failed:\n\n");
+      // Drop "Required"/"required" in fail-closed gate-all mode: these checks are gated because the
+      // required set was unknown, not because branch protection named them required (#302).
+      if (result.requiredContextsKnown()) {
+        sb.append("### ⚠️ Required CI Checks Status\n");
+        sb.append("Some required checks are still pending or have failed:\n\n");
+      } else {
+        sb.append("### ⚠️ CI Checks Status\n");
+        sb.append("Some checks are still pending or have failed:\n\n");
+      }
       sb.append("| Check | Type | Status | Detail |\n");
       sb.append("|-------|------|--------|--------|\n");
       for (var check : result.offendingCiChecks()) {

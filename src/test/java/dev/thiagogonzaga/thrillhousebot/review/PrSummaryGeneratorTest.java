@@ -341,6 +341,43 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void showsNeutralCiChecksStatusWhenRequiredSetUnknown() {
+    // #302: in fail-closed gate-all mode (required set unresolved) the summary must not label the
+    // gated checks "required" — branch protection never named them; they are gated because the
+    // required set was unknown.
+    var checks =
+        List.of(
+            new ReviewResult.CiCheck("build", "check-run", "failing", null),
+            new ReviewResult.CiCheck("test", "status", "pending", "pending"));
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            checks,
+            0,
+            false,
+            false);
+
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(summary.contains("until CI is confirmed green"), summary);
+    assertFalse(summary.contains("required CI is confirmed green"), summary);
+    assertTrue(summary.contains("### ⚠️ CI Checks Status"), summary);
+    assertFalse(summary.contains("Required CI Checks Status"), summary);
+    assertTrue(summary.contains("Some checks are still pending or have failed"), summary);
+    assertFalse(summary.contains("Some required checks are still pending or have failed"), summary);
+  }
+
+  @Test
   void cleanReviewHeldByBothCiAndTruncationReportsBoth() {
     // When CI holds approval AND the diff was truncated, the summary must disclose both — the CI
     // message must not mask the partial review.
