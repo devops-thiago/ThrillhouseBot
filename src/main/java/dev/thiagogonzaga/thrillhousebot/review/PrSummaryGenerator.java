@@ -373,7 +373,46 @@ public class PrSummaryGenerator {
     }
     String firstLine = cleaned.lines().findFirst().orElse("").strip().toLowerCase(Locale.ROOT);
     boolean recognized = MERMAID_PREFIXES.stream().anyMatch(firstLine::startsWith);
-    return recognized ? cleaned : null;
+    if (!recognized) {
+      return null;
+    }
+    // A sequenceDiagram whose participant/actor declarations carry a flowchart bracket label
+    // (`participant X["Y"]`) is invalid sequence syntax; GitHub's parser rejects it and drops the
+    // whole diagram (#311). The prompt steers away from this shape, but a broken block is worse
+    // than none — so reject it defensively rather than post something that renders as a parse
+    // error. We drop, not repair: #299 established that regex-rewriting Mermaid source corrupts
+    // valid diagrams, and a dropped diagram is recoverable on re-review.
+    if (firstLine.startsWith("sequencediagram") && hasBracketLabeledParticipant(cleaned)) {
+      return null;
+    }
+    return cleaned;
+  }
+
+  /**
+   * True when any {@code participant}/{@code actor} declaration in the source carries a flowchart
+   * bracket label — {@code participant O["Orchestrator"]} rather than the valid {@code participant
+   * O as Orchestrator}. The stray {@code [} or &#123; is the flowchart-quoting rule leaking into a
+   * sequence diagram (#311), which GitHub cannot render.
+   */
+  private static boolean hasBracketLabeledParticipant(String diagram) {
+    return diagram
+        .lines()
+        .map(line -> line.strip().toLowerCase(Locale.ROOT))
+        .filter(line -> line.startsWith("participant ") || line.startsWith("actor "))
+        .anyMatch(PrSummaryGenerator::hasBracketInAliasPosition);
+  }
+
+  /**
+   * True when the alias of a participant/actor declaration carries a bracket — the leaked flowchart
+   * shape {@code participant O["Orchestrator"]}, which never uses the {@code as} form. A valid
+   * {@code participant O as Display} may legitimately carry brackets in its display name (e.g.
+   * {@code as [User]}), so only the alias — the text before {@code " as "}, or the whole line when
+   * there is no {@code " as "} — is inspected, to avoid dropping a renderable diagram.
+   */
+  private static boolean hasBracketInAliasPosition(String participantLine) {
+    int asIndex = participantLine.indexOf(" as ");
+    String alias = asIndex >= 0 ? participantLine.substring(0, asIndex) : participantLine;
+    return alias.indexOf('[') >= 0 || alias.indexOf('{') >= 0;
   }
 
   /** Renders a signed line count, avoiding the awkward "+0"/"-0". */

@@ -117,5 +117,31 @@ class PrReviewPromptsContentTest {
         "the diagram prompt must require quoted node labels so GitHub can render them");
     assertContains(
         req, "#quot;", "the diagram prompt must give the escape for a literal double quote");
+    // #311: the quoting rule must be scoped to flowcharts, or the model over-generalizes it to
+    // sequence participants (`participant X["Y"]`), which is a parse error GitHub silently drops.
+    assertContains(
+        req,
+        "flowchart ONLY",
+        "the double-quote rule must be scoped to flowcharts, not applied to every diagram shape");
+  }
+
+  @Test
+  void diagramRequestGivesSequenceDiagramItsOwnSyntaxRules() {
+    // #311: a sequenceDiagram must declare participants with `as`, not flowchart bracket labels,
+    // and must not quote-wrap message text. Pin the sequence-specific guidance and an example so a
+    // future prompt edit cannot silently reintroduce the bracket-label breakage.
+    String req = PrReviewPrompts.DIAGRAM_REQUEST;
+    assertContains(
+        req,
+        "sequenceDiagram ONLY",
+        "the diagram prompt must give sequence diagrams their own syntax section");
+    assertContains(
+        req,
+        "participant Alias as Display Name",
+        "the diagram prompt must show the valid `participant X as Label` sequence syntax");
+    assertContains(
+        req,
+        "participant O as ReviewOrchestrator",
+        "the diagram prompt must include a correct sequence-diagram example");
   }
 }

@@ -744,6 +744,110 @@ class PrSummaryGeneratorTest {
     assertFalse(summary.contains("Control-Flow Diagram"));
   }
 
+  @Test
+  void shouldRenderSequenceDiagramWithAsParticipantSyntax() {
+    // #311: the valid `participant X as Label` shape (no bracket labels, plain message text) must
+    // render as a normal collapsible block.
+    var aiSummary =
+        summaryWithDiagram(
+            """
+            sequenceDiagram
+              participant O as ReviewOrchestrator
+              participant L as ReviewContextLoader
+              O->>L: load()
+              L-->>O: ReviewContext
+            """);
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### Control-Flow Diagram"));
+    assertTrue(summary.contains("```mermaid\nsequenceDiagram"));
+    assertTrue(summary.contains("participant O as ReviewOrchestrator"));
+  }
+
+  @Test
+  void shouldRenderSequenceDiagramWhenBracketsAppearOnlyInTheAsDisplayName() {
+    // #332 review: the bracket-label guard must not over-reach. A valid `participant X as Display`
+    // whose display name legitimately carries brackets is renderable — the invalid leak is a
+    // bracket
+    // in the alias position (`participant X["Y"]`), which never uses the `as` form — so it must not
+    // be dropped.
+    var aiSummary =
+        summaryWithDiagram(
+            """
+            sequenceDiagram
+              participant A as [User]
+              participant S as Server
+              A->>S: request()
+            """);
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### Control-Flow Diagram"));
+    assertTrue(summary.contains("participant A as [User]"));
+  }
+
+  @Test
+  void shouldDropSequenceDiagramWithBracketLabeledParticipants() {
+    // #311: the model over-generalized the flowchart double-quote rule onto sequence participants
+    // (`participant X["Y"]`), which is a parse error GitHub silently drops. Reject the whole
+    // diagram rather than post an unrenderable block.
+    var aiSummary =
+        summaryWithDiagram(
+            """
+            sequenceDiagram
+              participant O["ReviewOrchestrator"]
+              participant L["ReviewContextLoader"]
+              O->>L: "load()"
+            """);
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+    assertFalse(summary.contains("```mermaid"));
+  }
+
+  @Test
+  void shouldDropSequenceDiagramWithBraceLabeledActor() {
+    // The guard also fires on an `actor` declaration (not just `participant`) and on a brace label
+    // (`{`, not just `[`) — the alternate shapes the leaked flowchart quoting can take.
+    var aiSummary =
+        summaryWithDiagram(
+            "sequenceDiagram\n  actor U as User\n  actor B{\"Bot\"}\n  U->>B: ask()");
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Control-Flow Diagram"));
+    assertFalse(summary.contains("```mermaid"));
+  }
+
+  @Test
+  void shouldKeepFlowchartWithBracketLabelsWhenRejectingSequenceParticipants() {
+    // The #311 rejection is scoped to sequenceDiagram participants — a flowchart's quoted bracket
+    // labels (#299) are valid and must still render, so the guard must not over-reach.
+    var aiSummary = summaryWithDiagram("flowchart TD\n  A[\"call foo()\"] --> B{\"ready?\"}");
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### Control-Flow Diagram"));
+    assertTrue(summary.contains("A[\"call foo()\"] --> B{\"ready?\"}"));
+  }
+
   private static ReviewResponse.Summary summaryWithDiagram(String diagram) {
     return new ReviewResponse.Summary(
         0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(), diagram);
