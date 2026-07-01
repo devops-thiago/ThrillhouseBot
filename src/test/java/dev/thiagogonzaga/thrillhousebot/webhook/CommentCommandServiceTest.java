@@ -20,7 +20,6 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
@@ -30,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import java.util.List;
@@ -49,7 +49,7 @@ class CommentCommandServiceTest {
   @Mock private GitHubReviewClient reviewClient;
   @Mock private ReviewThreadService reviewThreadService;
   @Mock private ReviewDispatcher reviewDispatcher;
-  @Mock private ReviewSessionPersistence sessionPersistence;
+  @Mock private ReviewContextLoader contextLoader;
   @Mock private PrPauseService prPauseService;
   @Mock private ManualReviewAuthorizer authorizer;
   @Mock private PrDescriptionGenerator descriptionGenerator;
@@ -82,7 +82,7 @@ class CommentCommandServiceTest {
             reviewClient,
             reviewThreadService,
             reviewDispatcher,
-            sessionPersistence,
+            contextLoader,
             prPauseService,
             authorizer,
             new TriggerDetector(),
@@ -118,25 +118,39 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void summaryDispatchesReviewWhenNoSummaryExists() {
+  void summaryDispatchesForcedReviewWhenNoLiveSummaryComment() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
-    when(sessionPersistence.hasCompletedReview("owner/repo", 7)).thenReturn(false);
+    // No summary comment currently on the PR (never generated, or deleted) — the command must run.
+    when(contextLoader.botSummaryCommentExists("token", "owner", "repo", 7)).thenReturn(false);
 
     service.handle(ctx(CommentCommand.SUMMARY));
 
+    // Dispatched with forceSummary=true (last arg) so the summary is (re)posted even if a formal
+    // bot review already exists, where the first-review gate alone would suppress it.
     verify(reviewDispatcher)
         .dispatch(
             new ReviewOrchestrator.ReviewRequest(
-                "owner", "repo", 7, "", "(manual summary)", "", "", "main", 12345L, true));
+                "owner",
+                "repo",
+                7,
+                "",
+                "(manual summary)",
+                "",
+                "",
+                "main",
+                12345L,
+                true,
+                "",
+                true));
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
-  void summaryIsNoOpWhenSummaryAlreadyExists() {
+  void summaryIsNoOpWhenSummaryCommentIsLiveOnPr() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
-    when(sessionPersistence.hasCompletedReview("owner/repo", 7)).thenReturn(true);
+    when(contextLoader.botSummaryCommentExists("token", "owner", "repo", 7)).thenReturn(true);
 
     service.handle(ctx(CommentCommand.SUMMARY));
 
@@ -153,7 +167,7 @@ class CommentCommandServiceTest {
 
     assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
     verify(reviewDispatcher, never()).dispatch(any());
-    verify(sessionPersistence, never()).hasCompletedReview(any(), anyInt());
+    verify(contextLoader, never()).botSummaryCommentExists(any(), any(), any(), anyInt());
   }
 
   @Test

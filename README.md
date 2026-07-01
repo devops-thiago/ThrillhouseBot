@@ -71,7 +71,7 @@ mention form, e.g. `@Thrillhousebot review`.
 |---|---|---|
 | `/help` | List the available commands | anyone |
 | `/review` | Run (or re-run) a full review of the PR | write |
-| `/summary` | Post the PR summary, but only if one has not been generated yet (otherwise no-op) | write |
+| `/summary` | Post the PR summary if it isn't already on the PR — regenerates it if the comment was deleted, otherwise no-op | write |
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
