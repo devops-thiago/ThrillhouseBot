@@ -1,4 +1,8 @@
-# libcap in quay.io/quarkus/ubi9-quarkus-micro-image@2.0-2026-06-07 (el9_7).
-# Fixed in 2.48-10.el9_8.1; micro base has no package manager to apply the update.
-# The :*-distroless image variant scans clean. Remove when the Quarkus UBI base refreshes.
-CVE-2026-4878
+# libacl / libattr in quay.io/quarkus/ubi9-quarkus-micro-image@2.0-2026-06-28 (el9, RHEL 9.8).
+# Symlink-traversal privilege escalation (CVE-2026-54369 / CVE-2026-54371). RHEL has shipped no
+# fixed package for el9 yet — Trivy reports "no fix" on every micro base tag, including the latest;
+# the micro base has no package manager to apply an update, and the :*-distroless image variant
+# scans clean. Remove when RHEL ships fixed libacl/libattr.
+# (The earlier libcap CVE-2026-4878 is dropped: the 9.8 base above no longer ships it.)
+CVE-2026-54369
+CVE-2026-54371
