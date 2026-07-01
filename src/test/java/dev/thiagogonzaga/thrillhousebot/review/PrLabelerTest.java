@@ -373,6 +373,56 @@ class PrLabelerTest {
               anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
       assertEquals(List.of("bug"), captor.getValue().labels());
     }
+
+    @Test
+    void shouldTreatLabelsBeyondTheFirstPageAsAlreadyApplied() {
+      // max is set well above the label count so the budget stays positive — this isolates the
+      // pagination check: the suggestion is skipped only because it is recognised as already on the
+      // PR (page 2), not because the cap was hit. Page one must be full (100) or the walk stops
+      // before requesting page two, so the only label the PR could exceed one page with lives
+      // there.
+      when(labelsConfig.maxLabels()).thenReturn(200);
+      var fullFirstPage = new java.util.ArrayList<GitHubLabelClient.Label>();
+      for (int i = 0; i < 100; i++) {
+        fullFirstPage.add(label("page1-" + i));
+      }
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(1)))
+          .thenReturn(fullFirstPage);
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), eq(2)))
+          .thenReturn(List.of(label("page2-only")));
+
+      labeler.applyOrSuggest(request(false, List.of("page2-only"), List.of(label("page2-only"))));
+
+      // A single-page fetch would miss "page2-only" and re-add it; walking to page 2 sees it as
+      // already present, so nothing new is applied.
+      verify(labelClient, never())
+          .addLabels(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      // Both pages were walked to build the current-label set.
+      verify(labelClient, times(2))
+          .listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+    }
+
+    @Test
+    void shouldStopWalkingCurrentLabelsAtThePageCap() {
+      // Every page of PR labels comes back full, so only the MAX_LABEL_PAGES guard can end the
+      // walk.
+      var fullPage = new java.util.ArrayList<GitHubLabelClient.Label>();
+      for (int i = 0; i < 100; i++) {
+        fullPage.add(label("label-" + i));
+      }
+      when(labelClient.listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+          .thenReturn(fullPage);
+
+      labeler.applyOrSuggest(request(false, List.of("bug"), List.of(label("bug"))));
+
+      verify(labelClient, times(PrLabeler.MAX_LABEL_PAGES))
+          .listIssueLabels(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
+    }
   }
 
   @Nested
