@@ -282,6 +282,30 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void diffStatsWithAuthoritativeTotalsOverridesCountsButKeepsOmittedFileCount() {
+      // #298: the "Changes Overview" uses GitHub's authoritative totals, but the reviewed-diff
+      // omitted-file count (which gates approval and drives truncation disclosure) is preserved.
+      var reviewed = new VerdictBuilder.DiffStats(26, 958, 186, 3);
+
+      var authoritative =
+          reviewed.withAuthoritativeTotals(new ReviewContextLoader.PrTotals(27, 975, 196));
+
+      assertEquals(27, authoritative.filesChanged());
+      assertEquals(975, authoritative.additions());
+      assertEquals(196, authoritative.deletions());
+      assertEquals(3, authoritative.omittedFiles());
+      assertTrue(authoritative.truncated());
+    }
+
+    @Test
+    void diffStatsWithNullAuthoritativeTotalsFallsBackToDiffDerivedCounts() {
+      // When the PR-level totals can't be fetched, the reviewed-diff counts are used unchanged.
+      var reviewed = new VerdictBuilder.DiffStats(26, 958, 186, 0);
+
+      assertSame(reviewed, reviewed.withAuthoritativeTotals(null));
+    }
+
+    @Test
     void truncatedCleanSummaryBodyDoesNotCelebrateEndToEnd() {
       // Regression (#1): buildResult handed omittedFiles=0 to the summary generator, so the body's
       // truncated() branch was dead and emitted the all-clear celebration directly under the

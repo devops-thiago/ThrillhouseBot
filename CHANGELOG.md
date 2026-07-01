@@ -2,6 +2,12 @@
 
 All notable changes to ThrillhouseBot.
 
+## [Unreleased]
+
+### Fixed
+
+- **PR summary "Changes Overview" no longer undercounts files/lines**: the overview reported the file and line totals summed over the bot's *reviewable* file list — the ignore-glob-filtered subset — so a PR with any ignore-globbed file (e.g. a lockfile) showed fewer files and lines than GitHub's own totals, and the changed-files walkthrough's "…and N more file(s)" rollup was short by the same amount. The overview and the rollup now report GitHub's authoritative `changed_files` / `additions` / `deletions` for the PR (fetched from the pulls endpoint), while the walkthrough table still lists only the reviewable files. Truncation gating and disclosure are unchanged, and if the PR totals can't be fetched the summary falls back to the previous diff-derived counts (#298)
+
 ## [0.3.0] — 2026-06-30
 
 ### Added
