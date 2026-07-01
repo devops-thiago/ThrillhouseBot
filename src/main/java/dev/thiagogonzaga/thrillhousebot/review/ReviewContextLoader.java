@@ -232,7 +232,8 @@ public class ReviewContextLoader {
         req.defaultBranch(),
         req.installationId(),
         req.isManualTrigger(),
-        pr.base() != null ? pr.base().ref() : "");
+        pr.base() != null ? pr.base().ref() : "",
+        req.forceSummary());
   }
 
   /** Stack context is best-effort enrichment — its failure must never fail the review. */
@@ -304,7 +305,7 @@ public class ReviewContextLoader {
    * a first round held back only by pending CI). Best-effort: on a fetch failure it returns {@code
    * false}, falling back to the review-based signal rather than blocking the summary.
    */
-  boolean botSummaryCommentExists(String auth, String owner, String repo, int prNumber) {
+  public boolean botSummaryCommentExists(String auth, String owner, String repo, int prNumber) {
     for (var comment : fetchIssueComments(auth, owner, repo, prNumber)) {
       var user = comment.user();
       var body = comment.body();

@@ -80,6 +80,10 @@ public class ReviewOrchestrator {
    * @param isManualTrigger {@code true} when triggered by a /review command
    * @param baseRef PR base/target branch name, used to resolve required CI checks without an extra
    *     PR fetch; may be empty until {@link ReviewContextLoader#resolveMissingPrDetails} fills it
+   * @param forceSummary {@code true} when the PR summary comment must be (re)posted even on a
+   *     follow-up review — set by {@code /summary} to regenerate a summary that was deleted from
+   *     the PR. Off by every other path, which posts the summary only on the first user-visible
+   *     review
    */
   public record ReviewRequest(
       String owner,
@@ -92,12 +96,46 @@ public class ReviewOrchestrator {
       String defaultBranch,
       long installationId,
       boolean isManualTrigger,
-      String baseRef) {
+      String baseRef,
+      boolean forceSummary) {
+
+    /**
+     * Back-compat convenience for callers that carry the base ref but never force the summary — the
+     * automatic {@code pull_request} path and tests. Defaults {@code forceSummary} to {@code
+     * false}.
+     */
+    public ReviewRequest(
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        String prTitle,
+        String prDescription,
+        String baseSha,
+        String defaultBranch,
+        long installationId,
+        boolean isManualTrigger,
+        String baseRef) {
+      this(
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          prTitle,
+          prDescription,
+          baseSha,
+          defaultBranch,
+          installationId,
+          isManualTrigger,
+          baseRef,
+          false);
+    }
 
     /**
      * Back-compat convenience for callers that don't yet carry the base ref — the manual /review
      * entry points (filled in later by {@link ReviewContextLoader#resolveMissingPrDetails}) and
-     * tests. Defaults {@code baseRef} to empty, so the CI resolver gates on all checks until known.
+     * tests. Defaults {@code baseRef} to empty and {@code forceSummary} to {@code false}, so the CI
+     * resolver gates on all checks until known.
      */
     public ReviewRequest(
         String owner,
@@ -301,7 +339,8 @@ public class ReviewOrchestrator {
    */
   private void publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
     try {
-      reviewPublisher.publishSummary(auth, req.owner(), req.repo(), req.prNumber(), result);
+      reviewPublisher.publishSummary(
+          auth, req.owner(), req.repo(), req.prNumber(), result, req.forceSummary());
     } catch (RuntimeException e) {
       Log.warnf(
           e,

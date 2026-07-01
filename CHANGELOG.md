@@ -6,6 +6,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **`/summary` regenerates a deleted summary comment**: the command gated on persistence state ("a review ever completed for this PR") rather than the live PR, so once the summary comment was deleted it could never be regenerated — and `/summary` logged that a summary "already exists" when none was present. It now checks the PR for the bot's own summary comment and, when it is missing, re-posts it (even on a PR that already carries a formal review, where the first-review gate alone would suppress it); it still no-ops when the summary is present. The log line and README wording no longer claim a summary exists when it doesn't (#297)
 - **PR summary "Changes Overview" no longer undercounts files/lines**: the overview reported the file and line totals summed over the bot's *reviewable* file list — the ignore-glob-filtered subset — so a PR with any ignore-globbed file (e.g. a lockfile) showed fewer files and lines than GitHub's own totals, and the changed-files walkthrough's "…and N more file(s)" rollup was short by the same amount. The overview and the rollup now report GitHub's authoritative `changed_files` / `additions` / `deletions` for the PR (fetched from the pulls endpoint), while the walkthrough table still lists only the reviewable files. Truncation gating and disclosure are unchanged, and if the PR totals can't be fetched the summary falls back to the previous diff-derived counts (#298)
 
 ## [0.3.0] — 2026-06-30
