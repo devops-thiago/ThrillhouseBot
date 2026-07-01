@@ -280,13 +280,12 @@ public class MaintainerReplyService {
         continue;
       }
       threadIds.add(c.id());
-      // The triggering comment anchors this reply (and any descendants), but is shown only as the
-      // question — never repeated in the rendered thread.
-      if (c.id() == triggeringCommentId) {
-        continue;
+      // Render every thread comment except the triggering one: it anchors this reply (and any
+      // descendants) but is shown only as the question, never repeated in the rendered thread.
+      if (c.id() != triggeringCommentId) {
+        String author = c.user() != null ? c.user().login() : "unknown";
+        sb.append("- @").append(author).append(": ").append(c.body()).append("\n");
       }
-      String author = c.user() != null ? c.user().login() : "unknown";
-      sb.append("- @").append(author).append(": ").append(c.body()).append("\n");
     }
     return sb.toString();
   }
