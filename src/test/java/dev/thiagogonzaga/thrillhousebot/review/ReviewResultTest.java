@@ -139,4 +139,26 @@ class ReviewResultTest {
 
     assertEquals(ReviewState.APPROVE, result.reviewState());
   }
+
+  @Test
+  void truncationDisclosureIsEmptyWhenNothingWasOmitted() {
+    assertEquals("", ReviewResult.truncationDisclosure(0));
+  }
+
+  @Test
+  void truncationDisclosureDisclosesTheOmittedCountWithoutReviewFraming() {
+    var disclosure = ReviewResult.truncationDisclosure(48);
+
+    // Leads with a blank-line separator so it appends cleanly after a command's own footer, and
+    // shares the omitted-file clause with the review banner...
+    assertTrue(disclosure.startsWith("\n\n"), disclosure);
+    assertTrue(
+        disclosure.contains("48 file(s) were omitted because the diff exceeded the size budget"),
+        disclosure);
+    assertTrue(disclosure.contains("partial coverage"), disclosure);
+    // ...but drops the review-only "findings and verdict" framing, which is wrong for a
+    // description / changelog entry / doc suggestion.
+    assertFalse(disclosure.contains("findings and verdict"), disclosure);
+    assertFalse(disclosure.contains("partial review"), disclosure);
+  }
 }

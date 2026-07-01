@@ -109,7 +109,7 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
       }
       return null;
     }
-    return HEADER + entry + FOOTER;
+    return HEADER + entry + FOOTER + ReviewResult.truncationDisclosure(inputs.omittedFiles());
   }
 
   /**
