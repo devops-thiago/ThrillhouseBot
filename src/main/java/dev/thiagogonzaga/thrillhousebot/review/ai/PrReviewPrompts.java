@@ -291,7 +291,12 @@ public final class PrReviewPrompts {
             reorders interactions between components, or introduces a new multi-step path),
             populate summary.walkthrough_diagram with a single Mermaid diagram of the AFFECTED
             control flow:
-            - Use a `flowchart TD` or a `sequenceDiagram` — nothing else.
+            - Use a `flowchart TD` or a `sequenceDiagram` — nothing else. Prefer simple rectangle
+              and rhombus nodes; avoid exotic shapes.
+            - ALWAYS wrap node label text in double quotes, whatever the shape — `A["call foo()"]`,
+              `B{"ready?"}`, `C(["Fetch & merge"])`. GitHub's Mermaid parser rejects unquoted
+              parentheses, ampersands, colons, slashes and the like inside a label and then fails to
+              render the whole diagram; write a literal double quote as `#quot;`.
             - Keep it small: at most ~12 nodes / participants, modelling only the changed path,
               not the whole system.
             - Emit ONLY the raw Mermaid source: no ``` fences, no prose, no Markdown around it.

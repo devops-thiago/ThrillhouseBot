@@ -103,4 +103,19 @@ class PrReviewPromptsContentTest {
         "both places verbatim from the provided material",
         "the guard's body must stay attached to its header, not dangle as a fragment");
   }
+
+  @Test
+  void diagramRequestRequiresQuotedNodeLabels() {
+    // GitHub's Mermaid parser rejects unquoted (), &, : etc. inside a node label and fails to
+    // render
+    // the whole diagram. Quoting at generation time is the guard (server-side rewriting can't
+    // disambiguate Mermaid's shape grammar safely), so pin the instruction and its escape.
+    String req = PrReviewPrompts.DIAGRAM_REQUEST;
+    assertContains(
+        req,
+        "wrap node label text in double quotes",
+        "the diagram prompt must require quoted node labels so GitHub can render them");
+    assertContains(
+        req, "#quot;", "the diagram prompt must give the escape for a literal double quote");
+  }
 }
