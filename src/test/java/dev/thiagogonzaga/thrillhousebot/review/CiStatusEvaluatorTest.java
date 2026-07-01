@@ -242,6 +242,32 @@ class CiStatusEvaluatorTest {
     }
 
     @Test
+    void requiredContextsKnownReflectsWhetherRequiredListWasResolved() {
+      // #302: the evaluation records whether a required-context set was resolved, so the rendered
+      // copy can drop "required" in fail-closed gate-all mode (requiredContexts == null) and keep
+      // it
+      // when a concrete list was resolved.
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  1,
+                  List.of(
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                          1L, "build", "completed", "success", null))));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 0, List.of()));
+
+      assertFalse(
+          evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null).requiredContextsKnown(),
+          "a null required set (gate-all mode) is not a resolved list");
+      assertTrue(
+          evaluator
+              .evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"))
+              .requiredContextsKnown(),
+          "a resolved required list is recorded as known");
+    }
+
+    @Test
     void unreadableCiInGateSpecificModeAlsoHoldsApproval() {
       // #5: gate-specific mode is NOT automatically safe. The Check Runs source throws, so a
       // required check reporting only there could be hidden; the missing-required backfill still

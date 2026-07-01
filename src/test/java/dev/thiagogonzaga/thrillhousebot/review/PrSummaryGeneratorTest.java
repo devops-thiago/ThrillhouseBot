@@ -341,6 +341,43 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void showsNeutralCiChecksStatusWhenRequiredSetUnknown() {
+    // #302: in fail-closed gate-all mode (required set unresolved) the summary must not label the
+    // gated checks "required" — branch protection never named them; they are gated because the
+    // required set was unknown.
+    var checks =
+        List.of(
+            new ReviewResult.CiCheck("build", "check-run", "failing", null),
+            new ReviewResult.CiCheck("test", "status", "pending", "pending"));
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            checks,
+            0,
+            false,
+            false);
+
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
+
+    assertFalse(summary.contains("Everything's coming up Thrillhouse"));
+    assertTrue(summary.contains("until CI is confirmed green"), summary);
+    assertFalse(summary.contains("required CI is confirmed green"), summary);
+    assertTrue(summary.contains("### ⚠️ CI Checks Status"), summary);
+    assertFalse(summary.contains("Required CI Checks Status"), summary);
+    assertTrue(summary.contains("Some checks are still pending or have failed"), summary);
+    assertFalse(summary.contains("Some required checks are still pending or have failed"), summary);
+  }
+
+  @Test
   void cleanReviewHeldByBothCiAndTruncationReportsBoth() {
     // When CI holds approval AND the diff was truncated, the summary must disclose both — the CI
     // message must not mask the partial review.
@@ -657,6 +694,46 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("CI Status Unavailable"));
     assertTrue(summary.contains("could not be read"));
     assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE));
+    // #302 follow-up: an unreadable-only hold must read as "could not be read", not be framed as a
+    // "not confirmed green" result — that lead misreports an unread status as failing.
+    assertTrue(
+        summary.contains(
+            "the CI status could not be read, so the review cannot be approved until it can be"
+                + " confirmed"),
+        summary);
+    assertFalse(summary.contains("confirmed green"), summary);
+  }
+
+  @Test
+  void unreadableCiWithTruncationReportsBothWithoutClaimingNotGreen() {
+    // #302 follow-up: an unreadable-only CI hold alongside a truncated diff reports the read
+    // failure
+    // as "could not be read" (not "not confirmed green") and still discloses the partial review.
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            2,
+            true);
+
+    var summary = generator.generate(1, 5, 0, List.of(), null, result);
+
+    assertTrue(
+        summary.contains(
+            "the CI status could not be read, and the diff was too large to review in full"),
+        summary);
+    assertFalse(summary.contains("confirmed green"), summary);
+    assertTrue(summary.contains("partial review"), summary);
+    assertTrue(summary.contains("CI Status Unavailable"), summary);
   }
 
   @Test

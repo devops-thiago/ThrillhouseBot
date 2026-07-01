@@ -132,9 +132,12 @@ public class VerdictBuilder {
                 + " confirmed."
             : "";
     if (!result.offendingCiChecks().isEmpty()) {
+      // Drop "required" in fail-closed gate-all mode: the checks are gated because the required set
+      // was unknown, not because branch protection named them required (#302).
+      var checkLabel = result.requiredContextsKnown() ? "required CI check(s)" : "CI check(s)";
       return String.format(
-              "No new issues found, but %d required CI check(s) are still pending or failing.",
-              result.offendingCiChecks().size())
+              "No new issues found, but %d %s are still pending or failing.",
+              result.offendingCiChecks().size(), checkLabel)
           + unreadableSuffix
           + truncationSuffix;
     }
@@ -214,6 +217,7 @@ public class VerdictBuilder {
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
     var offendingCiChecks = ciEvaluation.offendingChecks();
     var ciUnreadable = ciEvaluation.unreadable();
+    var requiredContextsKnown = ciEvaluation.requiredContextsKnown();
     var tally = tallyFindings(aiResponse);
 
     // The review may only approve when nothing is outstanding: new findings AND previous
@@ -269,7 +273,8 @@ public class VerdictBuilder {
                 // and reports a partial review instead of the all-clear celebration; passing 0 here
                 // made that branch dead and let the celebration contradict the truncation banner.
                 diffStats.omittedFiles(),
-                ciUnreadable));
+                ciUnreadable,
+                requiredContextsKnown));
     if (diffStats.truncated()) {
       summaryMarkdown = ReviewResult.truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
     }
@@ -287,7 +292,8 @@ public class VerdictBuilder {
         previousStatuses,
         offendingCiChecks,
         diffStats.omittedFiles(),
-        ciUnreadable);
+        ciUnreadable,
+        requiredContextsKnown);
   }
 
   /** Findings parsed from the model response, with per-severity counts and the highest risk. */
