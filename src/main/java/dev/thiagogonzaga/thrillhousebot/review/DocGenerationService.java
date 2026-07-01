@@ -130,13 +130,19 @@ public class DocGenerationService {
         return;
       }
 
-      var response = generateOrReportFailure(auth, task, files, reviewable, pr);
+      // Build the diff once, keeping the omitted-file count: the model prompt runs on the (possibly
+      // truncated) text, while the count drives the partial-coverage disclosure on the summary so a
+      // large PR's docs are never presented as if they covered every file. Reuse the caller's
+      // already-filtered reviewable list rather than re-walking the ignore glob.
+      var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
+
+      var response = generateOrReportFailure(auth, task, formatted.text(), pr);
       if (response == null) {
         return;
       }
 
       var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, response);
-      postComment(auth, task, summaryMessage(response, outcome));
+      postComment(auth, task, summaryMessage(response, outcome, formatted.omittedFiles()));
       Log.infof(
           "/add-docs posted %d suggestion(s) and %d note(s) on %s/%s #%d",
           outcome.suggestions(), outcome.notes(), task.owner(), task.repo(), task.prNumber());
@@ -151,13 +157,9 @@ public class DocGenerationService {
    * parse throws — so the caller can bail without a nested try.
    */
   private DocGenerationResponse generateOrReportFailure(
-      String auth,
-      DocTask task,
-      List<GitHubPullRequestClient.FileDiff> files,
-      List<GitHubPullRequestClient.FileDiff> reviewable,
-      GitHubPullRequestClient.PullRequestDetails pr) {
+      String auth, DocTask task, String diff, GitHubPullRequestClient.PullRequestDetails pr) {
     try {
-      return generate(task, files, reviewable, pr);
+      return generate(task, diff, pr);
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Doc generation failed for %s/%s #%d", task.owner(), task.repo(), task.prNumber());
@@ -167,12 +169,7 @@ public class DocGenerationService {
   }
 
   private DocGenerationResponse generate(
-      DocTask task,
-      List<GitHubPullRequestClient.FileDiff> files,
-      List<GitHubPullRequestClient.FileDiff> reviewable,
-      GitHubPullRequestClient.PullRequestDetails pr) {
-    // Reuse the caller's already-filtered reviewable list rather than re-walking the ignore glob.
-    String diff = diffFormatter.buildDiffStringWithStats(files, reviewable).text();
+      DocTask task, String diff, GitHubPullRequestClient.PullRequestDetails pr) {
     String prContext = PromptSections.prContext(pr.title(), pr.body());
     String stack =
         SoftLoaders.projectStack(
@@ -348,7 +345,17 @@ public class DocGenerationService {
     return doc.suggestionNew().contains(doc.suggestionOld().strip());
   }
 
-  private String summaryMessage(DocGenerationResponse response, DocPostOutcome outcome) {
+  /**
+   * The summary comment for a completed {@code /add-docs} run, with a partial-coverage disclosure
+   * appended when the diff line budget dropped whole files — so docs derived from a truncated diff
+   * are never presented as if they covered the whole PR (reuses the review path's wording).
+   */
+  private String summaryMessage(
+      DocGenerationResponse response, DocPostOutcome outcome, int omittedFiles) {
+    return baseSummaryMessage(response, outcome) + ReviewResult.truncationDisclosure(omittedFiles);
+  }
+
+  private String baseSummaryMessage(DocGenerationResponse response, DocPostOutcome outcome) {
     int suggestions = outcome.suggestions();
     int notes = outcome.notes();
     // When the per-run comment cap stopped further docs, disclose it rather than silently

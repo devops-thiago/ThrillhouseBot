@@ -90,6 +90,8 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
                     PromptTemplateEscaper.escape(inputs.title()),
                     PromptTemplateEscaper.escape(inputs.body()),
                     PromptTemplateEscaper.escape(inputs.instructions())));
-    return suggestion == null ? null : HEADER + suggestion + FOOTER;
+    return suggestion == null
+        ? null
+        : HEADER + suggestion + FOOTER + ReviewResult.truncationDisclosure(inputs.omittedFiles());
   }
 }

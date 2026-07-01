@@ -56,9 +56,14 @@ class ChangelogEntryGeneratorTest {
   }
 
   private void diffReturns(String diff) {
+    diffReturns(diff, 0);
+  }
+
+  private void diffReturns(String diff, int omittedFiles) {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(new FileDiff("Foo.java", "modified", 1, 0, 1, "@@ -1 +1 @@")));
-    when(diffFormatter.buildDiffString(anyList())).thenReturn(diff);
+    when(diffFormatter.buildDiffStringWithStats(anyList()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff(diff, omittedFiles));
   }
 
   private String generate() {
@@ -79,6 +84,43 @@ class ChangelogEntryGeneratorTest {
     assertTrue(body.startsWith(ChangelogEntryGenerator.HEADER));
     assertTrue(body.contains("### Added"));
     assertTrue(body.endsWith(ChangelogEntryGenerator.FOOTER));
+  }
+
+  @Test
+  void appendsPartialCoverageDisclosureWhenTheDiffWasTruncated() {
+    // The formatter dropped 48 files from the diff the entry is drafted from, so the comment must
+    // disclose that it covers only part of the PR — reusing the review path's wording.
+    diffReturns("## Overview: 75 files (+9000 -0)\n\ndiff", 48);
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenReturn("### Added\n- x (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertEquals(
+        ReviewResult.truncationDisclosure(48),
+        body.substring(
+            body.indexOf(ChangelogEntryGenerator.FOOTER)
+                + ChangelogEntryGenerator.FOOTER.length()));
+    assertTrue(body.contains("48 file(s) were omitted"), body);
+    assertTrue(body.contains("partial review"), body);
+  }
+
+  @Test
+  void appendsNoDisclosureWhenNothingWasOmitted() {
+    diffReturns("## Overview: 1 files (+1 -0)\n\ndiff", 0);
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenReturn("### Added\n- x (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.endsWith(ChangelogEntryGenerator.FOOTER));
+    assertFalse(body.contains("were omitted"), body);
   }
 
   @Test
@@ -201,6 +243,10 @@ class ChangelogEntryGeneratorTest {
   void returnsNullWhenDiffFetchFails() {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("boom"));
+    // SoftLoaders.files degrades the failed fetch to an empty list, which the formatter renders as
+    // "(no changes detected)" — treated the same as no diff.
+    when(diffFormatter.buildDiffStringWithStats(anyList()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("(no changes detected)", 0));
 
     // A failed diff fetch degrades to no suggestion, not a crash.
     assertNull(generate());

@@ -133,6 +133,17 @@ public record ReviewResult(
         omittedFiles);
   }
 
+  /**
+   * Partial-coverage disclosure appended to an on-demand command's comment ({@code /describe},
+   * {@code /changelog}, {@code /add-docs}) when the diff was truncated, or an empty string when
+   * nothing was omitted. Wraps {@link #truncationNotice(int)} — stripped of its leading-banner
+   * spacing and separated by a blank line — so those surfaces disclose truncation in the same words
+   * as the review path.
+   */
+  public static String truncationDisclosure(int omittedFiles) {
+    return omittedFiles > 0 ? "\n\n" + truncationNotice(omittedFiles).strip() : "";
+  }
+
   public int totalFindings() {
     return findings.size();
   }

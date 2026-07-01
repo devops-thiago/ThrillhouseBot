@@ -139,4 +139,21 @@ class ReviewResultTest {
 
     assertEquals(ReviewState.APPROVE, result.reviewState());
   }
+
+  @Test
+  void truncationDisclosureIsEmptyWhenNothingWasOmitted() {
+    assertEquals("", ReviewResult.truncationDisclosure(0));
+  }
+
+  @Test
+  void truncationDisclosureWrapsTheTruncationNoticeWhenFilesWereOmitted() {
+    var disclosure = ReviewResult.truncationDisclosure(48);
+
+    // Leads with a blank-line separator so it appends cleanly after a command's own footer, then
+    // carries the same wording (and omitted-file count) as the review path's banner.
+    assertTrue(disclosure.startsWith("\n\n"), disclosure);
+    assertEquals("\n\n" + ReviewResult.truncationNotice(48).strip(), disclosure);
+    assertTrue(disclosure.contains("48 file(s) were omitted"), disclosure);
+    assertTrue(disclosure.contains("partial review"), disclosure);
+  }
 }

@@ -34,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -161,7 +162,54 @@ class DocGenerationServiceTest {
     assertTrue(inline.body().contains("```suggestion"), inline.body());
     assertTrue(inline.body().contains("public int bar(int x) {"), inline.body());
     assertTrue(inline.body().contains("bar(int)"), inline.body());
-    assertTrue(postedSummary().contains("**1**"));
+    var summary = postedSummary();
+    assertTrue(summary.contains("**1**"));
+    // Non-truncated PR: no partial-coverage disclosure appended.
+    assertFalse(summary.contains("were omitted"), summary);
+  }
+
+  @Test
+  void appendsPartialCoverageDisclosureToTheSummaryWhenFilesWereOmitted() {
+    // A large PR whose diff the line budget truncated (48 files dropped). The docs still post, but
+    // the summary must disclose the partial coverage so they are not read as covering the whole PR.
+    var truncatingFormatter = mock(ReviewDiffFormatter.class);
+    var foo = fooWithPatch();
+    when(truncatingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
+    when(truncatingFormatter.buildDiffStringWithStats(anyList(), anyList()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("## Overview\n(truncated)", 48));
+    when(truncatingFormatter.patchesByReviewableFiles(anyList()))
+        .thenReturn(Map.of("src/Foo.java", PATCH));
+    var truncatingService =
+        new DocGenerationService(
+            authClient,
+            prClient,
+            reviewClient,
+            commentClient,
+            truncatingFormatter,
+            suggestionFormatter,
+            instructionsResolver,
+            projectStackResolver,
+            docGenerator,
+            parser,
+            config);
+    prWithFiles(foo);
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar(int)",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** Doubles x. */\\npublic int bar(int x) {"}]}
+            """);
+
+    truncatingService.handle(task());
+
+    // The committable suggestion still posts on a truncated PR...
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    // ...and the summary discloses the 48 omitted files with the review path's wording.
+    assertTrue(summary.contains("**1**"), summary);
+    assertTrue(summary.contains("48 file(s) were omitted"), summary);
+    assertTrue(summary.contains("partial review"), summary);
   }
 
   @Test

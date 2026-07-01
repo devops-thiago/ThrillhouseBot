@@ -29,8 +29,13 @@ import java.util.function.Supplier;
  */
 public abstract class AbstractPrSuggestionGenerator {
 
-  /** The PR context a suggestion is generated from. */
-  protected record Inputs(String diff, String title, String body, String instructions) {}
+  /**
+   * The PR context a suggestion is generated from. {@code omittedFiles} is how many files the diff
+   * line budget dropped (0 when nothing was omitted), so the caller can disclose a partial-coverage
+   * suggestion.
+   */
+  protected record Inputs(
+      String diff, String title, String body, String instructions, int omittedFiles) {}
 
   private GitHubPullRequestClient prClient;
   private ReviewDiffFormatter diffFormatter;
@@ -65,7 +70,8 @@ public abstract class AbstractPrSuggestionGenerator {
       long installationId,
       String auth,
       String command) {
-    String diff = fetchDiff(auth, owner, repo, prNumber, command);
+    var formatted = fetchDiff(auth, owner, repo, prNumber, command);
+    String diff = formatted.text();
     if (diff == null || diff.isBlank() || "(no changes detected)".equals(diff)) {
       Log.debugf("No diff for %s on %s/%s #%d — posting nothing", command, owner, repo, prNumber);
       return null;
@@ -77,7 +83,7 @@ public abstract class AbstractPrSuggestionGenerator {
         SoftLoaders.instructions(
                 instructionsResolver, owner, repo, defaultBranch, installationId, command)
             .content();
-    return new Inputs(diff, title, body, instructions);
+    return new Inputs(diff, title, body, instructions, formatted.omittedFiles());
   }
 
   /**
@@ -100,10 +106,12 @@ public abstract class AbstractPrSuggestionGenerator {
     }
   }
 
-  private String fetchDiff(String auth, String owner, String repo, int prNumber, String command) {
-    // SoftLoaders.files degrades a failed fetch to an empty list; buildDiffString then yields
-    // "(no changes detected)", which loadInputs treats the same as null (post nothing).
+  private ReviewDiffFormatter.FormattedDiff fetchDiff(
+      String auth, String owner, String repo, int prNumber, String command) {
+    // SoftLoaders.files degrades a failed fetch to an empty list; buildDiffStringWithStats then
+    // yields "(no changes detected)", which loadInputs treats the same as null (post nothing). The
+    // stats overload is used so the omitted-file count rides along for the partial-coverage notice.
     var files = SoftLoaders.files(prClient, auth, owner, repo, prNumber, command);
-    return diffFormatter.buildDiffString(files);
+    return diffFormatter.buildDiffStringWithStats(files);
   }
 }
