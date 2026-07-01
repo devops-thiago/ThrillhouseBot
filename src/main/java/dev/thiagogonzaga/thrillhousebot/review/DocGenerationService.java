@@ -130,19 +130,14 @@ public class DocGenerationService {
         return;
       }
 
-      // Build the diff once, keeping the omitted-file count: the model prompt runs on the (possibly
-      // truncated) text, while the count drives the partial-coverage disclosure on the summary so a
-      // large PR's docs are never presented as if they covered every file. Reuse the caller's
-      // already-filtered reviewable list rather than re-walking the ignore glob.
-      var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
-
-      var response = generateOrReportFailure(auth, task, formatted.text(), pr);
-      if (response == null) {
+      var generated = generateOrReportFailure(auth, task, files, reviewable, pr);
+      if (generated == null) {
         return;
       }
 
-      var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, response);
-      postComment(auth, task, summaryMessage(response, outcome, formatted.omittedFiles()));
+      var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, generated.response());
+      postComment(
+          auth, task, summaryMessage(generated.response(), outcome, generated.omittedFiles()));
       Log.infof(
           "/add-docs posted %d suggestion(s) and %d note(s) on %s/%s #%d",
           outcome.suggestions(), outcome.notes(), task.owner(), task.repo(), task.prNumber());
@@ -152,14 +147,30 @@ public class DocGenerationService {
     }
   }
 
+  /** Parsed documentation plus how many files the diff line budget omitted. */
+  private record GeneratedDocs(DocGenerationResponse response, int omittedFiles) {}
+
   /**
-   * Runs generation, posting the failure notice and returning {@code null} when the model call or
-   * parse throws — so the caller can bail without a nested try.
+   * Builds the diff, runs generation, and returns the parsed docs plus the omitted-file count —
+   * posting the failure notice and returning {@code null} when the diff build, model call, or parse
+   * throws, so the caller can bail without a nested try. The diff build stays inside this handler
+   * on purpose: a formatter failure must still surface {@code GENERATION_FAILED} to the user rather
+   * than be swallowed by {@link #handle}'s outer catch with only a log line.
    */
-  private DocGenerationResponse generateOrReportFailure(
-      String auth, DocTask task, String diff, GitHubPullRequestClient.PullRequestDetails pr) {
+  private GeneratedDocs generateOrReportFailure(
+      String auth,
+      DocTask task,
+      List<GitHubPullRequestClient.FileDiff> files,
+      List<GitHubPullRequestClient.FileDiff> reviewable,
+      GitHubPullRequestClient.PullRequestDetails pr) {
     try {
-      return generate(task, diff, pr);
+      // Build the diff once, keeping the omitted-file count: the model prompt runs on the (possibly
+      // truncated) text, while the count drives the partial-coverage disclosure on the summary so a
+      // large PR's docs are never presented as if they covered every file. Reuse the caller's
+      // already-filtered reviewable list rather than re-walking the ignore glob.
+      var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
+      var response = generate(task, formatted.text(), pr);
+      return new GeneratedDocs(response, formatted.omittedFiles());
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Doc generation failed for %s/%s #%d", task.owner(), task.repo(), task.prNumber());

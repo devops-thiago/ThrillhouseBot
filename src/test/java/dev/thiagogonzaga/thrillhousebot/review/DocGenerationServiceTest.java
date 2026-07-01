@@ -486,6 +486,38 @@ class DocGenerationServiceTest {
   }
 
   @Test
+  void reportsFailureWhenDiffBuildThrows() {
+    // The diff build must stay inside the failure handler: a formatter RuntimeException has to
+    // surface GENERATION_FAILED to the user, not be swallowed by the outer catch with only a log.
+    var throwingFormatter = mock(ReviewDiffFormatter.class);
+    var foo = fooWithPatch();
+    when(throwingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
+    when(throwingFormatter.buildDiffStringWithStats(anyList(), anyList()))
+        .thenThrow(new RuntimeException("formatter boom"));
+    var throwingService =
+        new DocGenerationService(
+            authClient,
+            prClient,
+            reviewClient,
+            commentClient,
+            throwingFormatter,
+            suggestionFormatter,
+            instructionsResolver,
+            projectStackResolver,
+            docGenerator,
+            parser,
+            config);
+    prWithFiles(foo);
+
+    throwingService.handle(task());
+
+    assertEquals(DocGenerationService.GENERATION_FAILED, postedSummary());
+    verifyNoInteractions(docGenerator);
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
   void swallowsUnexpectedFailures() {
     when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth down"));
 
