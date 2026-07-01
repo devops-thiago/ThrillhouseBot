@@ -95,7 +95,25 @@ public interface GitHubPullRequestClient {
       @PathParam("path") String path,
       @QueryParam("ref") String ref);
 
-  record PullRequestDetails(String title, String body, Ref head, Ref base) {}
+  record PullRequestDetails(
+      String title,
+      String body,
+      Ref head,
+      Ref base,
+      // GitHub's authoritative PR-level totals (the same fields `gh pr view` reads). Populated from
+      // the pulls endpoint and preferred over the ignore-glob-filtered diff counts for the
+      // summary's
+      // "Changes Overview", which otherwise undercounts whenever a changed file is ignore-globbed.
+      @JsonProperty("changed_files") int changedFiles,
+      int additions,
+      int deletions) {
+    // The fields the review path historically read (title/body/refs). Retained so call sites and
+    // fixtures that don't model the file/line totals keep compiling; production always deserializes
+    // the full object via the canonical constructor, so these totals are only 0 in such fixtures.
+    public PullRequestDetails(String title, String body, Ref head, Ref base) {
+      this(title, body, head, base, 0, 0, 0);
+    }
+  }
 
   record Ref(String sha, String ref) {
     public Ref(String sha) {

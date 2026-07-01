@@ -77,6 +77,14 @@ public class ReviewContextLoader {
     this.botIdentity = botIdentity;
   }
 
+  /**
+   * GitHub's authoritative PR-level file/line totals, read from the pulls endpoint. Preferred over
+   * the ignore-glob-filtered diff counts for the summary's "Changes Overview"; {@code null} when
+   * the totals could not be fetched, in which case the summary falls back to the diff-derived
+   * counts.
+   */
+  public record PrTotals(int filesChanged, int additions, int deletions) {}
+
   /** Everything the review pipeline reads before the model call, loaded once up front. */
   public record ReviewContext(
       List<GitHubPullRequestClient.FileDiff> files,
@@ -94,7 +102,8 @@ public class ReviewContextLoader {
       List<GitHubLabelClient.Label> repoLabels,
       String projectStack,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
-      DiffLineResolver lineResolver) {
+      DiffLineResolver lineResolver,
+      PrTotals prTotals) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -114,6 +123,10 @@ public class ReviewContextLoader {
   ReviewContext load(
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
+    // GitHub's authoritative PR-level totals for the summary's "Changes Overview". Fetched
+    // best-effort: a failure leaves prTotals null and the summary falls back to the diff-derived
+    // counts (#298).
+    var prTotals = fetchPrTotals(auth, req.owner(), req.repo(), req.prNumber());
     // The ignore-glob filter runs once here; the already-filtered list feeds the diff render (so
     // formatFileSection does not re-glob each file) and the line resolver alike, instead of either
     // re-walking it.
@@ -194,7 +207,8 @@ public class ReviewContextLoader {
         repoLabels,
         resolveProjectStack(req),
         reviewableFiles,
-        lineResolver);
+        lineResolver,
+        prTotals);
   }
 
   /**
@@ -239,6 +253,24 @@ public class ReviewContextLoader {
     // produces a false APPROVE + green check on code that was never read. A genuinely empty
     // PR returns an empty list with no exception and still takes the normal path.
     return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
+  }
+
+  /**
+   * GitHub's authoritative PR-level file/line totals ({@code changed_files}/{@code
+   * additions}/{@code deletions} on the pulls endpoint), or {@code null} when they can't be read.
+   * The summary reports these rather than the ignore-glob-filtered diff counts, which undercount
+   * whenever a changed file is dropped by the ignore-glob (#298). Best-effort: a fetch failure
+   * returns {@code null} so the summary falls back to the diff-derived counts rather than failing
+   * the review.
+   */
+  PrTotals fetchPrTotals(String auth, String owner, String repo, int prNumber) {
+    try {
+      var pr = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
+      return new PrTotals(pr.changedFiles(), pr.additions(), pr.deletions());
+    } catch (RuntimeException e) {
+      Log.warn("Failed to fetch PR totals; summary will fall back to diff-derived counts", e);
+      return null;
+    }
   }
 
   ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(

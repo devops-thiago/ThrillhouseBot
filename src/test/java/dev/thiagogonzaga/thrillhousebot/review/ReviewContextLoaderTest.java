@@ -407,6 +407,40 @@ class ReviewContextLoaderTest {
   }
 
   @Nested
+  class FetchPrTotals {
+
+    @Test
+    void returnsGitHubAuthoritativeTotalsFromThePullRequest() {
+      // The summary's "Changes Overview" reports these, not the ignore-glob-filtered diff counts.
+      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(46)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "add API",
+                  "body",
+                  new GitHubPullRequestClient.Ref("headsha"),
+                  new GitHubPullRequestClient.Ref("basesha"),
+                  27,
+                  975,
+                  196));
+
+      var totals = loader.fetchPrTotals("Bearer tok", "owner", "repo", 46);
+
+      assertNotNull(totals);
+      assertEquals(27, totals.filesChanged());
+      assertEquals(975, totals.additions());
+      assertEquals(196, totals.deletions());
+    }
+
+    @Test
+    void returnsNullWhenTheFetchThrowsSoTheSummaryFallsBackToDiffCounts() {
+      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(46)))
+          .thenThrow(new RuntimeException("PR fetch failed"));
+
+      assertNull(loader.fetchPrTotals("Bearer tok", "owner", "repo", 46));
+    }
+  }
+
+  @Nested
   class FetchPullRequestComments {
 
     @Test

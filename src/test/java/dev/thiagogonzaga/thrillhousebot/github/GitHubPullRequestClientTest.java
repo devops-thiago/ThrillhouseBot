@@ -24,7 +24,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -100,5 +102,20 @@ class GitHubPullRequestClientTest {
     when(client.getPullRequestFilesPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(null);
 
     assertEquals(0, client.getPullRequestFiles("auth", "json", "o", "r", 7).size());
+  }
+
+  @Test
+  void deserializesAuthoritativePrTotalsFromTheGitHubSnakeCaseFields() throws Exception {
+    // GitHub's pulls payload uses changed_files (snake_case); the @JsonProperty mapping must hold
+    // so
+    // the summary's "Changes Overview" reads the authoritative totals rather than 0 (#298).
+    var json =
+        "{\"title\":\"T\",\"body\":\"B\",\"changed_files\":27,\"additions\":975,\"deletions\":196}";
+
+    var pr = new ObjectMapper().readValue(json, PullRequestDetails.class);
+
+    assertEquals(27, pr.changedFiles());
+    assertEquals(975, pr.additions());
+    assertEquals(196, pr.deletions());
   }
 }

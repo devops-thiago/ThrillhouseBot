@@ -482,6 +482,34 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void changesOverviewUsesAuthoritativeTotalsWhenReviewableCountsDiverge() {
+    // #298: the "Changes Overview" and the walkthrough rollup report GitHub's authoritative PR
+    // totals passed in, not the ignore-glob-filtered reviewable-file counts. Mirrors MongOCOM#46:
+    // GitHub reports 27 files / +975 / -196, but only 26 files are reviewable (one dropped by the
+    // ignore-glob), so counts derived from the reviewable list alone would undercount.
+    var reviewable = new java.util.ArrayList<PrSummaryGenerator.ChangedFile>();
+    for (int i = 0; i < 26; i++) {
+      reviewable.add(new PrSummaryGenerator.ChangedFile("src/F" + i + ".java", "modified"));
+    }
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(27, 975, 196, reviewable, null, result);
+
+    // Overview reflects GitHub's authoritative totals, not the 26 reviewable files.
+    assertTrue(summary.contains("**Files changed:** 27"), summary);
+    assertTrue(summary.contains("**Lines added:** +975"), summary);
+    assertTrue(summary.contains("**Lines removed:** -196"), summary);
+    // The walkthrough still caps at MAX_FILE_ROWS rows (row 19 present, row 20 rolled up)...
+    assertTrue(summary.contains("`src/F19.java`"));
+    assertFalse(summary.contains("`src/F20.java`"));
+    // ...and the rollup counts against the authoritative total (27 - 20 = 7), not the reviewable
+    // list (26 - 20 = 6), so it matches the "Changes Overview" file total above it.
+    assertTrue(summary.contains("…and 7 more file(s)."), summary);
+  }
+
+  @Test
   void shouldEscapePipesInChangedFilesTable() {
     var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/a|b.java", "modified"));
     var aiSummary =
