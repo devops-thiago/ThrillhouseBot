@@ -769,6 +769,31 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldRenderSequenceDiagramWhenBracketsAppearOnlyInTheAsDisplayName() {
+    // #332 review: the bracket-label guard must not over-reach. A valid `participant X as Display`
+    // whose display name legitimately carries brackets is renderable — the invalid leak is a
+    // bracket
+    // in the alias position (`participant X["Y"]`), which never uses the `as` form — so it must not
+    // be dropped.
+    var aiSummary =
+        summaryWithDiagram(
+            """
+            sequenceDiagram
+              participant A as [User]
+              participant S as Server
+              A->>S: request()
+            """);
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### Control-Flow Diagram"));
+    assertTrue(summary.contains("participant A as [User]"));
+  }
+
+  @Test
   void shouldDropSequenceDiagramWithBracketLabeledParticipants() {
     // #311: the model over-generalized the flowchart double-quote rule onto sequence participants
     // (`participant X["Y"]`), which is a parse error GitHub silently drops. Reject the whole

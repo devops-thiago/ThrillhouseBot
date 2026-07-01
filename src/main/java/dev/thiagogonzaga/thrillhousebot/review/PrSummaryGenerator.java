@@ -399,7 +399,20 @@ public class PrSummaryGenerator {
         .lines()
         .map(line -> line.strip().toLowerCase(Locale.ROOT))
         .filter(line -> line.startsWith("participant ") || line.startsWith("actor "))
-        .anyMatch(line -> line.indexOf('[') >= 0 || line.indexOf('{') >= 0);
+        .anyMatch(PrSummaryGenerator::hasBracketInAliasPosition);
+  }
+
+  /**
+   * True when the alias of a participant/actor declaration carries a bracket — the leaked flowchart
+   * shape {@code participant O["Orchestrator"]}, which never uses the {@code as} form. A valid
+   * {@code participant O as Display} may legitimately carry brackets in its display name (e.g.
+   * {@code as [User]}), so only the alias — the text before {@code " as "}, or the whole line when
+   * there is no {@code " as "} — is inspected, to avoid dropping a renderable diagram.
+   */
+  private static boolean hasBracketInAliasPosition(String participantLine) {
+    int asIndex = participantLine.indexOf(" as ");
+    String alias = asIndex >= 0 ? participantLine.substring(0, asIndex) : participantLine;
+    return alias.indexOf('[') >= 0 || alias.indexOf('{') >= 0;
   }
 
   /** Renders a signed line count, avoiding the awkward "+0"/"-0". */
