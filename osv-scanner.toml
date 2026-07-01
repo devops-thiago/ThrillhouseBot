@@ -1,0 +1,22 @@
+# OSV-Scanner / OpenSSF Scorecard vulnerability suppressions.
+# Each entry documents an advisory that has no actionable fix for our dependency line
+# AND does not affect this project. Re-evaluate these periodically.
+
+[[IgnoredVulns]]
+id = "GHSA-5jmj-h7xm-6q6v" # CVE-2026-54515
+reason = """
+jackson-databind case-insensitive bypass of per-property @JsonIgnoreProperties filtering.
+
+Not applicable, and no fix exists for the Jackson line Quarkus uses:
+- The only fix is tools.jackson.core:jackson-databind 3.1.4 (Jackson 3.x, new namespace).
+  Quarkus 3.37 resolves com.fasterxml.jackson.core:jackson-databind (Jackson 2.x), whose
+  entire range -- including our resolved 2.22.0 -- is affected with no 2.x fix available.
+- The vulnerable behaviour is a per-property @JsonIgnoreProperties({"name"}) name-based
+  filter defeated via case-insensitive matching. This codebase uses ONLY
+  @JsonIgnoreProperties(ignoreUnknown = true) (drop unknown fields for forward
+  compatibility), never a named-property blocklist, and no polymorphic/default typing --
+  so there is no protected property for the bypass to defeat.
+
+Verified with a CycloneDX SBOM generated from Maven's own resolution scanned against OSV.
+Revisit when Quarkus adopts Jackson 3.x or a fixed 2.x release ships.
+"""
