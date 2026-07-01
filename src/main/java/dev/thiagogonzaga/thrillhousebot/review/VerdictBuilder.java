@@ -57,7 +57,13 @@ public class VerdictBuilder {
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation) {
-    var diffStats = DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles());
+    // The "Changes Overview" reports GitHub's authoritative PR-level totals when available; the
+    // diff-derived counts (summed over the ignore-glob-filtered reviewable files) undercount
+    // whenever a changed file is dropped by the ignore-glob (#298). The reviewed-diff omitted-file
+    // count is preserved either way, so truncation gating and disclosure are unaffected.
+    var diffStats =
+        DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles())
+            .withAuthoritativeTotals(ctx.prTotals());
     var changedFiles = toChangedFiles(ctx.reviewableFiles());
     var unresolvedPrevious =
         followUpAnalyzer.unresolvedFindings(
@@ -160,6 +166,21 @@ public class VerdictBuilder {
     /** True when the line budget dropped whole files, so the model never saw part of the change. */
     boolean truncated() {
       return omittedFiles > 0;
+    }
+
+    /**
+     * Replaces the file/line counts with GitHub's authoritative PR-level totals, keeping the
+     * reviewed diff's omitted-file count. Returns {@code this} unchanged when {@code totals} is
+     * {@code null} (totals couldn't be fetched), so the summary falls back to the diff-derived
+     * counts. Only the overview counts change; {@link #truncated()} and {@link #omittedFiles()} —
+     * which gate approval and drive the truncation disclosure — still reflect the reviewed diff.
+     */
+    DiffStats withAuthoritativeTotals(ReviewContextLoader.PrTotals totals) {
+      if (totals == null) {
+        return this;
+      }
+      return new DiffStats(
+          totals.filesChanged(), totals.additions(), totals.deletions(), omittedFiles);
     }
 
     static DiffStats fromFiles(List<GitHubPullRequestClient.FileDiff> files, int omittedFiles) {
