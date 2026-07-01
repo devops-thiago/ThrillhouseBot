@@ -75,10 +75,17 @@ public class ReviewPublisher {
   /**
    * Posts the PR summary comment, but only on the first user-visible review (and only when there is
    * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
-   * comment.
+   * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
+   * regenerate a summary that was deleted from the PR even though a review already ran.
    */
-  void publishSummary(String auth, String owner, String repo, int prNumber, ReviewResult result) {
-    if (result.isFirstReview() && !result.summaryMarkdown().isBlank()) {
+  void publishSummary(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      ReviewResult result,
+      boolean forceSummary) {
+    if ((result.isFirstReview() || forceSummary) && !result.summaryMarkdown().isBlank()) {
       commentClient.createComment(
           auth,
           ACCEPT,

@@ -124,24 +124,6 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
     assertTrue(persistence.findAllPriorAiResponseJsons("owner/repo", 3, current.id).isEmpty());
   }
 
-  @Test
-  void shouldReportCompletedReviewExists() throws Exception {
-    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}");
-
-    assertTrue(persistence.hasCompletedReview("owner/repo", 3));
-  }
-
-  @Test
-  void shouldNotReportCompletedReviewForOtherStatusesOrPrs() throws Exception {
-    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_IN_PROGRESS, null);
-    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_FAILED, null);
-    persistSessionWith("owner/repo", 4, ReviewSession.STATUS_COMPLETED, "{\"v\":1}");
-
-    // No completed review for PR #3, and the completed one on PR #4 must not leak across.
-    assertFalse(persistence.hasCompletedReview("owner/repo", 3));
-    assertFalse(persistence.hasCompletedReview("other/repo", 4));
-  }
-
   private ReviewSession persistSession() throws Exception {
     tx.begin();
     ReviewSession session = ReviewSession.create("owner/repo", 3, "PR", "abc");

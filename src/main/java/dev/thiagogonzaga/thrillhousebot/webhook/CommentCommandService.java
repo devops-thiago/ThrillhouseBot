@@ -17,7 +17,6 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
@@ -25,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -60,7 +60,7 @@ public class CommentCommandService {
       | Command | What it does |
       |---------|--------------|
       | `/review` | Run a fresh review of this PR |
-      | `/summary` | Post the PR summary if one has not been generated yet |
+      | `/summary` | Post the PR summary if it isn't already on the PR (regenerates a deleted one) |
       | `/describe` | Suggest an improved PR title and description from the diff |
       | `/changelog` | Draft a CHANGELOG entry for this PR from the diff |
       | `/add-docs` | Suggest docstrings for the symbols changed in this PR |
@@ -78,7 +78,7 @@ public class CommentCommandService {
   private final GitHubReviewClient reviewClient;
   private final ReviewThreadService reviewThreadService;
   private final ReviewDispatcher reviewDispatcher;
-  private final ReviewSessionPersistence sessionPersistence;
+  private final ReviewContextLoader contextLoader;
   private final PrPauseService prPauseService;
   private final ManualReviewAuthorizer authorizer;
   private final TriggerDetector triggerDetector;
@@ -95,7 +95,7 @@ public class CommentCommandService {
       @RestClient GitHubReviewClient reviewClient,
       ReviewThreadService reviewThreadService,
       ReviewDispatcher reviewDispatcher,
-      ReviewSessionPersistence sessionPersistence,
+      ReviewContextLoader contextLoader,
       PrPauseService prPauseService,
       ManualReviewAuthorizer authorizer,
       TriggerDetector triggerDetector,
@@ -109,7 +109,7 @@ public class CommentCommandService {
     this.reviewClient = reviewClient;
     this.reviewThreadService = reviewThreadService;
     this.reviewDispatcher = reviewDispatcher;
-    this.sessionPersistence = sessionPersistence;
+    this.contextLoader = contextLoader;
     this.prPauseService = prPauseService;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -183,10 +183,13 @@ public class CommentCommandService {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
-    if (sessionPersistence.hasCompletedReview(repository(ctx), ctx.prNumber())) {
-      // A summary was already generated on the first review; the command is a no-op by design.
+    // Gate on the live PR, not persistence: a review that once completed does not mean the summary
+    // comment is still there — it may have been deleted. No-op only when the comment is actually
+    // present; otherwise dispatch a review that (re)posts it via forceSummary, even on a PR that
+    // already carries a formal bot review, where the first-review gate alone would suppress it.
+    if (contextLoader.botSummaryCommentExists(auth, ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
-          "Ignoring /summary — a summary already exists on {}/{} #{}",
+          "Ignoring /summary — a summary comment is already present on {}/{} #{}",
           ctx.owner(),
           ctx.repo(),
           num(ctx));
@@ -209,6 +212,8 @@ public class CommentCommandService {
             "",
             ctx.defaultBranch(),
             ctx.installationId(),
+            true,
+            "",
             true));
   }
 
