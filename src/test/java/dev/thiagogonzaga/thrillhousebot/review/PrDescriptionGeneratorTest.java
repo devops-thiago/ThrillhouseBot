@@ -102,7 +102,9 @@ class PrDescriptionGeneratorTest {
         body.substring(
             body.indexOf(PrDescriptionGenerator.FOOTER) + PrDescriptionGenerator.FOOTER.length()));
     assertTrue(body.contains("48 file(s) were omitted"), body);
-    assertTrue(body.contains("partial review"), body);
+    assertTrue(body.contains("partial coverage"), body);
+    // The review-only "findings and verdict" framing must not leak onto a /describe suggestion.
+    assertFalse(body.contains("findings and verdict"), body);
   }
 
   @Test

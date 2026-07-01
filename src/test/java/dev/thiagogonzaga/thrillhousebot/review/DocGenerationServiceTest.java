@@ -209,7 +209,9 @@ class DocGenerationServiceTest {
     // ...and the summary discloses the 48 omitted files with the review path's wording.
     assertTrue(summary.contains("**1**"), summary);
     assertTrue(summary.contains("48 file(s) were omitted"), summary);
-    assertTrue(summary.contains("partial review"), summary);
+    assertTrue(summary.contains("partial coverage"), summary);
+    // The review-only "findings and verdict" framing must not leak onto an /add-docs summary.
+    assertFalse(summary.contains("findings and verdict"), summary);
   }
 
   @Test

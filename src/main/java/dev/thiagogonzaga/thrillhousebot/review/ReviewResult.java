@@ -123,25 +123,40 @@ public record ReviewResult(
   }
 
   /**
+   * The shared "N file(s) were omitted …" clause, so the review banner and the on-demand-command
+   * disclosure never drift on the omitted count and the reason — only the surrounding framing
+   * differs between the two surfaces.
+   */
+  private static String omittedFilesClause(int omittedFiles) {
+    return String.format(
+        "%d file(s) were omitted because the diff exceeded the size budget", omittedFiles);
+  }
+
+  /**
    * Banner prepended to the summary when the diff was truncated, so a reader knows the review is
    * partial — the verdict is also held back from APPROVE in that case.
    */
   public static String truncationNotice(int omittedFiles) {
     return String.format(
-        "> ⚠️ **Large PR — partial review.** %d file(s) were omitted because the diff exceeded the"
-            + " size budget; the findings and verdict below cover only the reviewed portion.%n%n",
-        omittedFiles);
+        "> ⚠️ **Large PR — partial review.** %s; the findings and verdict below cover only the"
+            + " reviewed portion.%n%n",
+        omittedFilesClause(omittedFiles));
   }
 
   /**
    * Partial-coverage disclosure appended to an on-demand command's comment ({@code /describe},
    * {@code /changelog}, {@code /add-docs}) when the diff was truncated, or an empty string when
-   * nothing was omitted. Wraps {@link #truncationNotice(int)} — stripped of its leading-banner
-   * spacing and separated by a blank line — so those surfaces disclose truncation in the same words
-   * as the review path.
+   * nothing was omitted. Shares the omitted-file clause with {@link #truncationNotice(int)} but
+   * drops that banner's review-specific "findings and verdict" framing — a suggested description,
+   * changelog entry, or doc suggestion has neither — and reads correctly appended below the
+   * content.
    */
   public static String truncationDisclosure(int omittedFiles) {
-    return omittedFiles > 0 ? "\n\n" + truncationNotice(omittedFiles).strip() : "";
+    return omittedFiles > 0
+        ? "\n\n> ⚠️ **Large PR — partial coverage.** "
+            + omittedFilesClause(omittedFiles)
+            + ", so this covers only part of the diff."
+        : "";
   }
 
   public int totalFindings() {

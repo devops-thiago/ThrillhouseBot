@@ -105,7 +105,9 @@ class ChangelogEntryGeneratorTest {
             body.indexOf(ChangelogEntryGenerator.FOOTER)
                 + ChangelogEntryGenerator.FOOTER.length()));
     assertTrue(body.contains("48 file(s) were omitted"), body);
-    assertTrue(body.contains("partial review"), body);
+    assertTrue(body.contains("partial coverage"), body);
+    // The review-only "findings and verdict" framing must not leak onto a /changelog entry.
+    assertFalse(body.contains("findings and verdict"), body);
   }
 
   @Test
