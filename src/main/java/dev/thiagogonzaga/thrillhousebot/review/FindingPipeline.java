@@ -27,7 +27,9 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The post-AI finding chain: validate quotes, dedupe, verify against the diff, drop already-replied
@@ -67,22 +69,39 @@ public class FindingPipeline {
   /**
    * Calls the model on the assembled prompt, then runs the raw response through the full post-AI
    * chain ({@link #refine}). The {@code lineResolver} is shared with the verdict backstop, so the
-   * caller builds it once and passes it in.
+   * caller builds it once and passes it in. A budgeted plan is authoritative for what the model
+   * sees: even a single batch sends the planned (possibly hunk-clipped) text, never the uncapped
+   * raw diff — otherwise the budget would be bypassed in exactly the oversized-file case that
+   * motivated clipping (#53). The legacy uncapped {@code ctx.diff()} is only sent when budgeting is
+   * explicitly disabled.
    */
   ReviewResponse run(
       ReviewSession session,
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan,
       DiffLineResolver lineResolver) {
-    if (ctx.multiCall()) {
-      return runMultiCall(session, promptInputs, ctx, lineResolver);
+    if (plan.multiCall()) {
+      return runMultiCall(session, promptInputs, ctx, plan, lineResolver);
     }
-    var aiResponse = aiReviewService.review(session, promptInputs);
+    var singleInputs = promptInputs;
+    var quoteSource = ctx.diff();
+    if (plan.budgeted() && !plan.batches().isEmpty()) {
+      var batch = plan.batches().get(0);
+      // The base comparison stays: the planner counted it in the shared overhead.
+      singleInputs =
+          withDiff(
+              promptInputs,
+              PromptTemplateEscaper.fence(batch.text()),
+              promptInputs.baseComparison());
+      quoteSource = batch.text();
+    }
+    var aiResponse = aiReviewService.review(session, singleInputs);
     return refine(
         session,
         aiResponse,
-        ctx.diff(),
-        promptInputs,
+        quoteSource,
+        singleInputs,
         ctx.priorAiResponseJsons(),
         ctx.inlineComments(),
         lineResolver);
@@ -90,65 +109,98 @@ public class FindingPipeline {
 
   /**
    * Map-reduce review for a large PR (#53): review each token-budgeted batch in its own blocking
-   * call, union the findings, run the same dedupe + verifier chain over that union, then a single
-   * summary call rolls them up into the PR-level summary and reconciles previous-findings status.
-   * The passed {@code promptInputs} is reused as the shared-context template — only the diff slot
-   * changes per batch, and the base comparison is dropped (it is a near-duplicate of the diff that
-   * would otherwise be re-sent in every call).
+   * call, quote-validating and verifying each batch's findings against that batch's own in-budget
+   * text (the combined diff would exceed the very budget the batches exist to respect), union the
+   * results through the finishing chain, then a single summary call rolls them up into the PR-level
+   * summary. Previous-findings statuses are aggregated from the batch calls — they saw the diff;
+   * the code-blind summary call must not decide what was resolved. The passed {@code promptInputs}
+   * is reused as the shared-context template — only the diff slot changes per batch, and the base
+   * comparison is dropped (it is a near-duplicate of the diff that would otherwise be re-sent in
+   * every call).
    */
   private ReviewResponse runMultiCall(
       ReviewSession session,
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan,
       DiffLineResolver lineResolver) {
-    var batches = ctx.diffBatches();
+    var batches = plan.batches();
     var allFindings = new ArrayList<ReviewResponse.Finding>();
-    var combinedDiff = new StringBuilder();
+    var batchStatuses = new ArrayList<List<ReviewResponse.PreviousFindingStatus>>();
     for (var i = 0; i < batches.size(); i++) {
       var batch = batches.get(i);
-      var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()));
+      var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
       var batchResponse = aiReviewService.reviewBatch(session, batchInputs, i + 1, batches.size());
-      allFindings.addAll(batchResponse.findings());
-      combinedDiff.append(batch.text());
+      var validated = quoteValidator.validate(batchResponse, batch.text());
+      var verified =
+          findingVerificationService.verify(
+              validated,
+              batchInputs.diff(),
+              promptInputs.projectStack(),
+              promptInputs.previousFindings());
+      allFindings.addAll(verified.findings());
+      batchStatuses.add(batchResponse.previousFindingsStatus());
     }
 
-    var combinedRaw = combinedDiff.toString();
-    var aggregated = new ReviewResponse(allFindings, List.of(), null);
-    var refined =
-        refine(
-            session,
-            aggregated,
-            combinedRaw,
-            withDiff(promptInputs, PromptTemplateEscaper.fence(combinedRaw)),
-            ctx.priorAiResponseJsons(),
-            ctx.inlineComments(),
-            lineResolver);
+    // Finishing chain over the union — quote validation and verification already ran per batch.
+    var aggregated = new ReviewResponse(allFindings, mergeBatchStatuses(batchStatuses), null);
+    var refined = deduplicator.dedupe(aggregated);
+    refined =
+        followUpAnalyzer.dropRepliedDuplicates(
+            refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
+    refined = populateMissingAnchors(refined, lineResolver);
 
     var summaryInputs =
         new AiReviewService.SummaryInputs(
             promptInputs.prContext(),
             PromptTemplateEscaper.escape(findingsJson(refined.findings())),
-            PromptTemplateEscaper.escape(changedFilesOverview(ctx)),
+            PromptTemplateEscaper.escape(changedFilesOverview(ctx, plan.omittedFiles())),
             promptInputs.previousFindings(),
             promptInputs.repoInstructions());
     var summaryResponse = aiReviewService.summarize(session, summaryInputs);
 
     var merged =
         new ReviewResponse(
-            refined.findings(),
-            summaryResponse.previousFindingsStatus(),
-            summaryResponse.summary());
+            refined.findings(), refined.previousFindingsStatus(), summaryResponse.summary());
     persistAiResponse(session, merged);
     return merged;
   }
 
-  /** Copies the shared prompt context, swapping the diff slot and dropping the base comparison. */
+  /**
+   * Merges the per-batch previous-findings statuses into one verdict per prior finding id. A
+   * "resolved"/"justified" claim outranks "unresolved": only the batch whose slice contains the
+   * finding's file has the evidence to close it, while every other batch reports the finding
+   * unresolved simply because its fix is out of that slice.
+   */
+  static List<ReviewResponse.PreviousFindingStatus> mergeBatchStatuses(
+      List<List<ReviewResponse.PreviousFindingStatus>> batchStatuses) {
+    var merged = new LinkedHashMap<Integer, ReviewResponse.PreviousFindingStatus>();
+    for (var statuses : batchStatuses) {
+      for (var status : statuses) {
+        var previous = merged.get(status.id());
+        if (previous == null || statusRank(status.status()) > statusRank(previous.status())) {
+          merged.put(status.id(), status);
+        }
+      }
+    }
+    return List.copyOf(merged.values());
+  }
+
+  private static int statusRank(String status) {
+    return switch (status == null ? "" : status) {
+      case "resolved" -> 2;
+      case "justified" -> 1;
+      default -> 0;
+    };
+  }
+
+  /** Copies the shared prompt context, swapping the diff and base-comparison slots. */
   private static AiReviewService.PromptInputs withDiff(
-      AiReviewService.PromptInputs base, String diff) {
+      AiReviewService.PromptInputs base, String diff, String baseComparison) {
     return new AiReviewService.PromptInputs(
         diff,
         base.prContext(),
-        "",
+        baseComparison,
         base.projectStack(),
         base.relatedTests(),
         base.previousFindings(),
@@ -167,9 +219,14 @@ public class FindingPipeline {
   /**
    * Every changed file by name + change counts, so the summary covers files with no findings too.
    */
-  private static String changedFilesOverview(ReviewContextLoader.ReviewContext ctx) {
+  private static String changedFilesOverview(
+      ReviewContextLoader.ReviewContext ctx, List<String> omittedByName) {
     var sb = new StringBuilder();
+    var omitted = Set.copyOf(omittedByName);
     for (var file : ctx.reviewableFiles()) {
+      if (omitted.contains(file.filename())) {
+        continue;
+      }
       sb.append(file.filename())
           .append(" (")
           .append(file.status())
@@ -179,8 +236,8 @@ public class FindingPipeline {
           .append(file.deletions())
           .append(")\n");
     }
-    for (var omitted : ctx.omittedByName()) {
-      sb.append(omitted).append(" (omitted — exceeded the review call budget; not analyzed)\n");
+    for (var name : omittedByName) {
+      sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
     }
     return sb.toString();
   }

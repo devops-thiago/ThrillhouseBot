@@ -243,6 +243,20 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenMarginScaledBudgetIsNonPositive() {
+    // Passes the raw buffer < max comparison but the runtime budget is
+    // 48000 * 0.9 - 45000 = -1800 — the silent-disable case the validator must reject.
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder()
+                .maxInputTokens(48000)
+                .outputBufferTokens(45000)
+                .tokenSafetyMargin(0.9)
+                .build());
+    assertTrue(ex.getMessage().contains("REVIEW_TOKEN_SAFETY_MARGIN"), ex.getMessage());
+  }
+
+  @Test
   void allowsTokenBudgetingDisabledWithZeroInputTokens() {
     // 0 input tokens disables budgeting (single call); the output-buffer cross-check is skipped.
     new ConfigBuilder().maxInputTokens(0).build().validate();

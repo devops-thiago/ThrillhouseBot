@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -86,14 +87,10 @@ class FindingPipelineTest {
     return new DiffBudgetPlanner.DiffBatch("### " + name + "\n", List.of(file), 10);
   }
 
-  private static ReviewContextLoader.ReviewContext multiBatchContext() {
-    return multiBatchContext(List.of());
-  }
-
-  private static ReviewContextLoader.ReviewContext multiBatchContext(List<String> omittedByName) {
+  private static ReviewContextLoader.ReviewContext reviewContext() {
     return new ReviewContextLoader.ReviewContext(
         List.of(),
-        "",
+        "raw legacy diff",
         "",
         0,
         List.of(),
@@ -110,45 +107,115 @@ class FindingPipelineTest {
             new FileDiff("a.java", "modified", 3, 0, 3, ""),
             new FileDiff("b.java", "modified", 2, 0, 2, "")),
         new DiffLineResolver(Map.of()),
-        null,
-        List.of(batch("a.java"), batch("b.java")),
-        omittedByName);
+        null);
+  }
+
+  private static DiffBudgetPlanner.BudgetPlan multiBatchPlan() {
+    return multiBatchPlan(List.of());
+  }
+
+  private static DiffBudgetPlanner.BudgetPlan multiBatchPlan(List<String> omittedByName) {
+    return new DiffBudgetPlanner.BudgetPlan(
+        List.of(batch("a.java"), batch("b.java")), omittedByName, true);
   }
 
   @Test
   void multiCallReviewsEachBatchAggregatesAndSummarizes() {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
-    var ctx = multiBatchContext();
+    var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
 
+    var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
+    var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null))
-        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+        .thenReturn(
+            new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null))
+        .thenReturn(
+            new ReviewResponse(List.of(finding("b.java", "B")), List.of(batchTwoStatus), null));
 
     var summary = new ReviewResponse.Summary(2, 0, 0, 2, 0, "looks ok", "does things", List.of());
-    var previous = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+    var summaryStatuses = List.of(new ReviewResponse.PreviousFindingStatus(9, "resolved", "no"));
     when(aiReviewService.summarize(eq(session), any()))
-        .thenReturn(new ReviewResponse(List.of(), previous, summary));
+        .thenReturn(new ReviewResponse(List.of(), summaryStatuses, summary));
 
-    var result = pipeline.run(session, template, ctx, new DiffLineResolver(Map.of()));
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
     // One blocking review call per batch, with the right index/count.
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), eq(2));
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), eq(2));
     // Exactly one summary call rolls up the union.
     verify(aiReviewService).summarize(eq(session), any());
+    // Each batch's findings are verified against that batch's own in-budget diff — never the
+    // over-budget combined text (#53).
+    verify(findingVerificationService, times(2)).verify(any(), any(), any(), any());
 
-    // Findings are the union of both batches; the PR-level summary + previous status come from the
-    // summary call (not from any single batch).
+    // Findings are the union of both batches; the PR-level summary comes from the summary call,
+    // but previous-finding statuses come from the batch calls (which saw the diff) — the
+    // code-blind summary call's statuses are discarded, and the evidence-backed "resolved" wins.
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
-    assertEquals(previous, result.previousFindingsStatus());
+    assertEquals(List.of(batchTwoStatus), result.previousFindingsStatus());
+  }
+
+  @Test
+  void budgetedSingleBatchSendsThePlannedTextNotTheRawDiff() {
+    var session = ReviewSession.create("owner/repo", 1, "One big file", "sha");
+    var ctx = reviewContext();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(batch("clipped.java")), List.of(), true);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    // The (possibly hunk-clipped) batch text is what the model sees; the uncapped raw diff would
+    // bypass the budget in exactly the oversized-file case that motivated clipping (#53).
+    assertTrue(captor.getValue().diff().contains("### clipped.java"), captor.getValue().diff());
+    assertEquals("base", captor.getValue().baseComparison());
+    verify(quoteValidator).validate(any(), eq("### clipped.java\n"));
+  }
+
+  @Test
+  void disabledBudgetingKeepsTheLegacyDiffPath() {
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    var ctx = reviewContext();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), false);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertEquals("raw legacy diff", captor.getValue().diff());
+    verify(quoteValidator).validate(any(), eq("raw legacy diff"));
+  }
+
+  @Test
+  void mergeBatchStatusesLetsTheEvidenceBackedClaimWin() {
+    var unresolvedOne = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not here");
+    var resolvedOne = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed in slice");
+    var justifiedTwo = new ReviewResponse.PreviousFindingStatus(2, "justified", "author reply");
+    var unresolvedTwo = new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still open");
+    var unresolvedThree = new ReviewResponse.PreviousFindingStatus(3, "unresolved", "open");
+
+    var merged =
+        FindingPipeline.mergeBatchStatuses(
+            List.of(
+                List.of(unresolvedOne, justifiedTwo, unresolvedThree),
+                List.of(resolvedOne, unresolvedTwo)));
+
+    assertEquals(List.of(resolvedOne, justifiedTwo, unresolvedThree), merged);
   }
 
   @Test
   void summaryInputsDiscloseOmittedFilesByName() {
     var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
-    var ctx = multiBatchContext(List.of("vendor/huge.min.js"));
+    var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -156,7 +223,12 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(session, template, ctx, new DiffLineResolver(Map.of()));
+    pipeline.run(
+        session,
+        template,
+        ctx,
+        multiBatchPlan(List.of("vendor/huge.min.js")),
+        new DiffLineResolver(Map.of()));
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("vendor/huge.min.js"), changedFiles);
@@ -185,7 +257,7 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    p.run(session, template, multiBatchContext(), new DiffLineResolver(Map.of()));
+    p.run(session, template, reviewContext(), multiBatchPlan(), new DiffLineResolver(Map.of()));
 
     // The summary still gets a valid (empty) findings array rather than propagating the failure.
     assertTrue(captor.getValue().findings().contains("[]"), captor.getValue().findings());

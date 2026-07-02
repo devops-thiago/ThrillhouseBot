@@ -56,10 +56,13 @@ public class VerdictBuilder {
   ReviewResult build(
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
-      CiStatusEvaluator.CiEvaluation ciEvaluation) {
-    // Truncation = files left uncovered: the legacy line-cap omission (when token budgeting is off)
-    // plus any file the token budget omitted by name (#53). Either holds APPROVE and is disclosed.
-    var omitted = ctx.omittedFiles() + ctx.omittedByName().size();
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    // Truncation must reflect what was actually sent (#53): with budgeting on, only the plan's
+    // omitted-by-name files were withheld — the line-cap count belongs to the legacy diff string,
+    // which budgeted reviews never send. With budgeting off, only the line cap applies. Summing
+    // the two would disclose partial reviews that did not happen (or double-count a file).
+    var omitted = plan.budgeted() ? plan.omittedFiles().size() : ctx.omittedFiles();
     // The "Changes Overview" reports GitHub's authoritative PR-level totals when available; the
     // diff-derived counts (summed over the ignore-glob-filtered reviewable files) undercount
     // whenever a changed file is dropped by the ignore-glob (#298). The reviewed-diff omitted-file

@@ -287,8 +287,8 @@ public final class PrReviewPrompts {
       """
             You are ThrillhouseBot, a code review assistant. The per-file findings for this pull
             request have ALREADY been computed by an earlier pass and are given to you below. Your
-            job is to roll them up into the PR-level summary and reconcile previous-review status —
-            NOT to find new issues. Respond ONLY with valid JSON — no text outside the JSON.
+            job is to roll them up into the PR-level summary — NOT to find new issues. Respond
+            ONLY with valid JSON — no text outside the JSON.
 
             Rules:
             - "findings" MUST be an empty array []. Do not invent, restate, or re-rank findings;
@@ -314,11 +314,8 @@ public final class PrReviewPrompts {
               single Mermaid diagram per that section's rules; empty string for trivial changes. Omit
               the field entirely otherwise.
 
-            If there is previous review context, previous_findings_status MUST be a JSON ARRAY:
-            [{"id": <number>, "status": "resolved" | "unresolved" | "justified", "note": "<reason>"}]
-            Use each prior finding's listed number as its id; emit [] when there is no previous
-            context. "resolved" requires the change to actually address the issue; "justified"
-            requires a concrete reason in a reply; a bare acknowledgement stays "unresolved".
+            previous_findings_status MUST be an empty array []: resolution was already judged by
+            the per-batch review passes, which saw the diff — this call does not.
 
             The response MUST be valid JSON matching the schema exactly.
             """;
@@ -340,8 +337,7 @@ public final class PrReviewPrompts {
             {{changedFiles}}
 
             {{#if previousFindings}}
-            ## Previous Review Findings
-            For each, determine if it is resolved, unresolved, or justified.
+            ## Previous Review Findings (context only — resolution already judged)
             {{previousFindings}}
             {{/if}}
 

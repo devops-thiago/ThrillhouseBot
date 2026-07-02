@@ -124,12 +124,18 @@ public class StartupConfigValidator {
               + " (thrillhousebot.review.token-safety-margin): "
               + margin);
     }
-    if (review.maxInputTokens() > 0 && review.outputBufferTokens() >= review.maxInputTokens()) {
+    // The buffer is subtracted from the margin-scaled ceiling at runtime, so validating it
+    // against the raw max would pass configs whose effective budget is still <= 0 (e.g.
+    // 48000/45000/0.9 -> -1800) — the silent-disable this validator exists to reject.
+    if (review.maxInputTokens() > 0
+        && margin > 0
+        && margin <= 1.0
+        && (int) (review.maxInputTokens() * margin) - review.outputBufferTokens() <= 0) {
       problems.add(
           "REVIEW_OUTPUT_BUFFER_TOKENS ("
               + review.outputBufferTokens()
-              + ") must be less than REVIEW_MAX_INPUT_TOKENS ("
-              + review.maxInputTokens()
+              + ") must be less than REVIEW_MAX_INPUT_TOKENS x REVIEW_TOKEN_SAFETY_MARGIN ("
+              + (int) (review.maxInputTokens() * margin)
               + ") so there is budget left for the diff");
     }
   }

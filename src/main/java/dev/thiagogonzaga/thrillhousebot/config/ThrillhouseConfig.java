@@ -150,10 +150,11 @@ public interface ThrillhouseConfig {
     int aiTimeoutSeconds();
 
     /**
-     * Coarse secondary guard on diff size, by lines. Superseded by token budgeting (#53, {@link
-     * #maxInputTokens()}) which is now the primary control, so this defaults to 0 (off). It only
-     * bites when token budgeting is disabled ({@code max-input-tokens=0}); set it then to bound a
-     * single uncapped call.
+     * Line cap on single-call diff renders: the on-demand commands (/describe, /changelog,
+     * /add-docs), maintainer replies, the base comparison, and the budgeting-disabled legacy
+     * review. Token-budgeted review calls are governed by {@link #maxInputTokens()} instead (#53).
+     * Defaults to 0, which falls back to the pre-#53 5000-line guard rather than leaving those
+     * single calls unbounded; set it explicitly to change the bound.
      */
     @WithDefault("0")
     @WithName("max-diff-lines")

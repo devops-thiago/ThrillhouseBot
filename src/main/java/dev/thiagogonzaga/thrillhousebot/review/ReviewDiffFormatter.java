@@ -185,7 +185,7 @@ public class ReviewDiffFormatter {
     return formatWithLineBudget(header, files, namesOf(reviewableFiles));
   }
 
-  private static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
+  static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream()
         .map(GitHubPullRequestClient.FileDiff::filename)
         .collect(Collectors.toSet());
@@ -252,16 +252,22 @@ public class ReviewDiffFormatter {
     return formatWithLineBudget(header, withPatch, namesOf(reviewableFiles(withPatch)));
   }
 
+  /**
+   * Line cap applied to every render from this class. Token-budgeted review calls never use these
+   * renders (the planner sections and clips per batch), so everything here is a single AI call —
+   * the on-demand commands, maintainer replies, the base comparison, and the budgeting-disabled
+   * legacy review — and must keep the pre-#53 guard: with {@code max-diff-lines} retired to 0, the
+   * old 5000-line default becomes the fallback instead of leaving those calls unbounded.
+   */
+  private int effectiveMaxLines() {
+    return maxDiffLines > 0 ? maxDiffLines : SINGLE_CALL_FALLBACK_MAX_LINES;
+  }
+
+  static final int SINGLE_CALL_FALLBACK_MAX_LINES = 5000;
+
   private FormattedDiff formatWithLineBudget(
       String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {
-    if (maxDiffLines <= 0) {
-      var sb = new StringBuilder(header);
-      for (var file : files) {
-        sb.append(formatFileSection(file, reviewableNames));
-      }
-      return new FormattedDiff(sb.toString(), 0);
-    }
-
+    var maxLines = effectiveMaxLines();
     var output = new StringBuilder(header);
     var usedLines = lineCount(header);
     var omitted = new ArrayList<GitHubPullRequestClient.FileDiff>();
@@ -271,11 +277,11 @@ public class ReviewDiffFormatter {
       var section = formatFileSection(file, reviewableNames);
       var sectionLines = lineCount(section);
 
-      if (usedLines + sectionLines <= maxDiffLines) {
+      if (usedLines + sectionLines <= maxLines) {
         output.append(section);
         usedLines += sectionLines;
       } else {
-        var remaining = maxDiffLines - usedLines;
+        var remaining = maxLines - usedLines;
         var tail = files.subList(i, files.size());
         int footerLines = tail.size() > 1 ? 2 : 1;
         if (remaining <= footerLines) {
@@ -295,7 +301,7 @@ public class ReviewDiffFormatter {
       appendTruncationFooter(output, omitted, usedLines);
       Log.warnf(
           "Diff truncated to %d lines (max: %d, %d files omitted)",
-          maxDiffLines, maxDiffLines, omitted.size());
+          maxLines, maxLines, omitted.size());
     }
 
     return new FormattedDiff(output.toString(), omitted.size());
@@ -308,19 +314,19 @@ public class ReviewDiffFormatter {
 
   void appendTruncationFooter(
       StringBuilder output, List<GitHubPullRequestClient.FileDiff> omitted, int usedLines) {
-    if (maxDiffLines - usedLines < 1) {
+    var maxLines = effectiveMaxLines();
+    if (maxLines - usedLines < 1) {
       return;
     }
 
     String summary =
-        String.format(
-            "(diff truncated at %d lines — %d files omitted)", maxDiffLines, omitted.size());
+        String.format("(diff truncated at %d lines — %d files omitted)", maxLines, omitted.size());
     var summaryBlock = "\n" + summary + "\n";
     output.append(summaryBlock);
     usedLines += lineCount(summaryBlock);
 
     for (GitHubPullRequestClient.FileDiff file : omitted) {
-      if (maxDiffLines - usedLines < 1) {
+      if (maxLines - usedLines < 1) {
         break;
       }
       String line =

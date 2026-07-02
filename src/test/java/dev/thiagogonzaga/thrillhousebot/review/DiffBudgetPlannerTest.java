@@ -18,8 +18,13 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -32,7 +37,14 @@ class DiffBudgetPlannerTest {
 
   private final ReviewDiffFormatter formatter = new ReviewDiffFormatter(List.of("**/*.lock"), 0);
   private final TokenCounter tokenCounter = new TokenCounter();
-  private final DiffBudgetPlanner planner = new DiffBudgetPlanner(formatter, tokenCounter);
+  private final ThrillhouseConfig config = mock(ThrillhouseConfig.class);
+  private final ThrillhouseConfig.ReviewConfig reviewConfig =
+      mock(ThrillhouseConfig.ReviewConfig.class);
+  private final DiffBudgetPlanner planner = new DiffBudgetPlanner(formatter, tokenCounter, config);
+
+  {
+    lenient().when(config.review()).thenReturn(reviewConfig);
+  }
 
   private static FileDiff file(String name, int additions, String patch) {
     return new FileDiff(name, "modified", additions, 0, additions, patch);
@@ -167,23 +179,61 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
-  void absurdlySmallBudgetFallsBackToPlaceholder() {
-    // A budget of a couple tokens can't fit even one clipped line; the section becomes a fixed
-    // notice rather than silently blowing the budget with the full file.
+  void absurdlySmallBudgetOmitsTheFileByName() {
+    // A budget of a couple tokens can't fit even one clipped line; content the model never sees
+    // must not count as reviewed, so the file is reported by name and the review is disclosed as
+    // partial instead of a placeholder stub passing for coverage.
     var big = file("dir/huge.java", 400, patch(400));
     var plan = planner.plan(List.of(big), 2, 1);
-    assertEquals(1, plan.batches().size());
-    assertTrue(
-        plan.batches().get(0).text().contains("exceeds the per-call token budget"),
-        "expected the over-budget placeholder notice");
+    assertTrue(plan.batches().isEmpty(), "an unclippable file must not be packed");
+    assertEquals(List.of("dir/huge.java"), plan.omittedFiles());
+    assertTrue(plan.truncated());
   }
 
   @Test
-  void ignoredFilesAreNeverPlannedOrOmitted() {
+  void planTrustsTheCallerPreFilteredReviewableList() {
     var files = List.of(file("dir/app.java", 5, patch(5)), file("deps/yarn.lock", 999, patch(50)));
-    var plan = planner.plan(files, 100_000, 3);
+    var plan = planner.plan(formatter.reviewableFiles(files), 100_000, 3);
     var covered = coveredFilenames(plan);
     assertEquals(List.of("dir/app.java"), covered);
     assertFalse(plan.omittedFiles().contains("deps/yarn.lock"));
+  }
+
+  @Test
+  void overheadConsumingTheBudgetKeepsBudgetingOnAndDisclosesOmissions() {
+    // Shared overhead >= input budget must not silently disable budgeting (the old behavior sent
+    // one uncapped call exactly when the prompt was largest); instead the diff budget floors at 1
+    // token and the files overflow into omittedFiles, disclosed by name.
+    var files = List.of(file("dir/f1.java", 5, patch(5)), file("dir/f2.java", 5, patch(5)));
+    var overhead = patch(200); // far more tokens than the input budget below
+    var plan = planner.plan(files, overhead, 50, 3);
+    assertTrue(plan.budgeted(), "budgeting must stay on when overhead eats the budget");
+    assertTrue(plan.batches().isEmpty());
+    assertEquals(List.of("dir/f1.java", "dir/f2.java"), plan.omittedFiles());
+  }
+
+  @Test
+  void configDisabledBudgetingYieldsOneUnbudgetedBatch() {
+    when(reviewConfig.maxInputTokens()).thenReturn(0);
+    var files = List.of(file("dir/f1.java", 5, patch(5)), file("dir/f2.java", 5, patch(5)));
+    var inputs = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var plan = planner.plan(files, inputs);
+    assertFalse(plan.budgeted());
+    assertEquals(1, plan.batches().size());
+    assertEquals(2, plan.batches().get(0).files().size());
+  }
+
+  @Test
+  void configDrivenPlanSizesOverheadFromThePromptInputs() {
+    when(reviewConfig.maxInputTokens()).thenReturn(200_000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
+    when(reviewConfig.outputBufferTokens()).thenReturn(0);
+    when(reviewConfig.maxAiCalls()).thenReturn(6);
+    var files = List.of(file("dir/f1.java", 5, patch(5)), file("dir/f2.java", 5, patch(5)));
+    var inputs = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var plan = planner.plan(files, inputs);
+    assertTrue(plan.budgeted());
+    assertEquals(1, plan.batches().size());
+    assertFalse(plan.truncated());
   }
 }
