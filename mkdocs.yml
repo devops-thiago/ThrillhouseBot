@@ -1,0 +1,57 @@
+site_name: ThrillhouseBot
+site_description: Self-hosted AI pull-request reviewer — a GraalVM-native GitHub App built with Quarkus
+site_url: https://devops-thiago.github.io/ThrillhouseBot/
+repo_url: https://github.com/devops-thiago/ThrillhouseBot
+repo_name: devops-thiago/ThrillhouseBot
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.top
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - pymdownx.details
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+  - include-markdown
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Commands: commands.md
+  - Configuration: configuration.md
+  - AI providers: providers.md
+  - Architecture: ARCHITECTURE.md
+  - How it compares: COMPARISON.md
+  - Review-quality evaluation: REVIEW_EVAL.md
+  - Contributing: contributing.md

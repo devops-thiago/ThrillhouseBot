@@ -1,0 +1,2 @@
+mkdocs-material==9.7.6
+mkdocs-include-markdown-plugin==7.3.0

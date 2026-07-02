@@ -32,6 +32,19 @@ updates:
         exclude-patterns:
           - "io.quarkus*"
 
+  # pip (docs site)
+  - package-ecosystem: "pip"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps(docs)"
+    groups:
+      docs-minor-patch:
+        update-types:
+          - minor
+          - patch
+
   # npm (frontend)
   - package-ecosystem: "npm"
     directory: "/frontend"

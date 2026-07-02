@@ -48,3 +48,6 @@ out*.txt
 
 # Local-only
 rewrite.yml
+
+# MkDocs build output (docs site)
+site/
