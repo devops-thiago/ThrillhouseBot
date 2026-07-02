@@ -65,7 +65,10 @@ is tied to it.
 ## Commands
 
 Drive the bot directly from a PR by commenting one of these. Each also accepts the
-mention form, e.g. `@Thrillhousebot review`.
+mention form, e.g. `@Thrillhousebot review`. The bot acknowledges every command
+instantly with a 👀 reaction on your comment while the work runs in the background;
+a conversational `@thrillhousebot` mention (no command word) gets an answer instead,
+not a reaction.
 
 | Command | What it does | Access |
 |---|---|---|
