@@ -104,17 +104,9 @@ public class VerdictBuilder {
   }
 
   static String checkSummaryForResult(ReviewResult result) {
-    if (result.hasIssues()) {
-      return String.format(
-          "%d findings: %d critical, %d high, %d medium, %d low",
-          result.totalFindings(),
-          result.criticalCount(),
-          result.highCount(),
-          result.mediumCount(),
-          result.lowCount());
-    }
-    // No new findings — surface CI gating first, since it also holds approval back. When the diff
-    // was also truncated, append that so a partial review is disclosed on this surface too.
+    // Appended to every non-clean caption — findings count and CI holds alike — so a partial
+    // review is disclosed on this surface even when the best-effort summary comment failed to
+    // post and its banner never reached the PR (#338).
     var truncationSuffix =
         result.truncated()
             ? String.format(
@@ -122,6 +114,17 @@ public class VerdictBuilder {
                     + " review.",
                 result.omittedFiles())
             : "";
+    if (result.hasIssues()) {
+      return String.format(
+              "%d findings: %d critical, %d high, %d medium, %d low",
+              result.totalFindings(),
+              result.criticalCount(),
+              result.highCount(),
+              result.mediumCount(),
+              result.lowCount())
+          + truncationSuffix;
+    }
+    // No new findings — surface CI gating first, since it also holds approval back.
     // An offending check and an unreadable CI source are independent hold reasons that can both
     // apply at once; disclose the unreadable one alongside the offending message rather than
     // letting the offending branch suppress it, matching the PR review comment

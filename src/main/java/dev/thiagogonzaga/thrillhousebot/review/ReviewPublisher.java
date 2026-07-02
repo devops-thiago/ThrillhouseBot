@@ -173,13 +173,15 @@ public class ReviewPublisher {
       Log.warnf(
           "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
           owner, repo, prNumber);
+      var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
+      appendTruncationNotice(fallbackParts, result);
       createReviewWithFallback(
           auth,
           owner,
           repo,
           prNumber,
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha, String.join("\n\n", skippedFindingsBodyParts(inline)), event, List.of()));
+              commitSha, String.join("\n\n", fallbackParts), event, List.of()));
       return;
     }
 
@@ -195,6 +197,7 @@ public class ReviewPublisher {
     // location — no description), so this body is the only place an un-anchored finding's detail is
     // surfaced; repeating the title here is the acceptable cost of never dropping the problem.
     bodyParts.addAll(skippedFindingsBodyParts(inline));
+    appendTruncationNotice(bodyParts, result);
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
           auth,
@@ -203,6 +206,19 @@ public class ReviewPublisher {
           prNumber,
           new GitHubReviewClient.CreateReviewRequest(
               commitSha, String.join("\n\n", bodyParts), event, List.of()));
+    }
+  }
+
+  /**
+   * Adds the partial-review notice to a findings review body when the diff was truncated. The
+   * truncation banner otherwise lives only in the summary comment, which is posted best-effort and
+   * only on first reviews — if that post fails or is skipped, the review body is the sole PR
+   * surface left to disclose the partial coverage. A duplicated notice when the summary does post
+   * is the acceptable cost of never dropping it (same standard as {@link #noIssuesBody}).
+   */
+  private static void appendTruncationNotice(List<String> bodyParts, ReviewResult result) {
+    if (result.truncated()) {
+      bodyParts.add(ReviewResult.truncationNotice(result.omittedFiles()).strip());
     }
   }
 
