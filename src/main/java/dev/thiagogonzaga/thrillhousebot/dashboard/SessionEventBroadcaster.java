@@ -38,6 +38,7 @@ public final class SessionEventBroadcaster {
 
   private static final Logger log = LoggerFactory.getLogger(SessionEventBroadcaster.class);
   private static final String KEY_STATUS = "status";
+  private static final String STATUS_IN_PROGRESS = "in_progress";
   private static final String KEY_ATTEMPT = "attempt";
   private static final int MAX_BUFFERED_EVENTS_PER_SESSION = 500;
   static final Duration MAX_SESSION_BUFFER_AGE = Duration.ofHours(1);
@@ -272,7 +273,7 @@ public final class SessionEventBroadcaster {
           session.getPrTitle(),
           session.getCommitSha(),
           session.getTimestamp().toString(),
-          Map.of(KEY_STATUS, "in_progress"));
+          Map.of(KEY_STATUS, STATUS_IN_PROGRESS));
     }
 
     public static SessionEvent stream(
@@ -357,7 +358,27 @@ public final class SessionEventBroadcaster {
           session.getCommitSha(),
           session.getTimestamp().toString(),
           Map.of(
-              "findingsSoFar", findingsSoFar, "tokensUsed", tokensUsed, KEY_STATUS, "in_progress"));
+              "findingsSoFar",
+              findingsSoFar,
+              "tokensUsed",
+              tokensUsed,
+              KEY_STATUS,
+              STATUS_IN_PROGRESS));
+    }
+
+    /**
+     * Progress on a large multi-call review: reviewing batch {@code index} of {@code count} (#53).
+     */
+    public static SessionEvent batch(ReviewSession session, int index, int count) {
+      return new SessionEvent(
+          "review.batch",
+          session.id,
+          session.getRepository(),
+          session.getPrNumber(),
+          session.getPrTitle(),
+          session.getCommitSha(),
+          session.getTimestamp().toString(),
+          Map.of("batchIndex", index, "batchCount", count, KEY_STATUS, STATUS_IN_PROGRESS));
     }
 
     public static SessionEvent completed(ReviewSession session) {

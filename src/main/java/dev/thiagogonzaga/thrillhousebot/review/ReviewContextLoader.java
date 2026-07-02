@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -24,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -48,10 +50,12 @@ public class ReviewContextLoader {
   private final InstructionsResolver instructionsResolver;
   private final ProjectStackResolver projectStackResolver;
   private final ReviewDiffFormatter diffFormatter;
+  private final DiffBudgetPlanner budgetPlanner;
   private final PrLabeler labeler;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final ReviewSessionPersistence sessionPersistence;
   private final BotIdentity botIdentity;
+  private final ThrillhouseConfig config;
 
   @Inject
   public ReviewContextLoader(
@@ -61,20 +65,24 @@ public class ReviewContextLoader {
       InstructionsResolver instructionsResolver,
       ProjectStackResolver projectStackResolver,
       ReviewDiffFormatter diffFormatter,
+      DiffBudgetPlanner budgetPlanner,
       PrLabeler labeler,
       FollowUpAnalyzer followUpAnalyzer,
       ReviewSessionPersistence sessionPersistence,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      ThrillhouseConfig config) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.instructionsResolver = instructionsResolver;
     this.projectStackResolver = projectStackResolver;
     this.diffFormatter = diffFormatter;
+    this.budgetPlanner = budgetPlanner;
     this.labeler = labeler;
     this.followUpAnalyzer = followUpAnalyzer;
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
+    this.config = config;
   }
 
   /**
@@ -103,7 +111,9 @@ public class ReviewContextLoader {
       String projectStack,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       DiffLineResolver lineResolver,
-      PrTotals prTotals) {
+      PrTotals prTotals,
+      List<DiffBudgetPlanner.DiffBatch> diffBatches,
+      List<String> omittedByName) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -111,6 +121,13 @@ public class ReviewContextLoader {
       inlineComments = List.copyOf(inlineComments);
       repoLabels = List.copyOf(repoLabels);
       reviewableFiles = List.copyOf(reviewableFiles);
+      diffBatches = List.copyOf(diffBatches);
+      omittedByName = List.copyOf(omittedByName);
+    }
+
+    /** True when the diff was split into multiple batches for multi-call review (#53). */
+    public boolean multiCall() {
+      return diffBatches.size() > 1;
     }
   }
 
@@ -190,6 +207,24 @@ public class ReviewContextLoader {
     // Existing repo labels are fetched once (when the feature is on): they both constrain the
     // model's suggestions in the prompt and are reused to reconcile its output afterwards.
     var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
+    var projectStack = resolveProjectStack(req);
+
+    // Token-budget the diff into batches so a large PR is reviewed across multiple calls instead of
+    // being silently truncated (#53). Every batch call repeats the shared prompt overhead — system
+    // prompt, project stack, previous findings, instructions — so that overhead is subtracted from
+    // the per-call input budget, and one call of the cap is held back for the final summary. A
+    // single batch is the normal-PR path.
+    var review = config.review();
+    var sharedOverhead =
+        PrReviewPrompts.SYSTEM
+            + projectStack
+            + previousFindings
+            + (instructions.isPresent() ? instructions.content() : "");
+    var inputBudget =
+        (int) (review.maxInputTokens() * review.tokenSafetyMargin()) - review.outputBufferTokens();
+    var plan =
+        budgetPlanner.plan(
+            files, sharedOverhead, inputBudget, Math.max(1, review.maxAiCalls() - 1));
 
     return new ReviewContext(
         files,
@@ -205,10 +240,12 @@ public class ReviewContextLoader {
         previousFindings,
         instructions,
         repoLabels,
-        resolveProjectStack(req),
+        projectStack,
         reviewableFiles,
         lineResolver,
-        prTotals);
+        prTotals,
+        plan.batches(),
+        plan.omittedFiles());
   }
 
   /**

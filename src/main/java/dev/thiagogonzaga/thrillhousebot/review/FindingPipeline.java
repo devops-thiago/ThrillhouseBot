@@ -74,6 +74,9 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver) {
+    if (ctx.multiCall()) {
+      return runMultiCall(session, promptInputs, ctx, lineResolver);
+    }
     var aiResponse = aiReviewService.review(session, promptInputs);
     return refine(
         session,
@@ -83,6 +86,103 @@ public class FindingPipeline {
         ctx.priorAiResponseJsons(),
         ctx.inlineComments(),
         lineResolver);
+  }
+
+  /**
+   * Map-reduce review for a large PR (#53): review each token-budgeted batch in its own blocking
+   * call, union the findings, run the same dedupe + verifier chain over that union, then a single
+   * summary call rolls them up into the PR-level summary and reconciles previous-findings status.
+   * The passed {@code promptInputs} is reused as the shared-context template — only the diff slot
+   * changes per batch, and the base comparison is dropped (it is a near-duplicate of the diff that
+   * would otherwise be re-sent in every call).
+   */
+  private ReviewResponse runMultiCall(
+      ReviewSession session,
+      AiReviewService.PromptInputs promptInputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver) {
+    var batches = ctx.diffBatches();
+    var allFindings = new ArrayList<ReviewResponse.Finding>();
+    var combinedDiff = new StringBuilder();
+    for (var i = 0; i < batches.size(); i++) {
+      var batch = batches.get(i);
+      var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()));
+      var batchResponse = aiReviewService.reviewBatch(session, batchInputs, i + 1, batches.size());
+      allFindings.addAll(batchResponse.findings());
+      combinedDiff.append(batch.text());
+    }
+
+    var combinedRaw = combinedDiff.toString();
+    var aggregated = new ReviewResponse(allFindings, List.of(), null);
+    var refined =
+        refine(
+            session,
+            aggregated,
+            combinedRaw,
+            withDiff(promptInputs, PromptTemplateEscaper.fence(combinedRaw)),
+            ctx.priorAiResponseJsons(),
+            ctx.inlineComments(),
+            lineResolver);
+
+    var summaryInputs =
+        new AiReviewService.SummaryInputs(
+            promptInputs.prContext(),
+            PromptTemplateEscaper.escape(findingsJson(refined.findings())),
+            PromptTemplateEscaper.escape(changedFilesOverview(ctx)),
+            promptInputs.previousFindings(),
+            promptInputs.repoInstructions());
+    var summaryResponse = aiReviewService.summarize(session, summaryInputs);
+
+    var merged =
+        new ReviewResponse(
+            refined.findings(),
+            summaryResponse.previousFindingsStatus(),
+            summaryResponse.summary());
+    persistAiResponse(session, merged);
+    return merged;
+  }
+
+  /** Copies the shared prompt context, swapping the diff slot and dropping the base comparison. */
+  private static AiReviewService.PromptInputs withDiff(
+      AiReviewService.PromptInputs base, String diff) {
+    return new AiReviewService.PromptInputs(
+        diff,
+        base.prContext(),
+        "",
+        base.projectStack(),
+        base.relatedTests(),
+        base.previousFindings(),
+        base.repoInstructions());
+  }
+
+  private String findingsJson(List<ReviewResponse.Finding> findings) {
+    try {
+      return mapper.writeValueAsString(findings);
+    } catch (JsonProcessingException e) {
+      Log.warn("Failed to serialize aggregated findings for the summary call", e);
+      return "[]";
+    }
+  }
+
+  /**
+   * Every changed file by name + change counts, so the summary covers files with no findings too.
+   */
+  private static String changedFilesOverview(ReviewContextLoader.ReviewContext ctx) {
+    var sb = new StringBuilder();
+    for (var file : ctx.reviewableFiles()) {
+      sb.append(file.filename())
+          .append(" (")
+          .append(file.status())
+          .append(", +")
+          .append(file.additions())
+          .append(" -")
+          .append(file.deletions())
+          .append(")\n");
+    }
+    for (var omitted : ctx.omittedByName()) {
+      sb.append(omitted).append(" (omitted — exceeded the review call budget; not analyzed)\n");
+    }
+    return sb.toString();
   }
 
   /**

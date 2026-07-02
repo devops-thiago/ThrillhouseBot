@@ -57,13 +57,15 @@ public class VerdictBuilder {
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation) {
+    // Truncation = files left uncovered: the legacy line-cap omission (when token budgeting is off)
+    // plus any file the token budget omitted by name (#53). Either holds APPROVE and is disclosed.
+    var omitted = ctx.omittedFiles() + ctx.omittedByName().size();
     // The "Changes Overview" reports GitHub's authoritative PR-level totals when available; the
     // diff-derived counts (summed over the ignore-glob-filtered reviewable files) undercount
     // whenever a changed file is dropped by the ignore-glob (#298). The reviewed-diff omitted-file
     // count is preserved either way, so truncation gating and disclosure are unaffected.
     var diffStats =
-        DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles())
-            .withAuthoritativeTotals(ctx.prTotals());
+        DiffStats.fromFiles(ctx.reviewableFiles(), omitted).withAuthoritativeTotals(ctx.prTotals());
     var changedFiles = toChangedFiles(ctx.reviewableFiles());
     var unresolvedPrevious =
         followUpAnalyzer.unresolvedFindings(
