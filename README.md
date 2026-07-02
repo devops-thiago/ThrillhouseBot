@@ -191,6 +191,8 @@ variables are the ones you will change per provider:
 | `AI_MODEL` | Chat model name | `deepseek-chat` |
 | `AI_PROVIDER` | Provider label for telemetry (`gen_ai.provider.name`); derived from `AI_BASE_URL` when unset | _(derived)_ |
 | `AI_TIMEOUT` | Per-request timeout | `300s` |
+| `AI_REASONING_ENABLED` | Send a reasoning hint to reasoning-capable models; when `false` no reasoning parameter is sent and the provider default applies | `false` |
+| `AI_REASONING_EFFORT` | Effort sent while enabled: `none`/`low`/`medium`/`high` (`none` explicitly asks the model not to reason); reasoning tokens are billed as output tokens | `low` |
 | `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
