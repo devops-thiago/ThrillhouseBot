@@ -36,7 +36,7 @@ public record ReviewResult(
     boolean ciUnreadable,
     // False in fail-closed gate-all mode: the required-context set could not be resolved, so every
     // check is gated. The rendered CI copy then drops "required", which would misdescribe checks
-    // branch protection never named (#302).
+    // branch protection never named.
     boolean requiredContextsKnown) {
   public ReviewResult {
     findings = List.copyOf(findings);

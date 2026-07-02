@@ -125,7 +125,7 @@ public class ReviewContextLoader {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     // GitHub's authoritative PR-level totals for the summary's "Changes Overview". Fetched
     // best-effort: a failure leaves prTotals null and the summary falls back to the diff-derived
-    // counts (#298).
+    // counts.
     var prTotals = fetchPrTotals(auth, req.owner(), req.repo(), req.prNumber());
     // The ignore-glob filter runs once here; the already-filtered list feeds the diff render (so
     // formatFileSection does not re-glob each file) and the line resolver alike, instead of either
@@ -260,9 +260,9 @@ public class ReviewContextLoader {
    * GitHub's authoritative PR-level file/line totals ({@code changed_files}/{@code
    * additions}/{@code deletions} on the pulls endpoint), or {@code null} when they can't be read.
    * The summary reports these rather than the ignore-glob-filtered diff counts, which undercount
-   * whenever a changed file is dropped by the ignore-glob (#298). Best-effort: a fetch failure
-   * returns {@code null} so the summary falls back to the diff-derived counts rather than failing
-   * the review.
+   * whenever a changed file is dropped by the ignore-glob. Best-effort: a fetch failure returns
+   * {@code null} so the summary falls back to the diff-derived counts rather than failing the
+   * review.
    */
   PrTotals fetchPrTotals(String auth, String owner, String repo, int prNumber) {
     try {
