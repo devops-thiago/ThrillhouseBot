@@ -22,11 +22,13 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +54,8 @@ class WebhookControllerTest {
   @Mock private TriggerDetector triggerDetector;
 
   @Mock private ReviewTriggerFilter triggerFilter;
+
+  @Mock private AutoReviewRateLimiter autoReviewRateLimiter;
 
   @Mock private ReviewDispatcher reviewDispatcher;
 
@@ -85,6 +89,7 @@ class WebhookControllerTest {
             verifier,
             triggerDetector,
             triggerFilter,
+            autoReviewRateLimiter,
             reviewDispatcher,
             replyDispatcher,
             deduplicator,
@@ -449,6 +454,42 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldSkipAutomaticReviewWithinRateLimitWindow() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
+    when(autoReviewRateLimiter.isThrottled("owner", "repo", 55)).thenReturn(true);
+
+    // A new push (fresh head SHA) within the window is still skipped.
+    var body =
+        buildPullRequestPayload("synchronize", 55, "owner/repo", "fresh-sha", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-throttled", body);
+    assertEquals(200, response.getStatus());
+
+    // A throttled PR must not be reviewed, and the dedup slot stays claimed (a deliberate
+    // decision, not a rejected dispatch), so a redelivery is ignored too.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void shouldDispatchAutomaticReviewWhenRateLimitWindowOpen() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(autoReviewRateLimiter.isThrottled("owner", "repo", 56)).thenReturn(false);
+
+    var body =
+        buildPullRequestPayload("synchronize", 56, "owner/repo", "sha56", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(autoReviewRateLimiter).isThrottled("owner", "repo", 56);
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldPassParsedDraftAndLabelsToTriggerFilter() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 
@@ -496,6 +537,30 @@ class WebhookControllerTest {
         .dispatch(
             new ReviewOrchestrator.ReviewRequest(
                 "owner", "repo", 77, "", "(manual review)", "", "", "main", 12345L, true));
+  }
+
+  @Test
+  void shouldTriggerManualReviewEvenWithinRateLimitWindow() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    // An explicit /review always runs — the manual path never consults the rate limiter, so
+    // even a PR deep inside the throttle window is reviewed on request.
+    verify(reviewDispatcher)
+        .dispatch(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner", "repo", 77, "", "(manual review)", "", "", "main", 12345L, true));
+    verifyNoInteractions(autoReviewRateLimiter);
   }
 
   @Test

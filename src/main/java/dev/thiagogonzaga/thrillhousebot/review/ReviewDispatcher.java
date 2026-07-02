@@ -36,14 +36,18 @@ public final class ReviewDispatcher {
 
   private final ExecutorService reviewExecutor;
   private final ReviewOrchestrator orchestrator;
+  private final AutoReviewRateLimiter autoReviewRateLimiter;
 
   private final ConcurrentHashMap<PrKey, PerPrState> states = new ConcurrentHashMap<>();
 
   @Inject
   public ReviewDispatcher(
-      @ReviewExecutor ExecutorService reviewExecutor, ReviewOrchestrator orchestrator) {
+      @ReviewExecutor ExecutorService reviewExecutor,
+      ReviewOrchestrator orchestrator,
+      AutoReviewRateLimiter autoReviewRateLimiter) {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
+    this.autoReviewRateLimiter = autoReviewRateLimiter;
   }
 
   /**
@@ -114,6 +118,12 @@ public final class ReviewDispatcher {
 
       try {
         orchestrator.review(batch.request());
+        // Start the throttle window at completion (not dispatch) so a long-running review does
+        // not eat into it; manual reviews never shift the automatic window.
+        if (!batch.request().isManualTrigger()) {
+          autoReviewRateLimiter.recordCompletion(
+              batch.request().owner(), batch.request().repo(), batch.request().prNumber());
+        }
       } catch (RuntimeException e) {
         log.error(
             "Review failed for {}/{} #{}",

@@ -204,6 +204,17 @@ public interface ThrillhouseConfig {
     @WithName("manual-trigger-auth-timeout")
     Duration manualTriggerAuthTimeout();
 
+    /**
+     * Minimum interval between automatic (webhook-triggered) reviews of the same PR. While the last
+     * automatic review completed less than this ago, {@code pull_request} events for the PR are
+     * skipped silently — even when the head SHA changed — capping AI spend on noisy repositories. A
+     * manual {@code /review} always bypasses and never shifts the window. Zero (or negative)
+     * disables throttling. Tracked in-memory per replica.
+     */
+    @WithDefault("1h")
+    @WithName("auto-review-min-interval")
+    Duration autoReviewMinInterval();
+
     LabelsConfig labels();
 
     DiagramConfig diagram();
