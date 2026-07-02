@@ -19,6 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -41,6 +43,7 @@ import org.mockito.MockitoAnnotations;
 class ReviewDispatcherTest {
 
   @Mock private ReviewOrchestrator orchestrator;
+  @Mock private AutoReviewRateLimiter rateLimiter;
 
   private ExecutorService reviewExecutor;
   private ReviewDispatcher dispatcher;
@@ -49,7 +52,7 @@ class ReviewDispatcherTest {
   void setUp() {
     MockitoAnnotations.openMocks(this);
     reviewExecutor = Executors.newSingleThreadExecutor();
-    dispatcher = new ReviewDispatcher(reviewExecutor, orchestrator);
+    dispatcher = new ReviewDispatcher(reviewExecutor, orchestrator, rateLimiter);
   }
 
   @AfterEach
@@ -172,7 +175,7 @@ class ReviewDispatcherTest {
   void shouldClearStateWhenExecutorRejectsWithoutRunningTask() {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
-    dispatcher = new ReviewDispatcher(executor, orchestrator);
+    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1"));
     verify(orchestrator, after(500).never()).review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -283,7 +286,7 @@ class ReviewDispatcherTest {
   void shouldReturnFalseWhenExecutorRejectsTask() {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
-    dispatcher = new ReviewDispatcher(executor, orchestrator);
+    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter);
 
     // A rejected task means no review will run, so callers can roll back dedup state.
     assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
@@ -307,7 +310,7 @@ class ReviewDispatcherTest {
         .when(executor)
         .execute(any());
 
-    dispatcher = new ReviewDispatcher(executor, orchestrator);
+    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha1"));
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha2"));
@@ -330,6 +333,43 @@ class ReviewDispatcherTest {
     // The review still runs — on a fresh state, never on the retired one
     verify(orchestrator, timeout(2000)).review(req);
     assertEquals(false, retired.running);
+  }
+
+  @Test
+  void shouldRecordCompletionForAutomaticReview() {
+    ReviewOrchestrator.ReviewRequest req = reviewRequest("owner", "repo", 13, "sha1");
+
+    dispatcher.dispatch(req);
+
+    // The throttle window starts when the automatic review finishes, keyed by the PR.
+    verify(orchestrator, timeout(2000)).review(req);
+    verify(rateLimiter, timeout(2000)).recordCompletion("owner", "repo", 13);
+  }
+
+  @Test
+  void shouldNotRecordCompletionForManualReview() {
+    var req =
+        new ReviewOrchestrator.ReviewRequest(
+            "owner", "repo", 14, "", "(manual)", "", "", "main", 1L, true);
+
+    dispatcher.dispatch(req);
+
+    // A manual /review must not shift the automatic throttle window.
+    verify(orchestrator, timeout(2000)).review(req);
+    verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+  }
+
+  @Test
+  void shouldNotRecordCompletionWhenReviewThrows() {
+    doThrow(new RuntimeException("boom"))
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 15, "sha1"));
+
+    // An unexpected failure means no review was surfaced, so the next event may retry immediately.
+    verify(orchestrator, timeout(2000)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
   }
 
   private static ReviewOrchestrator.ReviewRequest reviewRequest(

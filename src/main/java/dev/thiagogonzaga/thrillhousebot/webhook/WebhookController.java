@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
@@ -40,6 +41,7 @@ public class WebhookController {
   private final WebhookVerifier verifier;
   private final TriggerDetector triggerDetector;
   private final ReviewTriggerFilter triggerFilter;
+  private final AutoReviewRateLimiter autoReviewRateLimiter;
   private final ReviewDispatcher reviewDispatcher;
   private final MaintainerReplyDispatcher replyDispatcher;
   private final WebhookDeduplicator deduplicator;
@@ -54,6 +56,7 @@ public class WebhookController {
       WebhookVerifier verifier,
       TriggerDetector triggerDetector,
       ReviewTriggerFilter triggerFilter,
+      AutoReviewRateLimiter autoReviewRateLimiter,
       ReviewDispatcher reviewDispatcher,
       MaintainerReplyDispatcher replyDispatcher,
       WebhookDeduplicator deduplicator,
@@ -65,6 +68,7 @@ public class WebhookController {
     this.verifier = verifier;
     this.triggerDetector = triggerDetector;
     this.triggerFilter = triggerFilter;
+    this.autoReviewRateLimiter = autoReviewRateLimiter;
     this.reviewDispatcher = reviewDispatcher;
     this.replyDispatcher = replyDispatcher;
     this.deduplicator = deduplicator;
@@ -189,6 +193,18 @@ public class WebhookController {
               pr.number(),
               repo.fullName(),
               skipReason.get());
+          yield true;
+        }
+
+        // Per-PR automatic review rate limit — a fresh push within the window is skipped silently
+        // (a manual /review always bypasses; a review already running coalesces in the dispatcher).
+        if (autoReviewRateLimiter.isThrottled(repo.owner().login(), repo.name(), pr.number())) {
+          log.info(
+              "Skipping automatic review for PR #{} in {} — last automatic review completed "
+                  + "less than {} ago (manual /review bypasses)",
+              pr.number(),
+              repo.fullName(),
+              config.review().autoReviewMinInterval());
           yield true;
         }
 
