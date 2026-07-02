@@ -219,8 +219,6 @@ public class PrSummaryGenerator {
 
   private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
     if (!result.offendingCiChecks().isEmpty()) {
-      // Drop "Required"/"required" in fail-closed gate-all mode: these checks are gated because the
-      // required set was unknown, not because branch protection named them required.
       if (result.requiredContextsKnown()) {
         sb.append("### ⚠️ Required CI Checks Status\n");
         sb.append("Some required checks are still pending or have failed:\n\n");
@@ -411,12 +409,6 @@ public class PrSummaryGenerator {
     if (!recognized) {
       return null;
     }
-    // A sequenceDiagram whose participant/actor declarations carry a flowchart bracket label
-    // (`participant X["Y"]`) is invalid sequence syntax; GitHub's parser rejects it and drops the
-    // whole diagram. The prompt steers away from this shape, but a broken block is worse
-    // than none — so reject it defensively rather than post something that renders as a parse
-    // error. We drop, not repair: regex-rewriting Mermaid source has been shown to corrupt
-    // valid diagrams, and a dropped diagram is recoverable on re-review.
     if (firstLine.startsWith("sequencediagram") && hasBracketLabeledParticipant(cleaned)) {
       return null;
     }

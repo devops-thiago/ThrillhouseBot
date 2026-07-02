@@ -164,10 +164,6 @@ public class DocGenerationService {
       List<GitHubPullRequestClient.FileDiff> reviewable,
       GitHubPullRequestClient.PullRequestDetails pr) {
     try {
-      // Build the diff once, keeping the omitted-file count: the model prompt runs on the (possibly
-      // truncated) text, while the count drives the partial-coverage disclosure on the summary so a
-      // large PR's docs are never presented as if they covered every file. Reuse the caller's
-      // already-filtered reviewable list rather than re-walking the ignore glob.
       var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
       var response = generate(task, formatted.text(), pr);
       return new GeneratedDocs(response, formatted.omittedFiles());

@@ -123,9 +123,6 @@ public class ReviewContextLoader {
   ReviewContext load(
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
-    // GitHub's authoritative PR-level totals for the summary's "Changes Overview". Fetched
-    // best-effort: a failure leaves prTotals null and the summary falls back to the diff-derived
-    // counts.
     var prTotals = fetchPrTotals(auth, req.owner(), req.repo(), req.prNumber());
     // The ignore-glob filter runs once here; the already-filtered list feeds the diff render (so
     // formatFileSection does not re-glob each file) and the line resolver alike, instead of either

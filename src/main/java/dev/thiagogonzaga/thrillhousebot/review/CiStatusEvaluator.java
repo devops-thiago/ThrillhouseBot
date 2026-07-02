@@ -218,10 +218,6 @@ public class CiStatusEvaluator {
     // unread can still hide a required check's true state. Reported as a first-class signal, not a
     // synthetic check.
     boolean unreadable = !checkRunsReadable || !statusReadable;
-    // requiredContexts == null means the required set could not be resolved and we are gating on
-    // every check; the rendered copy then uses neutral "CI check(s)" wording rather than calling
-    // checks "required" when branch protection never named them. A resolved list (even empty)
-    // keeps the accurate "required" wording.
     return new CiEvaluation(offending, unreadable, requiredContexts != null);
   }
 
