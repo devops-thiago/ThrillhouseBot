@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -202,14 +203,34 @@ class FindingPipelineTest {
     var justifiedTwo = new ReviewResponse.PreviousFindingStatus(2, "justified", "author reply");
     var unresolvedTwo = new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still open");
     var unresolvedThree = new ReviewResponse.PreviousFindingStatus(3, "unresolved", "open");
+    // A malformed null status ranks lowest and never displaces a real verdict.
+    var nullFour = new ReviewResponse.PreviousFindingStatus(4, null, "malformed");
+    var justifiedFour = new ReviewResponse.PreviousFindingStatus(4, "justified", "reply");
 
     var merged =
         FindingPipeline.mergeBatchStatuses(
             List.of(
-                List.of(unresolvedOne, justifiedTwo, unresolvedThree),
-                List.of(resolvedOne, unresolvedTwo)));
+                List.of(unresolvedOne, justifiedTwo, unresolvedThree, nullFour),
+                List.of(resolvedOne, unresolvedTwo, justifiedFour)));
 
-    assertEquals(List.of(resolvedOne, justifiedTwo, unresolvedThree), merged);
+    assertEquals(List.of(resolvedOne, justifiedTwo, unresolvedThree, justifiedFour), merged);
+  }
+
+  @Test
+  void budgetedPlanWithNoBatchesFallsBackToTheLegacyDiff() {
+    // Every reviewable file was omitted by name (pathologically small budget): there is no batch
+    // text to send, so the single-call path falls back to the assembled prompt as-is.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("huge.java"), true);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    assertEquals("raw legacy diff", captor.getValue().diff());
   }
 
   @Test
@@ -224,15 +245,14 @@ class FindingPipelineTest {
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
     pipeline.run(
-        session,
-        template,
-        ctx,
-        multiBatchPlan(List.of("vendor/huge.min.js")),
-        new DiffLineResolver(Map.of()));
+        session, template, ctx, multiBatchPlan(List.of("a.java")), new DiffLineResolver(Map.of()));
 
+    // An omitted reviewable file appears exactly once — as the omission note, not also as a
+    // covered row with change counts.
     var changedFiles = captor.getValue().changedFiles();
-    assertTrue(changedFiles.contains("vendor/huge.min.js"), changedFiles);
-    assertTrue(changedFiles.contains("omitted"), changedFiles);
+    assertTrue(changedFiles.contains("a.java (omitted"), changedFiles);
+    assertFalse(changedFiles.contains("a.java (modified"), changedFiles);
+    assertTrue(changedFiles.contains("b.java (modified"), changedFiles);
   }
 
   @Test
