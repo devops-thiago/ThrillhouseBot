@@ -78,11 +78,16 @@
                 <scope>import</scope>
             </dependency>
             <!--
-                CVE override for jackson-databind GHSA-5jmj-h7xm-6q6v / CVE-2026-54515
-                (@JsonIgnoreProperties deserialization bypass). quarkus-bom 3.36.3 manages 2.21.4
-                (vulnerable); the 2.21.x fix (2.21.5) is not yet on Maven Central, so bump to
-                2.22.0 — the next published release OSV reports clean. Declared before the
-                quarkus-bom import so this BOM wins. Remove once the platform ships a fixed jackson.
+                Pin the Jackson family to the latest 2.x (2.22.0) over the quarkus-bom-managed
+                version; declared before the quarkus-bom import so this BOM wins.
+                NOTE on GHSA-5jmj-h7xm-6q6v / CVE-2026-54515 (@JsonIgnoreProperties case-insensitive
+                deserialization bypass): the advisory affects the ENTIRE Jackson 2.x line with no
+                2.x fix — the only fix is tools.jackson.core:jackson-databind 3.1.4 (Jackson 3.x),
+                which Quarkus does not use — so 2.22.0 does NOT clear it. It does not affect this
+                codebase (all @JsonIgnoreProperties usage is ignoreUnknown=true, never a per-property
+                name blocklist, and there is no polymorphic/default typing), so it is documented and
+                suppressed in osv-scanner.toml. Revisit the pin and the suppression when the
+                platform adopts Jackson 3.x or a fixed 2.x release ships.
             -->
             <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
