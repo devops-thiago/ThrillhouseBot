@@ -449,6 +449,54 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void truncatedFirstReviewWithFindingsStillPostsBodyDisclosingPartialReview() {
+      // #338: a truncated review WITH findings disclosed the truncation only in the summary
+      // comment, which is posted best-effort — if that post failed, no PR surface carried the
+      // notice. With every finding anchored inline and no other hold, postReview used to post no
+      // body at all; it must now post one carrying the truncation notice.
+      var aiResponse =
+          new ReviewResponse(
+              List.of(
+                  new ReviewResponse.Finding(
+                      "medium", "src/Main.java", 10, "Bug", "desc", "old", "new")),
+              List.of(),
+              null);
+      var result =
+          verdictBuilder.buildResult(
+              aiResponse,
+              true,
+              new VerdictBuilder.DiffStats(120, 4000, 4000, 7),
+              List.of(),
+              List.of(),
+              new CiStatusEvaluator.CiEvaluation(List.of(), false),
+              List.of());
+      assertTrue(result.truncated());
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("inline body");
+
+      reviewPublisher.postReview(
+          "auth",
+          "owner",
+          "repo",
+          5,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      // The finding anchors inline...
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      // ...and the review body still posts, carrying the partial-review notice.
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("partial review"), body);
+      assertTrue(body.contains("7 file"), body);
+    }
+
+    @Test
     void shouldHandleNullFindingsInAiResponse() {
       var aiResponse = new ReviewResponse(null, null, null);
 
@@ -868,6 +916,33 @@ class ReviewOrchestratorTest {
       String summary = VerdictBuilder.checkSummaryForResult(result);
 
       assertEquals("1 findings: 0 critical, 1 high, 0 medium, 0 low", summary);
+    }
+
+    @Test
+    void checkSummaryForResultShouldDiscloseTruncationAlongsideFindingCounts() {
+      // #338: the finding-counts caption must also disclose a truncated diff — the summary comment
+      // that otherwise carries the banner is posted best-effort, so this surface can be the only
+      // one left to say the review was partial.
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.HIGH, "f", 1, "t", "d", null, null)),
+              0,
+              1,
+              0,
+              0,
+              RiskLevel.HIGH,
+              ReviewState.REQUEST_CHANGES,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              5);
+
+      String summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertTrue(summary.contains("1 findings: 0 critical, 1 high, 0 medium, 0 low"), summary);
+      assertTrue(summary.contains("5 file(s) omitted"), summary);
+      assertTrue(summary.contains("partial review"), summary);
     }
 
     @Test
@@ -2980,6 +3055,51 @@ class ReviewOrchestratorTest {
                           && req.body().contains("missing.java:10")
                           && req.body().contains("the X path NPEs")
                           && !req.body().contains("PR summary")));
+    }
+
+    @Test
+    void truncatedReviewDisclosesPartialReviewWhenNoFindingsAnchorInline() {
+      // #338: when no finding anchors inline on a truncated review, the fallback body that lists
+      // the findings must also carry the truncation notice — the summary comment that otherwise
+      // holds it is posted best-effort and only on first reviews.
+      var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
+      var result =
+          new ReviewResult(
+              List.of(finding),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              6);
+
+      reviewPublisher.postReview(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("Bug")
+                          && req.body().contains("missing.java:10")
+                          && req.body().contains("partial review")
+                          && req.body().contains("6 file")));
     }
 
     @Test
