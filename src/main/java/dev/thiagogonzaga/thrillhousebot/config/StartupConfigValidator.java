@@ -202,10 +202,11 @@ public class StartupConfigValidator {
   private void logReasoningStatus() {
     var reasoning = config.ai().reasoning();
     if (reasoning.enabled()) {
+      var effort = ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(reasoning.effort());
       log.info(
           "AI reasoning enabled (reasoning_effort={}) — reasoning tokens are billed as output"
               + " tokens, so expect higher cost and latency on reasoning-capable models.",
-          ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(reasoning.effort()));
+          effort);
     }
   }
 
