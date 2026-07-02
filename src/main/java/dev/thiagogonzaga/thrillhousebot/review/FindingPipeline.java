@@ -84,6 +84,9 @@ public class FindingPipeline {
     if (plan.multiCall()) {
       return runMultiCall(session, promptInputs, ctx, plan, lineResolver);
     }
+    if (plan.budgeted() && plan.batches().isEmpty() && !plan.omittedFiles().isEmpty()) {
+      return summarizeWithoutReview(session, promptInputs, ctx, plan);
+    }
     var singleInputs = promptInputs;
     var quoteSource = ctx.diff();
     if (plan.budgeted() && !plan.batches().isEmpty()) {
@@ -162,6 +165,35 @@ public class FindingPipeline {
     var merged =
         new ReviewResponse(
             refined.findings(), refined.previousFindingsStatus(), summaryResponse.summary());
+    persistAiResponse(session, merged);
+    return merged;
+  }
+
+  /**
+   * Degenerate budgeted plan: every reviewable file overflowed the budget, so no review call can
+   * carry any diff within it. Sending the uncapped raw diff instead would bypass the budget on
+   * exactly the PR it was meant to bound — skip the review call, keep the summary call (it never
+   * carries the diff) so the PR still gets its overview, and leave the previous-findings statuses
+   * empty: no call saw the diff, so nothing may be marked resolved. The plan's omissions hold
+   * APPROVE and disclose the partial review.
+   */
+  private ReviewResponse summarizeWithoutReview(
+      ReviewSession session,
+      AiReviewService.PromptInputs promptInputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    Log.warnf(
+        "No reviewable file fits the per-call token budget (%d omitted); skipping the review call",
+        plan.omittedFiles().size());
+    var summaryInputs =
+        new AiReviewService.SummaryInputs(
+            promptInputs.prContext(),
+            "[]",
+            PromptTemplateEscaper.escape(changedFilesOverview(ctx, plan.omittedFiles())),
+            promptInputs.previousFindings(),
+            promptInputs.repoInstructions());
+    var summaryResponse = aiReviewService.summarize(session, summaryInputs);
+    var merged = new ReviewResponse(List.of(), List.of(), summaryResponse.summary());
     persistAiResponse(session, merged);
     return merged;
   }

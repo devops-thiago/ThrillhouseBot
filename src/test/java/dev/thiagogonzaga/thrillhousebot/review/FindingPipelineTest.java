@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -217,20 +218,45 @@ class FindingPipelineTest {
   }
 
   @Test
-  void budgetedPlanWithNoBatchesFallsBackToTheLegacyDiff() {
-    // Every reviewable file was omitted by name (pathologically small budget): there is no batch
-    // text to send, so the single-call path falls back to the assembled prompt as-is.
+  void budgetedPlanWithNoFittingBatchSkipsTheReviewCall() {
+    // Every reviewable file overflowed the budget: sending the raw diff instead would bypass the
+    // budget on exactly the PR it was meant to bound. Only the diff-free summary call runs; the
+    // statuses stay empty (no call saw the diff) and the plan's omissions disclose the partial.
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("huge.java"), true);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java", "b.java"), true);
+    var summary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "too large", "unknown", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var result =
+        pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, never()).review(any(), any());
+    verify(aiReviewService, never()).reviewBatch(any(), any(), anyInt(), anyInt());
+    assertTrue(result.findings().isEmpty());
+    assertTrue(result.previousFindingsStatus().isEmpty());
+    assertSame(summary, result.summary());
+    assertTrue(captor.getValue().changedFiles().contains("a.java (omitted"));
+  }
+
+  @Test
+  void budgetedPlanWithNoReviewableFilesKeepsTheLegacySingleCall() {
+    // Batches and omissions both empty (nothing reviewable): the ordinary single call proceeds
+    // with the assembled prompt, whose diff render is the tiny "(no changes detected)" text.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    var template =
+        new AiReviewService.PromptInputs("(no changes detected)", "ctx", "base", "s", "t", "", "");
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), true);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
     pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
 
-    assertEquals("raw legacy diff", captor.getValue().diff());
+    assertEquals("(no changes detected)", captor.getValue().diff());
   }
 
   @Test

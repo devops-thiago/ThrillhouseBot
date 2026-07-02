@@ -179,26 +179,39 @@ public class DiffBudgetPlanner {
     var unclippable = new ArrayList<String>();
     for (var file : ordered) {
       var section = formatter.formatFileSection(file, reviewableNames);
-      // The disabled-budgeting path never reads the estimates; skip the BPE pass entirely.
       if (diffBudgetTokens <= 0) {
+        // The disabled-budgeting path never reads the estimates; skip the BPE pass entirely.
         sized.add(new Sized(file, section, 0));
-        continue;
+      } else {
+        sizeWithinBudget(file, section, diffBudgetTokens, sized, unclippable);
       }
-      var tokens = tokenCounter.estimateTokens(section);
-      if (tokens > diffBudgetTokens) {
-        var clipped = clipToBudget(section, diffBudgetTokens);
-        if (clipped == null) {
-          // Content the model would never see must not count as reviewed: report the file by
-          // name (holds APPROVE, disclosed) instead of packing a placeholder as coverage.
-          unclippable.add(file.filename());
-          continue;
-        }
-        section = clipped;
-        tokens = tokenCounter.estimateTokens(clipped);
-      }
-      sized.add(new Sized(file, section, tokens));
     }
     return new Rendered(sized, unclippable);
+  }
+
+  /**
+   * Estimates (clipping if oversized) one file section into {@code sized}, or records it in {@code
+   * unclippable} when no clip fits: content the model would never see must not count as reviewed —
+   * the file is reported by name (holds APPROVE, disclosed) instead of packing a placeholder as
+   * coverage.
+   */
+  private void sizeWithinBudget(
+      GitHubPullRequestClient.FileDiff file,
+      String section,
+      int diffBudgetTokens,
+      List<Sized> sized,
+      List<String> unclippable) {
+    var tokens = tokenCounter.estimateTokens(section);
+    if (tokens > diffBudgetTokens) {
+      var clipped = clipToBudget(section, diffBudgetTokens);
+      if (clipped == null) {
+        unclippable.add(file.filename());
+        return;
+      }
+      section = clipped;
+      tokens = tokenCounter.estimateTokens(clipped);
+    }
+    sized.add(new Sized(file, section, tokens));
   }
 
   private static DiffBatch toBatch(List<Sized> sized) {

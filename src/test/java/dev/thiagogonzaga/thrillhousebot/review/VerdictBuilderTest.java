@@ -79,8 +79,8 @@ class VerdictBuilderTest {
 
   @Test
   void budgetedReviewDisclosesOnlyThePlanOmissions() {
-    // The line-cap count belongs to the legacy diff string, which a budgeted review never sends;
-    // leaking it in would hold APPROVE on a fully covered PR.
+    // A budgeted review never sends the legacy diff string, so its line-cap count must not leak
+    // into the disclosed omissions and hold approval on a fully covered PR.
     var ctx = contextWithLineCapOmissions(3);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("big.java"), true);
 
