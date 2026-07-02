@@ -30,6 +30,12 @@ import jakarta.inject.Singleton;
 @ApplicationScoped
 public class BotIdentityProducer {
 
+  /**
+   * Produces the shared {@link BotIdentity} resolved from the configured bot logins.
+   *
+   * @param config the application configuration providing {@code github.bot-logins}
+   * @return the immutable identity shared by all review-pipeline collaborators
+   */
   // @Singleton (not @ApplicationScoped): BotIdentity is a record (final), so it can't be proxied by
   // a normal scope; a pseudo-scope still gives one shared instance for the immutable value.
   @Produces
