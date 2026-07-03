@@ -732,6 +732,21 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void previousFindingFilesByIdMapsTheOneBasedStatusIdSpace() {
+    var filesById = analyzer.previousFindingFilesById(PREVIOUS_JSON);
+
+    assertEquals("src/A.java", filesById.get(1));
+    assertEquals("src/B.java", filesById.get(2));
+    assertEquals(2, filesById.size());
+  }
+
+  @Test
+  void previousFindingFilesByIdIsEmptyForMissingOrBadInput() {
+    assertTrue(analyzer.previousFindingFilesById(null).isEmpty());
+    assertTrue(analyzer.previousFindingFilesById("not json").isEmpty());
+  }
+
+  @Test
   void unresolvedFindingsShouldReturnEmptyForMissingInputs() {
     var unresolvedStatus = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "x"));
 

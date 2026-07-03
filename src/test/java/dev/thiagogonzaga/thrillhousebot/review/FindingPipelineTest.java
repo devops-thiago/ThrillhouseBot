@@ -269,6 +269,8 @@ class FindingPipelineTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
+    // Finite budget with nothing to drop: the clamp is a no-op and serializes everything.
+    when(budgetPlanner.perCallInputBudget()).thenReturn(1_000_000);
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
@@ -287,11 +289,13 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
-    var low = new ReviewResponse.Finding("low", "high", "a.java", 1, "L", "d", "o", "n");
+    var high = new ReviewResponse.Finding("high", "high", "a.java", 1, "H", "d", "o", "n");
+    var nullRisk = new ReviewResponse.Finding(null, "high", "a.java", 2, "N", "d", "o", "n");
     var critical = new ReviewResponse.Finding("critical", "high", "b.java", 1, "C", "d", "o", "n");
 
     // Budget sized so the fixed summary sections plus exactly one finding fit: the critical one
-    // must win the remaining space and the low one is dropped from the serialization only.
+    // must win the remaining space; the high and null-risk ones are dropped from the
+    // serialization only.
     var tokenCounter = new TokenCounter();
     var overview = "a.java (modified, +3 -0)\nb.java (modified, +2 -0)\n";
     var fixedSections =
@@ -304,7 +308,7 @@ class FindingPipelineTest {
                 + 1);
 
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(low), List.of(), null))
+        .thenReturn(new ReviewResponse(List.of(high, nullRisk), List.of(), null))
         .thenReturn(new ReviewResponse(List.of(critical), List.of(), null));
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))
@@ -315,10 +319,11 @@ class FindingPipelineTest {
 
     // The response keeps every finding; only the summary-call serialization is clamped, keeping
     // the most severe finding.
-    assertEquals(2, result.findings().size());
+    assertEquals(3, result.findings().size());
     var serialized = captor.getValue().findings();
     assertTrue(serialized.contains("\"C\""), serialized);
-    assertFalse(serialized.contains("\"L\""), serialized);
+    assertFalse(serialized.contains("\"H\""), serialized);
+    assertFalse(serialized.contains("\"N\""), serialized);
   }
 
   @Test
