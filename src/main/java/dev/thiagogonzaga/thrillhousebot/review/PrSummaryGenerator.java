@@ -188,8 +188,8 @@ public class PrSummaryGenerator {
    * Renders the celebration-replacement line when CI holds approval (optionally alongside a
    * truncated diff). The two CI holds read differently: an offending check is pending/failing, so
    * it is phrased as CI "not confirmed green" — with neutral "CI"/"required CI" wording per whether
-   * the required set was resolved (#302). An unreadable source is NOT a not-green result — it could
-   * not be read — so it gets "could not be read" wording, matching {@code
+   * the required set was resolved. An unreadable source is NOT a not-green result — it could not be
+   * read — so it gets "could not be read" wording, matching {@code
    * VerdictBuilder.checkSummaryForResult} and the "CI Status Unavailable" section rather than
    * misreporting an unread status as failing. Reached only via {@link
    * ReviewResult#ciHoldsApproval}, so no offending check implies the hold is an unreadable source.
@@ -219,8 +219,6 @@ public class PrSummaryGenerator {
 
   private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
     if (!result.offendingCiChecks().isEmpty()) {
-      // Drop "Required"/"required" in fail-closed gate-all mode: these checks are gated because the
-      // required set was unknown, not because branch protection named them required (#302).
       if (result.requiredContextsKnown()) {
         sb.append("### ⚠️ Required CI Checks Status\n");
         sb.append("Some required checks are still pending or have failed:\n\n");
@@ -299,7 +297,7 @@ public class PrSummaryGenerator {
    *
    * <p>The trailing "…and N more file(s)" rollup is measured against {@code totalFilesChanged}
    * (GitHub's authoritative total), not the reviewable-row count, so it also accounts for files the
-   * ignore-glob dropped from the table — matching the "Changes Overview" total above it (#298).
+   * ignore-glob dropped from the table — matching the "Changes Overview" total above it.
    */
   private static void appendChangedFiles(
       StringBuilder sb,
@@ -411,12 +409,6 @@ public class PrSummaryGenerator {
     if (!recognized) {
       return null;
     }
-    // A sequenceDiagram whose participant/actor declarations carry a flowchart bracket label
-    // (`participant X["Y"]`) is invalid sequence syntax; GitHub's parser rejects it and drops the
-    // whole diagram (#311). The prompt steers away from this shape, but a broken block is worse
-    // than none — so reject it defensively rather than post something that renders as a parse
-    // error. We drop, not repair: #299 established that regex-rewriting Mermaid source corrupts
-    // valid diagrams, and a dropped diagram is recoverable on re-review.
     if (firstLine.startsWith("sequencediagram") && hasBracketLabeledParticipant(cleaned)) {
       return null;
     }
@@ -427,7 +419,7 @@ public class PrSummaryGenerator {
    * True when any {@code participant}/{@code actor} declaration in the source carries a flowchart
    * bracket label — {@code participant O["Orchestrator"]} rather than the valid {@code participant
    * O as Orchestrator}. The stray {@code [} or &#123; is the flowchart-quoting rule leaking into a
-   * sequence diagram (#311), which GitHub cannot render.
+   * sequence diagram, which GitHub cannot render.
    */
   private static boolean hasBracketLabeledParticipant(String diagram) {
     return diagram

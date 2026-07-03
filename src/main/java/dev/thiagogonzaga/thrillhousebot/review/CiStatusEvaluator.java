@@ -162,7 +162,7 @@ public class CiStatusEvaluator {
    * concepts — unreadable is not a check — so the verdict and the rendered summary can treat them
    * separately. {@code requiredContextsKnown} is false in fail-closed gate-all mode (the required
    * set could not be resolved, so every check is gated): the rendered copy then drops the word
-   * "required", which would misdescribe checks branch protection never named (#302).
+   * "required", which would misdescribe checks branch protection never named.
    */
   record CiEvaluation(
       List<ReviewResult.CiCheck> offendingChecks,
@@ -218,11 +218,6 @@ public class CiStatusEvaluator {
     // unread can still hide a required check's true state. Reported as a first-class signal, not a
     // synthetic check.
     boolean unreadable = !checkRunsReadable || !statusReadable;
-    // requiredContexts == null means the required set could not be resolved and we are gating on
-    // every check; the rendered copy then uses neutral "CI check(s)" wording rather than calling
-    // checks "required" when branch protection never named them (#302). A resolved list (even
-    // empty)
-    // keeps the accurate "required" wording.
     return new CiEvaluation(offending, unreadable, requiredContexts != null);
   }
 

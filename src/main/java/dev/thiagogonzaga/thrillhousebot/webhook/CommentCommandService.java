@@ -183,10 +183,6 @@ public class CommentCommandService {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
-    // Gate on the live PR, not persistence: a review that once completed does not mean the summary
-    // comment is still there — it may have been deleted. No-op only when the comment is actually
-    // present; otherwise dispatch a review that (re)posts it via forceSummary, even on a PR that
-    // already carries a formal bot review, where the first-review gate alone would suppress it.
     if (contextLoader.botSummaryCommentExists(auth, ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
           "Ignoring /summary — a summary comment is already present on {}/{} #{}",

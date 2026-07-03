@@ -57,10 +57,6 @@ public class VerdictBuilder {
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation) {
-    // The "Changes Overview" reports GitHub's authoritative PR-level totals when available; the
-    // diff-derived counts (summed over the ignore-glob-filtered reviewable files) undercount
-    // whenever a changed file is dropped by the ignore-glob (#298). The reviewed-diff omitted-file
-    // count is preserved either way, so truncation gating and disclosure are unaffected.
     var diffStats =
         DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles())
             .withAuthoritativeTotals(ctx.prTotals());
@@ -104,9 +100,6 @@ public class VerdictBuilder {
   }
 
   static String checkSummaryForResult(ReviewResult result) {
-    // Appended to every non-clean caption — findings count and CI holds alike — so a partial
-    // review is disclosed on this surface even when the best-effort summary comment failed to
-    // post and its banner never reached the PR (#338).
     var truncationSuffix =
         result.truncated()
             ? String.format(
@@ -124,7 +117,6 @@ public class VerdictBuilder {
               result.lowCount())
           + truncationSuffix;
     }
-    // No new findings — surface CI gating first, since it also holds approval back.
     // An offending check and an unreadable CI source are independent hold reasons that can both
     // apply at once; disclose the unreadable one alongside the offending message rather than
     // letting the offending branch suppress it, matching the PR review comment
@@ -135,8 +127,6 @@ public class VerdictBuilder {
                 + " confirmed."
             : "";
     if (!result.offendingCiChecks().isEmpty()) {
-      // Drop "required" in fail-closed gate-all mode: the checks are gated because the required set
-      // was unknown, not because branch protection named them required (#302).
       var checkLabel = result.requiredContextsKnown() ? "required CI check(s)" : "CI check(s)";
       return String.format(
               "No new issues found, but %d %s are still pending or failing.",

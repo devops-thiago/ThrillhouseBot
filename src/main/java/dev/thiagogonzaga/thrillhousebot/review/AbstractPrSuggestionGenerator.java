@@ -109,8 +109,7 @@ public abstract class AbstractPrSuggestionGenerator {
   private ReviewDiffFormatter.FormattedDiff fetchDiff(
       String auth, String owner, String repo, int prNumber, String command) {
     // SoftLoaders.files degrades a failed fetch to an empty list; buildDiffStringWithStats then
-    // yields "(no changes detected)", which loadInputs treats the same as null (post nothing). The
-    // stats overload is used so the omitted-file count rides along for the partial-coverage notice.
+    // yields "(no changes detected)", which loadInputs treats the same as null (post nothing).
     var files = SoftLoaders.files(prClient, auth, owner, repo, prNumber, command);
     return diffFormatter.buildDiffStringWithStats(files);
   }
