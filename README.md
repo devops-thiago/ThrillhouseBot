@@ -190,7 +190,8 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
      | java scripts/GenEnv.java --host <your-host>
    ```
 
-> Once the bot is running, `http://<your-host>:8080/install.html` auto-detects the URL
+> Once the bot is running, `install.html` on the bot's own URL (`https://<your-host>/install.html`
+> behind a reverse proxy, or `http://localhost:8080/install.html` directly) auto-detects the URL
 > and builds the manifest dynamically, with no file editing or local server needed.
 
 ### Option B: manual registration

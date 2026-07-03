@@ -36,6 +36,14 @@ gh api --method POST /app-manifests/<code>/conversions \
   | java scripts/GenEnv.java --host <your-host>
 ```
 
+!!! note "Smee setups"
+
+    The hosted installer registers Smee webhooks at the channel root and the
+    OAuth callback at `http://localhost:8080/api/auth/callback`. Skip `--host`
+    and keep the default `DASHBOARD_URL=http://localhost:8080` — `--host`
+    writes `DASHBOARD_URL=https://<host>`, and dashboard login only works when
+    `DASHBOARD_URL` matches the registered callback.
+
 ??? note "Manual registration instead"
 
     Prefer to register the app by hand? Create it at
@@ -50,9 +58,16 @@ gh api --method POST /app-manifests/<code>/conversions \
     | Identifying & authorizing users | Enabled (for dashboard login) |
     | Callback URL | `https://<your-host>/api/auth/callback` |
 
+    For a Smee channel, register the channel URL itself as the Webhook URL (no
+    `/api/webhook` suffix — Smee delivers only at the channel root) and
+    `http://localhost:8080/api/auth/callback` as the Callback URL, since OAuth
+    redirects happen in your browser against the local bot.
+
 !!! tip "Re-registering later"
 
-    Once the bot is running, `http://<your-host>:8080/install.html` builds the
+    Once the bot is running, `install.html` on the bot's own URL
+    (`https://<your-host>/install.html` behind a reverse proxy, or
+    `http://localhost:8080/install.html` when hitting it directly) builds the
     manifest from the detected host automatically — handy for adding the app to
     another account.
 

@@ -83,6 +83,14 @@
   </p>
   <pre>gh api --method POST /app-manifests/&lt;code&gt;/conversions \
   | java scripts/GenEnv.java --host &lt;your-host&gt;</pre>
+  <p>
+    Using Smee? Skip <code>--host</code> and keep the default
+    <code>DASHBOARD_URL=http://localhost:8080</code> in the generated
+    <code>.env</code> — <code>--host</code> writes
+    <code>DASHBOARD_URL=https://&lt;host&gt;</code>, and dashboard login only
+    works when <code>DASHBOARD_URL</code> matches the callback registered
+    above (<code>http://localhost:8080</code> for Smee installs).
+  </p>
 
   <script>
     const status = document.getElementById("status");
