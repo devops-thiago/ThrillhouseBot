@@ -145,6 +145,10 @@ public class ReviewPublisher {
     }
   }
 
+  /**
+   * Back-compat convenience for the automatic {@code pull_request} / {@code /review} paths and
+   * tests, which are never a summary-only re-run. Defaults {@code forceSummary} to {@code false}.
+   */
   void postReview(
       String auth,
       String owner,
@@ -153,7 +157,33 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver) {
+    postReview(auth, owner, repo, prNumber, commitSha, result, lineResolver, false);
+  }
+
+  void postReview(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String commitSha,
+      ReviewResult result,
+      DiffLineResolver lineResolver,
+      boolean forceSummary) {
     if (!result.hasIssues()) {
+      // A summary-only re-run (/summary) on a PR that already carries a formal bot review exists
+      // to regenerate the summary comment, which publishSummary just re-posted. A no-new-findings
+      // review here would only restate the verdict already on the PR right after that summary —
+      // skip it. First reviews keep posting (the /summary-before-any-review path), new findings
+      // below always post (a re-run may genuinely surface them), and a truncated diff still posts
+      // so the partial-review notice survives a failed best-effort summary — same standard as the
+      // first-review skip in postNoIssuesReview.
+      if (forceSummary && !result.isFirstReview() && !result.truncated()) {
+        Log.infof(
+            "Skipping the no-issues review for %s/%s #%d — summary-only re-run on an"
+                + " already-reviewed PR",
+            owner, repo, prNumber);
+        return;
+      }
       postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
       return;
     }

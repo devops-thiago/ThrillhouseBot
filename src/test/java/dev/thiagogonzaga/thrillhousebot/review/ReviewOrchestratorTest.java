@@ -2307,6 +2307,11 @@ class ReviewOrchestratorTest {
             .createComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), body.capture());
         assertTrue(body.getValue().body().startsWith(PrSummaryGenerator.SUMMARY_HEADING));
+        // ...but NO formal review is posted alongside it: the PR already carries one, so a fresh
+        // "no issues found" approval right after the summary would just restate it (the
+        // ThrillhouseBot#256 dogfood regression).
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -4068,6 +4073,79 @@ class ReviewOrchestratorTest {
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       assertEquals("COMMENT", captor.getValue().event());
       assertTrue(captor.getValue().body().contains("**build**"));
+    }
+
+    @Test
+    void postReviewShouldSkipNoIssuesReviewOnSummaryOnlyRerun() {
+      // /summary re-runs the review only to regenerate the summary comment; on a PR that already
+      // carries a formal bot review, an approval saying "no issues found" right after that summary
+      // would just restate it (the ThrillhouseBot#256 dogfood duplicate).
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldSkipCiPendingCommentReviewOnSummaryOnlyRerun() {
+      // Same summary-only re-run, held back only by pending CI: the regenerated summary already
+      // carries the CI table, so the COMMENT review would duplicate it too.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldStillPostNoIssuesReviewOnSummaryTriggeredFirstReview() {
+      // /summary on a PR with no formal review yet runs the ordinary first review; its approval
+      // must still post.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("APPROVE", captor.getValue().event());
+    }
+
+    @Test
+    void postReviewShouldStillPostReviewOnSummaryOnlyRerunWhenTruncated() {
+      // A truncated diff must stay disclosed on the PR even on a summary-only re-run: the summary
+      // is posted best-effort, so the review body is the surface that can never be dropped.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), List.of(), 3);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("partial review"));
     }
   }
 

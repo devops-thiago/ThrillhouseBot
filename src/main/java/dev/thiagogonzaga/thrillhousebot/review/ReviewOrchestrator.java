@@ -273,7 +273,14 @@ public class ReviewOrchestrator {
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       reviewPublisher.postReview(
-          auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, lineResolver);
+          auth,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          req.commitSha(),
+          result,
+          lineResolver,
+          req.forceSummary());
 
       // The review and its comments are on the PR now. Everything past this point is
       // best-effort and independent: each step runs in isolation so one failure can't abort the
