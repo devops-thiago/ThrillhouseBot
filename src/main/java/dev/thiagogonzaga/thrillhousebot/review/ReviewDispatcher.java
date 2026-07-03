@@ -117,10 +117,11 @@ public final class ReviewDispatcher {
       logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
 
       try {
-        orchestrator.review(batch.request());
-        // Start the throttle window at completion (not dispatch) so a long-running review does
-        // not eat into it; manual reviews never shift the automatic window.
-        if (!batch.request().isManualTrigger()) {
+        var surfaced = orchestrator.review(batch.request());
+        // Start the throttle window only when a review was actually posted, and at completion
+        // (not dispatch) so a long-running review does not eat into it. A failed review must not
+        // block the retry on the next push, and manual reviews never shift the automatic window.
+        if (surfaced && !batch.request().isManualTrigger()) {
           autoReviewRateLimiter.recordCompletion(
               batch.request().owner(), batch.request().repo(), batch.request().prNumber());
         }

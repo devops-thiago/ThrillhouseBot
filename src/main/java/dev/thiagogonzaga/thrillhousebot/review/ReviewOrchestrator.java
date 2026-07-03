@@ -194,9 +194,13 @@ public class ReviewOrchestrator {
   /**
    * Main entry point for reviewing a PR. Called from WebhookController for pull_request (opened,
    * synchronize) and /review triggers.
+   *
+   * @return {@code true} when the review result was surfaced to GitHub (post-result steps may still
+   *     have failed); {@code false} when the review failed before posting, so callers must not
+   *     treat it as a completed review (e.g. for rate-limit accounting).
    */
   @ActivateRequestContext
-  public void review(ReviewRequest request) {
+  public boolean review(ReviewRequest request) {
     Log.infof(
         "Starting review for %s/%s #%d (sha: %s)",
         request.owner(), request.repo(), request.prNumber(), request.commitSha());
@@ -330,6 +334,7 @@ public class ReviewOrchestrator {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
     }
+    return resultSurfaced;
   }
 
   /**

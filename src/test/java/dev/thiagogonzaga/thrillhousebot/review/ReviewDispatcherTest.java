@@ -27,6 +27,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -101,7 +102,7 @@ class ReviewDispatcherTest {
               reviewed.add(req);
               started.countDown();
               release.await(5, TimeUnit.SECONDS);
-              return null;
+              return true;
             })
         .when(orchestrator)
         .review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -157,7 +158,7 @@ class ReviewDispatcherTest {
               firstReviewStarted.countDown();
               throw new RuntimeException("boom");
             })
-        .doAnswer(invocation -> null)
+        .doAnswer(invocation -> true)
         .when(orchestrator)
         .review(any(ReviewOrchestrator.ReviewRequest.class));
 
@@ -203,7 +204,7 @@ class ReviewDispatcherTest {
                 aborted.countDown();
                 throw new AssertionError("fatal");
               }
-              return null;
+              return true;
             })
         .when(orchestrator)
         .review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -228,7 +229,7 @@ class ReviewDispatcherTest {
                 // Sneaks past the drain loop's RuntimeException catch to the worker guard
                 throw new Exception("unexpected checked failure");
               }
-              return null;
+              return true;
             })
         .when(orchestrator)
         .review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -253,7 +254,7 @@ class ReviewDispatcherTest {
               invocation -> {
                 started.countDown();
                 release.await(5, TimeUnit.SECONDS);
-                return null;
+                return true;
               })
           .when(orchestrator)
           .review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -338,6 +339,7 @@ class ReviewDispatcherTest {
   @Test
   void shouldRecordCompletionForAutomaticReview() {
     ReviewOrchestrator.ReviewRequest req = reviewRequest("owner", "repo", 13, "sha1");
+    when(orchestrator.review(req)).thenReturn(true);
 
     dispatcher.dispatch(req);
 
@@ -351,10 +353,24 @@ class ReviewDispatcherTest {
     var req =
         new ReviewOrchestrator.ReviewRequest(
             "owner", "repo", 14, "", "(manual)", "", "", "main", 1L, true);
+    when(orchestrator.review(req)).thenReturn(true);
 
     dispatcher.dispatch(req);
 
     // A manual /review must not shift the automatic throttle window.
+    verify(orchestrator, timeout(2000)).review(req);
+    verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+  }
+
+  @Test
+  void shouldNotRecordCompletionWhenReviewNotSurfaced() {
+    ReviewOrchestrator.ReviewRequest req = reviewRequest("owner", "repo", 16, "sha1");
+    when(orchestrator.review(req)).thenReturn(false);
+
+    dispatcher.dispatch(req);
+
+    // The orchestrator handled a failure internally and posted nothing, so the throttle window
+    // must not start — the next push may retry immediately.
     verify(orchestrator, timeout(2000)).review(req);
     verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
   }
