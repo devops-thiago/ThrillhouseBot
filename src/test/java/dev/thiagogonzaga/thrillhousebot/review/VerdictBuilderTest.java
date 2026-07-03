@@ -103,6 +103,19 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void clippedOnlyReviewIsDisclosedAsPartialAndHoldsApproval() {
+    // A hunk-clipped file's unseen content was withheld just like an omitted file's whole diff:
+    // a clipped-only review must not silently approve.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("huge.java"), true);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(1, result.omittedFiles());
+    assertTrue(result.truncated());
+  }
+
+  @Test
   void disabledBudgetingDisclosesTheLegacyLineCapCount() {
     var ctx = contextWithLineCapOmissions(2);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);

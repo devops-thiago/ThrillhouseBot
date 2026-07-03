@@ -81,7 +81,9 @@ public class DiffBudgetPlanner {
     }
 
     public boolean truncated() {
-      return !omittedFiles.isEmpty();
+      // A clipped file's unseen hunks were withheld just like an omitted file's whole diff: both
+      // make the review partial, so both hold APPROVE and demand disclosure.
+      return !omittedFiles.isEmpty() || !clippedFiles.isEmpty();
     }
 
     public boolean multiCall() {
@@ -105,12 +107,13 @@ public class DiffBudgetPlanner {
     if (review.maxInputTokens() <= 0) {
       return plan(reviewable, 0, 1);
     }
-    // fence("") counts the per-review fence scaffolding the pipeline wraps each batch in — small,
-    // but the safety margin should absorb estimate error, not known constants.
+    // fence(" ") produces the two real fence lines (fence of empty content is a no-op by design),
+    // counting the per-review scaffolding the pipeline wraps each batch in — small, but the safety
+    // margin should absorb estimate error, not known constants.
     var sharedOverhead =
         PrReviewPrompts.SYSTEM
             + PrReviewPrompts.USER
-            + PromptTemplateEscaper.fence("")
+            + PromptTemplateEscaper.fence(" ")
             + inputs.prContext()
             + inputs.baseComparison()
             + inputs.projectStack()

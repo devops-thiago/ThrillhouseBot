@@ -137,6 +137,9 @@ class FindingPipelineTest {
 
     var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
     var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
+    // Prior finding #1 lives in b.java — batch 2's slice — so its resolved claim is
+    // evidence-backed.
+    when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "b.java"));
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(
             new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null))
@@ -218,15 +221,17 @@ class FindingPipelineTest {
     when(followUpAnalyzer.previousFindingFilesById(any()))
         .thenReturn(Map.of(1, "b.java", 2, "a.java"));
 
-    // Batch 1 (a.java) hallucinates "resolved" on #1 without ever seeing b.java, but legitimately
-    // resolves #2 (its own slice); batch 2 (b.java) — informed on #1 — says unresolved.
+    // Batch 1 (a.java) hallucinates "resolved" on #1 without ever seeing b.java, legitimately
+    // resolves #2 (its own slice), and claims #3 — unmappable to any file, so no batch can prove
+    // it saw it; batch 2 (b.java) — informed on #1 — says unresolved.
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
                 List.of(
                     new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks done"),
-                    new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here")),
+                    new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here"),
+                    new ReviewResponse.PreviousFindingStatus(3, "resolved", "no map entry")),
                 null))
         .thenReturn(
             new ReviewResponse(
@@ -239,9 +244,54 @@ class FindingPipelineTest {
     var result =
         pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    assertEquals(2, result.previousFindingsStatus().size());
+    assertEquals(3, result.previousFindingsStatus().size());
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
     assertEquals("resolved", result.previousFindingsStatus().get(1).status());
+    // The unmappable claim is demoted: with no id-to-file mapping, scoping cannot be bypassed.
+    assertEquals("unresolved", result.previousFindingsStatus().get(2).status());
+  }
+
+  @Test
+  void oversizedOverviewIsClampedWithARollupNote() {
+    var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    // Budget just above the inherited sections: the overview cannot fit both file rows, so it is
+    // truncated line-wise with a rollup instead of blowing the summary prompt on file names.
+    var tokenCounter = new TokenCounter();
+    var inherited = PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d";
+    when(budgetPlanner.perCallInputBudget())
+        .thenReturn(tokenCounter.estimateTokens(inherited) + 20);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertTrue(
+        captor.getValue().changedFiles().contains("more changed files"),
+        captor.getValue().changedFiles());
+  }
+
+  @Test
+  void overviewIsWithheldWhenTheInheritedSectionsExhaustTheBudget() {
+    var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    when(budgetPlanner.perCallInputBudget()).thenReturn(10);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertTrue(
+        captor.getValue().changedFiles().contains("overview withheld"),
+        captor.getValue().changedFiles());
   }
 
   @Test

@@ -168,7 +168,7 @@ public class FindingPipeline {
             refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
 
-    var overview = changedFilesOverview(ctx, plan);
+    var overview = clampOverview(changedFilesOverview(ctx, plan), promptInputs);
     var summaryInputs =
         new AiReviewService.SummaryInputs(
             promptInputs.prContext(),
@@ -206,7 +206,8 @@ public class FindingPipeline {
         new AiReviewService.SummaryInputs(
             promptInputs.prContext(),
             "[]",
-            PromptTemplateEscaper.escape(changedFilesOverview(ctx, plan)),
+            PromptTemplateEscaper.escape(
+                clampOverview(changedFilesOverview(ctx, plan), promptInputs)),
             promptInputs.previousFindings(),
             promptInputs.repoInstructions());
     var summaryResponse = aiReviewService.summarize(session, summaryInputs);
@@ -216,11 +217,13 @@ public class FindingPipeline {
   }
 
   /**
-   * Keeps a batch's "resolved"/"justified" claims only for prior findings whose file was actually
+   * Keeps a batch's "resolved"/"justified" claims only for prior findings whose file was provably
    * in that batch's diff slice — a batch that never saw the fix has no evidence to close the
-   * finding, and its claim must not outrank an informed "unresolved". "unresolved" always passes
-   * (it is the no-evidence default), as does any status whose prior finding cannot be mapped to a
-   * file (conservative: it can then never be closed by a scoped-out batch).
+   * finding, and its claim must not outrank an informed "unresolved". A status whose prior finding
+   * cannot be mapped to a file is demoted too: with no mapping, no batch can prove it saw the
+   * finding, and letting the claim through would bypass the scoping entirely (e.g. when the prior
+   * context came from the unstructured review-body fallback). "unresolved" always passes — it is
+   * the no-evidence default.
    */
   private static List<ReviewResponse.PreviousFindingStatus> scopeStatusesToBatch(
       List<ReviewResponse.PreviousFindingStatus> statuses,
@@ -237,15 +240,60 @@ public class FindingPipeline {
     for (var status : statuses) {
       var closing = statusRank(status.status()) > 0;
       var file = previousFilesById.get(status.id());
-      if (closing && file != null && !batchFiles.contains(file)) {
+      if (closing && (file == null || !batchFiles.contains(file))) {
         scoped.add(
             new ReviewResponse.PreviousFindingStatus(
-                status.id(), "unresolved", "file not in this batch's diff slice"));
+                status.id(), "unresolved", "finding's file not in this batch's diff slice"));
         continue;
       }
       scoped.add(status);
     }
     return scoped;
+  }
+
+  /**
+   * Bounds the changed-files overview so the summary prompt's fixed sections can never alone exceed
+   * the per-call budget — a thousands-of-files PR would otherwise blow it on file names before a
+   * single finding is serialized. The overview gets at most half of what remains after the
+   * templates and inherited sections (which fit every batch call by construction), leaving the
+   * other half for the findings JSON; dropped rows are rolled up by count.
+   */
+  private String clampOverview(String overview, AiReviewService.PromptInputs promptInputs) {
+    var budget = budgetPlanner.perCallInputBudget();
+    if (budget == Integer.MAX_VALUE) {
+      return overview;
+    }
+    var inherited =
+        PrReviewPrompts.SUMMARY_SYSTEM
+            + PrReviewPrompts.SUMMARY_USER
+            + promptInputs.prContext()
+            + promptInputs.previousFindings()
+            + promptInputs.repoInstructions();
+    var overviewBudget = (budget - tokenCounter.estimateTokens(inherited)) / 2;
+    if (overviewBudget <= 0) {
+      return "(changed-files overview withheld — summary input budget exhausted)\n";
+    }
+    var lines = overview.split("\n");
+    var sb = new StringBuilder();
+    var used = 0;
+    var listed = 0;
+    while (listed < lines.length) {
+      var lineTokens = tokenCounter.estimateTokens(lines[listed] + "\n");
+      if (used + lineTokens > overviewBudget) {
+        break;
+      }
+      sb.append(lines[listed]).append('\n');
+      used += lineTokens;
+      listed++;
+    }
+    if (listed == lines.length) {
+      return overview;
+    }
+    sb.append("(+")
+        .append(lines.length - listed)
+        .append(" more changed files — overview")
+        .append(" truncated to fit the summary budget)\n");
+    return sb.toString();
   }
 
   /**

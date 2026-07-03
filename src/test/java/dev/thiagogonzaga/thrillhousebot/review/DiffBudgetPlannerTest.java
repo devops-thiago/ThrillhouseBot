@@ -152,7 +152,7 @@ class DiffBudgetPlannerTest {
     assertEquals(1, batch.files().size());
     assertTrue(batch.estimatedTokens() <= budget, "clipped batch over budget");
     assertTrue(batch.text().contains("truncated"), "oversized section should be clipped");
-    assertFalse(plan.truncated(), "a clipped file is covered, not omitted");
+    assertTrue(plan.truncated(), "a clipped file's unseen hunks make the review partial");
   }
 
   @Test
