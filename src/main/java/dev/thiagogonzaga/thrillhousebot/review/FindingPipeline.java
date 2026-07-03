@@ -22,13 +22,18 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -47,6 +52,8 @@ public class FindingPipeline {
   private final FollowUpAnalyzer followUpAnalyzer;
   private final ObjectMapper mapper;
   private final BotIdentity botIdentity;
+  private final DiffBudgetPlanner budgetPlanner;
+  private final TokenCounter tokenCounter;
 
   @Inject
   public FindingPipeline(
@@ -56,7 +63,9 @@ public class FindingPipeline {
       FindingVerificationService findingVerificationService,
       FollowUpAnalyzer followUpAnalyzer,
       ObjectMapper mapper,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      DiffBudgetPlanner budgetPlanner,
+      TokenCounter tokenCounter) {
     this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
     this.deduplicator = deduplicator;
@@ -64,6 +73,8 @@ public class FindingPipeline {
     this.followUpAnalyzer = followUpAnalyzer;
     this.mapper = mapper;
     this.botIdentity = botIdentity;
+    this.budgetPlanner = budgetPlanner;
+    this.tokenCounter = tokenCounter;
   }
 
   /**
@@ -130,6 +141,9 @@ public class FindingPipeline {
     var batches = plan.batches();
     var allFindings = new ArrayList<ReviewResponse.Finding>();
     var batchStatuses = new ArrayList<List<ReviewResponse.PreviousFindingStatus>>();
+    // The id space of previous_findings_status entries maps 1-based onto the prior response's
+    // findings; a batch may only close a prior finding whose file its own diff slice contained.
+    var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousAiResponseJson());
     for (var i = 0; i < batches.size(); i++) {
       var batch = batches.get(i);
       var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
@@ -142,7 +156,8 @@ public class FindingPipeline {
               promptInputs.projectStack(),
               promptInputs.previousFindings());
       allFindings.addAll(verified.findings());
-      batchStatuses.add(batchResponse.previousFindingsStatus());
+      batchStatuses.add(
+          scopeStatusesToBatch(batchResponse.previousFindingsStatus(), batch, previousFilesById));
     }
 
     // Finishing chain over the union — quote validation and verification already ran per batch.
@@ -153,11 +168,13 @@ public class FindingPipeline {
             refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
 
+    var overview = changedFilesOverview(ctx, plan);
     var summaryInputs =
         new AiReviewService.SummaryInputs(
             promptInputs.prContext(),
-            PromptTemplateEscaper.escape(findingsJson(refined.findings())),
-            PromptTemplateEscaper.escape(changedFilesOverview(ctx, plan.omittedFiles())),
+            PromptTemplateEscaper.escape(
+                budgetedFindingsJson(refined.findings(), promptInputs, overview)),
+            PromptTemplateEscaper.escape(overview),
             promptInputs.previousFindings(),
             promptInputs.repoInstructions());
     var summaryResponse = aiReviewService.summarize(session, summaryInputs);
@@ -189,7 +206,7 @@ public class FindingPipeline {
         new AiReviewService.SummaryInputs(
             promptInputs.prContext(),
             "[]",
-            PromptTemplateEscaper.escape(changedFilesOverview(ctx, plan.omittedFiles())),
+            PromptTemplateEscaper.escape(changedFilesOverview(ctx, plan)),
             promptInputs.previousFindings(),
             promptInputs.repoInstructions());
     var summaryResponse = aiReviewService.summarize(session, summaryInputs);
@@ -199,10 +216,89 @@ public class FindingPipeline {
   }
 
   /**
+   * Keeps a batch's "resolved"/"justified" claims only for prior findings whose file was actually
+   * in that batch's diff slice — a batch that never saw the fix has no evidence to close the
+   * finding, and its claim must not outrank an informed "unresolved". "unresolved" always passes
+   * (it is the no-evidence default), as does any status whose prior finding cannot be mapped to a
+   * file (conservative: it can then never be closed by a scoped-out batch).
+   */
+  private static List<ReviewResponse.PreviousFindingStatus> scopeStatusesToBatch(
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffBudgetPlanner.DiffBatch batch,
+      Map<Integer, String> previousFilesById) {
+    if (statuses.isEmpty()) {
+      return statuses;
+    }
+    var batchFiles = new HashSet<String>();
+    for (var file : batch.files()) {
+      batchFiles.add(file.filename());
+    }
+    var scoped = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var closing = statusRank(status.status()) > 0;
+      var file = previousFilesById.get(status.id());
+      if (closing && file != null && !batchFiles.contains(file)) {
+        scoped.add(
+            new ReviewResponse.PreviousFindingStatus(
+                status.id(), "unresolved", "file not in this batch's diff slice"));
+        continue;
+      }
+      scoped.add(status);
+    }
+    return scoped;
+  }
+
+  /**
+   * Serializes the findings for the summary call within the same per-call input budget the batch
+   * calls respect — the aggregated JSON of a many-batch PR can otherwise exceed the model context
+   * exactly when the expensive batch work already completed. Findings are kept most-severe-first;
+   * dropped ones only shrink the summary prose (the verdict's counts derive from the full list).
+   */
+  private String budgetedFindingsJson(
+      List<ReviewResponse.Finding> findings,
+      AiReviewService.PromptInputs promptInputs,
+      String changedFilesOverview) {
+    var budget = budgetPlanner.perCallInputBudget();
+    if (budget == Integer.MAX_VALUE) {
+      return findingsJson(findings);
+    }
+    var fixedSections =
+        PrReviewPrompts.SUMMARY_SYSTEM
+            + PrReviewPrompts.SUMMARY_USER
+            + promptInputs.prContext()
+            + changedFilesOverview
+            + promptInputs.previousFindings()
+            + promptInputs.repoInstructions();
+    var available = budget - tokenCounter.estimateTokens(fixedSections);
+    var kept = new ArrayList<>(findings);
+    kept.sort(Comparator.comparingInt(f -> -statusRankForSeverity(f.risk())));
+    var json = findingsJson(kept);
+    while (!kept.isEmpty() && tokenCounter.estimateTokens(json) > available) {
+      kept.remove(kept.size() - 1);
+      json = findingsJson(kept);
+    }
+    if (kept.size() < findings.size()) {
+      Log.warnf(
+          "Summary call input over budget: serializing %d of %d findings (most severe kept)",
+          kept.size(), findings.size());
+    }
+    return json;
+  }
+
+  private static int statusRankForSeverity(String risk) {
+    return switch (risk == null ? "" : risk) {
+      case "critical" -> 3;
+      case "high" -> 2;
+      case "medium" -> 1;
+      default -> 0;
+    };
+  }
+
+  /**
    * Merges the per-batch previous-findings statuses into one verdict per prior finding id. A
    * "resolved"/"justified" claim outranks "unresolved": only the batch whose slice contains the
-   * finding's file has the evidence to close it, while every other batch reports the finding
-   * unresolved simply because its fix is out of that slice.
+   * finding's file has the evidence to close it (enforced by {@link #scopeStatusesToBatch}), while
+   * every other batch reports the finding unresolved simply because its fix is out of that slice.
    */
   static List<ReviewResponse.PreviousFindingStatus> mergeBatchStatuses(
       List<List<ReviewResponse.PreviousFindingStatus>> batchStatuses) {
@@ -250,11 +346,14 @@ public class FindingPipeline {
 
   /**
    * Every changed file by name + change counts, so the summary covers files with no findings too.
+   * Hunk-clipped files are marked partially analyzed — presenting them with bare change counts
+   * would tell the summary they were fully covered when most of the patch was never sent.
    */
   private static String changedFilesOverview(
-      ReviewContextLoader.ReviewContext ctx, List<String> omittedByName) {
+      ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
     var sb = new StringBuilder();
-    var omitted = Set.copyOf(omittedByName);
+    var omitted = Set.copyOf(plan.omittedFiles());
+    var clipped = Set.copyOf(plan.clippedFiles());
     for (var file : ctx.reviewableFiles()) {
       if (omitted.contains(file.filename())) {
         continue;
@@ -266,9 +365,13 @@ public class FindingPipeline {
           .append(file.additions())
           .append(" -")
           .append(file.deletions())
+          .append(
+              clipped.contains(file.filename())
+                  ? " — partially analyzed: clipped to fit the review call budget"
+                  : "")
           .append(")\n");
     }
-    for (var name : omittedByName) {
+    for (var name : plan.omittedFiles()) {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
     }
     return sb.toString();

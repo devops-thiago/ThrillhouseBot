@@ -145,6 +145,8 @@ class DiffBudgetPlannerTest {
     var budget = 80;
     var plan = planner.plan(List.of(big), budget, 3);
 
+    // Clipped = covered but partially analyzed; the plan reports it so the summary can say so.
+    assertEquals(List.of("dir/huge.java"), plan.clippedFiles());
     assertEquals(1, plan.batches().size());
     var batch = plan.batches().get(0);
     assertEquals(1, batch.files().size());
@@ -210,6 +212,20 @@ class DiffBudgetPlannerTest {
     assertTrue(plan.budgeted(), "budgeting must stay on when overhead eats the budget");
     assertTrue(plan.batches().isEmpty());
     assertEquals(List.of("dir/f1.java", "dir/f2.java"), plan.omittedFiles());
+  }
+
+  @Test
+  void perCallInputBudgetIsUnboundedWhenBudgetingIsDisabled() {
+    when(reviewConfig.maxInputTokens()).thenReturn(0);
+    assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());
+  }
+
+  @Test
+  void perCallInputBudgetAppliesMarginAndOutputBuffer() {
+    when(reviewConfig.maxInputTokens()).thenReturn(48000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(0.9);
+    when(reviewConfig.outputBufferTokens()).thenReturn(8192);
+    assertEquals(43200 - 8192, planner.perCallInputBudget());
   }
 
   @Test

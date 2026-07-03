@@ -150,7 +150,9 @@ class ReviewOrchestratorTest {
             findingVerificationService,
             followUpAnalyzer,
             mapper,
-            BOT_ID);
+            BOT_ID,
+            new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+            new TokenCounter());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -3750,7 +3752,9 @@ class ReviewOrchestratorTest {
               findingVerificationService,
               followUpAnalyzer,
               badMapper,
-              BOT_ID);
+              BOT_ID,
+              new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+              new TokenCounter());
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

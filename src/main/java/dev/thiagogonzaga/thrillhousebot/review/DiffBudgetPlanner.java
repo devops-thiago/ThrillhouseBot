@@ -63,14 +63,21 @@ public class DiffBudgetPlanner {
   }
 
   /**
-   * The batching plan: ordered in-budget batches plus any files that did not fit, by name. {@code
-   * budgeted} is false only for an explicit {@code max-input-tokens=0} (legacy single uncapped
-   * batch) — consumers use it to pick between the plan's omissions and the legacy line-cap count.
+   * The batching plan: ordered in-budget batches, files that did not fit at all (by name), and
+   * files that were hunk-clipped to fit their batch — covered, but only partially analyzed, so the
+   * summary must not present them as fully reviewed. {@code budgeted} is false only for an explicit
+   * {@code max-input-tokens=0} (legacy single uncapped batch) — consumers use it to pick between
+   * the plan's omissions and the legacy line-cap count.
    */
-  public record BudgetPlan(List<DiffBatch> batches, List<String> omittedFiles, boolean budgeted) {
+  public record BudgetPlan(
+      List<DiffBatch> batches,
+      List<String> omittedFiles,
+      List<String> clippedFiles,
+      boolean budgeted) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
+      clippedFiles = List.copyOf(clippedFiles);
     }
 
     public boolean truncated() {
@@ -98,18 +105,35 @@ public class DiffBudgetPlanner {
     if (review.maxInputTokens() <= 0) {
       return plan(reviewable, 0, 1);
     }
-    var inputBudget =
-        (int) (review.maxInputTokens() * review.tokenSafetyMargin()) - review.outputBufferTokens();
+    // fence("") counts the per-review fence scaffolding the pipeline wraps each batch in — small,
+    // but the safety margin should absorb estimate error, not known constants.
     var sharedOverhead =
         PrReviewPrompts.SYSTEM
             + PrReviewPrompts.USER
+            + PromptTemplateEscaper.fence("")
             + inputs.prContext()
             + inputs.baseComparison()
             + inputs.projectStack()
             + inputs.relatedTests()
             + inputs.previousFindings()
             + inputs.repoInstructions();
-    return plan(reviewable, sharedOverhead, inputBudget, Math.max(1, review.maxAiCalls() - 1));
+    return plan(
+        reviewable, sharedOverhead, perCallInputBudget(), Math.max(1, review.maxAiCalls() - 1));
+  }
+
+  /**
+   * The per-call input-token budget every review-path AI call must fit — {@code max-input-tokens *
+   * token-safety-margin - output-buffer-tokens} — or {@link Integer#MAX_VALUE} when budgeting is
+   * disabled. Shared with the pipeline so the summary call is bounded by the same ceiling as the
+   * batch calls.
+   */
+  public int perCallInputBudget() {
+    var review = config.review();
+    if (review.maxInputTokens() <= 0) {
+      return Integer.MAX_VALUE;
+    }
+    return (int) (review.maxInputTokens() * review.tokenSafetyMargin())
+        - review.outputBufferTokens();
   }
 
   /**
@@ -147,13 +171,13 @@ public class DiffBudgetPlanner {
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
     var budgeted = diffBudgetTokens > 0;
     if (reviewable.isEmpty()) {
-      return new BudgetPlan(List.of(), List.of(), budgeted);
+      return new BudgetPlan(List.of(), List.of(), List.of(), budgeted);
     }
 
     var rendered = renderAndSize(reviewable, diffBudgetTokens);
 
     if (!budgeted) {
-      return new BudgetPlan(List.of(toBatch(rendered.sized())), List.of(), false);
+      return new BudgetPlan(List.of(toBatch(rendered.sized())), List.of(), List.of(), false);
     }
     return pack(rendered, diffBudgetTokens, Math.max(1, maxBatches));
   }
@@ -161,8 +185,11 @@ public class DiffBudgetPlanner {
   /** A file rendered to its diff section with a token estimate (oversized files pre-clipped). */
   private record Sized(GitHubPullRequestClient.FileDiff file, String text, int tokens) {}
 
-  /** Rendered sections plus the files no clipping could fit — omitted by name, never packed. */
-  private record Rendered(List<Sized> sized, List<String> unclippable) {}
+  /**
+   * Rendered sections plus the files no clipping could fit (omitted by name, never packed) and the
+   * files that were clipped to fit (covered, but only partially analyzed).
+   */
+  private record Rendered(List<Sized> sized, List<String> unclippable, List<String> clipped) {}
 
   private Rendered renderAndSize(
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens) {
@@ -175,43 +202,42 @@ public class DiffBudgetPlanner {
             .thenComparing(GitHubPullRequestClient.FileDiff::filename));
 
     var reviewableNames = ReviewDiffFormatter.namesOf(reviewable);
-    var sized = new ArrayList<Sized>(ordered.size());
-    var unclippable = new ArrayList<String>();
+    var rendered = new Rendered(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
     for (var file : ordered) {
       var section = formatter.formatFileSection(file, reviewableNames);
       if (diffBudgetTokens <= 0) {
         // The disabled-budgeting path never reads the estimates; skip the BPE pass entirely.
-        sized.add(new Sized(file, section, 0));
+        rendered.sized().add(new Sized(file, section, 0));
       } else {
-        sizeWithinBudget(file, section, diffBudgetTokens, sized, unclippable);
+        sizeWithinBudget(file, section, diffBudgetTokens, rendered);
       }
     }
-    return new Rendered(sized, unclippable);
+    return rendered;
   }
 
   /**
-   * Estimates (clipping if oversized) one file section into {@code sized}, or records it in {@code
-   * unclippable} when no clip fits: content the model would never see must not count as reviewed —
-   * the file is reported by name (holds APPROVE, disclosed) instead of packing a placeholder as
-   * coverage.
+   * Estimates (clipping if oversized) one file section into the rendered result. A clipped file is
+   * recorded so the summary can disclose the partial coverage; a file no clip fits is recorded as
+   * unclippable — content the model would never see must not count as reviewed, so it is reported
+   * by name (holds APPROVE, disclosed) instead of packing a placeholder as coverage.
    */
   private void sizeWithinBudget(
       GitHubPullRequestClient.FileDiff file,
       String section,
       int diffBudgetTokens,
-      List<Sized> sized,
-      List<String> unclippable) {
+      Rendered rendered) {
     var tokens = tokenCounter.estimateTokens(section);
     if (tokens > diffBudgetTokens) {
       var clipped = clipToBudget(section, diffBudgetTokens);
       if (clipped == null) {
-        unclippable.add(file.filename());
+        rendered.unclippable().add(file.filename());
         return;
       }
+      rendered.clipped().add(file.filename());
       section = clipped;
       tokens = tokenCounter.estimateTokens(clipped);
     }
-    sized.add(new Sized(file, section, tokens));
+    rendered.sized().add(new Sized(file, section, tokens));
   }
 
   private static DiffBatch toBatch(List<Sized> sized) {
@@ -250,7 +276,7 @@ public class DiffBudgetPlanner {
     for (var bin : binSections) {
       batches.add(toBatch(bin));
     }
-    return new BudgetPlan(batches, omitted, true);
+    return new BudgetPlan(batches, omitted, rendered.clipped(), true);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */

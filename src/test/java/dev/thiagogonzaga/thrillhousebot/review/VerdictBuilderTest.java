@@ -82,7 +82,7 @@ class VerdictBuilderTest {
     // A budgeted review never sends the legacy diff string, so its line-cap count must not leak
     // into the disclosed omissions and hold approval on a fully covered PR.
     var ctx = contextWithLineCapOmissions(3);
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("big.java"), true);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("big.java"), List.of(), true);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -93,7 +93,7 @@ class VerdictBuilderTest {
   @Test
   void budgetedReviewWithFullCoverageIsNotTruncated() {
     var ctx = contextWithLineCapOmissions(3);
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), true);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -105,7 +105,7 @@ class VerdictBuilderTest {
   @Test
   void disabledBudgetingDisclosesTheLegacyLineCapCount() {
     var ctx = contextWithLineCapOmissions(2);
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), false);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 

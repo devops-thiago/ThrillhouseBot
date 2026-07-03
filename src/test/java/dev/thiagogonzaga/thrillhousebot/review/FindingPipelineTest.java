@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -36,7 +37,9 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,6 +56,7 @@ class FindingPipelineTest {
   @Mock private FindingDeduplicator deduplicator;
   @Mock private FindingVerificationService findingVerificationService;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
+  @Mock private DiffBudgetPlanner budgetPlanner;
 
   private FindingPipeline pipeline;
 
@@ -67,7 +71,9 @@ class FindingPipelineTest {
             findingVerificationService,
             followUpAnalyzer,
             new ObjectMapper(),
-            BotIdentity.from(List.of("thrillhousebot[bot]")));
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            budgetPlanner,
+            new TokenCounter());
     // The post-AI chain is exercised elsewhere; here it passes the response through unchanged so
     // the
     // multi-call orchestration (batch fan-out, aggregation, summary merge) is what's asserted.
@@ -77,6 +83,8 @@ class FindingPipelineTest {
         .thenAnswer(inv -> inv.getArgument(0));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
+    lenient().when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of());
+    lenient().when(budgetPlanner.perCallInputBudget()).thenReturn(Integer.MAX_VALUE);
   }
 
   private static ReviewResponse.Finding finding(String file, String title) {
@@ -118,7 +126,7 @@ class FindingPipelineTest {
 
   private static DiffBudgetPlanner.BudgetPlan multiBatchPlan(List<String> omittedByName) {
     return new DiffBudgetPlanner.BudgetPlan(
-        List.of(batch("a.java"), batch("b.java")), omittedByName, true);
+        List.of(batch("a.java"), batch("b.java")), omittedByName, List.of(), true);
   }
 
   @Test
@@ -166,7 +174,9 @@ class FindingPipelineTest {
     var ctx = reviewContext();
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(batch("clipped.java")), List.of(), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("clipped.java")), List.of(), List.of(), true);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -186,7 +196,8 @@ class FindingPipelineTest {
     var ctx = reviewContext();
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), false);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), List.of(), false);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -195,6 +206,119 @@ class FindingPipelineTest {
 
     assertEquals("raw legacy diff", captor.getValue().diff());
     verify(quoteValidator).validate(any(), eq("raw legacy diff"));
+  }
+
+  @Test
+  void resolvedFromABatchThatNeverSawTheFileIsDemotedToUnresolved() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    // Prior finding #1 lives in b.java, #2 in a.java: only the batch whose slice contains the
+    // file may close it.
+    when(followUpAnalyzer.previousFindingFilesById(any()))
+        .thenReturn(Map.of(1, "b.java", 2, "a.java"));
+
+    // Batch 1 (a.java) hallucinates "resolved" on #1 without ever seeing b.java, but legitimately
+    // resolves #2 (its own slice); batch 2 (b.java) — informed on #1 — says unresolved.
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(
+                    new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks done"),
+                    new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here")),
+                null))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still broken")),
+                null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertEquals(2, result.previousFindingsStatus().size());
+    assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
+    assertEquals("resolved", result.previousFindingsStatus().get(1).status());
+  }
+
+  @Test
+  void summaryFindingsJsonFallsToEmptyWhenNothingFitsTheBudget() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    when(budgetPlanner.perCallInputBudget()).thenReturn(10);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertEquals("[]", captor.getValue().findings());
+  }
+
+  @Test
+  void clippedFilesAreDisclosedAsPartiallyAnalyzedInTheSummaryOverview() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(changedFiles.contains("a.java (modified, +3 -0 — partially analyzed"), changedFiles);
+    assertFalse(changedFiles.contains("b.java (modified, +2 -0 — partially"), changedFiles);
+  }
+
+  @Test
+  void summaryFindingsJsonIsClampedToThePerCallBudget() throws Exception {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    var low = new ReviewResponse.Finding("low", "high", "a.java", 1, "L", "d", "o", "n");
+    var critical = new ReviewResponse.Finding("critical", "high", "b.java", 1, "C", "d", "o", "n");
+
+    // Budget sized so the fixed summary sections plus exactly one finding fit: the critical one
+    // must win the remaining space and the low one is dropped from the serialization only.
+    var tokenCounter = new TokenCounter();
+    var overview = "a.java (modified, +3 -0)\nb.java (modified, +2 -0)\n";
+    var fixedSections =
+        PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d" + overview;
+    var criticalJson = new ObjectMapper().writeValueAsString(List.of(critical));
+    when(budgetPlanner.perCallInputBudget())
+        .thenReturn(
+            tokenCounter.estimateTokens(fixedSections)
+                + tokenCounter.estimateTokens(criticalJson)
+                + 1);
+
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(low), List.of(), null))
+        .thenReturn(new ReviewResponse(List.of(critical), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    // The response keeps every finding; only the summary-call serialization is clamped, keeping
+    // the most severe finding.
+    assertEquals(2, result.findings().size());
+    var serialized = captor.getValue().findings();
+    assertTrue(serialized.contains("\"C\""), serialized);
+    assertFalse(serialized.contains("\"L\""), serialized);
   }
 
   @Test
@@ -225,7 +349,8 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java", "b.java"), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java", "b.java"), List.of(), true);
     var summary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "too large", "unknown", List.of());
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))
@@ -249,7 +374,7 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template =
         new AiReviewService.PromptInputs("(no changes detected)", "ctx", "base", "s", "t", "", "");
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), true);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -294,7 +419,9 @@ class FindingPipelineTest {
             findingVerificationService,
             followUpAnalyzer,
             throwingMapper,
-            BotIdentity.from(List.of("thrillhousebot[bot]")));
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            budgetPlanner,
+            new TokenCounter());
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
