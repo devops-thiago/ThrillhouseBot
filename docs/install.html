@@ -31,7 +31,9 @@
   <h2>1. Where will the bot run?</h2>
   <p>
     Enter the public hostname where GitHub will reach your bot (for local dev
-    with <a href="https://smee.io/">Smee.io</a>, use your Smee channel URL).
+    with <a href="https://smee.io/">Smee.io</a>, use your Smee channel URL —
+    webhooks are then registered at the channel root, which the smee client
+    forwards to the bot's local <code>/api/webhook</code>).
     The manifest is built right here in your browser; nothing is sent anywhere
     until you submit it to GitHub.
   </p>
@@ -102,11 +104,14 @@
       if (!url.hostname || !url.hostname.includes(".")) return null;
       // Keep a path (e.g. a Smee channel) but drop any trailing slash.
       const base = url.origin + url.pathname;
-      return base.replace(/\/+$/, "");
+      // Smee delivers webhooks only at the channel root; the smee client
+      // forwards them to the bot's local /api/webhook.
+      return { base: base.replace(/\/+$/, ""), isSmee: /(^|\.)smee\.io$/i.test(url.hostname) };
     }
 
     function update() {
-      const base = normalizeOrigin(hostInput.value);
+      const normalized = normalizeOrigin(hostInput.value);
+      const base = normalized && normalized.base;
       if (!base) {
         submitBtn.disabled = true;
         previewUrl.textContent = previewWebhook.textContent = previewCallback.textContent = "—";
@@ -115,12 +120,13 @@
           : "";
         return;
       }
+      const webhookUrl = normalized.isSmee ? base : base + "/api/webhook";
       const manifest = {
         name: "ThrillhouseBot",
         url: base,
         description: "AI-powered GitHub PR reviewer",
         hook_attributes: {
-          url: base + "/api/webhook",
+          url: webhookUrl,
           active: true
         },
         redirect_url: base,
@@ -144,7 +150,7 @@
         request_oauth_on_install: false
       };
       previewUrl.textContent = base;
-      previewWebhook.textContent = base + "/api/webhook";
+      previewWebhook.textContent = webhookUrl;
       previewCallback.textContent = base + "/api/auth/callback";
       manifestInput.value = JSON.stringify(manifest);
       submitBtn.disabled = false;

@@ -158,7 +158,9 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 1. Open the hosted installer at
    [devops-thiago.github.io/ThrillhouseBot/install.html](https://devops-thiago.github.io/ThrillhouseBot/install.html),
    type the public hostname where the bot will run (for local dev with
-   [Smee.io](https://smee.io/), your Smee channel URL host), and click
+   [Smee.io](https://smee.io/), your Smee channel URL — the webhook is then
+   registered at the channel root, which the smee client forwards to the
+   bot's local `/api/webhook`), and click
    **Create ThrillhouseBot GitHub App**. GitHub creates the app from the manifest.
 
    <details>
