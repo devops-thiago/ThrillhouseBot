@@ -157,7 +157,8 @@ public class FindingPipeline {
               promptInputs.previousFindings());
       allFindings.addAll(verified.findings());
       batchStatuses.add(
-          scopeStatusesToBatch(batchResponse.previousFindingsStatus(), batch, previousFilesById));
+          scopeStatusesToBatch(
+              batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
     }
 
     // Finishing chain over the union — quote validation and verification already ran per batch.
@@ -218,16 +219,18 @@ public class FindingPipeline {
 
   /**
    * Keeps a batch's "resolved"/"justified" claims only for prior findings whose file was provably
-   * in that batch's diff slice — a batch that never saw the fix has no evidence to close the
-   * finding, and its claim must not outrank an informed "unresolved". A status whose prior finding
-   * cannot be mapped to a file is demoted too: with no mapping, no batch can prove it saw the
-   * finding, and letting the claim through would bypass the scoping entirely (e.g. when the prior
-   * context came from the unstructured review-body fallback). "unresolved" always passes — it is
-   * the no-evidence default.
+   * in that batch's diff slice <em>in full</em> — a batch that never saw the fix has no evidence to
+   * close the finding, and its claim must not outrank an informed "unresolved". Hunk-clipped files
+   * are excluded from the provably-seen set: the batch carried only their leading hunks, and the
+   * fix could live in the unseen tail. A status whose prior finding cannot be mapped to a file is
+   * demoted too: with no mapping, no batch can prove it saw the finding, and letting the claim
+   * through would bypass the scoping entirely (e.g. when the prior context came from the
+   * unstructured review-body fallback). "unresolved" always passes — it is the no-evidence default.
    */
   private static List<ReviewResponse.PreviousFindingStatus> scopeStatusesToBatch(
       List<ReviewResponse.PreviousFindingStatus> statuses,
       DiffBudgetPlanner.DiffBatch batch,
+      DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById) {
     if (statuses.isEmpty()) {
       return statuses;
@@ -236,6 +239,7 @@ public class FindingPipeline {
     for (var file : batch.files()) {
       batchFiles.add(file.filename());
     }
+    plan.clippedFiles().forEach(batchFiles::remove);
     var scoped = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
       var closing = statusRank(status.status()) > 0;
@@ -243,7 +247,7 @@ public class FindingPipeline {
       if (closing && (file == null || !batchFiles.contains(file))) {
         scoped.add(
             new ReviewResponse.PreviousFindingStatus(
-                status.id(), "unresolved", "finding's file not in this batch's diff slice"));
+                status.id(), "unresolved", "finding's file not fully in this batch's diff slice"));
         continue;
       }
       scoped.add(status);

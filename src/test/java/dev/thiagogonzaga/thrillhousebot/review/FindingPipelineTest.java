@@ -252,6 +252,33 @@ class FindingPipelineTest {
   }
 
   @Test
+  void resolvedFromABatchThatOnlySawTheClippedFileIsDemoted() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    // Prior finding #1 lives in a.java — which is in batch 1's slice, but hunk-clipped: the batch
+    // saw only its leading hunks, so it cannot prove the fix in the unseen tail.
+    when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "a.java"));
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks fixed")),
+                null))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertEquals(1, result.previousFindingsStatus().size());
+    assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
+  }
+
+  @Test
   void oversizedOverviewIsClampedWithARollupNote() {
     var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
     var ctx = reviewContext();
