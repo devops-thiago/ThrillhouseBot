@@ -33,7 +33,9 @@
     Enter the public hostname where GitHub will reach your bot (for local dev
     with <a href="https://smee.io/">Smee.io</a>, use your Smee channel URL —
     webhooks are then registered at the channel root, which the smee client
-    forwards to the bot's local <code>/api/webhook</code>).
+    forwards to the bot's local <code>/api/webhook</code>, and the OAuth
+    callback points at <code>http://localhost:8080</code>, where your browser
+    reaches the bot directly).
     The manifest is built right here in your browser; nothing is sent anywhere
     until you submit it to GitHub.
   </p>
@@ -121,6 +123,11 @@
         return;
       }
       const webhookUrl = normalized.isSmee ? base : base + "/api/webhook";
+      // Smee only relays webhook POSTs; OAuth redirects happen in the
+      // operator's browser, which reaches the local bot directly.
+      const callbackUrl = normalized.isSmee
+        ? "http://localhost:8080/api/auth/callback"
+        : base + "/api/auth/callback";
       const manifest = {
         name: "ThrillhouseBot",
         url: base,
@@ -131,7 +138,7 @@
         },
         redirect_url: base,
         callback_urls: [
-          base + "/api/auth/callback"
+          callbackUrl
         ],
         public: false,
         default_events: [
@@ -151,7 +158,7 @@
       };
       previewUrl.textContent = base;
       previewWebhook.textContent = webhookUrl;
-      previewCallback.textContent = base + "/api/auth/callback";
+      previewCallback.textContent = callbackUrl;
       manifestInput.value = JSON.stringify(manifest);
       submitBtn.disabled = false;
       status.textContent = "";
