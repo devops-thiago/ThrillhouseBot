@@ -156,6 +156,18 @@ class AckReactionServiceTest {
 
   @Test
   void shouldRestoreInterruptFlagWhenInterrupted() {
+    // Block the reaction so the wait cannot return before noticing the interrupt — Future.get only
+    // throws InterruptedException when it actually has to wait, so an already-completed task would
+    // race past the interrupted path.
+    var release = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              release.await(5, TimeUnit.SECONDS);
+              return null;
+            })
+        .when(reactionClient)
+        .createIssueCommentReaction(
+            anyString(), anyString(), anyString(), anyString(), anyLong(), any());
     Thread.currentThread().interrupt();
 
     assertDoesNotThrow(
@@ -163,5 +175,6 @@ class AckReactionServiceTest {
 
     // The interrupt is swallowed for the caller but must stay visible on the thread.
     assertTrue(Thread.interrupted());
+    release.countDown();
   }
 }
