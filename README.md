@@ -210,7 +210,7 @@ variables are the ones you will change per provider:
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, base comparison, budgeting-disabled review); `0` falls back to a 5000-line guard | `0` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, base comparison, budgeting-disabled review); token-budgeted review calls ignore it; `0` disables the cap | `5000` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |

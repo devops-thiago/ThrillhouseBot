@@ -153,10 +153,10 @@ public interface ThrillhouseConfig {
      * Line cap on single-call diff renders: the on-demand commands (/describe, /changelog,
      * /add-docs), maintainer replies, the base comparison, and the budgeting-disabled legacy
      * review. Token-budgeted review calls are governed by {@link #maxInputTokens()} instead (#53).
-     * Defaults to 0, which falls back to the pre-#53 5000-line guard rather than leaving those
-     * single calls unbounded; set it explicitly to change the bound.
+     * Keeps its pre-#53 default and released semantics: 5000 lines, and an explicit {@code 0} turns
+     * the cap off (unbounded render).
      */
-    @WithDefault("0")
+    @WithDefault("5000")
     @WithName("max-diff-lines")
     int maxDiffLines();
 

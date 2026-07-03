@@ -256,18 +256,20 @@ public class ReviewDiffFormatter {
    * Line cap applied to every render from this class. Token-budgeted review calls never use these
    * renders (the planner sections and clips per batch), so everything here is a single AI call —
    * the on-demand commands, maintainer replies, the base comparison, and the budgeting-disabled
-   * legacy review — and must keep the pre-#53 guard: with {@code max-diff-lines} retired to 0, the
-   * old 5000-line default becomes the fallback instead of leaving those calls unbounded.
+   * legacy review — guarded by the 5000-line config default. An explicit {@code max-diff-lines=0}
+   * keeps its released meaning: the cap is off and the render is unbounded.
    */
-  private int effectiveMaxLines() {
-    return maxDiffLines > 0 ? maxDiffLines : SINGLE_CALL_FALLBACK_MAX_LINES;
-  }
-
-  static final int SINGLE_CALL_FALLBACK_MAX_LINES = 5000;
-
   private FormattedDiff formatWithLineBudget(
       String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {
-    var maxLines = effectiveMaxLines();
+    var maxLines = maxDiffLines;
+    if (maxLines <= 0) {
+      var sb = new StringBuilder(header);
+      for (var file : files) {
+        sb.append(formatFileSection(file, reviewableNames));
+      }
+      return new FormattedDiff(sb.toString(), 0);
+    }
+
     var output = new StringBuilder(header);
     var usedLines = lineCount(header);
     var omitted = new ArrayList<GitHubPullRequestClient.FileDiff>();
@@ -314,7 +316,7 @@ public class ReviewDiffFormatter {
 
   void appendTruncationFooter(
       StringBuilder output, List<GitHubPullRequestClient.FileDiff> omitted, int usedLines) {
-    var maxLines = effectiveMaxLines();
+    var maxLines = maxDiffLines;
     if (maxLines - usedLines < 1) {
       return;
     }
