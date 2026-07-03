@@ -114,30 +114,48 @@ public final class ReviewDispatcher {
   private void drainReviews(PrKey key, PerPrState state) {
     while (true) {
       var batch = state.takeNextReview();
-      logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
 
-      try {
-        var surfaced = orchestrator.review(batch.request());
-        // Start the throttle window only when a review was actually posted, and at completion
-        // (not dispatch) so a long-running review does not eat into it. A failed review must not
-        // block the retry on the next push, and manual reviews never shift the automatic window.
-        if (surfaced && !batch.request().isManualTrigger()) {
-          autoReviewRateLimiter.recordCompletion(
-              batch.request().owner(), batch.request().repo(), batch.request().prNumber());
-        }
-      } catch (RuntimeException e) {
-        log.error(
-            "Review failed for {}/{} #{}",
-            batch.request().owner(),
-            batch.request().repo(),
-            batch.request().prNumber(),
-            e);
+      // The controller's rate-limit gate ran before dispatch, but a request coalesced behind an
+      // in-flight review passed that gate before the window opened — re-check here so it cannot
+      // run a second automatic review right after the one that just recorded its completion.
+      var req = batch.request();
+      if (!req.isManualTrigger()
+          && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+        log.info(
+            "Skipping coalesced automatic review for {}/{} #{} — within the auto-review "
+                + "rate window (manual /review bypasses)",
+            req.owner(),
+            req.repo(),
+            req.prNumber());
+      } else {
+        reviewBatch(batch);
       }
 
       if (state.tryRetireIfIdle()) {
         states.remove(key, state);
         return;
       }
+    }
+  }
+
+  private void reviewBatch(PerPrState.ReviewBatch batch) {
+    logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
+    try {
+      var surfaced = orchestrator.review(batch.request());
+      // Start the throttle window only when a review was actually posted, and at completion
+      // (not dispatch) so a long-running review does not eat into it. A failed review must not
+      // block the retry on the next push, and manual reviews never shift the automatic window.
+      if (surfaced && !batch.request().isManualTrigger()) {
+        autoReviewRateLimiter.recordCompletion(
+            batch.request().owner(), batch.request().repo(), batch.request().prNumber());
+      }
+    } catch (RuntimeException e) {
+      log.error(
+          "Review failed for {}/{} #{}",
+          batch.request().owner(),
+          batch.request().repo(),
+          batch.request().prNumber(),
+          e);
     }
   }
 

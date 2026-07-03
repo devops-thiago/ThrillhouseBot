@@ -26,6 +26,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -360,6 +361,75 @@ class ReviewDispatcherTest {
     // A manual /review must not shift the automatic throttle window.
     verify(orchestrator, timeout(2000)).review(req);
     verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+  }
+
+  @Test
+  void shouldSkipCoalescedAutomaticReviewWithinWindow() throws InterruptedException {
+    // Simulate the real limiter: throttled from the moment a completion is recorded.
+    var throttled = new java.util.concurrent.atomic.AtomicBoolean(false);
+    when(rateLimiter.isThrottled(anyString(), anyString(), anyInt()))
+        .thenAnswer(invocation -> throttled.get());
+    doAnswer(
+            invocation -> {
+              throttled.set(true);
+              return null;
+            })
+        .when(rateLimiter)
+        .recordCompletion(anyString(), anyString(), anyInt());
+
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              started.countDown();
+              release.await(5, TimeUnit.SECONDS);
+              return true;
+            })
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 17, "sha1"));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    // A push during the in-flight review passed the controller gate before the window opened...
+    dispatcher.dispatch(reviewRequest("owner", "repo", 17, "sha2"));
+    release.countDown();
+
+    awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
+
+    // ...but the drain loop re-checks, so only the first review runs and only one window starts.
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(rateLimiter, times(1)).recordCompletion("owner", "repo", 17);
+  }
+
+  @Test
+  void shouldRunCoalescedManualReviewWithinWindow() throws InterruptedException {
+    // Even a closed window must not hold back an explicit /review that coalesced behind an
+    // in-flight automatic run.
+    when(rateLimiter.isThrottled(anyString(), anyString(), anyInt())).thenReturn(true);
+
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var manualReq =
+        new ReviewOrchestrator.ReviewRequest(
+            "owner", "repo", 18, "", "(manual)", "", "", "main", 1L, true);
+    doAnswer(
+            invocation -> {
+              started.countDown();
+              release.await(5, TimeUnit.SECONDS);
+              return true;
+            })
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+
+    dispatcher.dispatch(
+        new ReviewOrchestrator.ReviewRequest(
+            "owner", "repo", 18, "", "(manual)", "", "", "main", 1L, true));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    dispatcher.dispatch(manualReq);
+    release.countDown();
+
+    verify(orchestrator, timeout(5000).times(2))
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
   @Test
