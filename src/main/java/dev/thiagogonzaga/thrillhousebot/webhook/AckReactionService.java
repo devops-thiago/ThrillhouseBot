@@ -84,7 +84,10 @@ public class AckReactionService {
     reactionExecutor.shutdownNow();
   }
 
-  /** Reacts 👀 on the triggering comment; never throws, never waits past the timeout. */
+  /**
+   * Reacts 👀 on the triggering comment; never throws on expected failures and never waits past the
+   * timeout. Only a fatal {@link Error} (OOM, etc.) propagates to the caller.
+   */
   public void addEyes(
       long installationId, String owner, String repo, long commentId, CommentKind kind) {
     var timeout = config.review().ackReactionTimeout();
