@@ -37,12 +37,7 @@ public interface GitHubCommentClient {
       @PathParam("issueNumber") int issueNumber,
       CreateCommentRequest request);
 
-  // GitHub serves 30 issue comments per page by default; request the 100 max and walk a bounded
-  // number of pages so the bot's summary is not missed on a busy PR. Comments are returned
-  // oldest-first and the summary is posted on the first review, so it normally sits among the
-  // earliest comments — but on a PR that already had many comments before that first review the
-  // summary can fall past page 1, and a single-page fetch would miss it and re-post a duplicate
-  // summary.
+  // GitHub serves 30 issue comments per page by default; 100 is the maximum.
   int COMMENTS_PER_PAGE = 100;
   int MAX_COMMENT_PAGES = 10;
 

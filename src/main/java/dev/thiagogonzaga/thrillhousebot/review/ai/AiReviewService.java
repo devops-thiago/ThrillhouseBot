@@ -199,9 +199,7 @@ public class AiReviewService {
               token -> handlePartialToken(token, buffer, flushStream, cancelled, lastFlushNanos))
           .onCompleteResponse(
               response -> handleCompleteResponse(response, result, buffer, flushStream, cancelled))
-          // langchain4j requires exactly one of onError/ignoreErrors — never add ignoreErrors
-          // here: AiServiceTokenStream.start() rejects the chain with both registered
-          // (FakeTokenStream enforces the same contract so tests catch it)
+          // langchain4j requires exactly one of onError/ignoreErrors; start() rejects both.
           .onError(error -> handleStreamError(error, result, flushStream, cancelled))
           .start();
 
@@ -220,13 +218,9 @@ public class AiReviewService {
       throw new AiReviewException("AI review interrupted", 1, e);
     } finally {
       cancelled.set(true);
-      // Deregister this attempt on every exit, so a late callback from a dead stream can never
-      // record session data — the retry backoff window, the final attempt, and any exit path
-      // added later are all covered structurally. Tokens billed by a stream that completes
-      // after the client-side timeout are deliberately not attributed to the session (the OTel
-      // cost counter still records them globally). On the success path this is safe because
-      // langchain4j notifies ChatModelListener.onResponse before completing the handler that
-      // resolves the future — pinned by StreamingChatModelListenerOrderingTest.
+      // Invalidate on every exit so a late callback from a dead stream never records session
+      // data. Safe on success: langchain4j notifies ChatModelListener.onResponse before
+      // completing the handler that resolves the future.
       ReviewSessionContext.invalidate(session.id);
       ReviewSessionContext.clear();
     }
@@ -263,7 +257,7 @@ public class AiReviewService {
     }
     try {
       flushStream.run();
-      // ChatResponse guarantees a non-null aiMessage; its text may still be null
+      // ChatResponse guarantees a non-null aiMessage; its text may still be null.
       var text = buffer.textOrFallback(response.aiMessage().text());
       result.complete(parser.parse(text));
     } catch (RuntimeException e) {

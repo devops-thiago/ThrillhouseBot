@@ -96,7 +96,7 @@ public class AckReactionService {
     try {
       reaction.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
     } catch (TimeoutException _) {
-      // Abandon the wait but let the POST finish in the background — a late 👀 is still useful.
+      // Abandon the wait; the POST may still finish in the background.
       log.warn(
           "👀 ack reaction on {} comment {} on {}/{} exceeded {} on the ACK path — continuing"
               + " without waiting",
@@ -106,8 +106,7 @@ public class AckReactionService {
           repo,
           timeout);
     } catch (ExecutionException e) {
-      // Best-effort on an expected runtime failure, but let a fatal Error (OOM, etc.) propagate as
-      // it would have before the reaction ran on a separate thread, rather than masking it.
+      // Best-effort on runtime failure; let fatal Errors propagate from the worker thread.
       if (e.getCause() instanceof Error error) {
         throw error;
       }

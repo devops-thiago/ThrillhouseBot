@@ -36,8 +36,7 @@ public class DocGenerationParser {
       throw new IllegalArgumentException("Model returned an empty response");
     }
     try {
-      // Reuse the review parser's fence/noise stripping so a model that wraps its JSON in ```json
-      // fences or leading prose still parses.
+      // Models sometimes wrap the JSON in ```json fences or leading prose.
       return mapper.readValue(ReviewResponseParser.extractJson(raw), DocGenerationResponse.class);
     } catch (IOException e) {
       throw new IllegalArgumentException("Model response is not valid add-docs JSON", e);

@@ -47,8 +47,7 @@ public class ReviewThreadService {
       }
       """;
 
-  // A PR with more review threads than this (100 per page) is far beyond anything realistic; the
-  // bound just stops a malformed pageInfo from looping forever.
+  // Stops a malformed pageInfo from looping forever.
   private static final int MAX_THREAD_PAGES = 20;
 
   private static final String RESOLVE_MUTATION =

@@ -179,19 +179,12 @@ public class FindingDeduplicator {
             .map(f -> RiskLevel.fromString(f.risk()))
             .sorted(Comparator.naturalOrder())
             .toList();
-    // The list is sorted most-severe first (RiskLevel natural order is CRITICAL..LOW). An odd
-    // cluster uses the true median so a lone outlier cannot decide the severity; an even cluster
-    // has
-    // no single middle, so take the more severe of the two central values (the lower index) — never
-    // the less severe — so a single hedged duplicate cannot downgrade a blocking finding.
+    // RiskLevel natural order is most-severe-first (CRITICAL..LOW); an even cluster takes the more
+    // severe of the two central values (the lower index).
     int mid = ranked.size() / 2;
     RiskLevel severity = ranked.size() % 2 == 0 ? ranked.get(mid - 1) : ranked.get(mid);
-    // Confidence stays paired with the chosen severity: the highest confidence among the members
-    // that carry it. Taking it from an arbitrary member could either defuse a blocking
-    // critical/high-confidence finding via a hedged duplicate, or synthesize a blocking pair no
-    // single member ever asserted. Confidence is declared most-certain-first (HIGH < MEDIUM < LOW
-    // in
-    // natural order), so min() selects the highest confidence.
+    // Confidence natural order is most-certain-first (HIGH < MEDIUM < LOW), so min() selects the
+    // highest confidence among members carrying the chosen severity.
     Confidence confidence =
         cluster.stream()
             .filter(f -> RiskLevel.fromString(f.risk()) == severity)

@@ -147,9 +147,6 @@ public class MaintainerReplyService {
     var root = findRoot(comments, task.rootCommentId());
     boolean rootIsBot =
         root != null && root.user() != null && triggerDetector.isBotComment(root.user().login());
-    // Only answer when the maintainer is actually addressing the bot: a reply on the bot's own
-    // finding thread, or an explicit mention. A reply between two humans on a human-started thread
-    // must not pull the bot in.
     if (!task.mentioned() && !rootIsBot) {
       Log.debugf(
           "Skipping review-thread reply on %s/%s #%d — not a bot thread and no mention",
@@ -260,8 +257,6 @@ public class MaintainerReplyService {
       long triggeringCommentId) {
     var sb = new StringBuilder();
     for (var c : comments) {
-      // Keep only the other replies on this thread: skip non-replies, replies to a different root,
-      // and the message that triggered this reply.
       if (c.inReplyToId() == null
           || c.inReplyToId() != rootCommentId
           || c.id() == triggeringCommentId) {

@@ -35,8 +35,8 @@ public record ReviewResult(
     List<CiCheck> offendingCiChecks,
     int omittedFiles,
     boolean ciUnreadable,
-    // False when the required-context set could not be resolved and every check is gated; the
-    // rendered CI copy then drops "required".
+    // False when the required-context set could not be resolved; rendered CI copy then drops
+    // "required".
     boolean requiredContextsKnown,
     TruncationDetail truncation) {
   public ReviewResult {
@@ -44,8 +44,7 @@ public record ReviewResult(
     previousStatuses = List.copyOf(previousStatuses);
     offendingCiChecks = offendingCiChecks == null ? List.of() : List.copyOf(offendingCiChecks);
     truncation = truncation == null ? TruncationDetail.EMPTY : truncation;
-    // Check-run conclusion derivation relies on a non-null state; fall back to the
-    // canonical risk mapping rather than NPE on an inconsistent record
+    // Check-run conclusion derivation relies on a non-null state.
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
@@ -173,11 +172,8 @@ public record ReviewResult(
     return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
   }
 
-  // A backstop-held finding can be summary-only — its flagged line was outside the diff when first
-  // raised, so it was never posted as an inline comment and has no thread to reply on.
-  // The guidance therefore qualifies the reply path ("where one exists") instead of promising a
-  // thread that may not be there; fixing the code, or a model resolved/justified verdict, still
-  // clears such a finding.
+  // A backstop-held finding may have no inline thread (its line was outside the diff when raised),
+  // hence the "where one exists" qualifier.
   public static String unresolvedPreviousMessage(long unresolved) {
     return String.format(
         "No new issues in this revision, but %d previous finding(s) remain unresolved — "

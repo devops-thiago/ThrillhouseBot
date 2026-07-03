@@ -466,8 +466,8 @@ public class FollowUpAnalyzer {
         if (!isSameFinding(finding, prior)) {
           continue;
         }
-        // Marker indices are only meaningful within their own round; across rounds the same
-        // index names unrelated findings, so the thread is located by file and title instead
+        // Marker indices are only meaningful within their own round; across rounds the same index
+        // names unrelated findings, so the thread is located by file and title instead.
         if (answeredRootComment(prior, inlineComments, botIdentity) != null) {
           return prior;
         }
@@ -481,21 +481,11 @@ public class FollowUpAnalyzer {
     if (finding.file() == null || !FilePaths.same(finding.file(), prior.file())) {
       return false;
     }
-    // Same file + close lines + similar title is the same finding re-raised. Severity is NOT part
-    // of identity: two distinct findings that merely share a severity (or both carry null/unknown
-    // risk, which maps to LOW) near the same line are different defects and must not be collapsed —
-    // doing so silently dropped a new finding whenever a same-severity neighbour had been replied
-    // to. A paraphrased re-raise whose title drifted is still caught by the content-overlap
-    // fallback below.
     if (Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE
         && FindingDeduplicator.titleSimilarity(finding.title(), prior.title())
             >= FindingDeduplicator.TITLE_SIMILARITY_THRESHOLD) {
       return true;
     }
-    // Paraphrased re-raises drift in both wording and line numbers as the PR evolves
-    // (observed: 29 lines and 0.12 title similarity); same file plus strongly overlapping
-    // title+description still identifies them, and suppression only ever fires when the
-    // prior thread carries a maintainer reply
     return FindingDeduplicator.contentOverlap(finding, prior)
         >= FindingDeduplicator.CONTENT_OVERLAP_THRESHOLD;
   }
@@ -877,7 +867,7 @@ public class FollowUpAnalyzer {
     var lastBotReview =
         priorReviews.stream()
             .filter(r -> botIdentity.matches(r.user().login()))
-            .reduce((first, second) -> second); // get last
+            .reduce((first, second) -> second);
 
     if (lastBotReview.isEmpty()) return "";
 

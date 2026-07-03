@@ -215,9 +215,6 @@ public class DocGenerationService {
       String commitSha,
       List<GitHubPullRequestClient.FileDiff> reviewable,
       DocGenerationResponse response) {
-    // `reviewable` is the already ignore-glob-filtered list the caller computed, so use the
-    // overload
-    // that trusts that filter rather than re-walking the glob here.
     var lineResolver = new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewable));
     int cap = config.review().maxReviewComments();
     int suggestions = 0;
@@ -226,8 +223,6 @@ public class DocGenerationService {
     var docs = response.docs();
     for (int i = 0; i < docs.size(); i++) {
       if (suggestions + notes >= cap) {
-        // Count the postable docs we're dropping because the cap is reached, so the summary can
-        // disclose them rather than silently under-documenting the PR.
         skippedByCap =
             (int) docs.subList(i, docs.size()).stream().filter(d -> d.isPostable()).count();
         Log.debugf(
@@ -257,10 +252,9 @@ public class DocGenerationService {
       DiffLineResolver lineResolver) {
     boolean multiLine = doc.suggestionOld().strip().contains("\n");
     var resolved = lineResolver.resolveRightSideLine(doc.file(), doc.line());
-    // A single-line docstring is anchored at doc.line() itself, so a snapped-to neighbour would
-    // rewrite the wrong line on commit — drop a near miss. A multi-line declaration is anchored by
-    // its verbatim range (below), so the exact line isn't required; only that the file is in the
-    // diff, which also gives the note fallback a valid line to attach to.
+    // A single-line docstring must anchor at doc.line() exactly — a snapped-to neighbour would
+    // rewrite the wrong line on commit. A multi-line declaration is anchored by its verbatim
+    // range below, so it only needs the file to be in the diff.
     if (resolved.isEmpty() || (!multiLine && resolved.getAsInt() != doc.line())) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — declaration line is not in the diff",
@@ -273,19 +267,13 @@ public class DocGenerationService {
           doc.file(), doc.line());
       return DocPostResult.SKIPPED;
     }
-    // A wrapped declaration spans several lines, so a committable suggestion must overwrite the
-    // whole span, not just doc.line() — otherwise the commit replaces only the first line and
-    // leaves
-    // the rest in place, corrupting the file. Resolve the range from the verbatim old code's
-    // position in the diff, which also anchors it independently of doc.line().
+    // A multi-line suggestion must overwrite the whole declaration span, not just doc.line() —
+    // otherwise the commit replaces only the first line and corrupts the file.
     var range =
         multiLine
             ? lineResolver.resolveSuggestionRange(doc.file(), doc.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
     if (multiLine && range.isEmpty()) {
-      // The multi-line declaration can't be anchored to a single hunk, so a committable suggestion
-      // would mis-apply. Still surface the missing-docs problem: post a note (anchored at the
-      // nearest in-diff line) with the drafted docs to add manually, rather than dropping it.
       boolean posted =
           postInline(
               auth,
@@ -365,8 +353,6 @@ public class DocGenerationService {
   private String baseSummaryMessage(DocGenerationResponse response, DocPostOutcome outcome) {
     int suggestions = outcome.suggestions();
     int notes = outcome.notes();
-    // When the per-run comment cap stopped further docs, disclose it rather than silently
-    // under-documenting the PR — the maintainer needs to know to re-run after addressing these.
     String capSuffix =
         outcome.skippedByCap() > 0
             ? " "
@@ -392,8 +378,6 @@ public class DocGenerationService {
           + capSuffix;
     }
     if (notes > 0) {
-      // Notes have no committable ```suggestion block, so don't tell the maintainer to "commit"
-      // them.
       return "📝 ThrillhouseBot drafted documentation for **"
           + notes
           + "** symbol(s) it couldn't post as committable suggestions (the declaration doesn't map"
@@ -401,8 +385,6 @@ public class DocGenerationService {
           + capSuffix;
     }
     if (outcome.skippedByCap() > 0) {
-      // Nothing posted, but the cap (e.g. maxReviewComments=0) stopped postable docs. Disclose the
-      // cap rather than falling through to COULD_NOT_PLACE, which would wrongly blame anchoring.
       return "📝 ThrillhouseBot posted no documentation: the per-run comment cap was reached, so **"
           + outcome.skippedByCap()
           + "** changed symbol(s) were not documented. Raise the comment cap or re-run `/add-docs`.";
@@ -410,8 +392,7 @@ public class DocGenerationService {
     return response.docs().isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
   }
 
-  // The command-specific guidance line for the repository-instructions section
-  // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
+  // Command-specific guidance for the repository-instructions section.
   private static final String INSTRUCTIONS_GUIDANCE =
       "The repository maintainers have provided these guidelines; respect them when writing"
           + " documentation.\n";

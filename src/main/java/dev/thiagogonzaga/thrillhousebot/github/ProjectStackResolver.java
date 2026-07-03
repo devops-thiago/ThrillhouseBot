@@ -82,7 +82,7 @@ public class ProjectStackResolver {
 
   private record CachedStack(String content, long expiresAt) {}
 
-  // Package-private so tests can inspect cache state without reflection
+  // Package-private for tests.
   final ConcurrentHashMap<String, CachedStack> cache = new ConcurrentHashMap<>();
 
   private final GitHubAuthClient authClient;
@@ -153,11 +153,11 @@ public class ProjectStackResolver {
     try {
       var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
       if (file.content() == null) {
-        // Directories, submodules, and oversized files come back without base64 content
+        // Directories, submodules, and oversized files come back without base64 content.
         log.debug("No content for manifest at {} in {}/{}", path, owner, repo);
         return Optional.empty();
       }
-      // GitHub wraps base64 content in newlines — the MIME decoder tolerates them
+      // GitHub wraps base64 content in newlines — the MIME decoder tolerates them.
       var content =
           new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
       if (content.isBlank()) {
@@ -196,8 +196,6 @@ public class ProjectStackResolver {
     return "### " + path + "\n" + summary;
   }
 
-  // Plain string scans instead of regexes: manifest content comes from arbitrary repos, and
-  // backtracking-prone patterns over attacker-controlled input are a DoS vector (java:S5852)
   private static String mavenArtifacts(String content) {
     var artifacts = new LinkedHashSet<String>();
     var index = 0;

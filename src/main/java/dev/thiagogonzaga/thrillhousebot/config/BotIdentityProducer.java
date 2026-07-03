@@ -36,8 +36,7 @@ public class BotIdentityProducer {
    * @param config the application configuration providing {@code github.bot-logins}
    * @return the immutable identity shared by all review-pipeline collaborators
    */
-  // @Singleton (not @ApplicationScoped): BotIdentity is a record (final), so it can't be proxied by
-  // a normal scope; a pseudo-scope still gives one shared instance for the immutable value.
+  // @Singleton: BotIdentity is a record (final), so a normal scope can't proxy it.
   @Produces
   @Singleton
   public BotIdentity botIdentity(ThrillhouseConfig config) {
