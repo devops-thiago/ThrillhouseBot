@@ -119,7 +119,7 @@ class AckReactionServiceTest {
   }
 
   @Test
-  void shouldStopWaitingWhenReactionExceedsTimeout() throws Exception {
+  void shouldStopWaitingWhenReactionExceedsTimeout() {
     when(reviewConfig.ackReactionTimeout()).thenReturn(Duration.ofMillis(50));
     var release = new CountDownLatch(1);
     doAnswer(
