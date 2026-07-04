@@ -45,6 +45,13 @@ gh api --method POST /app-manifests/<code>/conversions \
     `DASHBOARD_URL=http://localhost:8080` in the generated `.env` — dashboard
     login only works when `DASHBOARD_URL` matches the registered callback.
 
+    Webhooks land on the Smee channel, so also run the relay client to
+    forward them to the bot (keep it running alongside the bot):
+
+    ```bash
+    npx smee-client -u https://smee.io/YOUR_CHANNEL -t http://localhost:8080/api/webhook
+    ```
+
 ??? note "Manual registration instead"
 
     Prefer to register the app by hand? Create it at
