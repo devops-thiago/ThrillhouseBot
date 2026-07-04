@@ -68,6 +68,8 @@ class StartupConfigValidatorTest {
     private int outputBufferTokens = 8192;
     private int maxAiCalls = 6;
     private double tokenSafetyMargin = 0.9;
+    private boolean reasoningEnabled = false;
+    private String reasoningEffort = "low";
 
     ConfigBuilder appId(String v) {
       this.appId = v;
@@ -119,14 +121,30 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder reasoningEnabled(boolean v) {
+      this.reasoningEnabled = v;
+      return this;
+    }
+
+    ConfigBuilder reasoningEffort(String v) {
+      this.reasoningEffort = v;
+      return this;
+    }
+
     StartupConfigValidator build() {
       var config = mock(ThrillhouseConfig.class);
       var github = mock(ThrillhouseConfig.GitHubConfig.class);
       var dashboard = mock(ThrillhouseConfig.DashboardConfig.class);
       var review = mock(ThrillhouseConfig.ReviewConfig.class);
+      var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
+      var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
       lenient().when(config.github()).thenReturn(github);
       lenient().when(config.dashboard()).thenReturn(dashboard);
       lenient().when(config.review()).thenReturn(review);
+      lenient().when(config.ai()).thenReturn(ai);
+      lenient().when(ai.reasoning()).thenReturn(reasoning);
+      lenient().when(reasoning.enabled()).thenReturn(reasoningEnabled);
+      lenient().when(reasoning.effort()).thenReturn(reasoningEffort);
       lenient().when(github.appId()).thenReturn(appId);
       lenient().when(github.privateKey()).thenReturn(privateKey);
       lenient().when(github.webhookSecret()).thenReturn(webhookSecret);
@@ -305,6 +323,31 @@ class StartupConfigValidatorTest {
         .clientSecret(Optional.of("   "))
         .build()
         .validate();
+  }
+
+  @Test
+  void failsFastWhenReasoningEffortIsInvalid() {
+    var ex = assertFailsValidation(new ConfigBuilder().reasoningEffort("max").build());
+    assertTrue(
+        ex.getMessage().contains("AI_REASONING_EFFORT must be one of none, low, medium, high"),
+        ex.getMessage());
+  }
+
+  @Test
+  void rejectsInvalidReasoningEffortEvenWhileReasoningIsDisabled() {
+    // Setting AI_REASONING_EFFORT expresses clear intent, so a typo is rejected at boot instead of
+    // surfacing later when the flag is flipped on.
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder().reasoningEnabled(false).reasoningEffort("hgih").build());
+    assertTrue(ex.getMessage().contains("AI_REASONING_EFFORT"), ex.getMessage());
+  }
+
+  @Test
+  void acceptsEveryReasoningEffortCaseInsensitivelyWithWhitespace() {
+    for (var effort : new String[] {"none", "LOW", " Medium ", "high"}) {
+      new ConfigBuilder().reasoningEnabled(true).reasoningEffort(effort).build().validate();
+    }
   }
 
   @Test

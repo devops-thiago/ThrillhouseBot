@@ -353,7 +353,39 @@ public interface ThrillhouseConfig {
     @WithName("provider-name")
     Optional<String> providerName();
 
+    ReasoningConfig reasoning();
+
     Map<String, ModelPricing> pricing();
+
+    /**
+     * Reasoning-effort control for reasoning-capable models. Off by default so no reasoning
+     * parameter is sent and today's provider-default behavior is preserved; when {@link #enabled()}
+     * the configured {@link #effort()} is sent as the OpenAI-compatible {@code reasoning_effort} on
+     * every chat call, which providers map to their thinking budgets. Reasoning tokens are billed
+     * as output tokens, so this is the operator's cost/quality dial.
+     */
+    interface ReasoningConfig {
+      /** Effort values accepted by {@link #effort()}, in ascending cost/quality order. */
+      List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high");
+
+      /** Master switch — no reasoning parameter is sent unless this is {@code true}. */
+      @WithDefault("false")
+      boolean enabled();
+
+      /**
+       * Effort sent while {@link #enabled()}: one of {@code none}, {@code low}, {@code medium},
+       * {@code high} (case-insensitive). {@code none} explicitly asks the model not to reason —
+       * useful to pin down a reasoning-capable model that reasons by default. Validated at boot by
+       * {@link StartupConfigValidator}.
+       */
+      @WithDefault("low")
+      String effort();
+
+      /** An {@link #effort()} value normalized to the lowercase wire value providers expect. */
+      static String normalize(String effort) {
+        return effort.strip().toLowerCase(java.util.Locale.ROOT);
+      }
+    }
 
     interface ModelPricing {
       @WithName("input-per-1k")
