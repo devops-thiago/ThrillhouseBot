@@ -48,6 +48,7 @@ public class WebhookController {
   private final ManualReviewAuthorizer manualReviewAuthorizer;
   private final CommentCommandService commentCommandService;
   private final PrPauseService prPauseService;
+  private final AckReactionService ackReactionService;
   private final ObjectMapper mapper;
 
   @Inject
@@ -63,6 +64,7 @@ public class WebhookController {
       ManualReviewAuthorizer manualReviewAuthorizer,
       CommentCommandService commentCommandService,
       PrPauseService prPauseService,
+      AckReactionService ackReactionService,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
@@ -75,6 +77,7 @@ public class WebhookController {
     this.manualReviewAuthorizer = manualReviewAuthorizer;
     this.commentCommandService = commentCommandService;
     this.prPauseService = prPauseService;
+    this.ackReactionService = ackReactionService;
     this.mapper = mapper;
   }
 
@@ -279,6 +282,14 @@ public class WebhookController {
       log.debug("Ignoring {} command with missing repository or installation", command);
       return true;
     }
+    // 👀 ack before any pause/authorization gate or dispatch: every recognized command gets the
+    // "seen it" signal, even one that is then rejected. Conversational mentions never reach here.
+    ackReactionService.addEyes(
+        payload.installation().id(),
+        repo.owner().login(),
+        repo.name(),
+        payload.comment().id(),
+        AckReactionService.CommentKind.ISSUE);
     // On issue_comment the issue number equals the PR number.
     var ctx =
         new CommentCommandService.CommandContext(

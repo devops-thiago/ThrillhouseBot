@@ -245,6 +245,16 @@ public interface ThrillhouseConfig {
     Duration manualTriggerAuthTimeout();
 
     /**
+     * Upper bound on the 👀 command-ack reaction (token mint on a cold cache plus the reaction
+     * POST), which runs on the synchronous webhook acknowledgement thread. GitHub expects the
+     * {@code 200} ACK within ~10s, so when this elapses the wait is abandoned — the reaction may
+     * still land late in the background — instead of letting a degraded GitHub delay the ACK.
+     */
+    @WithDefault("3s")
+    @WithName("ack-reaction-timeout")
+    Duration ackReactionTimeout();
+
+    /**
      * Minimum interval between automatic (webhook-triggered) reviews of the same PR. While the last
      * automatic review completed less than this ago, {@code pull_request} events for the PR are
      * skipped silently — even when the head SHA changed — capping AI spend on noisy repositories. A
@@ -343,7 +353,39 @@ public interface ThrillhouseConfig {
     @WithName("provider-name")
     Optional<String> providerName();
 
+    ReasoningConfig reasoning();
+
     Map<String, ModelPricing> pricing();
+
+    /**
+     * Reasoning-effort control for reasoning-capable models. Off by default so no reasoning
+     * parameter is sent and today's provider-default behavior is preserved; when {@link #enabled()}
+     * the configured {@link #effort()} is sent as the OpenAI-compatible {@code reasoning_effort} on
+     * every chat call, which providers map to their thinking budgets. Reasoning tokens are billed
+     * as output tokens, so this is the operator's cost/quality dial.
+     */
+    interface ReasoningConfig {
+      /** Effort values accepted by {@link #effort()}, in ascending cost/quality order. */
+      List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high");
+
+      /** Master switch — no reasoning parameter is sent unless this is {@code true}. */
+      @WithDefault("false")
+      boolean enabled();
+
+      /**
+       * Effort sent while {@link #enabled()}: one of {@code none}, {@code low}, {@code medium},
+       * {@code high} (case-insensitive). {@code none} explicitly asks the model not to reason —
+       * useful to pin down a reasoning-capable model that reasons by default. Validated at boot by
+       * {@link StartupConfigValidator}.
+       */
+      @WithDefault("low")
+      String effort();
+
+      /** An {@link #effort()} value normalized to the lowercase wire value providers expect. */
+      static String normalize(String effort) {
+        return effort.strip().toLowerCase(java.util.Locale.ROOT);
+      }
+    }
 
     interface ModelPricing {
       @WithName("input-per-1k")

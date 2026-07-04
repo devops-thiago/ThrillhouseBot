@@ -82,12 +82,14 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateReasoningEffort(problems, config.ai().reasoning());
 
     if (!problems.isEmpty()) {
       throw new ConfigValidationException(formatMessage(problems));
     }
 
     logDashboardStatus();
+    logReasoningStatus();
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
@@ -176,6 +178,35 @@ public class StartupConfigValidator {
               + PRIVATE_KEY_PROPERTY
               + "): "
               + e.getMessage());
+    }
+  }
+
+  /**
+   * Validated even while reasoning is disabled: an operator who sets an invalid effort value has
+   * expressed clear intent, and rejecting the typo at boot beats discovering it when the flag is
+   * later flipped on.
+   */
+  private static void validateReasoningEffort(
+      List<String> problems, ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning) {
+    var allowed = ThrillhouseConfig.AiPricingConfig.ReasoningConfig.ALLOWED_EFFORTS;
+    if (!allowed.contains(
+        ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(reasoning.effort()))) {
+      problems.add(
+          "AI_REASONING_EFFORT must be one of "
+              + String.join(", ", allowed)
+              + " (thrillhousebot.ai.reasoning.effort): "
+              + reasoning.effort());
+    }
+  }
+
+  private void logReasoningStatus() {
+    var reasoning = config.ai().reasoning();
+    if (reasoning.enabled()) {
+      var effort = ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(reasoning.effort());
+      log.info(
+          "AI reasoning enabled (reasoning_effort={}) — reasoning tokens are billed as output"
+              + " tokens, so expect higher cost and latency on reasoning-capable models.",
+          effort);
     }
   }
 
