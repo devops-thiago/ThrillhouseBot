@@ -1,4 +1,5 @@
 # Architecture
+<!-- docs:architecture:start -->
 
 One-page overview of how the bot is structured and how a review flows through it.
 
@@ -187,7 +188,8 @@ status for branch protection (no inline annotations on the check run itself).
 Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
 `thrillhousebot.review.ai-timeout-seconds`. Cost and token metrics come from
 OpenTelemetry. OAuth login sessions are opaque IDs in cookies with tokens kept
-server-side; review history persists in the database. See [SECURITY.md](../SECURITY.md)
+server-side; review history persists in the database. See
+[SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md)
 for the reporting process.
 
 ## Adding an AI provider
@@ -195,5 +197,6 @@ for the reporting process.
 There is no provider-specific code. The model is reached through LangChain4j's
 OpenAI-compatible client, so a new provider is configuration: point `AI_BASE_URL`
 and `AI_MODEL` at it, and add a `thrillhousebot.ai.pricing.<model>.*` pair if you
-want cost tracking for that model. See the provider table in the
-[README](../README.md#provider-support).
+want cost tracking for that model. See the
+[provider table](https://devops-thiago.github.io/ThrillhouseBot/providers/).
+<!-- docs:architecture:end -->

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Install ThrillhouseBot GitHub App</title>
+  <link rel="icon" href="icon.png" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; line-height: 1.5; padding: 0 1rem; }
+    code, pre { background: #f4f4f4; border-radius: 4px; }
+    code { padding: 0.1rem 0.35rem; }
+    pre { padding: 0.75rem 1rem; overflow-x: auto; }
+    button { font-size: 1rem; padding: 0.6rem 1.2rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    input[type="text"] { font-size: 1rem; padding: 0.5rem 0.75rem; width: 100%; box-sizing: border-box; }
+    .error { color: #b00020; }
+    .preview { background: #f9f9f9; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+    .preview dt { font-weight: 600; margin-top: 0.5rem; }
+    .preview dd { margin-left: 0; color: #555; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Install ThrillhouseBot</h1>
+
+  <p>
+    This creates the GitHub App and gives you the credentials the bot needs to
+    run (App ID, private key, webhook secret, OAuth client ID/secret). Do this
+    first — the bot can't start until these values are in your <code>.env</code>.
+  </p>
+
+  <h2>1. Where will the bot run?</h2>
+  <p>
+    Enter the public hostname where GitHub will reach your bot (for local dev
+    with <a href="https://smee.io/">Smee.io</a>, use your Smee channel URL —
+    webhooks are then registered at the channel root, which the smee client
+    forwards to the bot's local <code>/api/webhook</code>, and the OAuth
+    callback points at <code>http://localhost:8080</code>, where your browser
+    reaches the bot directly).
+    The manifest is built right here in your browser; nothing is sent anywhere
+    until you submit it to GitHub.
+  </p>
+  <p>
+    <label for="host">Public host</label><br />
+    <input type="text" id="host" placeholder="bot.example.com or https://smee.io/YOUR_CHANNEL" autocomplete="off" />
+  </p>
+
+  <div class="preview">
+    <dl>
+      <dt>App URL</dt>
+      <dd><code id="preview-url">—</code></dd>
+      <dt>Webhook URL</dt>
+      <dd><code id="preview-webhook">—</code></dd>
+      <dt>Callback URL</dt>
+      <dd><code id="preview-callback">—</code></dd>
+    </dl>
+  </div>
+
+  <h2>2. Create the app</h2>
+  <form id="manifest-form" action="https://github.com/settings/apps/new" method="post">
+    <input type="hidden" name="manifest" id="manifest" />
+    <input type="hidden" name="state" value="thrillhousebot-setup" />
+    <p>
+      <button type="submit" id="submit-btn" disabled>Create ThrillhouseBot GitHub App</button>
+    </p>
+  </form>
+  <p id="status" class="error"></p>
+
+  <h2>3. Collect the credentials</h2>
+  <p>
+    On the confirmation page, note the <strong>App ID</strong>, generate a
+    <strong>private key</strong>, and create a <strong>webhook secret</strong>.
+    Copy the <strong>Client ID</strong> and <strong>Client secret</strong> from
+    the app's <em>Identifying and authorizing users</em> settings (needed for
+    dashboard login), then follow the
+    <a href="getting-started/">getting started guide</a> to put them in
+    <code>.env</code> and start the bot.
+  </p>
+  <p>
+    GitHub also redirects to your host with a one-time <code>?code=</code>
+    parameter (the bot isn't running yet, so the page won't load — that's
+    fine). You can exchange it for a ready-made <code>.env</code> instead of
+    copying values by hand:
+  </p>
+  <pre>gh api --method POST /app-manifests/&lt;code&gt;/conversions \
+  | java scripts/GenEnv.java --host &lt;your-host&gt;</pre>
+  <p>
+    Using Smee? Don't pass the Smee URL as <code>--host</code> (that writes
+    <code>DASHBOARD_URL=https://&lt;host&gt;</code>); run it without
+    <code>--host</code> and then set
+    <code>DASHBOARD_URL=http://localhost:8080</code> in the generated
+    <code>.env</code> — dashboard login only works when
+    <code>DASHBOARD_URL</code> matches the callback registered above
+    (<code>http://localhost:8080</code> for Smee installs).
+  </p>
+
+  <script>
+    const status = document.getElementById("status");
+    const submitBtn = document.getElementById("submit-btn");
+    const manifestInput = document.getElementById("manifest");
+    const hostInput = document.getElementById("host");
+    const previewUrl = document.getElementById("preview-url");
+    const previewWebhook = document.getElementById("preview-webhook");
+    const previewCallback = document.getElementById("preview-callback");
+
+    function normalizeOrigin(raw) {
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : "https://" + trimmed;
+      let url;
+      try {
+        url = new URL(withScheme);
+      } catch {
+        return null;
+      }
+      if (!url.hostname || !url.hostname.includes(".")) return null;
+      // Keep a path (e.g. a Smee channel) but drop any trailing slash.
+      const base = url.origin + url.pathname;
+      // Smee delivers webhooks only at the channel root; the smee client
+      // forwards them to the bot's local /api/webhook. A Smee URL without a
+      // channel path would register a webhook GitHub delivers into the void.
+      const isSmee = /(^|\.)smee\.io$/i.test(url.hostname);
+      if (isSmee && url.pathname.replace(/\/+$/, "") === "") return { smeeMissingChannel: true };
+      return { base: base.replace(/\/+$/, ""), isSmee };
+    }
+
+    function update() {
+      const normalized = normalizeOrigin(hostInput.value);
+      const base = normalized && normalized.base;
+      if (!base) {
+        submitBtn.disabled = true;
+        previewUrl.textContent = previewWebhook.textContent = previewCallback.textContent = "—";
+        status.textContent = normalized && normalized.smeeMissingChannel
+          ? "Enter your full Smee channel URL, e.g. https://smee.io/AbCd1234"
+          : hostInput.value.trim()
+            ? "Enter a valid hostname, e.g. bot.example.com"
+            : "";
+        return;
+      }
+      const webhookUrl = normalized.isSmee ? base : base + "/api/webhook";
+      // Smee only relays webhook POSTs; OAuth redirects happen in the
+      // operator's browser, which reaches the local bot directly.
+      const callbackUrl = normalized.isSmee
+        ? "http://localhost:8080/api/auth/callback"
+        : base + "/api/auth/callback";
+      const manifest = {
+        name: "ThrillhouseBot",
+        url: base,
+        description: "AI-powered GitHub PR reviewer",
+        hook_attributes: {
+          url: webhookUrl,
+          active: true
+        },
+        redirect_url: base,
+        callback_urls: [
+          callbackUrl
+        ],
+        public: false,
+        default_events: [
+          "pull_request",
+          "issue_comment",
+          "pull_request_review_comment"
+        ],
+        default_permissions: {
+          checks: "write",
+          pull_requests: "write",
+          contents: "read",
+          issues: "write",
+          actions: "read",
+          statuses: "read"
+        },
+        request_oauth_on_install: false
+      };
+      previewUrl.textContent = base;
+      previewWebhook.textContent = webhookUrl;
+      previewCallback.textContent = callbackUrl;
+      manifestInput.value = JSON.stringify(manifest);
+      submitBtn.disabled = false;
+      status.textContent = "";
+    }
+
+    hostInput.addEventListener("input", update);
+    update();
+  </script>
+</body>
+</html>

@@ -23,6 +23,10 @@ language-agnostic and you can pick the provider that suits you.
 See [how it compares](docs/COMPARISON.md) to CodeRabbit, PR-Agent, and Copilot
 code review.
 
+**[📖 Documentation](https://devops-thiago.github.io/ThrillhouseBot/)** — setup
+guide, configuration reference, architecture, comparison, and the hosted
+[GitHub App installer](https://devops-thiago.github.io/ThrillhouseBot/install.html).
+
 <p align="center">
   <img src="docs/assets/pr-approval.png" alt="ThrillhouseBot approving a clean pull request" width="800" />
 </p>
@@ -33,6 +37,7 @@ code review.
 
 ## Features
 
+<!-- docs:features:start -->
 - Reviews diffs for correctness, security, regressions, stale comments, and code quality
 - Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch
 - Inline code suggestions on review comments that you can apply with one click
@@ -45,9 +50,11 @@ code review.
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
 - Compiles ahead-of-time with GraalVM/Mandrel, so it starts fast and stays small
+<!-- docs:features:end -->
 
 ## Provider support
 
+<!-- docs:providers:start -->
 ThrillhouseBot talks to any endpoint that implements the OpenAI chat-completions
 API. Point `AI_BASE_URL` and `AI_MODEL` at your provider of choice:
 
@@ -61,9 +68,11 @@ API. Point `AI_BASE_URL` and `AI_MODEL` at your provider of choice:
 
 The default is DeepSeek, used only because it is inexpensive; nothing in the bot
 is tied to it.
+<!-- docs:providers:end -->
 
 ## Commands
 
+<!-- docs:commands:start -->
 Drive the bot directly from a PR by commenting one of these. Each also accepts the
 mention form, e.g. `@Thrillhousebot review`. The bot acknowledges every command
 instantly with a 👀 reaction on your comment while the work runs in the background;
@@ -99,6 +108,7 @@ declaration (spanning the whole signature when it wraps), so it only inserts doc
 rewriting code. When a multi-line declaration can't be pinned to a single diff hunk, the bot
 posts a note with the drafted docs to add manually instead of a committable suggestion. It
 spends AI budget per run; operators can turn it off with `REVIEW_ADD_DOCS_ENABLED=false`.
+<!-- docs:commands:end -->
 
 ## Quick start
 
@@ -145,21 +155,33 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 
 ### Option A: manifest install (recommended)
 
-1. Edit `manifest.json` in the repo root and replace every `<your-host>` with your
-   public hostname (no trailing slash). For local dev with [Smee.io](https://smee.io/),
-   use your Smee channel URL host.
-2. Serve the repo root locally:
+1. Open the hosted installer at
+   [devops-thiago.github.io/ThrillhouseBot/install.html](https://devops-thiago.github.io/ThrillhouseBot/install.html),
+   type the public hostname where the bot will run (for local dev with
+   [Smee.io](https://smee.io/), your Smee channel URL — the webhook is then
+   registered at the channel root, which the smee client forwards to the
+   bot's local `/api/webhook`), and click
+   **Create ThrillhouseBot GitHub App**. GitHub creates the app from the manifest.
+
+   <details>
+   <summary>Offline alternative: serve the installer locally</summary>
+
+   Edit `manifest.json` in the repo root and replace every `<your-host>` with your
+   public hostname (no trailing slash), serve the repo root locally:
 
    ```bash
    java -m jdk.httpserver -p 8081
    ```
 
-3. Open [http://localhost:8081/install.html](http://localhost:8081/install.html) and click
-   **Create ThrillhouseBot GitHub App**. GitHub creates the app from your manifest.
-4. On the confirmation page, note the **App ID**, generate a **private key**, and create a
+   then open [http://localhost:8081/install.html](http://localhost:8081/install.html) and click
+   **Create ThrillhouseBot GitHub App**.
+
+   </details>
+
+2. On the confirmation page, note the **App ID**, generate a **private key**, and create a
    **webhook secret**. Copy the **Client ID** and **Client secret** from the app's
    *Identifying and authorizing users* settings (needed for dashboard login).
-5. Install the app on your account or organization, then copy the values into `.env`.
+3. Install the app on your account or organization, then copy the values into `.env`.
 
    Alternatively, generate `.env` automatically from the manifest conversion response:
 
@@ -168,7 +190,8 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
      | java scripts/GenEnv.java --host <your-host>
    ```
 
-> Once the bot is running, `http://<your-host>:8080/install.html` auto-detects the URL
+> Once the bot is running, `install.html` on the bot's own URL (`https://<your-host>/install.html`
+> behind a reverse proxy, or `http://localhost:8080/install.html` directly) auto-detects the URL
 > and builds the manifest dynamically, with no file editing or local server needed.
 
 ### Option B: manual registration
@@ -184,6 +207,7 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 
 ## Configuration
 
+<!-- docs:configuration:start -->
 Configuration is read from environment variables (see `.env.example`). The AI
 variables are the ones you will change per provider:
 
@@ -244,6 +268,7 @@ thrillhousebot.ai.pricing.deepseek-chat.output-per-1k=0.00028
 
 If you switch to a different `AI_MODEL`, add a matching
 `thrillhousebot.ai.pricing.<model>.*` pair so the dashboard can compute cost.
+<!-- docs:configuration:end -->
 
 ## Dashboard
 
@@ -284,6 +309,7 @@ Place a `.github/thrillhousebot.md` file in any repo to customize the review:
 
 Fallback chain: `.github/thrillhousebot.md` → `.github/copilot-instructions.md` → `CLAUDE.md` → `AGENTS.md` → `AGENT.md`
 
+<!-- docs:pr-labels:start -->
 ## PR labels
 
 ThrillhouseBot can suggest context-aware labels (area, change type, risk) drawn
@@ -303,6 +329,7 @@ Set `REVIEW_LABELS_ALLOW_CREATE=true` to let the bot create a suggested label
 that doesn't exist yet (off by default, so it never invents labels), and
 `REVIEW_LABELS_MAX` to cap how many labels it applies or suggests (default `3`).
 Labelling is best-effort — a failure here never blocks or fails the review.
+<!-- docs:pr-labels:end -->
 
 ## Observability
 
@@ -361,9 +388,6 @@ This is still an early-stage project; the current constraints are:
 - **Review output caps** — at most 50 inline PR comments per review
   (`thrillhousebot.review.max-review-comments`). Lockfiles, `pom.xml`, generated
   paths, and `target/` are skipped by default (`thrillhousebot.review.ignored-files`).
-- **First GitHub App setup** — before the bot is running, app creation still needs a
-  local static server or `gh api`; `/install.html` on the running bot covers later
-  installs.
 - **Self-hosted** — no managed offering from this project.
 
 ## Verifying a release
