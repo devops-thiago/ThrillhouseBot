@@ -252,6 +252,36 @@ class FindingPipelineTest {
   }
 
   @Test
+  void singleBudgetedBatchScopesResolutionClaimsLikeTheMultiCallPath() {
+    var session = ReviewSession.create("owner/repo", 1, "One clipped file", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("raw", "ctx", "base", "s", "t", "", "");
+    // Prior #1 lives in a.java (clipped: only leading hunks were sent); prior #2 in b.java (fully
+    // in the batch). The single call may close #2 but not #1.
+    when(followUpAnalyzer.previousFindingFilesById(any()))
+        .thenReturn(Map.of(1, "a.java", 2, "b.java"));
+    var batchFiles =
+        List.of(
+            new FileDiff("a.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n"),
+            new FileDiff("b.java", "modified", 2, 0, 2, "@@ -1 +1 @@\n+y\n"));
+    var batch = new DiffBudgetPlanner.DiffBatch("### a.java\n### b.java\n", batchFiles, 10);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(batch), List.of(), List.of("a.java"), true);
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(
+                    new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks fixed"),
+                    new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here")),
+                null));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
+    assertEquals("resolved", result.previousFindingsStatus().get(1).status());
+  }
+
+  @Test
   void resolvedFromABatchThatOnlySawTheClippedFileIsDemoted() {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();

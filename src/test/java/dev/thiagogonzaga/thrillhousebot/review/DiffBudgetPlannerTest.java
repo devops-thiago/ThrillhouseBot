@@ -215,6 +215,28 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void aClippedFileThatOverflowsEveryBinIsOnlyOmittedNeverAlsoClipped() {
+    // Several oversized files, one bin: every file gets clipped, but only some fit the single
+    // batch — the overflow is omitted by name and must not also stay in clippedFiles. Each file
+    // lands in exactly one class, or the disclosure would list it twice and the verdict
+    // double-count it.
+    var files = new ArrayList<FileDiff>();
+    for (var i = 0; i < 5; i++) {
+      files.add(file("dir/huge" + i + ".java", 400 - i, patch(400)));
+    }
+    var plan = planner.plan(files, 80, 1);
+
+    assertFalse(plan.omittedFiles().isEmpty(), "scenario must overflow the single bin");
+    assertFalse(plan.clippedFiles().isEmpty(), "scenario must clip the packed files");
+    for (var omitted : plan.omittedFiles()) {
+      assertFalse(plan.clippedFiles().contains(omitted), omitted + " listed in both classes");
+    }
+    var accounted = new HashSet<>(coveredFilenames(plan));
+    accounted.addAll(plan.omittedFiles());
+    assertEquals(5, accounted.size(), "every file covered or omitted, exactly once");
+  }
+
+  @Test
   void perCallInputBudgetIsUnboundedWhenBudgetingIsDisabled() {
     when(reviewConfig.maxInputTokens()).thenReturn(0);
     assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());

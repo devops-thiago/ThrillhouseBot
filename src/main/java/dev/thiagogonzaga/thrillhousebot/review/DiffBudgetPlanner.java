@@ -25,6 +25,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 
 /**
@@ -279,7 +280,11 @@ public class DiffBudgetPlanner {
     for (var bin : binSections) {
       batches.add(toBatch(bin));
     }
-    return new BudgetPlan(batches, omitted, rendered.clipped(), true);
+    // A clipped file can still overflow every bin and end up omitted; each file must land in
+    // exactly one class or the disclosure would list it twice and the verdict double-count it.
+    var omittedSet = new HashSet<>(omitted);
+    var clipped = rendered.clipped().stream().filter(n -> !omittedSet.contains(n)).toList();
+    return new BudgetPlan(batches, omitted, clipped, true);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */

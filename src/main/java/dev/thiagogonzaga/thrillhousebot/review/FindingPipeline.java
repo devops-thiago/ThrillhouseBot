@@ -100,17 +100,30 @@ public class FindingPipeline {
     }
     var singleInputs = promptInputs;
     var quoteSource = ctx.diff();
+    DiffBudgetPlanner.DiffBatch budgetedBatch = null;
     if (plan.budgeted() && !plan.batches().isEmpty()) {
-      var batch = plan.batches().get(0);
+      budgetedBatch = plan.batches().get(0);
       // The base comparison stays: the planner counted it in the shared overhead.
       singleInputs =
           withDiff(
               promptInputs,
-              PromptTemplateEscaper.fence(batch.text()),
+              PromptTemplateEscaper.fence(budgetedBatch.text()),
               promptInputs.baseComparison());
-      quoteSource = batch.text();
+      quoteSource = budgetedBatch.text();
     }
     var aiResponse = aiReviewService.review(session, singleInputs);
+    if (budgetedBatch != null && !aiResponse.previousFindingsStatus().isEmpty()) {
+      // Same scoping as the multi-call path: the single budgeted batch may carry clipped files
+      // (and, at maxBatches=1, omit others entirely), so a "resolved" claim is only trusted for a
+      // prior finding whose file the call provably saw in full.
+      var scoped =
+          scopeStatusesToBatch(
+              aiResponse.previousFindingsStatus(),
+              budgetedBatch,
+              plan,
+              followUpAnalyzer.previousFindingFilesById(ctx.previousAiResponseJson()));
+      aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
+    }
     return refine(
         session,
         aiResponse,
