@@ -291,12 +291,15 @@ public class FindingPipeline {
       return "(changed-files overview withheld — summary input budget exhausted)\n";
     }
     var lines = overview.split("\n");
+    // The rollup note's tokens are reserved up front so appending it after truncation cannot push
+    // the overview past its share; the worst-case note (nothing listed) bounds all others.
+    var noteReserve = tokenCounter.estimateTokens(overviewRollupNote(lines.length));
     var sb = new StringBuilder();
     var used = 0;
     var listed = 0;
     while (listed < lines.length) {
       var lineTokens = tokenCounter.estimateTokens(lines[listed] + "\n");
-      if (used + lineTokens > overviewBudget) {
+      if (used + lineTokens > overviewBudget - noteReserve) {
         break;
       }
       sb.append(lines[listed]).append('\n');
@@ -306,11 +309,15 @@ public class FindingPipeline {
     if (listed == lines.length) {
       return overview;
     }
-    sb.append("(+")
-        .append(lines.length - listed)
-        .append(" more changed files — overview")
-        .append(" truncated to fit the summary budget)\n");
+    sb.append(overviewRollupNote(lines.length - listed));
     return sb.toString();
+  }
+
+  private static String overviewRollupNote(int notListed) {
+    return "(+"
+        + notListed
+        + " more changed files — overview truncated to fit the summary"
+        + " budget)\n";
   }
 
   /**
