@@ -158,6 +158,12 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void diffStatsNormalizesANullTruncationDetail() {
+    var stats = new VerdictBuilder.DiffStats(1, 2, 3, 4, null);
+    assertEquals(ReviewResult.TruncationDetail.EMPTY, stats.truncation());
+  }
+
+  @Test
   void disabledBudgetingDisclosesTheLegacyLineCapCount() {
     var ctx = contextWithLineCapOmissions(2);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);

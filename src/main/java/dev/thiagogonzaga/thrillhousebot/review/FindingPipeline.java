@@ -312,7 +312,7 @@ public class FindingPipeline {
       String changedFilesOverview) {
     var budget = budgetPlanner.perCallInputBudget();
     if (budget == Integer.MAX_VALUE) {
-      return findingsJson(findings);
+      return withSerializationFallbackNote(findingsJson(findings), findings);
     }
     var fixedSections =
         PrReviewPrompts.SUMMARY_SYSTEM
@@ -337,7 +337,21 @@ public class FindingPipeline {
       // not the serialized subset — the verdict and posted findings always use the full list.
       json = json + "\n" + trueTotalsNote(findings, findings.size() - kept.size());
     }
-    return json;
+    return withSerializationFallbackNote(json, findings);
+  }
+
+  /**
+   * A findings-serialization failure degrades to "[]" ({@link #findingsJson}); with real findings
+   * present, the summary model must still be told the true totals or it would describe a clean PR
+   * while the verdict posts findings. No-op when the array is genuinely empty, non-"[]", or the
+   * clamp already appended its note.
+   */
+  private static String withSerializationFallbackNote(
+      String json, List<ReviewResponse.Finding> findings) {
+    if (findings.isEmpty() || !json.startsWith("[]") || json.contains("more findings not shown")) {
+      return json;
+    }
+    return json + "\n" + trueTotalsNote(findings, findings.size());
   }
 
   private static String trueTotalsNote(List<ReviewResponse.Finding> findings, int notShown) {

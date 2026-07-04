@@ -523,7 +523,12 @@ class FindingPipelineTest {
 
     p.run(session, template, reviewContext(), multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    // The summary still gets a valid (empty) findings array rather than propagating the failure.
-    assertTrue(captor.getValue().findings().contains("[]"), captor.getValue().findings());
+    // The summary still gets a valid (empty) findings array rather than propagating the failure —
+    // but with real findings present, the true-totals note must ride along so the model does not
+    // describe a clean PR while the verdict posts findings.
+    assertTrue(captor.getValue().findings().startsWith("[]"), captor.getValue().findings());
+    assertTrue(
+        captor.getValue().findings().contains("more findings not shown"),
+        captor.getValue().findings());
   }
 }
