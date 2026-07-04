@@ -64,6 +64,10 @@ class StartupConfigValidatorTest {
     private String aiApiKey = "ai-key";
     private Optional<String> clientId = Optional.of("client-id");
     private Optional<String> clientSecret = Optional.of("client-secret");
+    private int maxInputTokens = 48000;
+    private int outputBufferTokens = 8192;
+    private int maxAiCalls = 6;
+    private double tokenSafetyMargin = 0.9;
 
     ConfigBuilder appId(String v) {
       this.appId = v;
@@ -95,17 +99,43 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder maxInputTokens(int v) {
+      this.maxInputTokens = v;
+      return this;
+    }
+
+    ConfigBuilder outputBufferTokens(int v) {
+      this.outputBufferTokens = v;
+      return this;
+    }
+
+    ConfigBuilder maxAiCalls(int v) {
+      this.maxAiCalls = v;
+      return this;
+    }
+
+    ConfigBuilder tokenSafetyMargin(double v) {
+      this.tokenSafetyMargin = v;
+      return this;
+    }
+
     StartupConfigValidator build() {
       var config = mock(ThrillhouseConfig.class);
       var github = mock(ThrillhouseConfig.GitHubConfig.class);
       var dashboard = mock(ThrillhouseConfig.DashboardConfig.class);
+      var review = mock(ThrillhouseConfig.ReviewConfig.class);
       lenient().when(config.github()).thenReturn(github);
       lenient().when(config.dashboard()).thenReturn(dashboard);
+      lenient().when(config.review()).thenReturn(review);
       lenient().when(github.appId()).thenReturn(appId);
       lenient().when(github.privateKey()).thenReturn(privateKey);
       lenient().when(github.webhookSecret()).thenReturn(webhookSecret);
       lenient().when(dashboard.clientId()).thenReturn(clientId);
       lenient().when(dashboard.clientSecret()).thenReturn(clientSecret);
+      lenient().when(review.maxInputTokens()).thenReturn(maxInputTokens);
+      lenient().when(review.outputBufferTokens()).thenReturn(outputBufferTokens);
+      lenient().when(review.maxAiCalls()).thenReturn(maxAiCalls);
+      lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
       return new StartupConfigValidator(config, aiApiKey);
     }
   }
@@ -172,6 +202,64 @@ class StartupConfigValidatorTest {
   void failsFastWhenAiApiKeyMissing() {
     var ex = assertFailsValidation(new ConfigBuilder().aiApiKey("").build());
     assertTrue(ex.getMessage().contains("AI_API_KEY"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenMaxInputTokensNegative() {
+    var ex = assertFailsValidation(new ConfigBuilder().maxInputTokens(-1).build());
+    assertTrue(ex.getMessage().contains("REVIEW_MAX_INPUT_TOKENS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenOutputBufferNegative() {
+    var ex = assertFailsValidation(new ConfigBuilder().outputBufferTokens(-1).build());
+    assertTrue(ex.getMessage().contains("REVIEW_OUTPUT_BUFFER_TOKENS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenMaxAiCallsBelowOne() {
+    var ex = assertFailsValidation(new ConfigBuilder().maxAiCalls(0).build());
+    assertTrue(ex.getMessage().contains("REVIEW_MAX_AI_CALLS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenSafetyMarginOutOfRange() {
+    assertTrue(
+        assertFailsValidation(new ConfigBuilder().tokenSafetyMargin(0).build())
+            .getMessage()
+            .contains("REVIEW_TOKEN_SAFETY_MARGIN"));
+    assertTrue(
+        assertFailsValidation(new ConfigBuilder().tokenSafetyMargin(1.5).build())
+            .getMessage()
+            .contains("REVIEW_TOKEN_SAFETY_MARGIN"));
+  }
+
+  @Test
+  void failsFastWhenOutputBufferLeavesNoDiffBudget() {
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder().maxInputTokens(8000).outputBufferTokens(8000).build());
+    assertTrue(ex.getMessage().contains("less than REVIEW_MAX_INPUT_TOKENS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenMarginScaledBudgetIsNonPositive() {
+    // Passes the raw buffer < max comparison but the runtime budget is
+    // 48000 * 0.9 - 45000 = -1800 — the silent-disable case the validator must reject.
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder()
+                .maxInputTokens(48000)
+                .outputBufferTokens(45000)
+                .tokenSafetyMargin(0.9)
+                .build());
+    assertTrue(ex.getMessage().contains("REVIEW_TOKEN_SAFETY_MARGIN"), ex.getMessage());
+  }
+
+  @Test
+  void allowsTokenBudgetingDisabledWithZeroInputTokens() {
+    // 0 input tokens disables budgeting (single call); the output-buffer cross-check is skipped.
+    new ConfigBuilder().maxInputTokens(0).build().validate();
   }
 
   @Test

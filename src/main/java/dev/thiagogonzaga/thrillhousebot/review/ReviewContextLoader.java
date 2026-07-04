@@ -187,6 +187,7 @@ public class ReviewContextLoader {
     // Existing repo labels are fetched once (when the feature is on): they both constrain the
     // model's suggestions in the prompt and are reused to reconcile its output afterwards.
     var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
+    var projectStack = resolveProjectStack(req);
 
     return new ReviewContext(
         files,
@@ -202,7 +203,7 @@ public class ReviewContextLoader {
         previousFindings,
         instructions,
         repoLabels,
-        resolveProjectStack(req),
+        projectStack,
         reviewableFiles,
         lineResolver,
         prTotals);

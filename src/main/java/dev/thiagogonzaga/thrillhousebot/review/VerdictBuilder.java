@@ -22,6 +22,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Builds the {@link ReviewResult} verdict from the model response and the review's gating inputs,
@@ -56,11 +57,38 @@ public class VerdictBuilder {
   ReviewResult build(
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
-      CiStatusEvaluator.CiEvaluation ciEvaluation) {
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    // Truncation must reflect what was actually sent (#53): with budgeting on, the plan's
+    // omitted-by-name files plus its hunk-clipped files (their unseen hunks were withheld too, so
+    // a clipped-only review must not silently approve) — the line-cap count belongs to the legacy
+    // diff string, which budgeted reviews never send. With budgeting off, only the line cap
+    // applies. Summing the mechanisms would disclose partial reviews that did not happen. The
+    // names ride along so every disclosure surface can report them, not just a count.
+    var truncation =
+        plan.budgeted()
+            ? new ReviewResult.TruncationDetail(plan.omittedFiles(), plan.clippedFiles())
+            : ReviewResult.TruncationDetail.EMPTY;
+    var omitted =
+        plan.budgeted()
+            ? plan.omittedFiles().size() + plan.clippedFiles().size()
+            : ctx.omittedFiles();
+    // The "Changes Overview" reports GitHub's authoritative PR-level totals when available; the
+    // diff-derived counts (summed over the ignore-glob-filtered reviewable files) undercount
+    // whenever a changed file is dropped by the ignore-glob (#298). The reviewed-diff omitted-file
+    // count is preserved either way, so truncation gating and disclosure are unaffected.
     var diffStats =
-        DiffStats.fromFiles(ctx.reviewableFiles(), ctx.omittedFiles())
+        DiffStats.fromFiles(ctx.reviewableFiles(), omitted, truncation)
             .withAuthoritativeTotals(ctx.prTotals());
-    var changedFiles = toChangedFiles(ctx.reviewableFiles());
+    // Budget-omitted files were never reviewed: listing them in the summary walkthrough as
+    // ordinary rows would present them as covered. They are disclosed by name in the truncation
+    // banner instead.
+    var omittedNames = Set.copyOf(truncation.omittedFileNames());
+    var changedFiles =
+        toChangedFiles(
+            ctx.reviewableFiles().stream()
+                .filter(f -> !omittedNames.contains(f.filename()))
+                .toList());
     var unresolvedPrevious =
         followUpAnalyzer.unresolvedFindings(
             ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus());
@@ -102,10 +130,9 @@ public class VerdictBuilder {
   static String checkSummaryForResult(ReviewResult result) {
     var truncationSuffix =
         result.truncated()
-            ? String.format(
-                " The diff was also too large to review in full (%d file(s) omitted) — partial"
-                    + " review.",
-                result.omittedFiles())
+            ? " The diff was also too large to review in full ("
+                + result.coverageGapBrief()
+                + ") — partial review."
             : "";
     if (result.hasIssues()) {
       return String.format(
@@ -142,10 +169,9 @@ public class VerdictBuilder {
     // A truncated diff holds approval at neutral; the summary must say so rather than fall
     // through to the all-clear celebration, which would caption a held check run as "no issues".
     if (result.truncated()) {
-      return String.format(
-          "No new issues found, but the diff was too large to review in full (%d file(s) omitted) —"
-              + " this is a partial review, so approval is held.",
-          result.omittedFiles());
+      return "No new issues found, but the diff was too large to review in full ("
+          + result.coverageGapBrief()
+          + ") — this is a partial review, so approval is held.";
     }
     var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
@@ -154,9 +180,22 @@ public class VerdictBuilder {
     return ReviewResult.unresolvedPreviousMessage(unresolved);
   }
 
-  record DiffStats(int filesChanged, int additions, int deletions, int omittedFiles) {
+  record DiffStats(
+      int filesChanged,
+      int additions,
+      int deletions,
+      int omittedFiles,
+      ReviewResult.TruncationDetail truncation) {
+    DiffStats {
+      truncation = truncation == null ? ReviewResult.TruncationDetail.EMPTY : truncation;
+    }
+
     DiffStats(int filesChanged, int additions, int deletions) {
       this(filesChanged, additions, deletions, 0);
+    }
+
+    DiffStats(int filesChanged, int additions, int deletions, int omittedFiles) {
+      this(filesChanged, additions, deletions, omittedFiles, ReviewResult.TruncationDetail.EMPTY);
     }
 
     /** True when the line budget dropped whole files, so the model never saw part of the change. */
@@ -176,17 +215,24 @@ public class VerdictBuilder {
         return this;
       }
       return new DiffStats(
-          totals.filesChanged(), totals.additions(), totals.deletions(), omittedFiles);
+          totals.filesChanged(), totals.additions(), totals.deletions(), omittedFiles, truncation);
     }
 
     static DiffStats fromFiles(List<GitHubPullRequestClient.FileDiff> files, int omittedFiles) {
+      return fromFiles(files, omittedFiles, ReviewResult.TruncationDetail.EMPTY);
+    }
+
+    static DiffStats fromFiles(
+        List<GitHubPullRequestClient.FileDiff> files,
+        int omittedFiles,
+        ReviewResult.TruncationDetail truncation) {
       var additions = 0;
       var deletions = 0;
       for (var file : files) {
         additions += file.additions();
         deletions += file.deletions();
       }
-      return new DiffStats(files.size(), additions, deletions, omittedFiles);
+      return new DiffStats(files.size(), additions, deletions, omittedFiles, truncation);
     }
   }
 
@@ -267,9 +313,12 @@ public class VerdictBuilder {
                 // made that branch dead and let the celebration contradict the truncation banner.
                 diffStats.omittedFiles(),
                 ciUnreadable,
-                requiredContextsKnown));
+                requiredContextsKnown,
+                diffStats.truncation()));
     if (diffStats.truncated()) {
-      summaryMarkdown = ReviewResult.truncationNotice(diffStats.omittedFiles()) + summaryMarkdown;
+      summaryMarkdown =
+          ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
+              + summaryMarkdown;
     }
 
     return new ReviewResult(
@@ -286,7 +335,8 @@ public class VerdictBuilder {
         offendingCiChecks,
         diffStats.omittedFiles(),
         ciUnreadable,
-        requiredContextsKnown);
+        requiredContextsKnown,
+        diffStats.truncation());
   }
 
   /** Findings parsed from the model response, with per-severity counts and the highest risk. */

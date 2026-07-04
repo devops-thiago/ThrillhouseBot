@@ -55,6 +55,8 @@ public class ReviewOrchestrator {
 
   private final ReviewPromptAssembler promptAssembler;
 
+  private final DiffBudgetPlanner budgetPlanner;
+
   private final ReviewPublisher reviewPublisher;
 
   private final VerdictBuilder verdictBuilder;
@@ -173,6 +175,7 @@ public class ReviewOrchestrator {
       CheckRunManager checkRunManager,
       ReviewContextLoader contextLoader,
       ReviewPromptAssembler promptAssembler,
+      DiffBudgetPlanner budgetPlanner,
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
@@ -185,6 +188,7 @@ public class ReviewOrchestrator {
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
+    this.budgetPlanner = budgetPlanner;
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
@@ -236,6 +240,9 @@ public class ReviewOrchestrator {
       var lineResolver = ctx.lineResolver();
 
       var promptInputs = promptAssembler.assemble(ctx, req);
+      // Planned from the fully assembled prompt so the overhead estimate covers every section a
+      // review call actually repeats — not just the loader-visible subset (#53).
+      var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       // CI status (required-context resolution + check evaluation) depends only on the
       // commit/branch,
@@ -246,11 +253,11 @@ public class ReviewOrchestrator {
       var ciFuture =
           CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, ciReq), reviewExecutor);
 
-      var aiResponse = findingPipeline.run(session, promptInputs, ctx, lineResolver);
+      var aiResponse = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver);
 
       CiStatusEvaluator.CiEvaluation ciEvaluation = ciFuture.join();
 
-      var result = verdictBuilder.build(ctx, aiResponse, ciEvaluation);
+      var result = verdictBuilder.build(ctx, aiResponse, ciEvaluation, plan);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);

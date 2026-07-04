@@ -206,6 +206,11 @@ variables are the ones you will change per provider:
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
+| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review calls; large PRs are split into batches that each fit it. `0` disables token budgeting | `48000` |
+| `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, base comparison, budgeting-disabled review); token-budgeted review calls ignore it; `0` disables the cap | `5000` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |
@@ -328,10 +333,11 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 This is still an early-stage project; the current constraints are:
 
 - **GitHub only** — no GitLab or Bitbucket integration.
-- **Large diffs** — the model sees at most `thrillhousebot.review.max-diff-lines` diff
-  lines (default 5000). Later files are dropped; the last included file is cut at a hunk
-  boundary with its code fence re-closed (only cut mid-hunk if a single hunk alone exceeds
-  the budget).
+- **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
+  split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
+  don't fit are disclosed by name instead of silently dropped. The on-demand commands
+  (`/describe`, `/changelog`, `/add-docs`) still send the diff in a single call without
+  batching.
 - **Single process** — OAuth login sessions and the live WebSocket replay buffer are
   in-memory (lost on restart). Review history and cost totals persist in PostgreSQL.
   Multiple replicas are unsupported.

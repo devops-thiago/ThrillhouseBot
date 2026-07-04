@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -149,7 +150,9 @@ class ReviewOrchestratorTest {
             findingVerificationService,
             followUpAnalyzer,
             mapper,
-            BOT_ID);
+            BOT_ID,
+            new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+            new TokenCounter());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -215,6 +218,7 @@ class ReviewOrchestratorTest {
             sessionPersistence,
             BOT_ID),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
+        new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
@@ -1029,7 +1033,8 @@ class ReviewOrchestratorTest {
               offending,
               0,
               false,
-              false);
+              false,
+              ReviewResult.TruncationDetail.EMPTY);
 
       String summary = VerdictBuilder.checkSummaryForResult(result);
 
@@ -3748,7 +3753,9 @@ class ReviewOrchestratorTest {
               findingVerificationService,
               followUpAnalyzer,
               badMapper,
-              BOT_ID);
+              BOT_ID,
+              new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+              new TokenCounter());
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

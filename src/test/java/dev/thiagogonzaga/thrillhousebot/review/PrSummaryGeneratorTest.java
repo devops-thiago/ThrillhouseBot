@@ -364,7 +364,8 @@ class PrSummaryGeneratorTest {
             checks,
             0,
             false,
-            false);
+            false,
+            ReviewResult.TruncationDetail.EMPTY);
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 

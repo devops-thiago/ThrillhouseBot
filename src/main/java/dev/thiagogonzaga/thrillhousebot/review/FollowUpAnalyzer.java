@@ -830,6 +830,21 @@ public class FollowUpAnalyzer {
     return status != null && RECOGNIZED_STATUSES.contains(status.toLowerCase(Locale.ROOT));
   }
 
+  /**
+   * File of each prior finding keyed by its 1-based listed number — the id space the model's {@code
+   * previous_findings_status} entries reference. Lets the multi-call merge accept a
+   * "resolved"/"justified" claim only from a batch whose diff slice actually contained the
+   * finding's file.
+   */
+  public Map<Integer, String> previousFindingFilesById(String previousAiResponseJson) {
+    var previous = parsePreviousFindings(previousAiResponseJson);
+    var filesById = new HashMap<Integer, String>();
+    for (var i = 0; i < previous.size(); i++) {
+      filesById.put(i + 1, previous.get(i).file());
+    }
+    return filesById;
+  }
+
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {
     return parseResponse(aiResponseJson).findings();
   }

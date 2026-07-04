@@ -42,4 +42,17 @@ public interface PrReviewer {
       @V("relatedTests") String relatedTests,
       @V("previousFindings") String previousFindings,
       @V("repoInstructions") String repoInstructions);
+
+  // Final summary call for a large multi-call review (#53): rolls the per-batch findings up into
+  // the
+  // PR-level summary object + previous_findings_status. @UserMessage stays on the method (same
+  // reason as reviewStream — on a parameter every other @V var is silently dropped).
+  @SystemMessage(PrReviewPrompts.SUMMARY_SYSTEM)
+  @UserMessage(PrReviewPrompts.SUMMARY_USER)
+  TokenStream summarizeStream(
+      @V("prContext") String prContext,
+      @V("findings") String findings,
+      @V("changedFiles") String changedFiles,
+      @V("previousFindings") String previousFindings,
+      @V("repoInstructions") String repoInstructions);
 }

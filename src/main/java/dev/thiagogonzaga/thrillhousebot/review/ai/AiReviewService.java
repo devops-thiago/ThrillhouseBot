@@ -33,6 +33,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * Runs PR reviews with streaming output to the dashboard and automatic retries for transient model
@@ -63,7 +64,55 @@ public class AiReviewService {
     this.broadcaster = broadcaster;
   }
 
+  /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
+    return runWithRetries(session, () -> reviewStream(inputs), true);
+  }
+
+  /**
+   * Reviews one batch of a large, multi-call PR (#53). Runs blocking — no per-token dashboard
+   * stream (the live feed would interleave several batches) — and emits a {@code batch index/count}
+   * progress event instead. The same retry/timeout scaffolding applies; only the findings of the
+   * returned response are used by the caller (PR-level summary comes from the final summary call).
+   */
+  public ReviewResponse reviewBatch(
+      ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.batch(session, batchIndex, batchCount));
+    return runWithRetries(session, () -> reviewStream(inputs), false);
+  }
+
+  /**
+   * Final summary call of a large multi-call review (#53): rolls the aggregated findings up into
+   * the PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
+   * response carries the summary and previous-findings status (its findings list is empty).
+   */
+  public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
+    return runWithRetries(
+        session,
+        () ->
+            prReviewer.summarizeStream(
+                inputs.prContext(),
+                inputs.findings(),
+                inputs.changedFiles(),
+                inputs.previousFindings(),
+                inputs.repoInstructions()),
+        false);
+  }
+
+  private TokenStream reviewStream(PromptInputs inputs) {
+    return prReviewer.reviewStream(
+        inputs.diff(),
+        inputs.prContext(),
+        inputs.baseComparison(),
+        inputs.projectStack(),
+        inputs.relatedTests(),
+        inputs.previousFindings(),
+        inputs.repoInstructions());
+  }
+
+  private ReviewResponse runWithRetries(
+      ReviewSession session, Supplier<TokenStream> streamFactory, boolean broadcastTokens) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
@@ -80,7 +129,7 @@ public class AiReviewService {
         }
 
         try {
-          return streamOnce(session, inputs, attempt);
+          return streamOnce(session, streamFactory, attempt, broadcastTokens);
         } catch (RuntimeException e) {
           lastFailure = e;
           Log.warnf(
@@ -111,28 +160,39 @@ public class AiReviewService {
       String previousFindings,
       String repoInstructions) {}
 
-  private ReviewResponse streamOnce(ReviewSession session, PromptInputs inputs, int attempt) {
+  /**
+   * The prompt sections for the final summary call (#53), pre-escaped for templating: the
+   * already-computed findings to roll up, the changed-files overview, and the PR-level context.
+   */
+  public record SummaryInputs(
+      String prContext,
+      String findings,
+      String changedFiles,
+      String previousFindings,
+      String repoInstructions) {}
+
+  private ReviewResponse streamOnce(
+      ReviewSession session,
+      Supplier<TokenStream> streamFactory,
+      int attempt,
+      boolean broadcastTokens) {
     var result = new CompletableFuture<ReviewResponse>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
     var lastFlushNanos = new AtomicLong(System.nanoTime());
     var cancelled = new AtomicBoolean(false);
 
+    // Blocking batch calls still accumulate the buffer (so the final parse has the full text) but
+    // skip the per-token dashboard broadcast: the flush is a no-op when not streaming tokens.
     Runnable flushStream =
-        () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos);
+        broadcastTokens
+            ? () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos)
+            : () -> {};
 
     ReviewSessionContext.bind(session.id, attempt);
     TokenStream stream = null;
     try {
-      stream =
-          prReviewer.reviewStream(
-              inputs.diff(),
-              inputs.prContext(),
-              inputs.baseComparison(),
-              inputs.projectStack(),
-              inputs.relatedTests(),
-              inputs.previousFindings(),
-              inputs.repoInstructions());
+      stream = streamFactory.get();
 
       stream
           .onPartialResponse(

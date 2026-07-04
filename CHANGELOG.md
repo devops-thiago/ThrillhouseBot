@@ -2,6 +2,12 @@
 
 All notable changes to ThrillhouseBot.
 
+## [Unreleased]
+
+### Added
+
+- **Whole-PR review for large diffs (token-aware, multi-call)**: the reviewer no longer truncates big PRs at a flat 5000-line cap that silently dropped files. It now estimates prompt size in **tokens** (jtokkit), splits the diff into priority-ordered, token-budgeted batches, reviews each in its own call, and rolls them up with a single summary call — so every file is covered by some call or **listed by name** as omitted, never dropped silently. Normal-size PRs are unchanged (one streaming call). New settings: `review.max-input-tokens`, `review.output-buffer-tokens`, `review.max-ai-calls`, `review.token-safety-margin`; `review.max-diff-lines` keeps its 5000-line default but now only bounds the single-call renders (the on-demand commands, maintainer replies, base comparison, and budgeting-disabled review — token-budgeted review calls ignore it; `0` still disables the cap). Exact per-model token counts are a follow-up (#239) (#53)
+
 ## [0.3.1] — 2026-07-02
 
 A patch release of disclosure and correctness fixes found dogfooding v0.3.0: truncation is now disclosed on every surface (the formal review body, the check run, and the on-demand commands), the PR summary reports GitHub's authoritative totals, `/summary` regenerates a deleted summary comment, sequence diagrams render again, CI hold copy no longer mislabels checks as required, and the label reconciler sees every page of a PR's labels.
