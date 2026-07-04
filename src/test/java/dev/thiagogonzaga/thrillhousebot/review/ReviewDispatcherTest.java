@@ -25,6 +25,7 @@ import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -399,6 +400,19 @@ class ReviewDispatcherTest {
     // ...but the drain loop re-checks, so only the first review runs and only one window starts.
     verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
     verify(rateLimiter, times(1)).recordCompletion("owner", "repo", 17);
+  }
+
+  @Test
+  void shouldSkipAutomaticReviewWhenWindowClosedAfterDispatchGate() {
+    // Pins the dispatch race: the controller gate passed before a prior worker recorded its
+    // completion, so this fresh worker's very first batch must hit the re-check and skip.
+    when(rateLimiter.isThrottled("owner", "repo", 19)).thenReturn(true);
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 19, "sha1"));
+
+    awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
+    verify(orchestrator, never()).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(rateLimiter, never()).recordCompletion(anyString(), anyString(), anyInt());
   }
 
   @Test

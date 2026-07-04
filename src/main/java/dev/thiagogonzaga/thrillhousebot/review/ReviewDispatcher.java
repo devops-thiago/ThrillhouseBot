@@ -115,14 +115,16 @@ public final class ReviewDispatcher {
     while (true) {
       var batch = state.takeNextReview();
 
-      // The controller's rate-limit gate ran before dispatch, but a request coalesced behind an
-      // in-flight review passed that gate before the window opened — re-check here so it cannot
-      // run a second automatic review right after the one that just recorded its completion.
+      // The controller's rate-limit gate ran before dispatch, so a request that passed it before
+      // the window opened can reach this worker — coalesced behind the in-flight review that then
+      // recorded its completion, or dispatched in the gap between a prior worker's
+      // recordCompletion and its state removal. Re-checking every batch closes both paths: no
+      // batch is reviewed once the window is closed, whichever way it got here.
       var req = batch.request();
       if (!req.isManualTrigger()
           && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
         log.info(
-            "Skipping coalesced automatic review for {}/{} #{} — within the auto-review "
+            "Skipping automatic review for {}/{} #{} — within the auto-review "
                 + "rate window (manual /review bypasses)",
             req.owner(),
             req.repo(),
