@@ -2317,6 +2317,82 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldStillPostReviewWhenForceSummarySetButSummaryPostFails() {
+      // The summary post is best-effort; when it fails on a summary-only re-run the skip must not
+      // fire too, or the run would leave nothing on the PR at all under a green check run. The
+      // no-issues review is the fallback visible outcome.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.ReviewResponse(
+                        1L,
+                        "",
+                        "APPROVED",
+                        "abc12345",
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+            .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        doThrow(new RuntimeException("summary post failed"))
+            .when(commentClient)
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "(manual summary)",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                true,
+                "main",
+                true));
+
+        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        verify(reviewClient)
+            .createReview(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq(42), captor.capture());
+        assertEquals("APPROVE", captor.getValue().event());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
     void shouldSkipSummaryWhenABotSummaryCommentAlreadyExistsButNoReviewDoes() {
       // Regression for the duplicate-summary bug: a first round held back only by pending CI posts
       // the summary issue-comment but leaves no review. On the next round no bot review

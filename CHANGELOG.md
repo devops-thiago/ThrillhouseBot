@@ -10,7 +10,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
-- **`/summary` no longer posts a duplicate "no issues found" review after the regenerated summary**: the command re-runs a review under the hood to rebuild the summary comment (#297), but the run's formal review still posted too — on an already-reviewed PR with no new findings, that meant a fresh "Everything's coming up Thrillhouse! No issues found" approval landing right after the summary it duplicates (dogfooded on ThrillhouseBot#256). A summary-only re-run now skips the no-new-findings review on a PR that already carries a formal bot review; a first review still posts normally, new findings still post, unresolved previous findings still post their reply-on-the-thread guidance, and a truncated diff still posts its partial-review disclosure
+- **`/summary` no longer posts a duplicate "no issues found" review after the regenerated summary**: the command re-runs a review under the hood to rebuild the summary comment (#297), but the run's formal review still posted too — on an already-reviewed PR with no new findings, that meant a fresh "Everything's coming up Thrillhouse! No issues found" approval landing right after the summary it duplicates (dogfooded on ThrillhouseBot#256). A summary-only re-run now skips the no-new-findings review on a PR that already carries a formal bot review — but only when the regenerated summary actually posted (a failed best-effort summary post leaves the review as the run's visible outcome); a first review still posts normally, new findings still post, unresolved previous findings still post their reply-on-the-thread guidance, and a truncated diff still posts its partial-review disclosure
 
 ## [0.3.1] — 2026-07-02
 

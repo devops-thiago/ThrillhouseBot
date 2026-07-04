@@ -77,8 +77,13 @@ public class ReviewPublisher {
    * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
    * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
    * regenerate a summary that was deleted from the PR even though a review already ran.
+   *
+   * @return {@code true} when the summary comment was actually created; {@code false} when this
+   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses the
+   *     no-issues review on a summary-only re-run only when this returned {@code true} — a failed
+   *     or skipped summary must leave the review as the run's visible outcome.
    */
-  void publishSummary(
+  boolean publishSummary(
       String auth,
       String owner,
       String repo,
@@ -93,7 +98,9 @@ public class ReviewPublisher {
           repo,
           prNumber,
           new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
+      return true;
     }
+    return false;
   }
 
   /**
@@ -147,7 +154,8 @@ public class ReviewPublisher {
 
   /**
    * Back-compat convenience for the automatic {@code pull_request} / {@code /review} paths and
-   * tests, which are never a summary-only re-run. Defaults {@code forceSummary} to {@code false}.
+   * tests, which are never a summary-only re-run. Defaults {@code summaryReposted} to {@code
+   * false}.
    */
   void postReview(
       String auth,
@@ -160,6 +168,12 @@ public class ReviewPublisher {
     postReview(auth, owner, repo, prNumber, commitSha, result, lineResolver, false);
   }
 
+  /**
+   * @param summaryReposted {@code true} only on a summary-only re-run ({@code /summary}) whose
+   *     regenerated summary comment was actually posted — the caller must AND the request's {@code
+   *     forceSummary} with {@code publishSummary}'s outcome, so a failed summary post never
+   *     suppresses the review too and leave the run with no visible outcome at all.
+   */
   void postReview(
       String auth,
       String owner,
@@ -168,7 +182,7 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver,
-      boolean forceSummary) {
+      boolean summaryReposted) {
     if (!result.hasIssues()) {
       // A summary-only re-run (/summary) on a PR that already carries a formal bot review exists
       // to regenerate the summary comment, which publishSummary just re-posted. A no-new-findings
@@ -177,9 +191,9 @@ public class ReviewPublisher {
       // findings below always post (a re-run may genuinely surface them). Two exclusions mirror
       // the first-review skip in postNoIssuesReview: unresolved previous findings still post
       // (their COMMENT/REQUEST_CHANGES carries "reply on the thread" guidance the summary lacks)
-      // and a truncated diff still posts (the partial-review notice must survive a failed
-      // best-effort summary).
-      if (forceSummary
+      // and a truncated diff still posts (the partial-review notice must not depend on the summary
+      // alone).
+      if (summaryReposted
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && !result.truncated()) {
