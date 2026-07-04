@@ -36,14 +36,18 @@ public final class ReviewDispatcher {
 
   private final ExecutorService reviewExecutor;
   private final ReviewOrchestrator orchestrator;
+  private final AutoReviewRateLimiter autoReviewRateLimiter;
 
   private final ConcurrentHashMap<PrKey, PerPrState> states = new ConcurrentHashMap<>();
 
   @Inject
   public ReviewDispatcher(
-      @ReviewExecutor ExecutorService reviewExecutor, ReviewOrchestrator orchestrator) {
+      @ReviewExecutor ExecutorService reviewExecutor,
+      ReviewOrchestrator orchestrator,
+      AutoReviewRateLimiter autoReviewRateLimiter) {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
+    this.autoReviewRateLimiter = autoReviewRateLimiter;
   }
 
   /**
@@ -110,23 +114,50 @@ public final class ReviewDispatcher {
   private void drainReviews(PrKey key, PerPrState state) {
     while (true) {
       var batch = state.takeNextReview();
-      logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
 
-      try {
-        orchestrator.review(batch.request());
-      } catch (RuntimeException e) {
-        log.error(
-            "Review failed for {}/{} #{}",
-            batch.request().owner(),
-            batch.request().repo(),
-            batch.request().prNumber(),
-            e);
+      // The controller's rate-limit gate ran before dispatch, so a request that passed it before
+      // the window opened can reach this worker — coalesced behind the in-flight review that then
+      // recorded its completion, or dispatched in the gap between a prior worker's
+      // recordCompletion and its state removal. Re-checking every batch closes both paths: no
+      // batch is reviewed once the window is closed, whichever way it got here.
+      var req = batch.request();
+      if (!req.isManualTrigger()
+          && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+        log.info(
+            "Skipping automatic review for {}/{} #{} — within the auto-review "
+                + "rate window (manual /review bypasses)",
+            req.owner(),
+            req.repo(),
+            req.prNumber());
+      } else {
+        reviewBatch(batch);
       }
 
       if (state.tryRetireIfIdle()) {
         states.remove(key, state);
         return;
       }
+    }
+  }
+
+  private void reviewBatch(PerPrState.ReviewBatch batch) {
+    logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
+    try {
+      var surfaced = orchestrator.review(batch.request());
+      // Start the throttle window only when a review was actually posted, and at completion
+      // (not dispatch) so a long-running review does not eat into it. A failed review must not
+      // block the retry on the next push, and manual reviews never shift the automatic window.
+      if (surfaced && !batch.request().isManualTrigger()) {
+        autoReviewRateLimiter.recordCompletion(
+            batch.request().owner(), batch.request().repo(), batch.request().prNumber());
+      }
+    } catch (RuntimeException e) {
+      log.error(
+          "Review failed for {}/{} #{}",
+          batch.request().owner(),
+          batch.request().repo(),
+          batch.request().prNumber(),
+          e);
     }
   }
 
