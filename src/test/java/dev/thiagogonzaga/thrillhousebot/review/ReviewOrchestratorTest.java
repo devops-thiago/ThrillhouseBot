@@ -2307,6 +2307,87 @@ class ReviewOrchestratorTest {
             .createComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), body.capture());
         assertTrue(body.getValue().body().startsWith(PrSummaryGenerator.SUMMARY_HEADING));
+        // ...but NO formal review is posted alongside it: the PR already carries one, so a fresh
+        // "no issues found" approval right after the summary would just restate it (the
+        // ThrillhouseBot#256 dogfood regression).
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void shouldStillPostReviewWhenForceSummarySetButSummaryPostFails() {
+      // The summary post is best-effort; when it fails on a summary-only re-run the skip must not
+      // fire too, or the run would leave nothing on the PR at all under a green check run. The
+      // no-issues review is the fallback visible outcome.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(checkRunClient.getRequiredStatusChecks(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.ReviewResponse(
+                        1L,
+                        "",
+                        "APPROVED",
+                        "abc12345",
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+            .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        doThrow(new RuntimeException("summary post failed"))
+            .when(commentClient)
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "(manual summary)",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                true,
+                "main",
+                true));
+
+        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        verify(reviewClient)
+            .createReview(
+                anyString(), anyString(), eq("owner"), eq("repo"), eq(42), captor.capture());
+        assertEquals("APPROVE", captor.getValue().event());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -4068,6 +4149,118 @@ class ReviewOrchestratorTest {
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       assertEquals("COMMENT", captor.getValue().event());
       assertTrue(captor.getValue().body().contains("**build**"));
+    }
+
+    @Test
+    void postReviewShouldSkipNoIssuesReviewOnSummaryOnlyRerun() {
+      // /summary re-runs the review only to regenerate the summary comment; on a PR that already
+      // carries a formal bot review, an approval saying "no issues found" right after that summary
+      // would just restate it (the ThrillhouseBot#256 dogfood duplicate).
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldSkipCiPendingCommentReviewOnSummaryOnlyRerun() {
+      // Same summary-only re-run, held back only by pending CI: the regenerated summary already
+      // carries the CI table, so the COMMENT review would duplicate it too.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldStillPostUnresolvedCommentReviewOnSummaryOnlyRerun() {
+      // Unresolved previous findings are excluded from the summary-only skip: their review
+      // carries "reply on the thread" guidance the summary lacks — same standard as the
+      // first-review skip.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("remain unresolved"));
+    }
+
+    @Test
+    void postReviewShouldStillPostNoIssuesReviewOnSummaryTriggeredFirstReview() {
+      // /summary on a PR with no formal review yet runs the ordinary first review; its approval
+      // must still post.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("APPROVE", captor.getValue().event());
+    }
+
+    @Test
+    void postReviewShouldStillPostReviewOnSummaryOnlyRerunWhenTruncated() {
+      // A truncated diff must stay disclosed on the PR even on a summary-only re-run: the summary
+      // is posted best-effort, so the review body is the surface that can never be dropped.
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), List.of(), 3);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("partial review"));
     }
   }
 

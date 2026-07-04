@@ -269,11 +269,21 @@ public class ReviewOrchestrator {
       // The summary comment is first-review enrichment, not the review itself: a transient failure
       // posting it must not abort before postReview and surface a hard FAILED check for a review
       // that would otherwise post. Keep it best-effort; the review below is the critical step.
-      publishSummaryBestEffort(auth, req, result);
+      boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
+      // The summary-only skip applies only when the regenerated summary actually landed on the
+      // PR — a failed best-effort summary post must leave the review as the run's visible outcome.
       reviewPublisher.postReview(
-          auth, req.owner(), req.repo(), req.prNumber(), req.commitSha(), result, lineResolver);
+          new ReviewPublisher.PostReviewRequest(
+              auth,
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              req.commitSha(),
+              result,
+              lineResolver,
+              req.forceSummary() && summaryPosted));
 
       // The review and its comments are on the PR now. Everything past this point is
       // best-effort and independent: each step runs in isolation so one failure can't abort the
@@ -348,10 +358,14 @@ public class ReviewOrchestrator {
    * Posts the PR summary comment, swallowing any failure: it is first-review enrichment, not the
    * review itself, so a transient failure here must not abort before {@code postReview} and surface
    * a hard FAILED check for a review that would otherwise post.
+   *
+   * @return {@code true} when the summary comment was actually created — {@code false} on a skip or
+   *     a swallowed failure, so the summary-only review skip never fires without a summary on the
+   *     PR.
    */
-  private void publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
+  private boolean publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
     try {
-      reviewPublisher.publishSummary(
+      return reviewPublisher.publishSummary(
           auth, req.owner(), req.repo(), req.prNumber(), result, req.forceSummary());
     } catch (RuntimeException e) {
       Log.warnf(
@@ -360,6 +374,7 @@ public class ReviewOrchestrator {
           req.owner(),
           req.repo(),
           req.prNumber());
+      return false;
     }
   }
 
