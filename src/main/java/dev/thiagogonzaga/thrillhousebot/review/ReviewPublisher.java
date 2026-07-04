@@ -218,7 +218,7 @@ public class ReviewPublisher {
    */
   private static void appendTruncationNotice(List<String> bodyParts, ReviewResult result) {
     if (result.truncated()) {
-      bodyParts.add(ReviewResult.truncationNotice(result.omittedFiles()).strip());
+      bodyParts.add(result.truncationNotice().strip());
     }
   }
 
@@ -367,7 +367,7 @@ public class ReviewPublisher {
       if (!sb.isEmpty()) {
         sb.append("\n\n");
       }
-      sb.append(ReviewResult.truncationNotice(result.omittedFiles()).strip());
+      sb.append(result.truncationNotice().strip());
     }
     return sb.toString();
   }

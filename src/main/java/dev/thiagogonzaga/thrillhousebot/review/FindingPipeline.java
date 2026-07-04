@@ -333,8 +333,30 @@ public class FindingPipeline {
       Log.warnf(
           "Summary call input over budget: serializing %d of %d findings (most severe kept)",
           kept.size(), findings.size());
+      // The model is told the true totals so summary counts and prose describe the full review,
+      // not the serialized subset — the verdict and posted findings always use the full list.
+      json = json + "\n" + trueTotalsNote(findings, findings.size() - kept.size());
     }
     return json;
+  }
+
+  private static String trueTotalsNote(List<ReviewResponse.Finding> findings, int notShown) {
+    var critical = 0;
+    var high = 0;
+    var medium = 0;
+    var low = 0;
+    for (var finding : findings) {
+      switch (statusRankForSeverity(finding.risk())) {
+        case 3 -> critical++;
+        case 2 -> high++;
+        case 1 -> medium++;
+        default -> low++;
+      }
+    }
+    return String.format(
+        "(+%d more findings not shown — base the summary counts on the true totals:"
+            + " %d total, %d critical, %d high, %d medium, %d low)",
+        notShown, findings.size(), critical, high, medium, low);
   }
 
   private static int statusRankForSeverity(String risk) {

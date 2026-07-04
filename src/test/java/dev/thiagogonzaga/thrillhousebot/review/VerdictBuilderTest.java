@@ -19,8 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
@@ -29,6 +31,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 /**
  * Unit tests for {@link VerdictBuilder#build}'s truncation accounting (#53): the disclosed omitted
@@ -38,15 +41,17 @@ import org.junit.jupiter.api.Test;
 class VerdictBuilderTest {
 
   private final FollowUpAnalyzer followUpAnalyzer = mock(FollowUpAnalyzer.class);
+  private final PrSummaryGenerator summaryGenerator = mock(PrSummaryGenerator.class);
 
   private final VerdictBuilder builder =
       new VerdictBuilder(
-          mock(PrSummaryGenerator.class),
-          followUpAnalyzer,
-          BotIdentity.from(List.of("thrillhousebot[bot]")));
+          summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
 
   {
     lenient().when(followUpAnalyzer.unresolvedFindings(any(), any())).thenReturn(List.of());
+    lenient()
+        .when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        .thenReturn("");
   }
 
   /** A context whose legacy diff render dropped {@code lineCapOmitted} files. */
@@ -113,6 +118,43 @@ class VerdictBuilderTest {
 
     assertEquals(1, result.omittedFiles());
     assertTrue(result.truncated());
+  }
+
+  @Test
+  void uncoveredFilesAreNamedOnTheDisclosureSurfaces() {
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("big.java"), List.of("huge.java"), true);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    // The banner names both classes of uncovered files — "reported by name" must hold on the
+    // user-facing surfaces, not only in the summary model's prompt.
+    assertTrue(
+        result.summaryMarkdown().contains("omitted entirely (big.java)"), result.summaryMarkdown());
+    assertTrue(
+        result.summaryMarkdown().contains("partially analyzed (huge.java)"),
+        result.summaryMarkdown());
+    // The check-run copy splits the counts: a clipped file was analyzed in part, not omitted.
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("1 file(s) omitted, 1 file(s) partially analyzed"), checkSummary);
+  }
+
+  @Test
+  void budgetOmittedFilesAreDroppedFromTheWalkthroughRows() {
+    var ctx = contextWithLineCapOmissions(0); // reviewable: a.java
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java"), List.of(), true);
+    var rowsCaptor = ArgumentCaptor.forClass(List.class);
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    verify(summaryGenerator)
+        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
+    // A file the model never saw must not appear in the walkthrough as if it were reviewed; it is
+    // disclosed by name in the truncation banner instead.
+    assertTrue(rowsCaptor.getValue().isEmpty(), rowsCaptor.getValue().toString());
   }
 
   @Test

@@ -293,7 +293,9 @@ public final class PrReviewPrompts {
             Rules:
             - "findings" MUST be an empty array []. Do not invent, restate, or re-rank findings;
               they are final.
-            - Base summary.total_findings and the per-severity counts on the findings provided below.
+            - Base summary.total_findings and the per-severity counts on the findings provided
+              below — unless a "(+N more findings not shown …)" note follows the array; use that
+              note's stated true totals then, since the list was truncated to fit your input.
             - overall_assessment and pr_purpose must be consistent with those findings and the
               changed-files list; do not contradict them.
 

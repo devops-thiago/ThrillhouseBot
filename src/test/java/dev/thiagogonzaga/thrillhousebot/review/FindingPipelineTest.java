@@ -335,7 +335,12 @@ class FindingPipelineTest {
 
     pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    assertEquals("[]", captor.getValue().findings());
+    // Nothing fits: an empty array is sent, but the true totals still ride along so the summary
+    // model does not describe the review as finding-free.
+    assertTrue(captor.getValue().findings().startsWith("[]"), captor.getValue().findings());
+    assertTrue(
+        captor.getValue().findings().contains("more findings not shown"),
+        captor.getValue().findings());
   }
 
   @Test
@@ -367,6 +372,7 @@ class FindingPipelineTest {
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
     var high = new ReviewResponse.Finding("high", "high", "a.java", 1, "H", "d", "o", "n");
+    var medium = new ReviewResponse.Finding("medium", "high", "a.java", 3, "M", "d", "o", "n");
     var nullRisk = new ReviewResponse.Finding(null, "high", "a.java", 2, "N", "d", "o", "n");
     var critical = new ReviewResponse.Finding("critical", "high", "b.java", 1, "C", "d", "o", "n");
 
@@ -385,7 +391,7 @@ class FindingPipelineTest {
                 + 1);
 
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(high, nullRisk), List.of(), null))
+        .thenReturn(new ReviewResponse(List.of(high, medium, nullRisk), List.of(), null))
         .thenReturn(new ReviewResponse(List.of(critical), List.of(), null));
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))
@@ -395,12 +401,15 @@ class FindingPipelineTest {
         pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
     // The response keeps every finding; only the summary-call serialization is clamped, keeping
-    // the most severe finding.
-    assertEquals(3, result.findings().size());
+    // the most severe finding, and the true totals ride along so the summary model's counts and
+    // narrative describe the full review rather than the serialized subset.
+    assertEquals(4, result.findings().size());
     var serialized = captor.getValue().findings();
     assertTrue(serialized.contains("\"C\""), serialized);
     assertFalse(serialized.contains("\"H\""), serialized);
     assertFalse(serialized.contains("\"N\""), serialized);
+    assertTrue(serialized.contains("+3 more findings not shown"), serialized);
+    assertTrue(serialized.contains("4 total, 1 critical, 1 high, 1 medium, 1 low"), serialized);
   }
 
   @Test

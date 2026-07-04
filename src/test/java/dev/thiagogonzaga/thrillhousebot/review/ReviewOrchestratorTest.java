@@ -1033,7 +1033,8 @@ class ReviewOrchestratorTest {
               offending,
               0,
               false,
-              false);
+              false,
+              ReviewResult.TruncationDetail.EMPTY);
 
       String summary = VerdictBuilder.checkSummaryForResult(result);
 
