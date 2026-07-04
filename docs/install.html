@@ -116,8 +116,11 @@
       // Keep a path (e.g. a Smee channel) but drop any trailing slash.
       const base = url.origin + url.pathname;
       // Smee delivers webhooks only at the channel root; the smee client
-      // forwards them to the bot's local /api/webhook.
-      return { base: base.replace(/\/+$/, ""), isSmee: /(^|\.)smee\.io$/i.test(url.hostname) };
+      // forwards them to the bot's local /api/webhook. A Smee URL without a
+      // channel path would register a webhook GitHub delivers into the void.
+      const isSmee = /(^|\.)smee\.io$/i.test(url.hostname);
+      if (isSmee && url.pathname.replace(/\/+$/, "") === "") return { smeeMissingChannel: true };
+      return { base: base.replace(/\/+$/, ""), isSmee };
     }
 
     function update() {
@@ -126,9 +129,11 @@
       if (!base) {
         submitBtn.disabled = true;
         previewUrl.textContent = previewWebhook.textContent = previewCallback.textContent = "—";
-        status.textContent = hostInput.value.trim()
-          ? "Enter a valid hostname, e.g. bot.example.com"
-          : "";
+        status.textContent = normalized && normalized.smeeMissingChannel
+          ? "Enter your full Smee channel URL, e.g. https://smee.io/AbCd1234"
+          : hostInput.value.trim()
+            ? "Enter a valid hostname, e.g. bot.example.com"
+            : "";
         return;
       }
       const webhookUrl = normalized.isSmee ? base : base + "/api/webhook";
