@@ -60,8 +60,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # One-time prerequisite: enable Pages with Settings → Pages → Source:
+      # "GitHub Actions" (or `gh api -X POST repos/<owner>/<repo>/pages
+      # -f build_type=workflow`). GITHUB_TOKEN cannot enable Pages itself —
+      # configure-pages `enablement` needs an admin token, so it is not used.
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-        with:
-          enablement: true
       - id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
