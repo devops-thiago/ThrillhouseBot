@@ -245,6 +245,16 @@ public interface ThrillhouseConfig {
     Duration manualTriggerAuthTimeout();
 
     /**
+     * Upper bound on the 👀 command-ack reaction (token mint on a cold cache plus the reaction
+     * POST), which runs on the synchronous webhook acknowledgement thread. GitHub expects the
+     * {@code 200} ACK within ~10s, so when this elapses the wait is abandoned — the reaction may
+     * still land late in the background — instead of letting a degraded GitHub delay the ACK.
+     */
+    @WithDefault("3s")
+    @WithName("ack-reaction-timeout")
+    Duration ackReactionTimeout();
+
+    /**
      * Minimum interval between automatic (webhook-triggered) reviews of the same PR. While the last
      * automatic review completed less than this ago, {@code pull_request} events for the PR are
      * skipped silently — even when the head SHA changed — capping AI spend on noisy repositories. A

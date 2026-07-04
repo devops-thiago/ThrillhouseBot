@@ -69,6 +69,8 @@ class WebhookControllerTest {
 
   @Mock private PrPauseService prPauseService;
 
+  @Mock private AckReactionService ackReactionService;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
@@ -96,6 +98,7 @@ class WebhookControllerTest {
             manualReviewAuthorizer,
             commentCommandService,
             prPauseService,
+            ackReactionService,
             mapper);
   }
 
@@ -647,6 +650,150 @@ class WebhookControllerTest {
     assertEquals(77, ctx.getValue().prNumber());
     // The command service (not the controller) does the authorization and the AI work.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldAddEyesReactionOnReviewCommand() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+  }
+
+  @Test
+  void shouldAddEyesReactionOnNonReviewCommand() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/help")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+  }
+
+  @Test
+  void shouldAddEyesReactionEvenWhenReviewUnauthorized() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("stranger")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized(
+            anyString(), anyString(), anyLong(), anyString(), any()))
+        .thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 88, "owner/repo", "stranger", "/review", "NONE")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    // The ack fires before authorization: the commenter still sees the command was noticed even
+    // when it is then rejected.
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldAddEyesReactionOnReviewCommandOnPausedPr() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(prPauseService.isPaused("owner", "repo", 77)).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    // The ack also precedes the pause gate — the command itself was still seen.
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+  }
+
+  @Test
+  void shouldNotReactOnConversationalMention() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("@thrillhousebot is this thread-safe?"))
+        .thenReturn(CommentCommand.NONE);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot is this thread-safe?"))
+        .thenReturn(true);
+    when(replyDispatcher.dispatch(any(MaintainerReplyService.ReplyTask.class))).thenReturn(true);
+
+    var body =
+        buildIssueCommentPayload(
+                "created", 77, "owner/repo", "octocat", "@thrillhousebot is this thread-safe?")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    // A bare conversational mention is not a command — no 👀 ack, only the reply.
+    verify(replyDispatcher).dispatch(any(MaintainerReplyService.ReplyTask.class));
+    verifyNoInteractions(ackReactionService);
+  }
+
+  @Test
+  void shouldNotReactOnReviewThreadMention() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("@thrillhousebot why is this flagged?"))
+        .thenReturn(true);
+    when(replyDispatcher.dispatch(any(MaintainerReplyService.ReplyTask.class))).thenReturn(true);
+
+    var body =
+        buildReviewCommentPayload(
+                "created",
+                42,
+                "owner/repo",
+                "octocat",
+                "@thrillhousebot why is this flagged?",
+                99L,
+                1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+
+    // An inline-thread mention is conversational, never a command — no 👀 ack.
+    verify(replyDispatcher).dispatch(any(MaintainerReplyService.ReplyTask.class));
+    verifyNoInteractions(ackReactionService);
+  }
+
+  @Test
+  void shouldNotReactWhenCommandInstallationMissing() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
+    when(triggerDetector.isBotComment("user")).thenReturn(false);
+
+    var body =
+        ("{"
+                + "\"action\":\"created\","
+                + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
+                + "\"comment\":{\"id\":1,\"body\":\"/help\",\"user\":{\"login\":\"user\",\"id\":1}},"
+                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+                + "\"installation\":null"
+                + "}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    // Without an installation there is no token to react with.
+    verifyNoInteractions(ackReactionService);
   }
 
   @Test
