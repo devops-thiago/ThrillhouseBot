@@ -4116,6 +4116,35 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void postReviewShouldStillPostUnresolvedCommentReviewOnSummaryOnlyRerun() {
+      // Unresolved previous findings are excluded from the summary-only skip: their review
+      // carries "reply on the thread" guidance the summary lacks — same standard as the
+      // first-review skip.
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("remain unresolved"));
+    }
+
+    @Test
     void postReviewShouldStillPostNoIssuesReviewOnSummaryTriggeredFirstReview() {
       // /summary on a PR with no formal review yet runs the ordinary first review; its approval
       // must still post.

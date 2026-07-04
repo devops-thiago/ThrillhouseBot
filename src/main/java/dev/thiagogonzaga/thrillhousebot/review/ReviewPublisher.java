@@ -173,11 +173,16 @@ public class ReviewPublisher {
       // A summary-only re-run (/summary) on a PR that already carries a formal bot review exists
       // to regenerate the summary comment, which publishSummary just re-posted. A no-new-findings
       // review here would only restate the verdict already on the PR right after that summary —
-      // skip it. First reviews keep posting (the /summary-before-any-review path), new findings
-      // below always post (a re-run may genuinely surface them), and a truncated diff still posts
-      // so the partial-review notice survives a failed best-effort summary — same standard as the
-      // first-review skip in postNoIssuesReview.
-      if (forceSummary && !result.isFirstReview() && !result.truncated()) {
+      // skip it. First reviews keep posting (the /summary-before-any-review path), and new
+      // findings below always post (a re-run may genuinely surface them). Two exclusions mirror
+      // the first-review skip in postNoIssuesReview: unresolved previous findings still post
+      // (their COMMENT/REQUEST_CHANGES carries "reply on the thread" guidance the summary lacks)
+      // and a truncated diff still posts (the partial-review notice must survive a failed
+      // best-effort summary).
+      if (forceSummary
+          && !result.isFirstReview()
+          && result.unresolvedPreviousCount() == 0
+          && !result.truncated()) {
         Log.infof(
             "Skipping the no-issues review for %s/%s #%d — summary-only re-run on an"
                 + " already-reviewed PR",
