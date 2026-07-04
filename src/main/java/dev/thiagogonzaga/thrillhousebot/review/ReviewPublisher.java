@@ -153,6 +153,24 @@ public class ReviewPublisher {
   }
 
   /**
+   * Parameter object for {@link #postReview(PostReviewRequest)}.
+   *
+   * @param summaryReposted {@code true} only on a summary-only re-run ({@code /summary}) whose
+   *     regenerated summary comment was actually posted — the caller must AND the request's {@code
+   *     forceSummary} with {@code publishSummary}'s outcome, so a failed summary post never
+   *     suppresses the review too and leave the run with no visible outcome at all.
+   */
+  record PostReviewRequest(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String commitSha,
+      ReviewResult result,
+      DiffLineResolver lineResolver,
+      boolean summaryReposted) {}
+
+  /**
    * Back-compat convenience for the automatic {@code pull_request} / {@code /review} paths and
    * tests, which are never a summary-only re-run. Defaults {@code summaryReposted} to {@code
    * false}.
@@ -165,24 +183,18 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver) {
-    postReview(auth, owner, repo, prNumber, commitSha, result, lineResolver, false);
+    postReview(
+        new PostReviewRequest(auth, owner, repo, prNumber, commitSha, result, lineResolver, false));
   }
 
-  /**
-   * @param summaryReposted {@code true} only on a summary-only re-run ({@code /summary}) whose
-   *     regenerated summary comment was actually posted — the caller must AND the request's {@code
-   *     forceSummary} with {@code publishSummary}'s outcome, so a failed summary post never
-   *     suppresses the review too and leave the run with no visible outcome at all.
-   */
-  void postReview(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String commitSha,
-      ReviewResult result,
-      DiffLineResolver lineResolver,
-      boolean summaryReposted) {
+  void postReview(PostReviewRequest post) {
+    var auth = post.auth();
+    var owner = post.owner();
+    var repo = post.repo();
+    var prNumber = post.prNumber();
+    var commitSha = post.commitSha();
+    var result = post.result();
+    var lineResolver = post.lineResolver();
     if (!result.hasIssues()) {
       // A summary-only re-run (/summary) on a PR that already carries a formal bot review exists
       // to regenerate the summary comment, which publishSummary just re-posted. A no-new-findings
@@ -193,7 +205,7 @@ public class ReviewPublisher {
       // (their COMMENT/REQUEST_CHANGES carries "reply on the thread" guidance the summary lacks)
       // and a truncated diff still posts (the partial-review notice must not depend on the summary
       // alone).
-      if (summaryReposted
+      if (post.summaryReposted()
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && !result.truncated()) {

@@ -4160,7 +4160,9 @@ class ReviewOrchestratorTest {
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -4185,7 +4187,9 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
               0);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -4211,7 +4215,9 @@ class ReviewOrchestratorTest {
               List.of(),
               0);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -4228,7 +4234,9 @@ class ReviewOrchestratorTest {
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -4244,7 +4252,9 @@ class ReviewOrchestratorTest {
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), List.of(), 3);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor(), true);
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)

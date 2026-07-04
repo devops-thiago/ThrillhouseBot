@@ -275,14 +275,15 @@ public class ReviewOrchestrator {
       // The summary-only skip applies only when the regenerated summary actually landed on the
       // PR — a failed best-effort summary post must leave the review as the run's visible outcome.
       reviewPublisher.postReview(
-          auth,
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          req.commitSha(),
-          result,
-          lineResolver,
-          req.forceSummary() && summaryPosted);
+          new ReviewPublisher.PostReviewRequest(
+              auth,
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              req.commitSha(),
+              result,
+              lineResolver,
+              req.forceSummary() && summaryPosted));
 
       // The review and its comments are on the PR now. Everything past this point is
       // best-effort and independent: each step runs in isolation so one failure can't abort the
