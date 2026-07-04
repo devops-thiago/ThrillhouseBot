@@ -312,7 +312,7 @@ public class FindingPipeline {
       String changedFilesOverview) {
     var budget = budgetPlanner.perCallInputBudget();
     if (budget == Integer.MAX_VALUE) {
-      return withSerializationFallbackNote(findingsJson(findings), findings);
+      return withTrueTotalsIfIncomplete(findingsJson(findings), findings, findings.size());
     }
     var fixedSections =
         PrReviewPrompts.SUMMARY_SYSTEM
@@ -321,7 +321,13 @@ public class FindingPipeline {
             + changedFilesOverview
             + promptInputs.previousFindings()
             + promptInputs.repoInstructions();
-    var available = budget - tokenCounter.estimateTokens(fixedSections);
+    // The note's tokens are reserved up front so appending it after clamping cannot itself push
+    // the prompt back over the budget; the worst-case note (everything dropped) bounds all others.
+    var noteReserve =
+        findings.isEmpty()
+            ? 0
+            : tokenCounter.estimateTokens("\n" + trueTotalsNote(findings, findings.size()));
+    var available = budget - tokenCounter.estimateTokens(fixedSections) - noteReserve;
     var kept = new ArrayList<>(findings);
     kept.sort(Comparator.comparingInt(f -> -statusRankForSeverity(f.risk())));
     var json = findingsJson(kept);
@@ -333,28 +339,27 @@ public class FindingPipeline {
       Log.warnf(
           "Summary call input over budget: serializing %d of %d findings (most severe kept)",
           kept.size(), findings.size());
-      // The model is told the true totals so summary counts and prose describe the full review,
-      // not the serialized subset — the verdict and posted findings always use the full list.
-      json = json + "\n" + trueTotalsNote(findings, findings.size() - kept.size());
     }
-    return withSerializationFallbackNote(json, findings);
+    return withTrueTotalsIfIncomplete(json, findings, kept.size());
   }
 
   /**
-   * A findings-serialization failure degrades to "[]" ({@link #findingsJson}); with real findings
-   * present, the summary model must still be told the true totals or it would describe a clean PR
-   * while the verdict posts findings. No-op when the array is genuinely empty, non-"[]", or the
-   * clamp already appended its note.
+   * Appends the true-totals note whenever the serialized array shows fewer findings than exist —
+   * whether the clamp dropped them or serialization degraded to "[]" ({@link #findingsJson}'s
+   * failure fallback). The shown count is derived from the JSON itself, so a degraded "[]" after a
+   * clamp still reports every finding as not shown rather than only the clamped ones. The summary
+   * model then describes the full review; the verdict and posted findings always use the full list.
    */
-  private static String withSerializationFallbackNote(
-      String json, List<ReviewResponse.Finding> findings) {
-    if (findings.isEmpty() || !json.startsWith("[]") || json.contains("more findings not shown")) {
+  private static String withTrueTotalsIfIncomplete(
+      String json, List<ReviewResponse.Finding> findings, int kept) {
+    var shown = json.startsWith("[]") ? 0 : kept;
+    if (shown >= findings.size()) {
       return json;
     }
-    return json + "\n" + trueTotalsNote(findings, findings.size());
+    return json + "\n" + trueTotalsNote(findings, findings.size() - shown);
   }
 
-  private static String trueTotalsNote(List<ReviewResponse.Finding> findings, int notShown) {
+  static String trueTotalsNote(List<ReviewResponse.Finding> findings, int notShown) {
     var critical = 0;
     var high = 0;
     var medium = 0;

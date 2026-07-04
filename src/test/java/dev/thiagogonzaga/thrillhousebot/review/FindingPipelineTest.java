@@ -384,9 +384,14 @@ class FindingPipelineTest {
     var fixedSections =
         PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d" + overview;
     var criticalJson = new ObjectMapper().writeValueAsString(List.of(critical));
+    var allFindings = List.of(high, medium, nullRisk, critical);
+    var noteReserve =
+        tokenCounter.estimateTokens(
+            "\n" + FindingPipeline.trueTotalsNote(allFindings, allFindings.size()));
     when(budgetPlanner.perCallInputBudget())
         .thenReturn(
             tokenCounter.estimateTokens(fixedSections)
+                + noteReserve
                 + tokenCounter.estimateTokens(criticalJson)
                 + 1);
 
