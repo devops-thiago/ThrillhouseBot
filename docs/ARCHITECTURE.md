@@ -47,7 +47,8 @@ flowchart TD
     WH -->|verify HMAC, detect trigger| RO[review/ ReviewOrchestrator]
     RO -->|fetch diff, instructions, prior findings| GHC[github/ API clients]
     RO -->|build prompt, stream tokens| AI[review/ai/ LangChain4j]
-    AI -->|parse findings, verify| RO
+    AI -->|parse findings| RO
+    RO -->|verify findings — 2nd AI call, on by default| AI
     RO -->|post review + check run| GHC --> GH
     AI -. live tokens .-> DB[dashboard/ broadcaster]
     DB -->|WebSocket| FE[frontend/ Next.js UI]
@@ -84,6 +85,11 @@ sequenceDiagram
 
     TB->>AI: POST chat (diff + base comparison + review prompt)
     AI-->>TB: findings + risk levels + suggestions
+
+    opt Findings found and REVIEW_VERIFIER_ENABLED (default)
+        TB->>AI: POST chat (re-check each finding against the diff)
+        AI-->>TB: confirmed / downgraded / dropped findings
+    end
 
     alt AI fails
         TB->>GH: PATCH check-run → conclusion: failure
@@ -125,6 +131,11 @@ sequenceDiagram
 
     TB->>AI: POST chat (diff + prior findings + follow-up prompt)
     AI-->>TB: resolved / unresolved / new findings
+
+    opt Findings found and REVIEW_VERIFIER_ENABLED (default)
+        TB->>AI: POST chat (re-check each finding against the diff)
+        AI-->>TB: confirmed / downgraded / dropped findings
+    end
 
     alt AI fails
         Note over TB: Same sanitized error path as first review
@@ -184,6 +195,17 @@ sequenceDiagram
 
 PR reviews carry inline comments and suggestions; check runs carry pass/fail
 status for branch protection (no inline annotations on the check run itself).
+
+**AI call budget** — a review that reports findings makes **two** model calls
+by default: the review call plus a skeptical verification pass
+(`FindingVerifier`) that re-sends the diff and each candidate finding, dropping
+or downgrading what it can't confirm. It fails open — a verifier error keeps
+the original findings, so a broken verifier can never block a review. Under
+token-aware budgeting on large PRs this becomes N batch review calls + N
+per-batch verification calls + one summary call. `REVIEW_VERIFIER_ENABLED=false`
+skips only the AI pass (a deterministic hedging-language guard still runs) and
+trades cost for more false positives. Expect two model spans per flagged review
+in the traces and in the dashboard's session totals.
 
 Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
 `thrillhousebot.review.ai-timeout-seconds`. Cost and token metrics come from
