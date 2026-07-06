@@ -268,13 +268,11 @@ jobs:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
-      # Trivy's Maven analyzer resolves transitive POMs from Maven Central whenever they are absent
-      # from ~/.m2. A cold cache made it fan out enough requests to trip a 429 IP block (Maven
-      # Central then refuses every request from the runner for 30 min). Populate the local
-      # repository first so Trivy reads every POM locally and makes no remote calls; the ~/.m2 cache
-      # keeps warm runs from re-downloading at all.
+      # Trivy's Maven analyzer fetches any POM missing from ~/.m2; a partial cache still fans out
+      # enough Central requests to trip a 429 IP block. dependency:resolve (not go-offline) covers
+      # the POM set Trivy's SBOM pass actually reads — see trivy.dev troubleshooting / Maven 429.
       - name: Populate local Maven repository
-        run: ./mvnw -q -B dependency:go-offline
+        run: ./mvnw -q -B dependency:resolve
       - uses: ./.github/actions/trivy-scan
         with:
           scan-type: fs
