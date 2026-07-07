@@ -1,8 +1,9 @@
 # Contributing to ThrillhouseBot
 
 Thanks for your interest! Everything's coming up Thrillhouse. 🎉
+<!-- docs:contributing:start -->
 
-This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By taking
+This project follows the [Contributor Covenant](https://github.com/devops-thiago/ThrillhouseBot/blob/main/CODE_OF_CONDUCT.md). By taking
 part you agree to uphold it.
 
 ## Where to start
@@ -16,7 +17,7 @@ part you agree to uphold it.
 
 Prerequisites: **Java 25+**, **Node.js 20+** (dashboard only), **Docker** (native builds only). Maven is bundled via the wrapper.
 
-Follow the [README Quick Start](README.md#quick-start) for cloning, credentials, dev mode, and webhook forwarding — it is the single source of truth for setup commands. Contributor-specific extras:
+Follow the [README Quick Start](https://github.com/devops-thiago/ThrillhouseBot#quick-start) for cloning, credentials, dev mode, and webhook forwarding — it is the single source of truth for setup commands. Contributor-specific extras:
 
 ```bash
 cd frontend && npm install && npm run dev   # dashboard with hot reload
@@ -49,7 +50,8 @@ The project uses [Conventional Commits](https://www.conventionalcommits.org/): `
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Package flow:
+See the [architecture overview](https://devops-thiago.github.io/ThrillhouseBot/architecture/)
+(source: [docs/ARCHITECTURE.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/ARCHITECTURE.md)). Package flow:
 `webhook/` → `review/` (`review/ai/`) → `github/` → `dashboard/` (`frontend/`).
 
 ## Adding an AI provider
@@ -59,9 +61,11 @@ LangChain4j's OpenAI-compatible client, so a new provider is configuration: poin
 `AI_BASE_URL` and `AI_MODEL` at the endpoint, and add a matching
 `thrillhousebot.ai.pricing.<model>.input-per-1k` / `.output-per-1k` pair in
 `application.properties` if you want the dashboard to track its cost. The
-[README provider table](README.md#provider-support) lists the ones that are known
+[README provider table](https://github.com/devops-thiago/ThrillhouseBot#provider-support) lists the ones that are known
 to work.
 
 ## Reporting security issues
 
-Please **do not** open a public issue — see [SECURITY.md](SECURITY.md).
+Please **do not** open a public issue — see
+[SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md).
+<!-- docs:contributing:end -->

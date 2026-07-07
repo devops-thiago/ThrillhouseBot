@@ -1,4 +1,5 @@
 # How ThrillhouseBot compares
+<!-- docs:comparison:start -->
 
 A quick, honest look at where ThrillhouseBot sits next to other AI code-review
 tools. Facts verified June 2026 from the sources linked below; vendor
@@ -78,3 +79,4 @@ a live dashboard, and a small native binary.
     reports LLM cost in stdout, not in a separate dashboard.
     <https://kit.cased.com/pr-reviewer/> · <https://github.com/cased/kit>
 [^kit-lic]: cased-kit is published under MIT on PyPI and GitHub.
+<!-- docs:comparison:end -->
