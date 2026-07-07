@@ -21,6 +21,7 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
@@ -46,18 +47,22 @@ public class StartupConfigValidator {
 
   private final ThrillhouseConfig config;
   private final String aiApiKey;
+  private final ActiveModelSettings activeModel;
 
   @Inject
   public StartupConfigValidator(
       ThrillhouseConfig config,
-      @ConfigProperty(name = "quarkus.langchain4j.openai.api-key") Optional<String> aiApiKey) {
-    this(config, aiApiKey.orElse(""));
+      @ConfigProperty(name = "quarkus.langchain4j.openai.api-key") Optional<String> aiApiKey,
+      ActiveModelSettings activeModel) {
+    this(config, aiApiKey.orElse(""), activeModel);
   }
 
   /** Visible for tests: exercises validation outcomes without booting the CDI container. */
-  StartupConfigValidator(ThrillhouseConfig config, String aiApiKey) {
+  StartupConfigValidator(
+      ThrillhouseConfig config, String aiApiKey, ActiveModelSettings activeModel) {
     this.config = config;
     this.aiApiKey = aiApiKey;
+    this.activeModel = activeModel;
   }
 
   void onStart(@Observes StartupEvent event) {
@@ -82,6 +87,8 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateModelSettings(problems, config.ai().models());
+    validateEffectiveBudget(problems);
     validateReasoningEffort(problems, config.ai().reasoning());
 
     if (!problems.isEmpty()) {
@@ -90,6 +97,7 @@ public class StartupConfigValidator {
 
     logDashboardStatus();
     logReasoningStatus();
+    logActiveModelStatus();
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
@@ -126,19 +134,70 @@ public class StartupConfigValidator {
               + " (thrillhousebot.review.token-safety-margin): "
               + margin);
     }
-    // The buffer is subtracted from the margin-scaled ceiling at runtime, so validating it
-    // against the raw max would pass configs whose effective budget is still <= 0 (e.g.
-    // 48000/45000/0.9 -> -1800) — the silent-disable this validator exists to reject.
-    if (review.maxInputTokens() > 0
+  }
+
+  /**
+   * Validates every per-model settings entry (#50) — not just the active model's — because an
+   * operator who wrote an invalid value has expressed clear intent, and rejecting the typo at boot
+   * beats discovering it when {@code AI_MODEL} is later switched to that model.
+   */
+  private static void validateModelSettings(
+      List<String> problems, Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models) {
+    models.forEach(
+        (name, settings) -> {
+          var prefix = "thrillhousebot.ai.models.\"" + name + "\".";
+          settings
+              .maxInputTokens()
+              .filter(v -> v < 1)
+              .ifPresent(v -> problems.add(prefix + "max-input-tokens must be >= 1: " + v));
+          settings
+              .outputBufferTokens()
+              .filter(v -> v < 0)
+              .ifPresent(v -> problems.add(prefix + "output-buffer-tokens must be >= 0: " + v));
+          settings
+              .tokenSafetyMargin()
+              .filter(v -> v <= 0 || v > 1.0)
+              .ifPresent(v -> problems.add(prefix + "token-safety-margin must be in (0, 1]: " + v));
+          settings
+              .temperature()
+              .filter(v -> v < 0 || v > 2.0)
+              .ifPresent(v -> problems.add(prefix + "temperature must be in [0, 2]: " + v));
+          settings
+              .topP()
+              .filter(v -> v <= 0 || v > 1.0)
+              .ifPresent(v -> problems.add(prefix + "top-p must be in (0, 1]: " + v));
+          settings
+              .maxOutputTokens()
+              .filter(v -> v < 1)
+              .ifPresent(v -> problems.add(prefix + "max-output-tokens must be >= 1: " + v));
+        });
+  }
+
+  /**
+   * Rejects a configuration whose <em>effective</em> per-call budget for the active model is
+   * degenerate. The buffer is subtracted from the margin-scaled ceiling at runtime, so validating
+   * it against the raw max would pass configs whose effective budget is still {@code <= 0} (e.g.
+   * 48000/45000/0.9 -> -1800) — the silent-disable this validator exists to reject. Checked on the
+   * active model's resolved values (per-model overrides and input cap, #50), because that is the
+   * combination the budgeter will actually run with — the global combination alone may be broken
+   * yet fixed by an override, or vice versa.
+   */
+  private void validateEffectiveBudget(List<String> problems) {
+    var maxInputTokens = activeModel.maxInputTokens();
+    var margin = activeModel.tokenSafetyMargin();
+    if (maxInputTokens > 0
         && margin > 0
         && margin <= 1.0
-        && (int) (review.maxInputTokens() * margin) - review.outputBufferTokens() <= 0) {
+        && (int) (maxInputTokens * margin) - activeModel.outputBufferTokens() <= 0) {
       problems.add(
-          "REVIEW_OUTPUT_BUFFER_TOKENS ("
-              + review.outputBufferTokens()
-              + ") must be less than REVIEW_MAX_INPUT_TOKENS x REVIEW_TOKEN_SAFETY_MARGIN ("
-              + (int) (review.maxInputTokens() * margin)
-              + ") so there is budget left for the diff");
+          "the effective output buffer ("
+              + activeModel.outputBufferTokens()
+              + ") must be less than the effective max input tokens x safety margin ("
+              + (int) (maxInputTokens * margin)
+              + ") for model '"
+              + activeModel.modelName()
+              + "' so there is budget left for the diff (thrillhousebot.review.* with"
+              + " thrillhousebot.ai.models overrides)");
     }
   }
 
@@ -197,6 +256,46 @@ public class StartupConfigValidator {
               + " (thrillhousebot.ai.reasoning.effort): "
               + reasoning.effort());
     }
+  }
+
+  /**
+   * Surfaces the per-model resolution at boot (#50): warns when the model's input cap silently
+   * lowers the configured global budget (the operator raised {@code REVIEW_MAX_INPUT_TOKENS} past
+   * the model's window — or past the 128k default for a model with no entry — and should raise the
+   * cap deliberately), and logs the active generation parameters so a tuning entry that targets the
+   * wrong model name is visible immediately.
+   */
+  private void logActiveModelStatus() {
+    if (config.review().maxInputTokens() > 0 && activeModel.budgetClampedByModelCap()) {
+      log.warn(
+          "REVIEW_MAX_INPUT_TOKENS ({}) exceeds the input cap of model '{}' ({}); using {}. Raise"
+              + " thrillhousebot.ai.models.\"{}\".max-input-tokens if the model's context window"
+              + " allows it.",
+          config.review().maxInputTokens(),
+          activeModel.modelName(),
+          activeModel.modelInputCap(),
+          activeModel.maxInputTokens(),
+          activeModel.modelName());
+    }
+    if (config.ai().models().containsKey(activeModel.modelName())) {
+      var temperature = orProviderDefault(activeModel.temperature());
+      var topP = orProviderDefault(activeModel.topP());
+      var maxOutputTokens = orProviderDefault(activeModel.maxOutputTokens());
+      log.info(
+          "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
+              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={}",
+          activeModel.modelName(),
+          activeModel.maxInputTokens(),
+          activeModel.outputBufferTokens(),
+          activeModel.tokenSafetyMargin(),
+          temperature,
+          topP,
+          maxOutputTokens);
+    }
+  }
+
+  private static String orProviderDefault(Optional<? extends Number> value) {
+    return value.map(String::valueOf).orElse("provider default");
   }
 
   private void logReasoningStatus() {

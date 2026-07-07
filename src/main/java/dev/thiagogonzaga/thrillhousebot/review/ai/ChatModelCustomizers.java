@@ -17,26 +17,29 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import io.quarkiverse.langchain4j.ModelBuilderCustomizer;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.Optional;
 
 /**
- * Applies the operator's reasoning-effort setting ({@code thrillhousebot.ai.reasoning.*}) to the
- * OpenAI-compatible chat models.
+ * Applies the operator's model tuning to the OpenAI-compatible chat models: the reasoning-effort
+ * setting ({@code thrillhousebot.ai.reasoning.*}, #65) and the active model's generation parameters
+ * ({@code thrillhousebot.ai.models.*} — temperature, top-p, max output tokens; #50). Every
+ * parameter is applied only when configured, so an untouched knob keeps the provider default and
+ * non-reasoning models never see a reasoning argument they might reject.
  *
  * <p>Wiring goes through {@link ModelBuilderCustomizer} beans rather than the extension's {@code
- * quarkus.langchain4j.openai.chat-model.reasoning-effort} property for two reasons: the flag must
- * conditionally omit the parameter entirely when disabled (so non-reasoning models never see an
- * argument they might reject), and in quarkus-langchain4j 1.11.2 that property is only applied to
- * the blocking {@code ChatModel} — the streaming builder never reads it, which would silently skip
- * the main review call ({@link PrReviewer#reviewStream}). Setting the builder's own {@code
- * reasoningEffort} covers both models and leaves every other default request parameter untouched.
+ * quarkus.langchain4j.openai.chat-model.*} properties for two reasons: the values must be
+ * conditionally omitted entirely when unset, and in quarkus-langchain4j 1.11.2 those properties are
+ * only applied to the blocking {@code ChatModel} — the streaming builder never reads them, which
+ * would silently skip the main review call ({@link PrReviewer#reviewStream}). Setting the builders'
+ * own parameters covers both models and leaves every other default request parameter untouched.
  */
-public final class ReasoningEffortCustomizers {
+public final class ChatModelCustomizers {
 
-  private ReasoningEffortCustomizers() {}
+  private ChatModelCustomizers() {}
 
   /**
    * The {@code reasoning_effort} wire value to send, or empty when the feature is disabled and the
@@ -50,37 +53,47 @@ public final class ReasoningEffortCustomizers {
         : Optional.empty();
   }
 
-  /** Reasoning effort for the blocking model (verifier, describe, changelog, docs, replies). */
+  /** Tuning for the blocking model (verifier, describe, changelog, docs, replies). */
   @ApplicationScoped
   static class ChatModelCustomizer
       implements ModelBuilderCustomizer<OpenAiChatModel.OpenAiChatModelBuilder> {
 
     private final ThrillhouseConfig config;
+    private final ActiveModelSettings activeModel;
 
-    ChatModelCustomizer(ThrillhouseConfig config) {
+    ChatModelCustomizer(ThrillhouseConfig config, ActiveModelSettings activeModel) {
       this.config = config;
+      this.activeModel = activeModel;
     }
 
     @Override
     public void customize(OpenAiChatModel.OpenAiChatModelBuilder builder) {
       reasoningEffort(config).ifPresent(builder::reasoningEffort);
+      activeModel.temperature().ifPresent(builder::temperature);
+      activeModel.topP().ifPresent(builder::topP);
+      activeModel.maxOutputTokens().ifPresent(builder::maxTokens);
     }
   }
 
-  /** Reasoning effort for the streaming model (the main PR review call). */
+  /** Tuning for the streaming model (the main PR review call). */
   @ApplicationScoped
   static class StreamingChatModelCustomizer
       implements ModelBuilderCustomizer<OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder> {
 
     private final ThrillhouseConfig config;
+    private final ActiveModelSettings activeModel;
 
-    StreamingChatModelCustomizer(ThrillhouseConfig config) {
+    StreamingChatModelCustomizer(ThrillhouseConfig config, ActiveModelSettings activeModel) {
       this.config = config;
+      this.activeModel = activeModel;
     }
 
     @Override
     public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
       reasoningEffort(config).ifPresent(builder::reasoningEffort);
+      activeModel.temperature().ifPresent(builder::temperature);
+      activeModel.topP().ifPresent(builder::topP);
+      activeModel.maxOutputTokens().ifPresent(builder::maxTokens);
     }
   }
 }

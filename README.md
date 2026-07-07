@@ -208,8 +208,12 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 ## Configuration
 
 <!-- docs:configuration:start -->
-Configuration is read from environment variables (see `.env.example`). The AI
-variables are the ones you will change per provider:
+Configuration is read from environment variables (see `.env.example`). Short
+names (`AI_*`, `REVIEW_*`, `WEBHOOK_*`, ...) are explicit aliases; every other
+`thrillhousebot.*` key is settable through the standard Quarkus env-var mapping
+— uppercase with `.`/`-` replaced by `_` (e.g. `thrillhousebot.review.ignored-files`
+→ `THRILLHOUSEBOT_REVIEW_IGNORED_FILES`). The AI variables are the ones you
+will change per provider:
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -238,11 +242,17 @@ variables are the ones you will change per provider:
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
-| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review calls; large PRs are split into batches that each fit it. `0` disables token budgeting | `48000` |
+| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
 | `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, base comparison, budgeting-disabled review); token-budgeted review calls ignore it; `0` disables the cap | `5000` |
+| `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
+| `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
+| `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
+| `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per AI streaming attempt; keep it >= `AI_TIMEOUT` so timed-out attempts don't leave orphaned provider streams | `300` |
+| `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repo-relative path of the per-repo instructions file read on each review | `.github/thrillhousebot.md` |
+| `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs excluded from review — lockfiles, generated code, build output. `*` does not cross `/`; use `**` to span directories. Replaces (not extends) the default list, so re-include the defaults you still want | `**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |
@@ -281,6 +291,42 @@ thrillhousebot.ai.pricing.deepseek-chat.output-per-1k=0.00028
 
 If you switch to a different `AI_MODEL`, add a matching
 `thrillhousebot.ai.pricing.<model>.*` pair so the dashboard can compute cost.
+
+### Per-model AI settings
+
+Model-specific settings live under `thrillhousebot.ai.models.<model>.*`, keyed
+by the model name (the `AI_MODEL` value) like the pricing map. Only the active
+model's entry is read, so you can keep entries for every model you use and
+switch `AI_MODEL` freely:
+
+```properties
+# Input hard cap (the model's context window). The effective review budget is
+# min(REVIEW_MAX_INPUT_TOKENS, cap); models without an entry get a 128000 cap.
+thrillhousebot.ai.models.deepseek-chat.max-input-tokens=64000
+# Per-model overrides of REVIEW_OUTPUT_BUFFER_TOKENS / REVIEW_TOKEN_SAFETY_MARGIN
+thrillhousebot.ai.models.deepseek-chat.output-buffer-tokens=8192
+thrillhousebot.ai.models.deepseek-chat.token-safety-margin=0.9
+# Generation parameters, sent on every chat call when set
+thrillhousebot.ai.models.deepseek-chat.temperature=0.2
+thrillhousebot.ai.models.deepseek-chat.top-p=0.95
+thrillhousebot.ai.models.deepseek-chat.max-output-tokens=8192
+```
+
+Notes:
+
+- **`max-input-tokens` is a cap, not the budget.** `REVIEW_MAX_INPUT_TOKENS`
+  stays the spend knob; the per-model value keeps it from overshooting the
+  model's real window. To use a large-context model beyond 128k, raise both.
+  Startup logs a warning whenever the cap lowers your configured budget.
+- **Quote keys with `.` or `/`** (`thrillhousebot.ai.models."gpt-5.5".…`), the
+  same rule as the pricing map. Map keys don't survive env-var name mangling,
+  so set these in an external `application.properties` or as `-D` system
+  properties rather than environment variables.
+- **`top_k` is not available** on the OpenAI-compatible wire; it becomes
+  relevant only with native provider integrations.
+- **Generation-parameter validation** happens at boot: temperature must be in
+  `[0, 2]`, `top-p` in `(0, 1]`, token counts positive — a typo in any entry
+  (even an inactive model's) fails startup with a message naming the key.
 <!-- docs:configuration:end -->
 
 ## Dashboard

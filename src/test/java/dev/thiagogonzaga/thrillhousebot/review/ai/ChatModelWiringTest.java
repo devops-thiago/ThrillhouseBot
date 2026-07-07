@@ -29,45 +29,55 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * Boots the real quarkus-langchain4j wiring with reasoning enabled and asserts both model beans
- * carry the configured {@code reasoning_effort} (normalized to lowercase) in their default request
- * parameters.
+ * Boots the real quarkus-langchain4j wiring with reasoning enabled and a per-model settings entry
+ * for the configured model, and asserts both model beans carry the configured {@code
+ * reasoning_effort} (normalized to lowercase, #65) and the per-model generation parameters (#50) in
+ * their default request parameters.
  *
- * <p>The streaming assertion is the important one: in quarkus-langchain4j 1.11.2 the {@code
- * quarkus.langchain4j.openai.chat-model.reasoning-effort} property is applied to the blocking model
- * only, so this test pins that the {@link ReasoningEffortCustomizers} route reaches the streaming
- * model used by the main PR review call. It would fail if the wiring ever regressed to the config
- * property.
+ * <p>The streaming assertions are the important ones: in quarkus-langchain4j 1.11.2 the {@code
+ * quarkus.langchain4j.openai.chat-model.*} properties are applied to the blocking model only, so
+ * this test pins that the {@link ChatModelCustomizers} route reaches the streaming model used by
+ * the main PR review call. It would fail if the wiring ever regressed to the config properties.
  */
 @QuarkusTest
-@TestProfile(ReasoningEffortWiringTest.ReasoningEnabled.class)
-class ReasoningEffortWiringTest {
+@TestProfile(ChatModelWiringTest.TuningEnabled.class)
+class ChatModelWiringTest {
 
   @Inject ChatModel chatModel;
   @Inject StreamingChatModel streamingChatModel;
 
   @Test
-  void blockingModelCarriesConfiguredReasoningEffort() {
+  void blockingModelCarriesConfiguredTuning() {
     var params =
         assertInstanceOf(OpenAiChatRequestParameters.class, chatModel.defaultRequestParameters());
     assertEquals("medium", params.reasoningEffort());
+    assertEquals(0.3, params.temperature());
+    assertEquals(0.95, params.topP());
+    assertEquals(4096, params.maxOutputTokens());
   }
 
   @Test
-  void streamingModelCarriesConfiguredReasoningEffort() {
+  void streamingModelCarriesConfiguredTuning() {
     var params =
         assertInstanceOf(
             OpenAiChatRequestParameters.class, streamingChatModel.defaultRequestParameters());
     assertEquals("medium", params.reasoningEffort());
+    assertEquals(0.3, params.temperature());
+    assertEquals(0.95, params.topP());
+    assertEquals(4096, params.maxOutputTokens());
   }
 
-  public static class ReasoningEnabled implements QuarkusTestProfile {
+  public static class TuningEnabled implements QuarkusTestProfile {
     @Override
     public Map<String, String> getConfigOverrides() {
-      // Mixed case on purpose: the wire value must arrive normalized.
+      // Mixed case on purpose: the wire value must arrive normalized. The models key matches the
+      // default test model name (AI_MODEL is unset in tests, so deepseek-chat applies).
       return Map.of(
           "thrillhousebot.ai.reasoning.enabled", "true",
-          "thrillhousebot.ai.reasoning.effort", "Medium");
+          "thrillhousebot.ai.reasoning.effort", "Medium",
+          "thrillhousebot.ai.models.deepseek-chat.temperature", "0.3",
+          "thrillhousebot.ai.models.deepseek-chat.top-p", "0.95",
+          "thrillhousebot.ai.models.deepseek-chat.max-output-tokens", "4096");
     }
   }
 }

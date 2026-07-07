@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -151,7 +152,8 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             mapper,
             BOT_ID,
-            new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+            new DiffBudgetPlanner(
+                diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
             new TokenCounter());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
@@ -218,7 +220,8 @@ class ReviewOrchestratorTest {
             sessionPersistence,
             BOT_ID),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
-        new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+        new DiffBudgetPlanner(
+            diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
@@ -3835,7 +3838,8 @@ class ReviewOrchestratorTest {
               followUpAnalyzer,
               badMapper,
               BOT_ID,
-              new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config),
+              new DiffBudgetPlanner(
+                  diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
               new TokenCounter());
 
       var response = new ReviewResponse(List.of(), List.of(), null);

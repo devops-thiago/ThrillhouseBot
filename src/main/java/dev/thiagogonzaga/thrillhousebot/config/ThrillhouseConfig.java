@@ -358,6 +358,16 @@ public interface ThrillhouseConfig {
     Map<String, ModelPricing> pricing();
 
     /**
+     * Per-model AI settings keyed by the model name (the {@code AI_MODEL} value), mirroring the
+     * {@link #pricing()} key scheme (#50). Only the active model's entry is read; keeping entries
+     * for several models lets an operator switch {@code AI_MODEL} without retuning. All values are
+     * optional — an absent value falls back as documented on each key — so a model needs an entry
+     * only for the values that differ from the defaults. Resolution for the active model lives in
+     * {@link ActiveModelSettings}.
+     */
+    Map<String, ModelSettings> models();
+
+    /**
      * Reasoning-effort control for reasoning-capable models. Off by default so no reasoning
      * parameter is sent and today's provider-default behavior is preserved; when {@link #enabled()}
      * the configured {@link #effort()} is sent as the OpenAI-compatible {@code reasoning_effort} on
@@ -385,6 +395,68 @@ public interface ThrillhouseConfig {
       static String normalize(String effort) {
         return effort.strip().toLowerCase(java.util.Locale.ROOT);
       }
+    }
+
+    /**
+     * One model's settings: the input-token hard cap the #53 budgeter respects, per-model overrides
+     * of the token-budget knobs, and generation parameters sent on every chat call. Generation
+     * parameters ride the OpenAI-compatible wire, which carries {@code temperature}, {@code top_p},
+     * and {@code max_tokens} but has no {@code top_k} — a top-k dial needs a native provider
+     * integration.
+     */
+    interface ModelSettings {
+      /**
+       * Input-token cap assumed for a model with no explicit {@link #maxInputTokens()} — sized to
+       * the smallest context window among commonly deployed models, so an unknown model is never
+       * assumed larger than it may be.
+       */
+      int DEFAULT_MAX_INPUT_TOKENS = 128_000;
+
+      /**
+       * Hard cap on the per-call input tokens for this model — its context window. The effective
+       * review budget is the smaller of {@code thrillhousebot.review.max-input-tokens} and this cap
+       * ({@link #DEFAULT_MAX_INPUT_TOKENS} when absent), so a raised global budget can never
+       * overshoot a model's real window unless the operator raises the cap too.
+       */
+      @WithName("max-input-tokens")
+      Optional<Integer> maxInputTokens();
+
+      /**
+       * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens reserved
+       * out of the context window for the model's response.
+       */
+      @WithName("output-buffer-tokens")
+      Optional<Integer> outputBufferTokens();
+
+      /**
+       * Per-model override of {@code thrillhousebot.review.token-safety-margin} — the fraction of
+       * the input budget actually used, absorbing token-estimate error (which varies by model
+       * family; the estimator BPE is cl100k_base).
+       */
+      @WithName("token-safety-margin")
+      Optional<Double> tokenSafetyMargin();
+
+      /**
+       * Sampling temperature sent on every chat call; absent keeps the default already in effect
+       * (the extension's 1.0).
+       */
+      Optional<Double> temperature();
+
+      /**
+       * Nucleus-sampling {@code top_p} sent on every chat call; absent keeps the default already in
+       * effect (the extension's 1.0).
+       */
+      @WithName("top-p")
+      Optional<Double> topP();
+
+      /**
+       * OpenAI-compatible {@code max_tokens} sent on every chat call, bounding the response length
+       * (and spend). Absent leaves the provider default. Independent of {@link
+       * #outputBufferTokens()}, which only reserves input-budget headroom — set both when capping
+       * output.
+       */
+      @WithName("max-output-tokens")
+      Optional<Integer> maxOutputTokens();
     }
 
     interface ModelPricing {

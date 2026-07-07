@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
@@ -70,6 +72,9 @@ class StartupConfigValidatorTest {
     private double tokenSafetyMargin = 0.9;
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
+    private String modelName = "deepseek-chat";
+    private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
+        new HashMap<>();
 
     ConfigBuilder appId(String v) {
       this.appId = v;
@@ -131,6 +136,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder model(String name, ThrillhouseConfig.AiPricingConfig.ModelSettings settings) {
+      this.models.put(name, settings);
+      return this;
+    }
+
     StartupConfigValidator build() {
       var config = mock(ThrillhouseConfig.class);
       var github = mock(ThrillhouseConfig.GitHubConfig.class);
@@ -154,8 +164,22 @@ class StartupConfigValidatorTest {
       lenient().when(review.outputBufferTokens()).thenReturn(outputBufferTokens);
       lenient().when(review.maxAiCalls()).thenReturn(maxAiCalls);
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
-      return new StartupConfigValidator(config, aiApiKey);
+      lenient().when(ai.models()).thenReturn(models);
+      return new StartupConfigValidator(
+          config, aiApiKey, new ActiveModelSettings(config, modelName));
     }
+  }
+
+  /** A per-model settings entry mock; every value defaults to absent unless stubbed by the test. */
+  private static ThrillhouseConfig.AiPricingConfig.ModelSettings emptyModelSettings() {
+    var settings = mock(ThrillhouseConfig.AiPricingConfig.ModelSettings.class);
+    lenient().when(settings.maxInputTokens()).thenReturn(Optional.empty());
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.empty());
+    lenient().when(settings.tokenSafetyMargin()).thenReturn(Optional.empty());
+    lenient().when(settings.temperature()).thenReturn(Optional.empty());
+    lenient().when(settings.topP()).thenReturn(Optional.empty());
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.empty());
+    return settings;
   }
 
   private static ConfigValidationException assertFailsValidation(StartupConfigValidator validator) {
@@ -257,7 +281,7 @@ class StartupConfigValidatorTest {
     var ex =
         assertFailsValidation(
             new ConfigBuilder().maxInputTokens(8000).outputBufferTokens(8000).build());
-    assertTrue(ex.getMessage().contains("less than REVIEW_MAX_INPUT_TOKENS"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("budget left for the diff"), ex.getMessage());
   }
 
   @Test
@@ -271,7 +295,88 @@ class StartupConfigValidatorTest {
                 .outputBufferTokens(45000)
                 .tokenSafetyMargin(0.9)
                 .build());
-    assertTrue(ex.getMessage().contains("REVIEW_TOKEN_SAFETY_MARGIN"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("budget left for the diff"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenAModelSettingsEntryIsOutOfRange() {
+    // Every entry is validated — not just the active model's — so a typo is caught before
+    // AI_MODEL is later switched to that model.
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(0));
+    lenient().when(settings.temperature()).thenReturn(Optional.of(3.0));
+    lenient().when(settings.topP()).thenReturn(Optional.of(1.5));
+    var ex = assertFailsValidation(new ConfigBuilder().model("some-other-model", settings).build());
+    var message = ex.getMessage();
+    assertTrue(
+        message.contains("thrillhousebot.ai.models.\"some-other-model\".max-input-tokens"),
+        message);
+    assertTrue(message.contains("temperature must be in [0, 2]"), message);
+    assertTrue(message.contains("top-p must be in (0, 1]"), message);
+  }
+
+  @Test
+  void failsFastOnEveryOutOfRangePerModelValue() {
+    var settings = emptyModelSettings();
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(-1));
+    lenient().when(settings.tokenSafetyMargin()).thenReturn(Optional.of(1.5));
+    lenient().when(settings.temperature()).thenReturn(Optional.of(-0.1));
+    lenient().when(settings.topP()).thenReturn(Optional.of(0.0));
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(0));
+    var zeroMargin = emptyModelSettings();
+    lenient().when(zeroMargin.tokenSafetyMargin()).thenReturn(Optional.of(0.0));
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder().model("m", settings).model("m2", zeroMargin).build());
+    var message = ex.getMessage();
+    assertTrue(message.contains("output-buffer-tokens must be >= 0"), message);
+    assertTrue(message.contains("token-safety-margin must be in (0, 1]"), message);
+    assertTrue(message.contains("\"m2\".token-safety-margin"), message);
+    assertTrue(message.contains("temperature must be in [0, 2]"), message);
+    assertTrue(message.contains("top-p must be in (0, 1]"), message);
+    assertTrue(message.contains("max-output-tokens must be >= 1"), message);
+  }
+
+  @Test
+  void bootsWhenTheGlobalBudgetIsClampedByTheDefaultModelCap() {
+    // A budget past the 128k default cap is not a misconfiguration — it boots with the clamped
+    // budget (and a startup warning), because the operator may simply not know the model's window.
+    new ConfigBuilder().maxInputTokens(500_000).build().validate();
+  }
+
+  @Test
+  void bootsWhenAModelSettingsEntryIsValid() {
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(64_000));
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(4_096));
+    lenient().when(settings.tokenSafetyMargin()).thenReturn(Optional.of(0.8));
+    lenient().when(settings.temperature()).thenReturn(Optional.of(0.2));
+    lenient().when(settings.topP()).thenReturn(Optional.of(0.95));
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_192));
+    new ConfigBuilder().model("deepseek-chat", settings).build().validate();
+  }
+
+  @Test
+  void failsFastWhenAPerModelOverrideLeavesNoDiffBudget() {
+    // The global combination is fine, but the active model's output-buffer override swallows the
+    // whole margin-scaled budget — the effective values are what the budgeter runs with.
+    var settings = emptyModelSettings();
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(48_000));
+    var ex = assertFailsValidation(new ConfigBuilder().model("deepseek-chat", settings).build());
+    assertTrue(ex.getMessage().contains("budget left for the diff"), ex.getMessage());
+  }
+
+  @Test
+  void bootsWhenAPerModelOverrideRepairsABrokenGlobalCombination() {
+    // Effective values decide: the global buffer would swallow the budget, but the active model's
+    // override restores headroom, so the boot must succeed.
+    var settings = emptyModelSettings();
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(1_000));
+    new ConfigBuilder()
+        .outputBufferTokens(45_000)
+        .model("deepseek-chat", settings)
+        .build()
+        .validate();
   }
 
   @Test
