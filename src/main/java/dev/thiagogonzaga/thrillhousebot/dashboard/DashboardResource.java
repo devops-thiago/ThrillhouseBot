@@ -174,6 +174,7 @@ public class DashboardResource {
     detail.put("inputTokens", session.getInputTokens());
     detail.put("outputTokens", session.getOutputTokens());
     detail.put(KEY_COST, session.getCost());
+    detail.put("pricingMissing", session.isPricingMissing());
     detail.put("durationMs", session.getDurationMs());
     detail.put("criticalFindings", session.getCriticalFindings());
     detail.put("highFindings", session.getHighFindings());

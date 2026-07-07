@@ -33,6 +33,8 @@ import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Vertx;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,6 +56,7 @@ public class OtelObservabilityListener implements ChatModelListener {
   private final LongHistogram tokenHistogram;
   private final DoubleHistogram durationHistogram;
   private final DoubleCounter costCounter;
+  private final Set<String> modelsWarnedForMissingPricing = ConcurrentHashMap.newKeySet();
 
   @Inject
   public OtelObservabilityListener(
@@ -125,7 +128,10 @@ public class OtelObservabilityListener implements ChatModelListener {
 
     var cost = 0.0;
     var pricing = config.ai().pricing().get(model);
-    if (pricing != null) {
+    var pricingMissing = pricing == null;
+    if (pricingMissing) {
+      warnOnceAboutMissingPricing(model);
+    } else {
       cost =
           ModelPricing.cost(
               pricing.inputPer1k(),
@@ -167,16 +173,42 @@ public class OtelObservabilityListener implements ChatModelListener {
       var outputTokens = usage.outputTokenCount();
       var totalTokens = usage.totalTokenCount();
       var recordedCost = cost;
+      var recordedPricingMissing = pricingMissing;
       runOnWorker(
           sessionId,
           () ->
               sessionUpdater.recordModelUsage(
-                  sessionId, model, inputTokens, outputTokens, recordedCost, durationMs),
+                  sessionId,
+                  model,
+                  inputTokens,
+                  outputTokens,
+                  recordedCost,
+                  recordedPricingMissing,
+                  durationMs),
           "persist session usage");
       if (log.isInfoEnabled()) {
-        log.info(
-            "Session persisted: {} tokens, ${}", totalTokens, String.format("%.6f", recordedCost));
+        var costLabel =
+            recordedPricingMissing
+                ? "cost unknown (no pricing for model)"
+                : "$" + String.format("%.6f", recordedCost);
+        log.info("Session persisted: {} tokens, {}", totalTokens, costLabel);
       }
+    }
+  }
+
+  /**
+   * Warns once per model name for the process lifetime — a missing pricing entry repeats on every
+   * call of every review, and a per-request warning would drown the log while saying nothing new.
+   * Token counts are unaffected; only the cost is recorded as unknown.
+   */
+  private void warnOnceAboutMissingPricing(String model) {
+    if (modelsWarnedForMissingPricing.add(model)) {
+      log.warn(
+          "No pricing configured for model '{}' — its cost is recorded as $0 and flagged, so the"
+              + " dashboard under-reports spend. Add thrillhousebot.ai.pricing.\"{}\".input-per-1k"
+              + " and .output-per-1k; existing sessions are backfilled on the next restart.",
+          model,
+          model);
     }
   }
 

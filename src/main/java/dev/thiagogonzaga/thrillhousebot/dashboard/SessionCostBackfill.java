@@ -85,6 +85,8 @@ public class SessionCostBackfill {
               session.getOutputTokens());
       if (cost > 0) {
         session.setCost(cost);
+        // The model has a price now, so the missing-pricing flag (#48) no longer applies.
+        session.setPricingMissing(false);
         updated++;
       }
     }
