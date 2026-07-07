@@ -277,7 +277,7 @@ public class StartupConfigValidator {
           activeModel.maxInputTokens(),
           activeModel.modelName());
     }
-    if (config.ai().models().containsKey(activeModel.modelName())) {
+    if (config.ai().models().containsKey(activeModel.modelName()) && log.isInfoEnabled()) {
       log.info(
           "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
               + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={}",
@@ -285,10 +285,14 @@ public class StartupConfigValidator {
           activeModel.maxInputTokens(),
           activeModel.outputBufferTokens(),
           activeModel.tokenSafetyMargin(),
-          activeModel.temperature().map(String::valueOf).orElse("provider default"),
-          activeModel.topP().map(String::valueOf).orElse("provider default"),
-          activeModel.maxOutputTokens().map(String::valueOf).orElse("provider default"));
+          orProviderDefault(activeModel.temperature()),
+          orProviderDefault(activeModel.topP()),
+          orProviderDefault(activeModel.maxOutputTokens()));
     }
+  }
+
+  private static String orProviderDefault(Optional<? extends Number> value) {
+    return value.map(String::valueOf).orElse("provider default");
   }
 
   private void logReasoningStatus() {
