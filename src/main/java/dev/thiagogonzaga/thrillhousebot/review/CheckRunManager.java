@@ -33,8 +33,7 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class CheckRunManager {
 
   private static final String ACCEPT = "application/vnd.github+json";
-  // Single source of the bot's check-run name. Referenced by VerdictBuilder (check title) and
-  // CiStatusEvaluator (to skip the bot's own check when CI-gating), so a rename can't drift.
+  // Also referenced by VerdictBuilder (check title) and CiStatusEvaluator (self-check skip).
   static final String CHECK_NAME = "ThrillhouseBot Review";
   private static final String CHECK_STATUS_IN_PROGRESS = "in_progress";
   private static final String CHECK_STATUS_COMPLETED = "completed";

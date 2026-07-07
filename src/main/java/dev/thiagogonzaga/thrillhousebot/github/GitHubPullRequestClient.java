@@ -25,9 +25,7 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterRestClient(configKey = "github-api")
 public interface GitHubPullRequestClient {
 
-  // GitHub serves 30 PR files per page by default; request the 100 max and walk a bounded number of
-  // pages so a large PR's diff is not silently truncated. GitHub caps PR file listings at 3000
-  // files (≈ 30 pages of 100).
+  // GitHub serves 30 PR files per page by default (100 max) and caps listings at 3000 files.
   int FILES_PER_PAGE = 100;
   int MAX_FILE_PAGES = 30;
 

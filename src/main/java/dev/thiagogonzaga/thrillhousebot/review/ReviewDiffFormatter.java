@@ -351,8 +351,6 @@ public class ReviewDiffFormatter {
             .append(" -")
             .append(file.deletions())
             .append(")\n");
-    // Membership in the caller's precomputed reviewable set, not a fresh isIgnored() glob match, so
-    // the ignore-glob filter is walked once per review rather than again here for every file.
     if (!reviewableNames.contains(file.filename())) {
       sb.append(
               String.format(

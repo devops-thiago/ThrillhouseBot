@@ -77,15 +77,12 @@ public record ReviewResponse(
       @JsonProperty("description_gaps") List<String> descriptionGaps,
       @JsonProperty("suggested_labels") List<String> suggestedLabels,
       @JsonProperty("file_summaries") List<FileSummary> fileSummaries,
-      // Optional Mermaid source for a control-flow diagram of the change (no ``` fences). Populated
-      // only when the diagram feature is enabled and the change is non-trivial; null/blank
-      // otherwise.
+      // Optional Mermaid source (no ``` fences); null/blank unless the diagram feature is enabled
+      // and the change is non-trivial.
       @JsonProperty("walkthrough_diagram") String walkthroughDiagram) {
     public Summary {
-      // The AI may emit null elements inside these arrays (e.g. ["bug", null]); a bare List.copyOf
-      // would throw an NPE that fails the whole review, even though both lists are best-effort
-      // metadata. Drop the nulls first, then copy. List.copyOf is kept inline rather than folded
-      // into the helper so SpotBugs still sees the defensive copy and does not flag EI_EXPOSE_REP.
+      // The AI may emit null elements inside these arrays; drop them before List.copyOf. copyOf
+      // stays inline so SpotBugs sees the defensive copy (EI_EXPOSE_REP).
       descriptionGaps = List.copyOf(withoutNulls(descriptionGaps));
       suggestedLabels = List.copyOf(withoutNulls(suggestedLabels));
       fileSummaries = List.copyOf(withoutNulls(fileSummaries));

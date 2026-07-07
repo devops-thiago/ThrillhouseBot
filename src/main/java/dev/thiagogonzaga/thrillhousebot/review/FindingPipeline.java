@@ -174,7 +174,6 @@ public class FindingPipeline {
               batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
     }
 
-    // Finishing chain over the union — quote validation and verification already ran per batch.
     var aggregated = new ReviewResponse(allFindings, mergeBatchStatuses(batchStatuses), null);
     var refined = deduplicator.dedupe(aggregated);
     refined =
@@ -291,8 +290,7 @@ public class FindingPipeline {
       return "(changed-files overview withheld — summary input budget exhausted)\n";
     }
     var lines = overview.split("\n");
-    // The rollup note's tokens are reserved up front so appending it after truncation cannot push
-    // the overview past its share; the worst-case note (nothing listed) bounds all others.
+    // Rollup-note tokens are reserved up front so post-truncation append cannot exceed the share.
     var noteReserve = tokenCounter.estimateTokens(overviewRollupNote(lines.length));
     var sb = new StringBuilder();
     var used = 0;
@@ -341,8 +339,7 @@ public class FindingPipeline {
             + changedFilesOverview
             + promptInputs.previousFindings()
             + promptInputs.repoInstructions();
-    // The note's tokens are reserved up front so appending it after clamping cannot itself push
-    // the prompt back over the budget; the worst-case note (everything dropped) bounds all others.
+    // trueTotalsNote tokens are reserved up front so post-clamp append cannot exceed the budget.
     var noteReserve =
         findings.isEmpty()
             ? 0
@@ -503,8 +500,6 @@ public class FindingPipeline {
       List<String> priorAiResponseJsons,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver) {
-    // Quote validation runs before dedupe so a merged finding can never inherit a phantom
-    // quote from one duplicate while a verbatim sibling gets discarded
     aiResponse = quoteValidator.validate(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
     aiResponse =

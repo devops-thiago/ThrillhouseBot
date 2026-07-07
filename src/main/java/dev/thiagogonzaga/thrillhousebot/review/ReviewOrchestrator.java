@@ -33,11 +33,8 @@ import java.util.function.Consumer;
 @ApplicationScoped
 public class ReviewOrchestrator {
 
-  // Check run status constant used when building the completion update (CheckRunManager owns
-  // create).
   private static final String CHECK_STATUS_COMPLETED = "completed";
 
-  // Check run conclusion constants
   private static final String CONCLUSION_FAILURE = "failure";
 
   private final ThrillhouseConfig config;
@@ -63,8 +60,6 @@ public class ReviewOrchestrator {
 
   private final FindingPipeline findingPipeline;
 
-  // The CI status I/O (required-context resolution + check evaluation) is independent of the model
-  // response, so it runs on this executor concurrently with the blocking AI call rather than after.
   private final ExecutorService reviewExecutor;
 
   /**
@@ -217,8 +212,6 @@ public class ReviewOrchestrator {
     sessionPersistence.create(session);
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(session));
 
-    // Resolution happens inside the try: a failing PR fetch (deleted PR, rate limit) must take
-    // the same failure path as any other error — comment, failed session, broadcast.
     var req = request;
     var checkRunId = -1L;
     var resultSurfaced = false;
@@ -244,15 +237,8 @@ public class ReviewOrchestrator {
       var lineResolver = ctx.lineResolver();
 
       var promptInputs = promptAssembler.assemble(ctx, req);
-      // Planned from the fully assembled prompt so the overhead estimate covers every section a
-      // review call actually repeats — not just the loader-visible subset (#53).
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
-      // CI status (required-context resolution + check evaluation) depends only on the
-      // commit/branch,
-      // not the model response, so kick it off concurrently with the blocking AI call and join
-      // after
-      // — the GitHub latency overlaps the model latency instead of stacking on top of it.
       final var ciReq = req;
       var ciFuture =
           CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, ciReq), reviewExecutor);
@@ -266,14 +252,11 @@ public class ReviewOrchestrator {
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
-      // The summary comment is first-review enrichment, not the review itself: a transient failure
-      // posting it must not abort before postReview and surface a hard FAILED check for a review
-      // that would otherwise post. Keep it best-effort; the review below is the critical step.
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
-      // The summary-only skip applies only when the regenerated summary actually landed on the
-      // PR — a failed best-effort summary post must leave the review as the run's visible outcome.
+      // summaryReposted gates the summary-only skip: a failed summary post leaves review
+      // posting enabled.
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
               auth,
@@ -285,11 +268,6 @@ public class ReviewOrchestrator {
               lineResolver,
               req.forceSummary() && summaryPosted));
 
-      // The review and its comments are on the PR now. Everything past this point is
-      // best-effort and independent: each step runs in isolation so one failure can't abort the
-      // rest. In particular a failure in an earlier step must not skip the session completion and
-      // broadcast, which would otherwise leave the session stuck IN_PROGRESS in the dashboard even
-      // though the review was posted.
       resultSurfaced = true;
       final var doneReq = req;
       final var concludedCheckRunId = checkRunId;
@@ -326,12 +304,8 @@ public class ReviewOrchestrator {
           doneReq,
           "complete the session",
           () -> {
-            // Persist the completed status FIRST, then broadcast: the broadcast must not fire if
-            // the
-            // persistence write throws, or the dashboard would show a "completed" event over a row
-            // still IN_PROGRESS (and revert to IN_PROGRESS on reload). Keeping them in one step
-            // means
-            // a failed write skips the broadcast, so persisted and live state stay consistent.
+            // Persist first: a failed write must skip the broadcast so persisted and live
+            // dashboard state stay consistent.
             applyReviewResult(session, result);
             broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session));
           });

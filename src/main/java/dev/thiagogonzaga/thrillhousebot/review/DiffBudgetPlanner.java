@@ -82,8 +82,7 @@ public class DiffBudgetPlanner {
     }
 
     public boolean truncated() {
-      // A clipped file's unseen hunks were withheld just like an omitted file's whole diff: both
-      // make the review partial, so both hold APPROVE and demand disclosure.
+      // Clipped unseen hunks withhold coverage like omitted files — both hold APPROVE.
       return !omittedFiles.isEmpty() || !clippedFiles.isEmpty();
     }
 
@@ -197,7 +196,6 @@ public class DiffBudgetPlanner {
 
   private Rendered renderAndSize(
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens) {
-    // Highest-impact first so that, when bins fill, the files left out by name are the smallest.
     var ordered = new ArrayList<>(reviewable);
     ordered.sort(
         Comparator.comparingInt(

@@ -237,7 +237,6 @@ public class CommentCommandService {
             ctx.installationId(),
             auth);
     if (suggestion == null) {
-      // Nothing to suggest (no diff) or the model produced no usable answer — already logged.
       return;
     }
     postComment(auth, ctx, suggestion);
@@ -267,7 +266,6 @@ public class CommentCommandService {
             ctx.installationId(),
             auth);
     if (entry == null) {
-      // Nothing changelog-worthy (no diff / model declined) or no usable answer — already logged.
       return;
     }
     postComment(auth, ctx, entry);
@@ -292,9 +290,6 @@ public class CommentCommandService {
         ctx.repo(),
         num(ctx),
         ctx.login());
-    // This already runs on the review executor (handle() submitted execute() to it), off the
-    // webhook ack thread, so the blocking AI call + GitHub round trips run here safely. The service
-    // is @ActivateRequestContext, so the LangChain4j AI call has an active request scope.
     docGenerationService.handle(
         new DocGenerationService.DocTask(
             ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.defaultBranch(), ctx.installationId()));
@@ -318,7 +313,6 @@ public class CommentCommandService {
       if (thread == null || thread.resolved()) {
         continue;
       }
-      // A failure on one thread (e.g. a transient GraphQL error) must not abort the rest.
       try {
         if (reviewThreadService.resolve(auth, thread.id())) {
           resolved++;
@@ -346,7 +340,7 @@ public class CommentCommandService {
       return;
     }
     if (!pauseIfPossible(ctx)) {
-      return; // genuine failure already logged — do not post a misleading confirmation
+      return;
     }
     postComment(
         auth,

@@ -50,9 +50,7 @@ public class CiStatusEvaluator {
 
   private final GitHubCheckRunClient checkRunClient;
 
-  // Bot-identity tokens (the slug of each "<slug>[bot]" login), derived from the shared BotIdentity
-  // bean so check/app matching honors the configured logins — including the alternate slug — rather
-  // than a single hardcoded literal.
+  // Slug tokens of the configured "<slug>[bot]" logins, used for check/app matching.
   private final Set<String> botTokens;
 
   @Inject
@@ -82,12 +80,6 @@ public class CiStatusEvaluator {
   Optional<List<String>> resolveRequiredContexts(
       String auth, String owner, String repo, String baseBranch) {
     if (baseBranch == null || baseBranch.isBlank()) {
-      // The base branch was not carried on the request (e.g. a manual trigger whose PR lookup did
-      // not yield one): gate on all checks rather than guessing the target branch. The branch ref
-      // is
-      // resolved upstream (webhook payload / resolveMissingPrDetails), so this no longer fetches
-      // the
-      // PR here just to read it.
       return Optional.empty();
     }
     String branch = baseBranch;
@@ -210,13 +202,8 @@ public class CiStatusEvaluator {
 
     addMissingRequiredChecks(requiredContexts, seen, offending);
 
-    // Fail closed for the APPROVE decision: if either CI source could not be read (an
-    // exception or a null body — GitHub returns an empty list, never null, past the last page) we
-    // cannot confirm CI is green, so the verdict must not approve over CI we never saw. This
-    // holds in BOTH gate modes: gate-specific is not automatically safe, because
-    // addMissingRequiredChecks only catches required contexts that did not report — a source going
-    // unread can still hide a required check's true state. Reported as a first-class signal, not a
-    // synthetic check.
+    // GitHub returns an empty list, never null, past the last page — an exception or null body
+    // means the source was unreadable, which must hold approval even in gate-specific mode.
     boolean unreadable = !checkRunsReadable || !statusReadable;
     return new CiEvaluation(offending, unreadable, requiredContexts != null);
   }
@@ -331,9 +318,8 @@ public class CiStatusEvaluator {
     if (CONCLUSION_FAILURE.equalsIgnoreCase(state) || "error".equalsIgnoreCase(state)) {
       return CI_FAILING;
     }
-    // "pending", null, or any unrecognized state is not a confirmed pass: classify it as pending so
-    // an indeterminate required check holds the approval rather than being mistaken for success.
-    // Only an explicit "success" clears the gate.
+    // "pending", null, or any unrecognized state is not a confirmed pass — only an explicit
+    // "success" clears the gate.
     return CI_PENDING;
   }
 
@@ -346,9 +332,8 @@ public class CiStatusEvaluator {
     return app != null && (containsBotToken(app.slug()) || containsBotToken(app.name()));
   }
 
-  // Deliberately a substring test, not BotIdentity.matches (exact login set): a check's app slug or
-  // name lacks the "[bot]" suffix that BotIdentity strips, so an exact match would never recognise
-  // the bot's own check. This is why identity matching is not reused here.
+  // Substring test, not BotIdentity.matches: a check's app slug/name lacks the "[bot]" suffix,
+  // so an exact login match would never recognise the bot's own check.
   private boolean containsBotToken(String value) {
     if (value == null) {
       return false;

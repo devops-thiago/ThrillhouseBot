@@ -44,12 +44,11 @@ public class GitHubAuthClient {
   private final ThrillhouseConfig config;
   private final GitHubTokenApi tokenApi;
 
-  // Cached tokens — installation access tokens expire after 1 hour
+  // Installation access tokens expire after 1 hour.
   private record CachedToken(String token, Instant expiresAt, long installationId) {}
 
   private final Map<Long, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
-  // The configured private key never changes at runtime — parse it once.
   private final AtomicReference<RSAPrivateKey> cachedPrivateKey = new AtomicReference<>();
 
   @Inject
@@ -67,13 +66,9 @@ public class GitHubAuthClient {
       Instant now = Instant.now();
       var privateKey = privateKey();
 
-      // The issued-at and expiry claims are plain epoch seconds, which Nimbus serializes
-      // the same way as its Date-based builder methods — this keeps java.util.Date out
       var claims =
           new JWTClaimsSet.Builder()
-              // Strip surrounding whitespace to match StartupConfigValidator, which accepts a
-              // padded-but-numeric app id; without this an id that passes boot validation would
-              // still yield an "iss" GitHub rejects on the first call.
+              // GitHub rejects an "iss" with padding, but boot validation accepts a padded app id.
               .issuer(config.github().appId().strip())
               .claim("iat", now.getEpochSecond())
               .claim("exp", now.plus(10, ChronoUnit.MINUTES).getEpochSecond())
@@ -109,7 +104,7 @@ public class GitHubAuthClient {
     var response =
         tokenApi.createInstallationToken(authHeader, "application/vnd.github+json", installationId);
 
-    // Cache with 50-minute TTL (tokens expire at 60 min — safety margin)
+    // 50-minute TTL: tokens expire at 60 min, keep a safety margin.
     var newToken =
         new CachedToken(
             response.token(), Instant.now().plus(50, ChronoUnit.MINUTES), installationId);

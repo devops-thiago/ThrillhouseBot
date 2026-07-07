@@ -101,8 +101,8 @@ public final class ReviewDispatcher {
       log.error("Review worker aborted for {}/{} #{}", key.owner(), key.repo(), key.prNumber(), e);
       retire(key, state);
     } finally {
-      // Errors (OOM, assertion failures) propagate to the executor thread, but the state
-      // must still be retired so later dispatches for this PR are not coalesced forever
+      // Even when an Error propagates, the state must be retired or later dispatches for this
+      // PR would be coalesced forever.
       if (!completed) {
         log.error(
             "Review worker aborted fatally for {}/{} #{}", key.owner(), key.repo(), key.prNumber());
@@ -115,11 +115,8 @@ public final class ReviewDispatcher {
     while (true) {
       var batch = state.takeNextReview();
 
-      // The controller's rate-limit gate ran before dispatch, so a request that passed it before
-      // the window opened can reach this worker — coalesced behind the in-flight review that then
-      // recorded its completion, or dispatched in the gap between a prior worker's
-      // recordCompletion and its state removal. Re-checking every batch closes both paths: no
-      // batch is reviewed once the window is closed, whichever way it got here.
+      // Re-check after dispatch: a request can pass the controller gate then reach here once the
+      // window closed (coalesce or recordCompletion gap).
       var req = batch.request();
       if (!req.isManualTrigger()
           && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
@@ -144,9 +141,7 @@ public final class ReviewDispatcher {
     logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
     try {
       var surfaced = orchestrator.review(batch.request());
-      // Start the throttle window only when a review was actually posted, and at completion
-      // (not dispatch) so a long-running review does not eat into it. A failed review must not
-      // block the retry on the next push, and manual reviews never shift the automatic window.
+      // recordCompletion at post time, not dispatch; manual reviews are out of scope.
       if (surfaced && !batch.request().isManualTrigger()) {
         autoReviewRateLimiter.recordCompletion(
             batch.request().owner(), batch.request().repo(), batch.request().prNumber());
@@ -248,9 +243,8 @@ public final class ReviewDispatcher {
 
     DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req) {
       synchronized (lock) {
-        // A finishing worker can retire the state between the map lookup above and this
-        // lock; reviving a retired state would let two workers run for the same PR, so
-        // drop the dead mapping and retry with a fresh state.
+        // A finishing worker can retire the state between the map lookup and this lock;
+        // reviving it would let two workers run for the same PR.
         if (retired) {
           return new DispatchResult(true, false, 0);
         }

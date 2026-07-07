@@ -196,15 +196,8 @@ public class ReviewPublisher {
     var result = post.result();
     var lineResolver = post.lineResolver();
     if (!result.hasIssues()) {
-      // A summary-only re-run (/summary) on a PR that already carries a formal bot review exists
-      // to regenerate the summary comment, which publishSummary just re-posted. A no-new-findings
-      // review here would only restate the verdict already on the PR right after that summary —
-      // skip it. First reviews keep posting (the /summary-before-any-review path), and new
-      // findings below always post (a re-run may genuinely surface them). Two exclusions mirror
-      // the first-review skip in postNoIssuesReview: unresolved previous findings still post
-      // (their COMMENT/REQUEST_CHANGES carries "reply on the thread" guidance the summary lacks)
-      // and a truncated diff still posts (the partial-review notice must not depend on the summary
-      // alone).
+      // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first
+      // review, unresolved previous, and truncation still post.
       if (post.summaryReposted()
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
@@ -225,12 +218,7 @@ public class ReviewPublisher {
 
     if (inline.posted() == 0) {
       // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
-      // force-push). List them in the review body with their descriptions so they are never
-      // invisible. This does not point at the PR summary comment even on a first review: the
-      // summary
-      // is posted best-effort (a transient failure leaves no such comment), and its Key Findings is
-      // only a brief TOC without descriptions — so the body is the one place the detail is sure to
-      // appear.
+      // force-push); surface them in the review body instead.
       Log.warnf(
           "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
           owner, repo, prNumber);
@@ -246,17 +234,10 @@ public class ReviewPublisher {
       return;
     }
 
-    // Some findings anchored inline. Still post a review body when there are changes to flag and/or
-    // findings that could not be anchored — so a finding whose line fell outside the diff is
-    // reported (with its description), not silently dropped just because its siblings anchored.
     var bodyParts = new ArrayList<String>();
     if (result.reviewState() == ReviewState.REQUEST_CHANGES) {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
-    // List every un-anchored finding with its description, even on a first review where the summary
-    // comment also names it. The summary's Key Findings is a brief table of contents (risk, title,
-    // location — no description), so this body is the only place an un-anchored finding's detail is
-    // surfaced; repeating the title here is the acceptable cost of never dropping the problem.
     bodyParts.addAll(skippedFindingsBodyParts(inline));
     appendTruncationNotice(bodyParts, result);
     if (!bodyParts.isEmpty()) {
@@ -329,8 +310,6 @@ public class ReviewPublisher {
           .append(":")
           .append(f.line())
           .append("`)");
-      // No inline comment carries the detail here, so include the description to still explain the
-      // problem (a suggestion can't be placed, but the issue is reported).
       if (f.description() != null && !f.description().isBlank()) {
         sb.append("\n  ").append(f.description().strip().replace("\n", "\n  "));
       }
@@ -344,8 +323,6 @@ public class ReviewPublisher {
   private void postNoIssuesReview(
       String auth, String owner, String repo, int prNumber, String commitSha, ReviewResult result) {
     if (result.reviewState() == ReviewState.APPROVE) {
-      // On a first review the celebration is part of the summary comment, so the approval itself
-      // carries no body; follow-ups post no summary and keep the message here.
       var req =
           new GitHubReviewClient.CreateReviewRequest(
               commitSha,
@@ -355,24 +332,12 @@ public class ReviewPublisher {
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
-    // A COMMENT held back only by pending/failed CI (no findings, nothing unresolved) merely
-    // restates the summary comment the first review already posts, so emitting it too would
-    // duplicate that message. Skip it on the first review and let the summary stand alone — EXCEPT
-    // when the hold is (also) a truncated diff: the summary comment is posted best-effort, so
-    // a transient failure would leave the partial review disclosed nowhere on the PR (CI holds stay
-    // visible via the red checks themselves; truncation has no other PR surface). Post the body for
-    // a truncated review so the partial-review notice is never lost.
-    // Unresolved previous findings are excluded — their COMMENT carries distinct "reply on the
-    // thread" guidance the summary lacks, so it still posts. Follow-ups post no summary, so the
-    // COMMENT is their only signal; REQUEST_CHANGES always posts; the merge gate is the check run.
     if (result.reviewState() == ReviewState.COMMENT
         && result.isFirstReview()
         && result.unresolvedPreviousCount() == 0
         && !result.truncated()) {
       return;
     }
-    // No new findings, but previous ones are still unresolved or CI checks are pending/failed —
-    // never claim a clean review.
     var req =
         new GitHubReviewClient.CreateReviewRequest(
             commitSha,
@@ -394,11 +359,6 @@ public class ReviewPublisher {
   private String noIssuesBody(ReviewResult result) {
     long unresolved = result.unresolvedPreviousCount();
     var sb = new StringBuilder();
-    // Offending checks and an unreadable CI source are independent hold reasons — a review can be
-    // held by both at once (one CI source failing while another is unreadable), so disclose each on
-    // its own rather than letting the offending branch suppress the unreadable note. This mirrors
-    // the
-    // summary table, which lists the two separately.
     boolean ciHeld = false;
     if (!result.offendingCiChecks().isEmpty()) {
       sb.append(
@@ -420,10 +380,6 @@ public class ReviewPublisher {
       sb.append(ciHeld ? "\nAdditionally, " : "")
           .append(ReviewResult.unresolvedPreviousMessage(unresolved));
     }
-    // Disclose the partial review here whenever the diff was truncated — on follow-ups (which post
-    // no summary) and on first reviews too: the first-review summary banner is posted best-effort,
-    // so relying on it alone would lose the only PR-visible notice if that post fails. The
-    // summary may repeat it; a duplicated notice is the acceptable cost of never dropping it.
     if (result.truncated()) {
       if (!sb.isEmpty()) {
         sb.append("\n\n");
@@ -459,13 +415,9 @@ public class ReviewPublisher {
     var capSkipped = new ArrayList<Finding>();
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size(); i++) {
-      // The 1-based index doubles as the finding's id in the persisted response and the
-      // hidden comment marker, keeping thread matching deterministic on follow-up reviews
+      // The 1-based index doubles as the finding's id in the persisted response and the hidden
+      // comment marker, keeping thread matching deterministic on follow-up reviews.
       var finding = result.findings().get(i);
-      // The cap limits inline comments, not findings: once it's reached, remaining findings are
-      // returned as capSkipped (never tried for anchoring) so the caller reports them with the
-      // right
-      // reason — capped on noise, but never silently dropped or mislabeled as un-anchorable.
       if (posted >= maxComments) {
         capSkipped.add(finding);
         continue;
@@ -500,23 +452,16 @@ public class ReviewPublisher {
           finding.file(), finding.line(), resolvedLine);
     }
 
-    // A suggestion whose old code spans several lines is posted as a multi-line comment so the
-    // GitHub suggestion overwrites the whole range, not just the anchor line. The range is
-    // resolved from the verbatim old code's position in the diff; a blank/single-line/unresolvable
-    // anchor leaves it empty and the comment stays single-line.
+    // A GitHub suggestion overwrites the whole commented range, so multi-line old code needs a
+    // multi-line anchor; an unresolvable anchor leaves the range empty and the comment single-line.
     var range =
         finding.hasSuggestion()
             ? lineResolver.resolveSuggestionRange(finding.file(), finding.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
 
-    // A multi-line suggestion must overwrite its whole range. When that range can't be resolved
-    // (the old code doesn't match the diff verbatim, is ambiguous, or straddles a hunk), attaching
-    // the suggestion would post it against a single line — applying it then overwrites only the
-    // anchor line and leaves the rest of the quoted block in place (the same multi-line
-    // corruption).
-    // In that case post the finding without the suggestion: the problem is still reported, just not
-    // as a one-click fix.
-    // hasSuggestion() already guarantees a non-blank suggestionOld, so the newline check is safe.
+    // A multi-line suggestion posted against a single line corrupts code when applied (only the
+    // anchor line is overwritten), so with no resolvable range the suggestion block is dropped.
+    // hasSuggestion() guarantees a non-blank suggestionOld, so the newline check is safe.
     var multiLineSuggestion =
         finding.hasSuggestion() && finding.suggestionOld().strip().contains("\n");
     var includeSuggestion = finding.hasSuggestion() && (!multiLineSuggestion || range.isPresent());
@@ -588,9 +533,7 @@ public class ReviewPublisher {
       List<GitHubReviewClient.ReviewResponse> priorReviews) {
     try {
       for (var review : priorReviews) {
-        // A review from a since-deleted account serializes as user:null; guard it (matching the
-        // first-visible-review check) so one ghost review can't NPE-abort the whole dismissal loop
-        // and leave the bot's own stale pending review undeleted.
+        // A review from a since-deleted account serializes as user:null.
         if ("PENDING".equals(review.state())
             && review.user() != null
             && botIdentity.matches(review.user().login())) {
@@ -617,8 +560,7 @@ public class ReviewPublisher {
     try {
       reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, req);
     } catch (RuntimeException e) {
-      // CreateReviewRequest's compact constructor normalizes a null comments list to List.of(), so
-      // only the isEmpty() check is ever reachable here.
+      // CreateReviewRequest's compact constructor normalizes a null comments list to List.of().
       if (req.comments().isEmpty()) {
         throw new ReviewPostException(
             "GitHub review rejected for " + owner + "/" + repo + " #" + prNumber, e);

@@ -109,11 +109,8 @@ public final class DiffLineResolver {
     if (exact != null && !exact.isEmpty()) {
       return exact.get(line);
     }
-    // Variant fallback: resolve to the UNIQUE FilePaths.same variant. On a suffix collision (two
-    // diff keys both matching, e.g. a/Handler.java and b/Handler.java) return null rather than
-    // guess
-    // whichever entry the map iterates first — mirrors resolveRightSideLinesForFileOrVariant, the
-    // safe direction.
+    // Variant fallback: resolve to the unique FilePaths.same variant; on a suffix collision
+    // (two diff keys both matching) return null rather than guess.
     Map<Integer, String> resolved = null;
     for (var entry : rightSideLineTextByFile.entrySet()) {
       var value = entry.getValue();
@@ -318,19 +315,11 @@ public final class DiffLineResolver {
     if (matchOffset == -1) {
       return Optional.empty();
     }
-    // Right-side line numbers are walked in ascending diff order, so a run of two or more matched
-    // lines always yields endLine > startLine — no degenerate single-line range to guard against.
     int startLine = lineNumbers.get(matchOffset);
     int endLine = lineNumbers.get(matchOffset + anchorLines.size() - 1);
-    // The match is contiguous in the trimmed-text list, but blank-line dropping lets it straddle a
-    // hunk boundary (last line of one hunk, first line of the next). A multi-line GitHub suggestion
-    // must stay within a single hunk — start_line and line in different hunks is rejected (422),
-    // even when the two hunks are numerically adjacent and the span has no missing line number.
-    // Fall
-    // back to a single-line comment when any hunk begins inside (startLine, endLine]. The key came
-    // from the parallel right-side-text map, populated in the same pass, so its hunk-starts entry
-    // is
-    // always present.
+    // GitHub rejects (422) a multi-line suggestion whose start_line and line fall in different
+    // hunks, and blank-line dropping lets a match straddle a hunk boundary — fall back to a
+    // single-line comment when any hunk begins inside (startLine, endLine].
     TreeSet<Integer> hunkStarts = rightSideHunkStartsByFile.get(key);
     if (!hunkStarts.subSet(startLine, false, endLine, true).isEmpty()) {
       return Optional.empty();
