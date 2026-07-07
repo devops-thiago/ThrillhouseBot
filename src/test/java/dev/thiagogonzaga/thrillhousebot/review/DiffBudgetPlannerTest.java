@@ -22,28 +22,54 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests for {@link DiffBudgetPlanner}: packing, priority, clipping, omitted-by-name (#53). */
 class DiffBudgetPlannerTest {
 
+  private static final String MODEL = "test-model";
+
   private final ReviewDiffFormatter formatter = new ReviewDiffFormatter(List.of("**/*.lock"), 0);
   private final TokenCounter tokenCounter = new TokenCounter();
   private final ThrillhouseConfig config = mock(ThrillhouseConfig.class);
   private final ThrillhouseConfig.ReviewConfig reviewConfig =
       mock(ThrillhouseConfig.ReviewConfig.class);
-  private final DiffBudgetPlanner planner = new DiffBudgetPlanner(formatter, tokenCounter, config);
+  private final ThrillhouseConfig.AiPricingConfig aiConfig =
+      mock(ThrillhouseConfig.AiPricingConfig.class);
+  private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
+      new HashMap<>();
+  private final DiffBudgetPlanner planner =
+      new DiffBudgetPlanner(
+          formatter, tokenCounter, config, new ActiveModelSettings(config, MODEL));
 
   {
     lenient().when(config.review()).thenReturn(reviewConfig);
+    lenient().when(config.ai()).thenReturn(aiConfig);
+    lenient().when(aiConfig.models()).thenReturn(models);
+  }
+
+  /** A per-model settings entry for {@link #MODEL}; unset values fall back to the review keys. */
+  private ThrillhouseConfig.AiPricingConfig.ModelSettings modelSettings(
+      Optional<Integer> maxInputTokens,
+      Optional<Integer> outputBufferTokens,
+      Optional<Double> tokenSafetyMargin) {
+    var settings = mock(ThrillhouseConfig.AiPricingConfig.ModelSettings.class);
+    lenient().when(settings.maxInputTokens()).thenReturn(maxInputTokens);
+    lenient().when(settings.outputBufferTokens()).thenReturn(outputBufferTokens);
+    lenient().when(settings.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
+    return settings;
   }
 
   private static FileDiff file(String name, int additions, String patch) {
@@ -273,5 +299,47 @@ class DiffBudgetPlannerTest {
     assertTrue(plan.budgeted());
     assertEquals(1, plan.batches().size());
     assertFalse(plan.truncated());
+  }
+
+  @Test
+  void perCallInputBudgetIsCappedByTheDefaultModelInputCap() {
+    // No per-model entry: a global budget raised past the 128k default cap must not overshoot an
+    // unknown model's window (#50).
+    when(reviewConfig.maxInputTokens()).thenReturn(500_000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
+    when(reviewConfig.outputBufferTokens()).thenReturn(0);
+    assertEquals(128_000, planner.perCallInputBudget());
+  }
+
+  @Test
+  void perModelMaxInputTokensRaisesTheCapPastTheDefault() {
+    models.put(MODEL, modelSettings(Optional.of(500_000), Optional.empty(), Optional.empty()));
+    when(reviewConfig.maxInputTokens()).thenReturn(300_000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
+    when(reviewConfig.outputBufferTokens()).thenReturn(0);
+    assertEquals(300_000, planner.perCallInputBudget());
+  }
+
+  @Test
+  void perModelMaxInputTokensLowersTheEffectiveBudget() {
+    models.put(MODEL, modelSettings(Optional.of(32_000), Optional.empty(), Optional.empty()));
+    when(reviewConfig.maxInputTokens()).thenReturn(48_000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
+    when(reviewConfig.outputBufferTokens()).thenReturn(0);
+    assertEquals(32_000, planner.perCallInputBudget());
+  }
+
+  @Test
+  void perModelBufferAndMarginOverrideTheGlobalValues() {
+    models.put(MODEL, modelSettings(Optional.empty(), Optional.of(1_000), Optional.of(0.5)));
+    when(reviewConfig.maxInputTokens()).thenReturn(48_000);
+    assertEquals(24_000 - 1_000, planner.perCallInputBudget());
+  }
+
+  @Test
+  void aModelCapNeverReenablesExplicitlyDisabledBudgeting() {
+    models.put(MODEL, modelSettings(Optional.of(64_000), Optional.empty(), Optional.empty()));
+    when(reviewConfig.maxInputTokens()).thenReturn(0);
+    assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());
   }
 }

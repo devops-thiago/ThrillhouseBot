@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -46,13 +47,18 @@ public class DiffBudgetPlanner {
   private final ReviewDiffFormatter formatter;
   private final TokenCounter tokenCounter;
   private final ThrillhouseConfig config;
+  private final ActiveModelSettings activeModel;
 
   @Inject
   public DiffBudgetPlanner(
-      ReviewDiffFormatter formatter, TokenCounter tokenCounter, ThrillhouseConfig config) {
+      ReviewDiffFormatter formatter,
+      TokenCounter tokenCounter,
+      ThrillhouseConfig config,
+      ActiveModelSettings activeModel) {
     this.formatter = formatter;
     this.tokenCounter = tokenCounter;
     this.config = config;
+    this.activeModel = activeModel;
   }
 
   /** One in-budget batch: its rendered diff text, the files it covers, and the token estimate. */
@@ -104,7 +110,7 @@ public class DiffBudgetPlanner {
   public BudgetPlan plan(
       List<GitHubPullRequestClient.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {
     var review = config.review();
-    if (review.maxInputTokens() <= 0) {
+    if (activeModel.maxInputTokens() <= 0) {
       return plan(reviewable, 0, 1);
     }
     // fence(" ") produces the two real fence lines (fence of empty content is a no-op by design),
@@ -127,16 +133,18 @@ public class DiffBudgetPlanner {
   /**
    * The per-call input-token budget every review-path AI call must fit — {@code max-input-tokens *
    * token-safety-margin - output-buffer-tokens} — or {@link Integer#MAX_VALUE} when budgeting is
-   * disabled. Shared with the pipeline so the summary call is bounded by the same ceiling as the
-   * batch calls.
+   * disabled. Each term is the active model's effective value ({@link ActiveModelSettings}, #50):
+   * the max input tokens are the global budget bounded by the model's input cap, and the margin and
+   * output buffer honor per-model overrides. Shared with the pipeline so the summary call is
+   * bounded by the same ceiling as the batch calls.
    */
   public int perCallInputBudget() {
-    var review = config.review();
-    if (review.maxInputTokens() <= 0) {
+    var maxInputTokens = activeModel.maxInputTokens();
+    if (maxInputTokens <= 0) {
       return Integer.MAX_VALUE;
     }
-    return (int) (review.maxInputTokens() * review.tokenSafetyMargin())
-        - review.outputBufferTokens();
+    return (int) (maxInputTokens * activeModel.tokenSafetyMargin())
+        - activeModel.outputBufferTokens();
   }
 
   /**

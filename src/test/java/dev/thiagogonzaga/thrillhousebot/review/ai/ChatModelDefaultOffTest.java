@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -26,24 +27,32 @@ import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 /**
- * Default profile: reasoning is off, so no {@code reasoning_effort} reaches either model and the
- * provider default keeps applying — today's behavior is preserved for non-reasoning models.
+ * Default profile: reasoning is off and no per-model settings entry exists, so no {@code
+ * reasoning_effort} and no {@code max_tokens} reach either model, and temperature/top-p stay at the
+ * quarkus-langchain4j extension defaults (1.0/1.0) — today's behavior is preserved for untuned
+ * deployments.
  */
 @QuarkusTest
-class ReasoningEffortDefaultOffTest {
+class ChatModelDefaultOffTest {
 
   @Inject ChatModel chatModel;
   @Inject StreamingChatModel streamingChatModel;
 
   @Test
-  void noReasoningEffortIsSentByDefault() {
+  void noTuningIsSentByDefault() {
     var blocking =
         assertInstanceOf(OpenAiChatRequestParameters.class, chatModel.defaultRequestParameters());
     assertNull(blocking.reasoningEffort());
+    assertNull(blocking.maxOutputTokens());
+    assertEquals(1.0, blocking.temperature());
+    assertEquals(1.0, blocking.topP());
 
     var streaming =
         assertInstanceOf(
             OpenAiChatRequestParameters.class, streamingChatModel.defaultRequestParameters());
     assertNull(streaming.reasoningEffort());
+    assertNull(streaming.maxOutputTokens());
+    assertEquals(1.0, streaming.temperature());
+    assertEquals(1.0, streaming.topP());
   }
 }
