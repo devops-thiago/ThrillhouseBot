@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
@@ -77,13 +78,42 @@ class SessionCostBackfillTest extends ReviewSessionTestSupport {
     assertEquals(0.0, loaded.getCost(), 1e-9);
   }
 
+  @Test
+  void shouldClearTheMissingPricingFlagWhenTheCostIsBackfilled() throws Exception {
+    // A session flagged "pricing not configured" (#48) whose model now has a price gets its cost
+    // recomputed and the flag cleared — the dashboard stops reporting it as unknown.
+    var id = persistUsage("deepseek-v4-pro", 1000, 1000, 0.0, true);
+
+    backfill.backfill();
+
+    ReviewSession loaded = ReviewSession.findById(id);
+    assertEquals(0.00522, loaded.getCost(), 1e-9);
+    assertFalse(loaded.isPricingMissing());
+  }
+
+  @Test
+  void shouldKeepTheMissingPricingFlagWhenTheModelIsStillUnpriced() throws Exception {
+    var id = persistUsage("totally-unknown-model", 1000, 1000, 0.0, true);
+
+    backfill.backfill();
+
+    ReviewSession loaded = ReviewSession.findById(id);
+    assertTrue(loaded.isPricingMissing());
+  }
+
   private long persistUsage(String model, int input, int output, double cost) throws Exception {
+    return persistUsage(model, input, output, cost, false);
+  }
+
+  private long persistUsage(
+      String model, int input, int output, double cost, boolean pricingMissing) throws Exception {
     tx.begin();
     ReviewSession session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     session.setModel(model);
     session.setInputTokens(input);
     session.setOutputTokens(output);
     session.setCost(cost);
+    session.setPricingMissing(pricingMissing);
     session.setStatus(ReviewSession.STATUS_COMPLETED);
     session.persist();
     session.flush();

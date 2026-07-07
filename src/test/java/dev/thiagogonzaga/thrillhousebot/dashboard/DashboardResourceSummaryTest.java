@@ -84,4 +84,17 @@ class DashboardResourceSummaryTest {
     assertEquals("422", detail.get("errorMessage"));
     assertEquals("{\"findings\":[]}", detail.get("aiResponseJson"));
   }
+
+  @Test
+  void toSessionDetailShouldExposeTheMissingPricingFlag() {
+    // "Pricing not configured" must be distinguishable from a genuine $0 in the dashboard (#48).
+    var session = new ReviewSession();
+    session.id = 8L;
+    session.setPricingMissing(true);
+
+    var detail = DashboardResource.toSessionDetail(session);
+
+    assertEquals(true, detail.get("pricingMissing"));
+    assertEquals(0.0, detail.get("cost"));
+  }
 }

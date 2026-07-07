@@ -35,6 +35,8 @@ export interface SessionListItem {
   inputTokens: number;
   outputTokens: number;
   cost: number;
+  /** True when the model had no pricing entry, so the $0 cost is unknown rather than free. */
+  pricingMissing: boolean;
   durationMs: number;
   criticalFindings: number;
   highFindings: number;

@@ -62,6 +62,7 @@ export const mockSessions: SessionListItem[] = [
     inputTokens: 4200,
     outputTokens: 890,
     cost: 0.0012,
+    pricingMissing: false,
     durationMs: 12_400,
     criticalFindings: 0,
     highFindings: 1,

@@ -162,7 +162,16 @@ export default function SessionsPage() {
                     </td>
                     <td style={styles.tdRight}>{(s.inputTokens + s.outputTokens).toLocaleString()}</td>
                     <td style={{ ...styles.tdRight, color: 'var(--yellow)' }}>
-                      ${s.cost.toFixed(6)}
+                      {s.pricingMissing ? (
+                        <span
+                          style={{ color: 'var(--orange, #d29922)' }}
+                          title={`No pricing configured for ${s.model} — cost unknown, not $0`}
+                        >
+                          no pricing
+                        </span>
+                      ) : (
+                        `$${s.cost.toFixed(6)}`
+                      )}
                     </td>
                     <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
                       {s.criticalFindings}C / {s.highFindings}H / {s.mediumFindings}M /{' '}
@@ -247,7 +256,14 @@ export default function SessionsPage() {
                     label="Tokens"
                     value={`${detail.inputTokens.toLocaleString()} in / ${detail.outputTokens.toLocaleString()} out`}
                   />
-                  <Meta label="Cost" value={`$${detail.cost.toFixed(6)}`} />
+                  <Meta
+                    label="Cost"
+                    value={
+                      detail.pricingMissing
+                        ? 'unknown — no pricing configured for this model'
+                        : `$${detail.cost.toFixed(6)}`
+                    }
+                  />
                   <Meta label="Duration" value={`${detail.durationMs} ms`} />
                   <Meta
                     label="Findings"
