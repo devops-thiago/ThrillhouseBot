@@ -277,7 +277,10 @@ public class StartupConfigValidator {
           activeModel.maxInputTokens(),
           activeModel.modelName());
     }
-    if (config.ai().models().containsKey(activeModel.modelName()) && log.isInfoEnabled()) {
+    if (config.ai().models().containsKey(activeModel.modelName())) {
+      var temperature = orProviderDefault(activeModel.temperature());
+      var topP = orProviderDefault(activeModel.topP());
+      var maxOutputTokens = orProviderDefault(activeModel.maxOutputTokens());
       log.info(
           "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
               + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={}",
@@ -285,9 +288,9 @@ public class StartupConfigValidator {
           activeModel.maxInputTokens(),
           activeModel.outputBufferTokens(),
           activeModel.tokenSafetyMargin(),
-          orProviderDefault(activeModel.temperature()),
-          orProviderDefault(activeModel.topP()),
-          orProviderDefault(activeModel.maxOutputTokens()));
+          temperature,
+          topP,
+          maxOutputTokens);
     }
   }
 
