@@ -294,7 +294,7 @@ thrillhousebot.ai.pricing.deepseek-chat.output-per-1k=0.00028
 If you switch to a different `AI_MODEL`, add a matching
 `thrillhousebot.ai.pricing.<model>.*` pair so the dashboard can compute cost.
 Without an entry the bot still records tokens, but warns once and flags sessions
-as "no pricing" instead of showing `$0` (see [Known limitations](#known-limitations)).
+as "no pricing" instead of showing `$0`.
 
 ### Per-model AI settings
 
