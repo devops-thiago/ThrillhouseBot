@@ -33,10 +33,17 @@ jobs:
           # BOM imports and the build plugin are metadata-only artifacts whose
           # licenses the dependency graph can't resolve; all are Apache-2.0.
           # Unversioned purls so platform bumps don't re-trigger the warning.
+          #
+          # website/ transitive: robust-predicates is Unlicense / public-domain
+          # dedication (npm "license": "Unlicense"; upstream LICENSE at
+          # https://github.com/mourner/robust-predicates/blob/v3.0.3/LICENSE).
+          # ClearlyDefined reports LicenseRef-scancode-public-domain AND
+          # Unlicense; allow the package rather than the scancode LicenseRef.
           allow-dependencies-licenses: >-
             pkg:maven/io.netty/netty-bom,
             pkg:maven/io.opentelemetry/opentelemetry-bom,
             pkg:maven/io.opentelemetry/opentelemetry-bom-alpha,
             pkg:maven/io.quarkus.platform/quarkus-bom,
-            pkg:maven/io.quarkus.platform/quarkus-maven-plugin
+            pkg:maven/io.quarkus.platform/quarkus-maven-plugin,
+            pkg:npm/robust-predicates
           comment-summary-in-pr: always
