@@ -39,7 +39,8 @@ guide, configuration reference, architecture, comparison, and the hosted
 
 <!-- docs:features:start -->
 - Reviews diffs for correctness, security, regressions, stale comments, and code quality
-- Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch
+- Token-budgeted whole-PR review for large diffs — split into map-reduce batches with omitted files named, not silently dropped
+- Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch — plus a per-PR auto-review interval (`AUTO_REVIEW_MIN_INTERVAL`) so busy PRs are not re-reviewed on every push
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
 - Follow-up reviews track whether earlier findings were addressed or justified
@@ -48,6 +49,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
+- Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
 - Compiles ahead-of-time with GraalVM/Mandrel, so it starts fast and stays small
 <!-- docs:features:end -->
@@ -291,6 +293,8 @@ thrillhousebot.ai.pricing.deepseek-chat.output-per-1k=0.00028
 
 If you switch to a different `AI_MODEL`, add a matching
 `thrillhousebot.ai.pricing.<model>.*` pair so the dashboard can compute cost.
+Without an entry the bot still records tokens, but warns once and flags sessions
+as "no pricing" instead of showing `$0` (see [Known limitations](#known-limitations)).
 
 ### Per-model AI settings
 
@@ -347,7 +351,9 @@ to pin it explicitly when auto-detection fails.
 | ![Session history table](docs/assets/dashboard-sessions.png) | ![Session detail with model output and findings](docs/assets/session-detail.png) |
 
 The Overview has summary cards, a recent-activity feed, and a live panel that
-streams the model's output as a review runs:
+streams the model's output as a review runs. On large, map-reduce reviews (token
+budgeting) per-token streaming is off and the panel shows `review.batch` progress
+(batch X/Y) instead of an empty token stream:
 
 <p align="center">
   <img src="docs/assets/live-streaming.png" alt="Dashboard Overview with summary cards, live model-output panel, and recent activity" width="800" />
@@ -431,8 +437,9 @@ This is still an early-stage project; the current constraints are:
   don't fit are disclosed by name instead of silently dropped. The on-demand commands
   (`/describe`, `/changelog`, `/add-docs`) still send the diff in a single call without
   batching.
-- **Single process** — OAuth login sessions and the live WebSocket replay buffer are
-  in-memory (lost on restart). Review history and cost totals persist in PostgreSQL.
+- **Single process** — OAuth login sessions, the live WebSocket replay buffer, and
+  the per-PR auto-review rate-limit window are in-memory (lost on restart / not shared
+  across replicas). Review history and cost totals persist in PostgreSQL.
   Multiple replicas are unsupported.
 - **Dashboard access** — GitHub OAuth required. Only the app account owner and
   collaborators on installed repos can use the dashboard; no admin UI or guest mode.
