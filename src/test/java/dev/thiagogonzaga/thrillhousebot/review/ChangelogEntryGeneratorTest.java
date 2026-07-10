@@ -88,8 +88,6 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void appendsPartialCoverageDisclosureWhenTheDiffWasTruncated() {
-    // The formatter dropped 48 files from the diff the entry is drafted from, so the comment must
-    // disclose that it covers only part of the PR — reusing the review path's wording.
     diffReturns("## Overview: 75 files (+9000 -0)\n\ndiff", 48);
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("t", "b", null, null));
@@ -106,7 +104,6 @@ class ChangelogEntryGeneratorTest {
                 + ChangelogEntryGenerator.FOOTER.length()));
     assertTrue(body.contains("48 file(s) were omitted"), body);
     assertTrue(body.contains("partial coverage"), body);
-    // The review-only "findings and verdict" framing must not leak onto a /changelog entry.
     assertFalse(body.contains("findings and verdict"), body);
   }
 
@@ -137,7 +134,6 @@ class ChangelogEntryGeneratorTest {
 
     var prNumber = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(any(), prNumber.capture(), any(), any(), any());
-    // The PR number is fed to the prompt so the model can stamp each bullet with `(#7)`.
     assertEquals("7", prNumber.getValue());
   }
 
@@ -149,9 +145,6 @@ class ChangelogEntryGeneratorTest {
     verifyNoInteractions(changelogAssistant);
   }
 
-  // The model declined (the NONE sentinel, case-insensitively, tolerating markdown emphasis/quote
-  // markers and trailing punctuation) or returned a blank answer — post nothing rather than noise.
-  // One parameterized test covers each "nothing usable".
   @ParameterizedTest
   @ValueSource(strings = {"NONE", " none ", "**NONE**", "`NONE`", "NONE.", "> NONE", "   "})
   void returnsNullWhenAssistantProducesNothingUsable(String draft) {
@@ -165,8 +158,6 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void postsRealEntryThatMerelyMentionsNone() {
-    // The NONE guard must match only a whole-reply sentinel, never a real entry containing the
-    // word.
     diffReturns("## Overview\ndiff");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("t", "b", null, null));
@@ -181,9 +172,6 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void postsDecorationOnlyReplyThatStripsToAnEmptyCore() {
-    // Trimming the markdown markers can leave an empty core (e.g. "---"). An empty core is not the
-    // NONE sentinel, so — like any non-decline reply — it is posted verbatim rather than dropped.
-    // This also drives the trim loops until the whole reply is consumed.
     diffReturns("## Overview\ndiff");
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("t", "b", null, null));
@@ -218,7 +206,6 @@ class ChangelogEntryGeneratorTest {
     var title = ArgumentCaptor.forClass(String.class);
     var desc = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(any(), any(), title.capture(), desc.capture(), any());
-    // Missing details degrade to empty current title/description, not a crash.
     assertEquals("", title.getValue());
     assertEquals("", desc.getValue());
   }
@@ -235,8 +222,6 @@ class ChangelogEntryGeneratorTest {
 
     var diffArg = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(diffArg.capture(), any(), any(), any(), any());
-    // The diff is wrapped in an unguessable random fence and passed byte-exact, so PR content
-    // (including the old diff markers) reaches the model verbatim and cannot forge the boundary.
     assertTrue(diffArg.getValue().contains(PromptTemplateEscaper.fencePrefix()));
     assertTrue(diffArg.getValue().contains("<<<DIFF_END>>> marker"));
   }
@@ -245,12 +230,9 @@ class ChangelogEntryGeneratorTest {
   void returnsNullWhenDiffFetchFails() {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("boom"));
-    // SoftLoaders.files degrades the failed fetch to an empty list, which the formatter renders as
-    // "(no changes detected)" — treated the same as no diff.
     when(diffFormatter.buildDiffStringWithStats(anyList()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("(no changes detected)", 0));
 
-    // A failed diff fetch degrades to no suggestion, not a crash.
     assertNull(generate());
     verifyNoInteractions(changelogAssistant);
   }
@@ -286,7 +268,6 @@ class ChangelogEntryGeneratorTest {
     var title = ArgumentCaptor.forClass(String.class);
     var desc = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(any(), any(), title.capture(), desc.capture(), any());
-    // A PR with no title/body yet degrades to empty context rather than passing "null" through.
     assertEquals("", title.getValue());
     assertEquals("", desc.getValue());
   }
@@ -306,7 +287,6 @@ class ChangelogEntryGeneratorTest {
     assertNotNull(body);
     var instructions = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(any(), any(), any(), any(), instructions.capture());
-    // A failed instructions lookup degrades to no instructions, not a crash. escape("") -> "".
     assertEquals("", instructions.getValue());
   }
 }

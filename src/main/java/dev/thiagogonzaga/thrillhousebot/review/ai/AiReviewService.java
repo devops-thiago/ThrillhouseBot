@@ -70,10 +70,10 @@ public class AiReviewService {
   }
 
   /**
-   * Reviews one batch of a large, multi-call PR (#53). Runs blocking — no per-token dashboard
-   * stream (the live feed would interleave several batches) — and emits a {@code batch index/count}
-   * progress event instead. The same retry/timeout scaffolding applies; only the findings of the
-   * returned response are used by the caller (PR-level summary comes from the final summary call).
+   * Reviews one batch of a large, multi-call PR. Runs blocking — no per-token dashboard stream (the
+   * live feed would interleave several batches) — and emits a {@code batch index/count} progress
+   * event instead. The same retry/timeout scaffolding applies; only the findings of the returned
+   * response are used by the caller (PR-level summary comes from the final summary call).
    */
   public ReviewResponse reviewBatch(
       ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
@@ -83,8 +83,8 @@ public class AiReviewService {
   }
 
   /**
-   * Final summary call of a large multi-call review (#53): rolls the aggregated findings up into
-   * the PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
+   * Final summary call of a large multi-call review: rolls the aggregated findings up into the
+   * PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
    * response carries the summary and previous-findings status (its findings list is empty).
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
@@ -161,7 +161,7 @@ public class AiReviewService {
       String repoInstructions) {}
 
   /**
-   * The prompt sections for the final summary call (#53), pre-escaped for templating: the
+   * The prompt sections for the final summary call, pre-escaped for templating: the
    * already-computed findings to roll up, the changed-files overview, and the PR-level context.
    */
   public record SummaryInputs(

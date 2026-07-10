@@ -30,9 +30,8 @@ import org.mockito.Answers;
 
 /**
  * Unit tests for {@link CiStatusEvaluator} — the CI-status subsystem extracted from {@code
- * ReviewOrchestrator} (#250). Carries the original {@code EvaluateCiChecks} and {@code
- * ResolveRequiredContexts} cases verbatim, including the #217 unknown-state-holds-approval
- * coverage.
+ * ReviewOrchestrator}. Carries the original {@code EvaluateCiChecks} and {@code
+ * ResolveRequiredContexts} cases verbatim, including the unknown-state-holds-approval coverage.
  */
 class CiStatusEvaluatorTest {
 
@@ -42,9 +41,6 @@ class CiStatusEvaluatorTest {
 
   @BeforeEach
   void setUp() {
-    // getAllCheckRuns/getAllCombinedStatus are default methods that page over the abstract
-    // getCheckRuns/getCombinedStatus the tests stub, so the mock must invoke real default methods
-    // while still mocking the abstract calls.
     checkRunClient =
         mock(
             GitHubCheckRunClient.class,
@@ -52,9 +48,6 @@ class CiStatusEvaluatorTest {
                 invocation.getMethod().isDefault()
                     ? invocation.callRealMethod()
                     : Answers.RETURNS_DEFAULTS.answer(invocation));
-    // Empty set falls back to BotIdentity.DEFAULT_LOGINS (thrillhousebot[bot],
-    // thrillhouse-bot[bot]),
-    // so the bot-token detection keeps recognizing the "thrillhousebot" checks these tests use.
     evaluator = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()));
   }
 
@@ -63,8 +56,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldIgnoreThrillhouseBotChecks() {
-      // All checks below are failing; only the genuinely-non-bot ones must surface as offending,
-      // proving the ThrillhouseBot checks are dropped by bot-detection rather than by being green.
       var app =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
               1L, "thrillhousebot", "ThrillhouseBot");
@@ -93,7 +84,6 @@ class CiStatusEvaluatorTest {
               new GitHubCheckRunClient.CheckRunsResponse(
                   4, List.of(tbRun, appSlugRun, appNameRun, otherRun)));
 
-      // Setup statuses
       var tbStatus =
           new GitHubCheckRunClient.CombinedStatus.StatusDetail(
               1L, "failure", "thrillhousebot-status", "desc");
@@ -115,9 +105,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void usesConfiguredBotIdentityToIgnoreItsOwnChecks() {
-      // #9: bot detection is driven by the shared BotIdentity, not a hardcoded literal — a
-      // deployment under a custom slug recognizes its own app's checks (here "acme-reviewer"),
-      // which the old hardcoded "thrillhousebot" token would have missed.
       var custom = new CiStatusEvaluator(checkRunClient, BotIdentity.of("acme-reviewer[bot]"));
       var botRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
@@ -143,8 +130,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void botTokenMatchingHandlesAConfiguredLoginWithoutTheBotSuffix() {
-      // A configured login that does not end in "[bot]" is used as the token verbatim, so a check
-      // whose name contains that bare token is still recognized as the bot's and dropped.
       var custom = new CiStatusEvaluator(checkRunClient, BotIdentity.of("acme-bot-login"));
       var botRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
@@ -166,7 +151,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldExcludePassingChecksFromOffendingList() {
-      // Every check is green — the offending list must come back empty so APPROVE is not gated.
       var passRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "completed", "success", null);
@@ -180,7 +164,6 @@ class CiStatusEvaluatorTest {
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CombinedStatus("success", 1, List.of(passStatus)));
 
-      // requiredContexts lists checks that are all green and already reported — none is missing.
       var result =
           evaluator.evaluateCiChecks(
               "auth", "owner", "repo", "sha", List.of("build", "docs", "lint"));
@@ -190,10 +173,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void unreadableCheckRunsHoldApproveInGateAllMode() {
-      // Check Runs API throws; combined status reads clean. In gate-all mode (no required-context
-      // list to backfill) we cannot confirm CI is green, so the evaluation reports a first-class
-      // unreadable signal that holds the verdict to COMMENT rather than approving over CI we never
-      // saw — and it is NOT smuggled in as a synthetic offending check.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenThrow(new RuntimeException("rate limited"));
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
@@ -209,8 +188,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void nullCombinedStatusBodyHoldsApproveInGateAllMode() {
-      // A null body (not an empty list) means the response could not be read — must not count
-      // green.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(0, List.of()));
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
@@ -223,8 +200,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void readableGreenCiInGateAllModeStillApproves() {
-      // Both sources read cleanly and green — nothing offending and CI is readable, APPROVE not
-      // gated.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CheckRunsResponse(
@@ -243,10 +218,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void requiredContextsKnownReflectsWhetherRequiredListWasResolved() {
-      // #302: the evaluation records whether a required-context set was resolved, so the rendered
-      // copy can drop "required" in fail-closed gate-all mode (requiredContexts == null) and keep
-      // it
-      // when a concrete list was resolved.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(
               new GitHubCheckRunClient.CheckRunsResponse(
@@ -269,10 +240,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void unreadableCiInGateSpecificModeAlsoHoldsApproval() {
-      // #5: gate-specific mode is NOT automatically safe. The Check Runs source throws, so a
-      // required check reporting only there could be hidden; the missing-required backfill still
-      // flags "build", and the unread source is now reported as a first-class unreadable signal too
-      // — closing the gap where a gate-specific review could approve over a source it never read.
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenThrow(new RuntimeException("boom"));
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
@@ -286,9 +253,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldHoldApprovalWhenAStatusStateIsUnrecognized() {
-      // A commit status whose state is neither success/pending/failure/error (here a malformed
-      // value; null behaves identically) is not a confirmed pass — it must surface as a pending
-      // offending check so it holds the approval rather than clearing the gate.
       var passRun =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "completed", "success", null);
@@ -311,7 +275,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldFilterByRequiredContextsWhenProvided() {
-      // All four checks are failing; only the two in requiredContexts must surface as offending.
       var run1 =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "completed", "failure", null);
@@ -350,7 +313,6 @@ class CiStatusEvaluatorTest {
           evaluator.evaluateCiChecks(
               "auth", "owner", "repo", "sha", List.of("build", "thrillhousebot"));
 
-      // thrillhousebot is ignored, so only "build" is missing
       assertEquals(1, result.offendingChecks().size());
       var check = result.offendingChecks().get(0);
       assertEquals("build", check.name());
@@ -360,15 +322,12 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldEvaluateStatusesAndConclusionsCorrectly() {
-      // 1. Pending check run
       var runPending =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "in_progress", null, null);
-      // 2. Failed check run
       var runFailed =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               2L, "test", "completed", "failure", null);
-      // 3. Skipped check run (success)
       var runSkipped =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               3L, "docs", "completed", "skipped", null);
@@ -377,10 +336,8 @@ class CiStatusEvaluatorTest {
               new GitHubCheckRunClient.CheckRunsResponse(
                   3, List.of(runPending, runFailed, runSkipped)));
 
-      // 4. Pending status
       var statusPending =
           new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "pending", "lint", "desc");
-      // 5. Error status
       var statusError =
           new GitHubCheckRunClient.CombinedStatus.StatusDetail(2L, "error", "security", "desc");
       when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
@@ -390,7 +347,6 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      // docs (skipped → passing) is excluded; only the four offending checks remain.
       assertEquals(4, result.offendingChecks().size());
 
       var build =
@@ -426,7 +382,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldPageThroughCheckRunsUntilAShortPageIsReturned() {
-      // A full first page (100 rows) must trigger a second fetch; the short second page stops it.
       var fullPage = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
       for (int i = 0; i < 100; i++) {
         fullPage.add(
@@ -445,7 +400,6 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      // Both pages were consumed: 100 + 1 failing check runs.
       assertEquals(101, result.offendingChecks().size());
       verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(1));
       verify(checkRunClient).getCheckRuns(any(), any(), any(), any(), any(), eq(100), eq(2));
@@ -477,8 +431,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldStopPagingAtTheMaxPagesGuard() {
-      // Every page is full (CI_PER_PAGE rows) so the short-page break never fires; the loop must
-      // terminate at the CI_MAX_PAGES guard rather than run forever.
       var fullRuns = new java.util.ArrayList<GitHubCheckRunClient.CheckRunsResponse.CheckRun>();
       var fullStatuses =
           new java.util.ArrayList<GitHubCheckRunClient.CombinedStatus.StatusDetail>();
@@ -500,7 +452,6 @@ class CiStatusEvaluatorTest {
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
 
-      // Deduped to the distinct names across the repeated pages.
       assertEquals(2 * GitHubCheckRunClient.CI_PER_PAGE, result.offendingChecks().size());
       verify(checkRunClient, times(GitHubCheckRunClient.CI_MAX_PAGES))
           .getCheckRuns(
@@ -512,9 +463,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldBreakWhenCheckRunsAndStatusResponsesAreNull() {
-      // Unmocked endpoints return null; the page loops break immediately without error, but a null
-      // body is "could not read", so gate-all mode holds the verdict rather than allowing APPROVE
-      // over CI it never saw (#253).
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
       assertTrue(result.unreadable());
     }
@@ -536,7 +484,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldDeduplicateContextReportedAsBothCheckRunAndStatus() {
-      // The same failing context reported twice via check runs and once via status → listed once.
       var run =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
               1L, "build", "completed", "failure", null);
@@ -559,7 +506,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void shouldKeepNonBotChecksWhoseAppAndNameDoNotMatch() {
-      // Apps present but not ThrillhouseBot (one with a name, one without), plus a null-named run.
       var appWithName =
           new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
               9L, "github-actions", "GitHub Actions");
@@ -606,9 +552,6 @@ class CiStatusEvaluatorTest {
           .thenThrow(new RuntimeException("failed"));
 
       var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", null);
-      // Exceptions are swallowed (no crash), but unreadable CI must hold the verdict — not come
-      // back
-      // empty and silently allow APPROVE (#253).
       assertTrue(result.unreadable());
       assertTrue(result.offendingChecks().isEmpty());
     }
@@ -636,9 +579,6 @@ class CiStatusEvaluatorTest {
 
     @Test
     void returnsEmptyWhenBaseBranchIsBlank() {
-      // The base branch is resolved upstream (webhook payload / resolveMissingPrDetails); when it
-      // is
-      // absent we gate on all checks and never look up branch rules — no PR fetch happens here.
       assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", "").isEmpty());
       assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", null).isEmpty());
       verify(checkRunClient, never())
@@ -674,7 +614,6 @@ class CiStatusEvaluatorTest {
       when(checkRunClient.getBranchRules(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenReturn(List.of(new GitHubCheckRunClient.BranchRule("required_status_checks", null)));
-      // Classic 404s — a ruleset governs the branch but contributes no required contexts.
       when(checkRunClient.getRequiredStatusChecks(
               anyString(), anyString(), anyString(), anyString(), anyString()))
           .thenThrow(new RuntimeException("Not Found, status code 404"));

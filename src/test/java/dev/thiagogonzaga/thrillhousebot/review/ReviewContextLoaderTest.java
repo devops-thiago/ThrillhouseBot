@@ -32,7 +32,7 @@ import org.mockito.MockitoAnnotations;
 
 /**
  * Unit tests for {@link ReviewContextLoader} — the read side of the review pipeline extracted from
- * {@code ReviewOrchestrator} (#250). Carries the diff/base-comparison, PR-files, prior-reviews,
+ * {@code ReviewOrchestrator}. Carries the diff/base-comparison, PR-files, prior-reviews,
  * inline-comment, bot-summary-detection, resolve-missing-details and project-stack cases verbatim.
  */
 class ReviewContextLoaderTest {
@@ -280,8 +280,6 @@ class ReviewContextLoaderTest {
       when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("GitHub API error"));
 
-      // Swallowing the failure into an empty list would yield an empty diff and a false APPROVE on
-      // unreviewed code; it must propagate so review() takes the failure path.
       assertThrows(RuntimeException.class, () -> loader.fetchPrFiles("auth", "owner", "repo", 42));
     }
 
@@ -411,7 +409,6 @@ class ReviewContextLoaderTest {
 
     @Test
     void returnsGitHubAuthoritativeTotalsFromThePullRequest() {
-      // The summary's "Changes Overview" reports these, not the ignore-glob-filtered diff counts.
       when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(46)))
           .thenReturn(
               new GitHubPullRequestClient.PullRequestDetails(
@@ -445,8 +442,6 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnEmptyListWhenClientThrows() {
-      // The paginating client never returns null, so the only failure to absorb is the fetch
-      // throwing — it degrades to an empty list rather than aborting the review.
       when(reviewClient.listPullRequestComments(
               anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("boom"));
@@ -509,8 +504,6 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldIgnoreASummaryHeadingPostedBySomeoneElse() {
-      // A human (or another bot) quoting the heading must not be mistaken for the bot's own
-      // summary.
       stubComments(comment(PrSummaryGenerator.SUMMARY_HEADING + "\n\nspoof", "impersonator"));
 
       assertFalse(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
@@ -518,8 +511,6 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldIgnoreBotCommentsThatAreNotTheSummary() {
-      // The bot also posts conversational replies (e.g. answering /review questions); only the
-      // summary heading counts.
       stubComments(comment("I don't have enough context to answer that.", "thrillhousebot[bot]"));
 
       assertFalse(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
@@ -534,9 +525,6 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldNotMatchTheHeadingMidComment() {
-      // Only a comment that *starts* with the heading is the bot's summary; an embedded mention is
-      // a
-      // quote in a discussion, not the summary artifact.
       stubComments(
           comment("As noted in the " + PrSummaryGenerator.SUMMARY_HEADING, "thrillhousebot[bot]"));
 
@@ -558,8 +546,6 @@ class ReviewContextLoaderTest {
       when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("boom"));
 
-      // A thrown fetch falls back to "no summary seen" rather than blocking the review.
-      // (listComments paginates internally and never returns null, so that case can't arise.)
       assertFalse(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
       assertTrue(loader.fetchIssueComments("auth", "owner", "repo", 1).isEmpty());
     }

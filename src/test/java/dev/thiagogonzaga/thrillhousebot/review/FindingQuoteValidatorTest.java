@@ -82,7 +82,6 @@ class FindingQuoteValidatorTest {
 
   @Test
   void dropsFindingWhoseQuoteIsNowhereInTheDiff() {
-    // The phantom-quote case from dogfooding: single braces where the file has double braces
     var response = response(finding("SHA=\"${ steps.meta.outputs.sha }\""));
 
     var result = validator.validate(response, DIFF);
@@ -109,10 +108,6 @@ class FindingQuoteValidatorTest {
 
   @Test
   void stripsSuggestionWhenMultiLineQuoteIsScatteredNotContiguous() {
-    // Both lines exist in the diff ("}" last, "public class Main {" first) but never as a
-    // contiguous in-order run — a recombination of real lines that matchQuote's per-line set
-    // membership wrongly accepts as FULL. It must be demoted so the fabricated suggestion is
-    // not kept.
     var response = response(finding("}\npublic class Main {"));
 
     var result = validator.validate(response, DIFF);
@@ -137,7 +132,6 @@ class FindingQuoteValidatorTest {
 
   @Test
   void fileHeaderAndHunkLinesAreNotMatchableContent() {
-    // "+++ b/src/Main.java" must not let a finding quoting it survive
     var response = response(finding("+++ b/src/Main.java"));
 
     var result = validator.validate(response, DIFF);
@@ -158,8 +152,6 @@ class FindingQuoteValidatorTest {
 
   @Test
   void quotesOfMarkerContentMatchByteExact() {
-    // The diff is fenced and passed byte-exact, so the model quotes the marker text verbatim
-    // (three-bracket form) and it must validate against the raw diff — no neutralization.
     var diff =
         """
         +++ b/src/Probe.java
@@ -252,7 +244,6 @@ class FindingQuoteValidatorTest {
 
   @Test
   void ambiguousPathScopesToItsCandidatesNotTheWholeDiff() {
-    // Handler.java matches two sections; a quote from an unrelated third file must not pass
     var misattributed = findingOn("Handler.java", "int inC = 3;");
 
     var result = validator.validate(response(misattributed), AMBIGUOUS_DIFF);
@@ -315,9 +306,6 @@ class FindingQuoteValidatorTest {
          }
         ```
         """;
-    // The two occurrences sit at right-side lines 11 and 14, so their 3-line tolerance windows
-    // ([8,14] and [11,17]) overlap. The finding at line 12 falls inside both, uniquely selecting
-    // neither — so the outcome depends on correct right-side line tracking, not mere distance.
     var finding =
         new ReviewResponse.Finding(
             "critical",
@@ -356,7 +344,6 @@ class FindingQuoteValidatorTest {
       ```
       """;
 
-  // Same duplicate quote, but each hunk header carries git's trailing function-context suffix.
   private static final String DUPLICATE_QUOTE_DIFF_TRAILING_HEADER =
       """
       ### src/Test.java (modified, +2 -2)
@@ -376,11 +363,8 @@ class FindingQuoteValidatorTest {
 
   static Stream<Arguments> uniquelySelectedDuplicateQuotes() {
     return Stream.of(
-        // line 21 uniquely selects testTwo — the upper occurrence's tolerance window
         arguments(DUPLICATE_QUOTE_DIFF, 21),
-        // line 11 selects the earlier testOne — exercises the lower-bound edge of the window
         arguments(DUPLICATE_QUOTE_DIFF, 11),
-        // trailing context after @@ must still parse the +start, so line 21 selects testTwo
         arguments(DUPLICATE_QUOTE_DIFF_TRAILING_HEADER, 21));
   }
 
@@ -424,10 +408,6 @@ class FindingQuoteValidatorTest {
          }
         ```
         """;
-    // The quote has "stepOne();" and "stepTwo();" which are separated by "+    insertedStep();" in
-    // the diff.
-    // Since "+    insertedStep();" is an addition, it should be ignored when matching
-    // suggestionOld.
     var quote = "stepOne();\nstepTwo();";
     var finding =
         new ReviewResponse.Finding(
@@ -444,9 +424,6 @@ class FindingQuoteValidatorTest {
 
   @Test
   void multiLineQuoteOfContiguousAddedCodeIsKept() {
-    // suggestion_old may quote code this PR added (to replace a just-added bug). Those lines are
-    // contiguous on the new side (context + additions) but absent from the original side (context +
-    // deletions), so the multi-line contiguity gate must still keep them.
     var diff =
         """
         ### src/New.java (modified, +2 -0)
@@ -490,9 +467,6 @@ class FindingQuoteValidatorTest {
          }
         ```
         """;
-    // The finding's file matches no section, so scoping falls back to the whole-diff union where
-    // "doThing();" appears in both files at right-side line 11 (each file restarts its own
-    // numbering). Line 11 sits in both tolerance windows, so neither is uniquely selected.
     var finding =
         new ReviewResponse.Finding(
             "critical",
@@ -526,8 +500,6 @@ class FindingQuoteValidatorTest {
          }
         ```
         """;
-    // A line that starts with @@ but carries no parseable +start leaves right-side numbering at its
-    // default; the single quoted occurrence has no duplicate to disambiguate and is kept.
     var finding =
         new ReviewResponse.Finding(
             "critical",
@@ -581,9 +553,9 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * The dogfood case: {@code suggestion_old} quotes the real changed line (a FULL match) but the
-   * description's supporting mechanism is a chained call that exists nowhere. The finding is kept
-   * but demoted — suggestion stripped, confidence capped — exactly like a partial quote.
+   * When {@code suggestion_old} quotes the real changed line (a FULL match) but the description's
+   * supporting mechanism is a chained call that exists nowhere, the finding is kept but demoted —
+   * suggestion stripped, confidence capped — exactly like a partial quote.
    */
   @Test
   void demotesFindingWhenDescriptionCitesPhantomChainedCall() {
@@ -616,26 +588,16 @@ class FindingQuoteValidatorTest {
   @NullSource
   @ValueSource(
       strings = {
-        // blank: no citations to check
         "   ",
-        // chained call genuinely present in the diff
         "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
-        // bare method names are not distinctive enough to flag against the diff window
         "accountOwner flows from installedRepos() and evaluateAccess(); it may be null.",
-        // a dotted field access without a call is ignored
         "The configured `dashboardConfig.accountOwner` default is applied here.",
-        // face (b): the full lambda chain present in the diff is one citation, kept whole
         "The filter `repos.stream().filter(r -> r.owner().equals(accountOwner)).toList()` is"
             + " case-sensitive, which misses matches.",
-        // unbalanced parentheses consume no argument list, so nothing distinctive is flagged
         "The incomplete call `obj.process(arg` appears only in the prose.",
-        // an unterminated string literal swallows the remainder, so no call chain is consumed
         "It mentions `obj.run(\"oops` without ever closing the quote.",
-        // a null-guard clause cites no call chain, so the present chain still matches and is kept
         "Guard `owner == null || accountOwner == null` before"
             + " `r.owner().equals(accountOwner)`, which is present.",
-        // a present chain wrapped in a bare-name call: the inner chain is descended into and found
-        // in the diff, so the finding is not over-demoted
         "The value `requireNonNull(r.owner().equals(accountOwner))` is recomputed each call."
       })
   void keepsFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
@@ -668,9 +630,7 @@ class FindingQuoteValidatorTest {
   @NullSource
   @ValueSource(
       strings = {
-        // chained call genuinely present in the diff
         "The filter `r.owner().equals(accountOwner)` is case-sensitive, which misses matches.",
-        // no chained call at all
         "accountOwner may be null at this point."
       })
   void keepsQuotelessFindingWhenDescriptionHasNoAbsentChainedCall(String description) {
@@ -691,25 +651,13 @@ class FindingQuoteValidatorTest {
   @ParameterizedTest
   @ValueSource(
       strings = {
-        // nested-call argument: was truncated to the paren-less "config.lookup" and dropped
         "accountOwner comes from `config.lookup(getKey()).orElse(null)`, so it may be null.",
-        // lambda chain sharing a real prefix; the old split missed the invented .orElseThrow tail
         "It evaluates `repos.stream().filter(r -> r.owner().equals(accountOwner))"
             + ".orElseThrow(IllegalStateException::new)` on every request.",
-        // the receiver itself takes arguments
         "The value `getConfig().lookup(key).orElse(null)` is never null-checked before use.",
-        // an escaped quote inside the string-literal argument must not terminate the literal early,
-        // and the receiver name exercises underscore/digit identifier characters
         "It validates with `pattern_2.match(\"a\\\"b\").orElseThrow()` before continuing.",
-        // a char-literal slash holds no real bracket, a leading dollar sign is a valid identifier
-        // start, and the sentence break exercises a dot that is not followed by an identifier
         "Two call sites exist. The `path.split('/')` output (the $tmp local) is never checked.",
-        // a lone apostrophe inside the cited call's arguments must not swallow the rest of the
-        // citation: the phantom chain is still extracted whole and, being absent, demoted
         "accountOwner is `dashboardConfig.lookup(the user's key).orElse(null)`, which may be null.",
-        // a phantom chain wrapped in a bare-name call must still be checked: the wrapper itself is
-        // not a citation, but the inner config.fetch(accountId) is extracted and, being absent,
-        // demoted
         "It is wrapped as `requireNonNull(config.fetch(accountId))`, which can throw."
       })
   void demotesFindingWhenDescriptionCitesAbsentNestedCallChain(String description) {
@@ -846,10 +794,8 @@ class FindingQuoteValidatorTest {
             "DashboardAccessChecker.java",
             221,
             "Potential NullPointerException when accountOwner is null",
-            // present core chain (verbatim in the diff) cited alongside an off-diff helper
             "`r.owner().equals(accountOwner)` is case-sensitive; `cfg.opts().get()` set the owner.",
             MATCHED_OLD,
-            // the proposed fix wraps the present chain, so it restates it verbatim
             "r != null && r.owner().equals(accountOwner)");
     var response = response(finding);
 
@@ -1032,8 +978,6 @@ class FindingQuoteValidatorTest {
         \\ No newline at end of file
         ```
         """;
-    // The "\\ No newline at end of file" indicator is diff plumbing; a finding quoting it must not
-    // validate against the diff.
     var response = response(findingOn("src/Test.java", "\\ No newline at end of file"));
 
     var result = validator.validate(response, diff);

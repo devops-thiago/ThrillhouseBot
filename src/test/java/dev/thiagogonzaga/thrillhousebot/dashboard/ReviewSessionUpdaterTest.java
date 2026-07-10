@@ -43,7 +43,6 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldFlagMissingPricingOnTheSession() throws Exception {
-    // The flag distinguishes "pricing not configured" from a genuine $0 in the dashboard (#48).
     var session = persistSession();
 
     updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true, 1500);
@@ -72,7 +71,6 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
     assertDoesNotThrow(() -> updater.recordModelUsage(999_999L, "model", 1, 1, 0.0, false, 1));
     assertDoesNotThrow(() -> updater.recordFailure(999_999L, "gone", 1));
 
-    // No session may be created as a side effect of updating a missing ID
     assertEquals(0, ReviewSession.count());
   }
 

@@ -56,8 +56,8 @@ public class ReviewSession extends PanacheEntity {
 
   /**
    * True when the session's cost was recorded as 0 because the model had no {@code
-   * thrillhousebot.ai.pricing} entry (#48) — distinguishes "pricing not configured" from a genuine
-   * $0 so the dashboard can flag under-reported spend. Cleared by {@link SessionCostBackfill} once
+   * thrillhousebot.ai.pricing} entry — distinguishes "pricing not configured" from a genuine $0 so
+   * the dashboard can flag under-reported spend. Cleared by {@link SessionCostBackfill} once
    * pricing is added and the cost is recomputed.
    */
   boolean pricingMissing;

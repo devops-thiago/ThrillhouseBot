@@ -83,7 +83,7 @@ public class FindingPipeline {
    * caller builds it once and passes it in. A budgeted plan is authoritative for what the model
    * sees: even a single batch sends the planned (possibly hunk-clipped) text, never the uncapped
    * raw diff — otherwise the budget would be bypassed in exactly the oversized-file case that
-   * motivated clipping (#53). The legacy uncapped {@code ctx.diff()} is only sent when budgeting is
+   * motivated clipping. The legacy uncapped {@code ctx.diff()} is only sent when budgeting is
    * explicitly disabled.
    */
   ReviewResponse run(
@@ -135,9 +135,9 @@ public class FindingPipeline {
   }
 
   /**
-   * Map-reduce review for a large PR (#53): review each token-budgeted batch in its own blocking
-   * call, quote-validating and verifying each batch's findings against that batch's own in-budget
-   * text (the combined diff would exceed the very budget the batches exist to respect), union the
+   * Map-reduce review for a large PR: review each token-budgeted batch in its own blocking call,
+   * quote-validating and verifying each batch's findings against that batch's own in-budget text
+   * (the combined diff would exceed the very budget the batches exist to respect), union the
    * results through the finishing chain, then a single summary call rolls them up into the PR-level
    * summary. Previous-findings statuses are aggregated from the batch calls — they saw the diff;
    * the code-blind summary call must not decide what was resolved. The passed {@code promptInputs}

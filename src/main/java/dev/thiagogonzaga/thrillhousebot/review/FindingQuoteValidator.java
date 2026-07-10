@@ -28,11 +28,8 @@ import java.util.Set;
 
 /**
  * Deterministic guard against findings that quote code which is not in the diff. The model
- * occasionally reviews a paraphrase of the change instead of the change itself (historically also a
- * symptom of prompt-pipeline corruption) and then flags defects in code nobody wrote. Dogfooding
- * examples: a critical "broken type inference" finding whose suggested fix was byte-identical to
- * the committed line, and two critical "invalid syntax" findings quoting single-brace expressions
- * where the file has double braces.
+ * occasionally reviews a paraphrase of the change instead of the change itself and then flags
+ * defects in code nobody wrote.
  *
  * <p>The check is conservative: a finding is dropped only when none of its quoted lines exist in
  * the diff (pure phantom). When the quote is partially wrong, the unreliable suggestion block is

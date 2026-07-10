@@ -152,17 +152,17 @@ public interface ThrillhouseConfig {
     /**
      * Line cap on single-call diff renders: the on-demand commands (/describe, /changelog,
      * /add-docs), maintainer replies, the base comparison, and the budgeting-disabled legacy
-     * review. Token-budgeted review calls are governed by {@link #maxInputTokens()} instead (#53).
-     * Keeps its pre-#53 default and released semantics: 5000 lines, and an explicit {@code 0} turns
-     * the cap off (unbounded render).
+     * review. Token-budgeted review calls are governed by {@link #maxInputTokens()} instead. Keeps
+     * its previous default and released semantics: 5000 lines, and an explicit {@code 0} turns the
+     * cap off (unbounded render).
      */
     @WithDefault("5000")
     @WithName("max-diff-lines")
     int maxDiffLines();
 
     /**
-     * Per-call input-token budget for the review prompt (#53). The diff is split into batches that
-     * each fit this budget after the shared prompt overhead and {@link #outputBufferTokens()} are
+     * Per-call input-token budget for the review prompt. The diff is split into batches that each
+     * fit this budget after the shared prompt overhead and {@link #outputBufferTokens()} are
      * subtracted; a PR whose diff exceeds one batch is reviewed in multiple calls. Sized for the
      * model's context window — keep headroom for output. 0 disables token budgeting (single call).
      */
@@ -176,7 +176,7 @@ public interface ThrillhouseConfig {
     int outputBufferTokens();
 
     /**
-     * Hard cap on model calls per review across all batches plus the final summary call (#53), so a
+     * Hard cap on model calls per review across all batches plus the final summary call, so a
      * pathologically large PR can never fan out without bound. Files that do not fit within this
      * many calls are reported by name, never silently dropped.
      */
@@ -187,7 +187,7 @@ public interface ThrillhouseConfig {
     /**
      * Fraction of {@link #maxInputTokens()} actually used when budgeting, so an under-estimate from
      * the provider-agnostic token counter never pushes a call over the real limit. Self-calibration
-     * against the API's reported usage is the follow-up in #239.
+     * against the API's reported usage is a follow-up.
      */
     @WithDefault("0.9")
     @WithName("token-safety-margin")
@@ -359,8 +359,8 @@ public interface ThrillhouseConfig {
 
     /**
      * Per-model AI settings keyed by the model name (the {@code AI_MODEL} value), mirroring the
-     * {@link #pricing()} key scheme (#50). Only the active model's entry is read; keeping entries
-     * for several models lets an operator switch {@code AI_MODEL} without retuning. All values are
+     * {@link #pricing()} key scheme. Only the active model's entry is read; keeping entries for
+     * several models lets an operator switch {@code AI_MODEL} without retuning. All values are
      * optional — an absent value falls back as documented on each key — so a model needs an entry
      * only for the values that differ from the defaults. Resolution for the active model lives in
      * {@link ActiveModelSettings}.
@@ -398,8 +398,8 @@ public interface ThrillhouseConfig {
     }
 
     /**
-     * One model's settings: the input-token hard cap the #53 budgeter respects, per-model overrides
-     * of the token-budget knobs, and generation parameters sent on every chat call. Generation
+     * One model's settings: the input-token hard cap the budgeter respects, per-model overrides of
+     * the token-budget knobs, and generation parameters sent on every chat call. Generation
      * parameters ride the OpenAI-compatible wire, which carries {@code temperature}, {@code top_p},
      * and {@code max_tokens} but has no {@code top_k} — a top-k dial needs a native provider
      * integration.

@@ -62,7 +62,6 @@ class GitHubPullRequestClientTest {
 
     var all = client.getPullRequestFiles("auth", "json", "o", "r", 7);
 
-    // 242 files across 3 pages — not silently truncated to the first 30.
     assertEquals(242, all.size());
     verify(client).getPullRequestFilesPage("auth", "json", "o", "r", 7, 100, 3);
     verify(client, never()).getPullRequestFilesPage("auth", "json", "o", "r", 7, 100, 4);
@@ -106,9 +105,6 @@ class GitHubPullRequestClientTest {
 
   @Test
   void deserializesAuthoritativePrTotalsFromTheGitHubSnakeCaseFields() throws Exception {
-    // GitHub's pulls payload uses changed_files (snake_case); the @JsonProperty mapping must hold
-    // so
-    // the summary's "Changes Overview" reads the authoritative totals rather than 0 (#298).
     var json =
         "{\"title\":\"T\",\"body\":\"B\",\"changed_files\":27,\"additions\":975,\"deletions\":196}";
 

@@ -33,7 +33,6 @@ class SessionCostBackfillTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldRecomputeCostForZeroCostSessionWithKnownModel() throws Exception {
-    // deepseek-v4-pro: 0.00174 in / 0.00348 out per 1K → 0.00174 + 0.00348 = 0.00522
     var id = persistUsage("deepseek-v4-pro", 1000, 1000, 0.0);
 
     var updated = backfill.backfill();
@@ -80,8 +79,6 @@ class SessionCostBackfillTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldClearTheMissingPricingFlagWhenTheCostIsBackfilled() throws Exception {
-    // A session flagged "pricing not configured" (#48) whose model now has a price gets its cost
-    // recomputed and the flag cleared — the dashboard stops reporting it as unknown.
     var id = persistUsage("deepseek-v4-pro", 1000, 1000, 0.0, true);
 
     backfill.backfill();

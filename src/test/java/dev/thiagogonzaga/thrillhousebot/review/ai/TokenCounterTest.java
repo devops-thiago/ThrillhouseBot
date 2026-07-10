@@ -20,9 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-/**
- * Unit tests for {@link TokenCounter} — the jtokkit-backed estimate behind diff budgeting (#53).
- */
+/** Unit tests for {@link TokenCounter} — the jtokkit-backed estimate behind diff budgeting. */
 class TokenCounterTest {
 
   private final TokenCounter counter = new TokenCounter();
@@ -35,9 +33,6 @@ class TokenCounterTest {
 
   @Test
   void countsRealBpeTokensNotCharacters() {
-    // A dense code snippet: a real BPE tokenizer yields far fewer tokens than characters, but well
-    // above zero — proves jtokkit is actually loaded and tokenizing, not char-counting or
-    // no-op'ing.
     String code =
         """
         public record DiffBatch(List<FileDiff> files, int estimatedTokens) {
@@ -47,7 +42,6 @@ class TokenCounterTest {
     int tokens = counter.estimateTokens(code);
     assertTrue(tokens > 10, "expected a non-trivial token count, got " + tokens);
     assertTrue(tokens < code.length(), "tokens must be fewer than characters, got " + tokens);
-    // ~2–8 chars/token is the plausible band for code under cl100k_base.
     double charsPerToken = (double) code.length() / tokens;
     assertTrue(
         charsPerToken > 1.5 && charsPerToken < 8.0,

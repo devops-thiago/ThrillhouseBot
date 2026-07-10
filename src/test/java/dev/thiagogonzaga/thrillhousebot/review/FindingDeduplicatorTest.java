@@ -47,7 +47,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void mergesSameDefectReportedAtThreeSeveritiesIntoMedian() {
-    // The dogfooding case: one defect posted three times at low, medium and high
     var response =
         response(
             finding("low", "src/Prompt.java", 42, "Literal backslash-n instead of newline", "a"),
@@ -98,8 +97,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void twoDuplicatesKeepTheMoreSevereSeverity() {
-    // An even cluster has no single median; the more severe of the two central values wins, so a
-    // single hedged (lower-severity) duplicate cannot downgrade a blocking finding.
     var response =
         response(
             finding("critical", "src/A.java", 5, "Unbounded recursion in parser", "short"),
@@ -113,8 +110,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void evenClusterTakesTheMoreSevereOfTheTwoCentralSeverities() {
-    // Sorted [critical, high, medium, low]; the two central values are high and medium, so the more
-    // severe (high) is chosen — never the less severe (medium).
     var response =
         response(
             finding("critical", "src/A.java", 5, "Unbounded recursion in parser", "a"),
@@ -164,9 +159,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void mergePreservesBlockingConfidenceOfTheMedianRisk() {
-    // A terse critical/high-confidence finding merged with a verbose hedged duplicate must
-    // stay blocking: confidence comes from the members carrying the median risk, not from
-    // whichever copy wrote the most
     var response =
         response(
             new ReviewResponse.Finding(
@@ -200,7 +192,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void mergeDoesNotPairMedianRiskWithAnotherMembersConfidence() {
-    // No member asserted critical/high; the merge must not synthesize that blocking pair
     var response =
         response(
             new ReviewResponse.Finding(
@@ -226,7 +217,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void chainedDuplicatesMergeIntoOneCluster() {
-    // B is within tolerance of A, C within tolerance of B but not of A — still one defect
     var response =
         response(
             finding("high", "src/A.java", 10, "Missing null check on request", "a"),
@@ -240,8 +230,6 @@ class FindingDeduplicatorTest {
 
   @Test
   void mergeTakesSiblingSuggestionWhenRichestHasNone() {
-    // When quote validation strips the suggestion from the copy with the richest
-    // description, the verbatim sibling's suggestion must survive the merge
     var response =
         response(
             new ReviewResponse.Finding(
@@ -309,7 +297,6 @@ class FindingDeduplicatorTest {
   void filePathsHelperMatchesAtDirectoryBoundariesOnly() {
     assertTrue(FilePaths.same("src/B.java", "src/B.java"));
     assertTrue(FilePaths.same("nested/path/B.java", "path/B.java"));
-    // Bare file names match exactly only — Handler.java exists in many modules
     assertFalse(FilePaths.same("B.java", "nested/path/B.java"));
     assertFalse(FilePaths.same("path/B.java", "path/C.java"));
     assertFalse(FilePaths.same("MyB.java", "B.java"));

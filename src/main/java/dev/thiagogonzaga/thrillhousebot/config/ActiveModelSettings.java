@@ -23,9 +23,9 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Resolves the effective AI settings for the configured model ({@code AI_MODEL}) from the per-model
- * map ({@code thrillhousebot.ai.models.*}, #50) with the global review keys as fallback, so
- * consumers never re-implement the precedence. The budget keys feed the #53 diff budgeter; the
- * generation parameters feed the chat-model builders.
+ * map ({@code thrillhousebot.ai.models.*}) with the global review keys as fallback, so consumers
+ * never re-implement the precedence. The budget keys feed the diff budgeter; the generation
+ * parameters feed the chat-model builders.
  */
 @ApplicationScoped
 public class ActiveModelSettings {

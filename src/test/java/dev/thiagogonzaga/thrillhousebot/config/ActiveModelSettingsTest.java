@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
-/** Resolution precedence for the active model's AI settings (#50). */
+/** Resolution precedence for the active model's AI settings. */
 class ActiveModelSettingsTest {
 
   private static final String MODEL = "test-model";

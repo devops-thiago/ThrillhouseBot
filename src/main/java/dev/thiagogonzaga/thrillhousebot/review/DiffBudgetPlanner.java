@@ -31,7 +31,7 @@ import java.util.List;
 
 /**
  * Splits a PR's reviewable files into token-budgeted batches so every file is covered by some model
- * call (#53), replacing the old silent line cap. Files are ordered highest-impact-first and packed
+ * call, replacing the old silent line cap. Files are ordered highest-impact-first and packed
  * First-Fit-Decreasing into at most {@code maxBatches} bins, each within the per-call token budget;
  * a single file larger than one budget is hunk-clipped (via {@link ReviewDiffFormatter}) to fit,
  * and anything that still does not fit — once every bin is full — is reported {@link
@@ -133,8 +133,8 @@ public class DiffBudgetPlanner {
   /**
    * The per-call input-token budget every review-path AI call must fit — {@code max-input-tokens *
    * token-safety-margin - output-buffer-tokens} — or {@link Integer#MAX_VALUE} when budgeting is
-   * disabled. Each term is the active model's effective value ({@link ActiveModelSettings}, #50):
-   * the max input tokens are the global budget bounded by the model's input cap, and the margin and
+   * disabled. Each term is the active model's effective value ({@link ActiveModelSettings}): the
+   * max input tokens are the global budget bounded by the model's input cap, and the margin and
    * output buffer honor per-model overrides. Shared with the pipeline so the summary call is
    * bounded by the same ceiling as the batch calls.
    */

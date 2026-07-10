@@ -30,8 +30,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void injectConstructorReadsDiagramEnabledFromConfig() {
-    // Exercises the production @Inject constructor (the other tests use the visible-for-tests
-    // boolean ctor): with the diagram feature enabled in config, a volunteered diagram renders.
     var config = mock(ThrillhouseConfig.class);
     var review = mock(ThrillhouseConfig.ReviewConfig.class);
     var diagram = mock(ThrillhouseConfig.DiagramConfig.class);
@@ -106,7 +104,6 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("Adds a user update endpoint with validation."));
     assertTrue(summary.contains("### ⚠️ Description vs. Implementation"));
     assertTrue(summary.contains("- Description claims tests were added"));
-    // The blank gap entry is skipped, leaving a single gap bullet (overview bullets use "- **")
     assertEquals(
         1, summary.lines().filter(l -> l.startsWith("- ") && !l.startsWith("- **")).count());
   }
@@ -115,7 +112,6 @@ class PrSummaryGeneratorTest {
   void shouldOmitPurposeAndGapsSectionsWhenAbsent() {
     var blankSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", " ", List.of());
     var nullPurposeSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, null);
-    // Only blank gaps must not render a section header with zero bullets
     var blankGapsSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, List.of(" ", ""));
     var result =
         new ReviewResult(
@@ -148,7 +144,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldNotIncludeDashboardLink() {
-    // The dashboard deep-link lives on the check run (details_url), not in the PR comment
     var result =
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
@@ -182,9 +177,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void truncatedCleanReviewReportsPartialReviewInsteadOfCelebrating() {
-    // A clean review whose diff was truncated (omittedFiles > 0) is held; the summary must say it
-    // is
-    // a partial review rather than claim the all-clear celebration over a partly-reviewed change.
     var result =
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 2);
@@ -262,8 +254,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldCountPreviousFindingsStatusCaseInsensitively() {
-    // Counting must be case-insensitive, consistent with the gate logic; a model emitting
-    // "Resolved"/"UNRESOLVED"/"Justified" would otherwise be undercounted to zero in the table.
     var statuses =
         List.of(
             new ReviewResult.PreviousFindingStatus(1, "Resolved", "Fixed"),
@@ -309,7 +299,6 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(6, 0, 0, List.of(), null, result);
 
-    // Should only show 5 findings
     assertTrue(summary.contains("C1"));
     assertTrue(summary.contains("C2"));
     assertTrue(summary.contains("H1"));
@@ -342,9 +331,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void showsNeutralCiChecksStatusWhenRequiredSetUnknown() {
-    // #302: in fail-closed gate-all mode (required set unresolved) the summary must not label the
-    // gated checks "required" — branch protection never named them; they are gated because the
-    // required set was unknown.
     var checks =
         List.of(
             new ReviewResult.CiCheck("build", "check-run", "failing", null),
@@ -380,8 +366,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void cleanReviewHeldByBothCiAndTruncationReportsBoth() {
-    // When CI holds approval AND the diff was truncated, the summary must disclose both — the CI
-    // message must not mask the partial review.
     var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
     var result =
         new ReviewResult(
@@ -425,7 +409,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldEscapePipesInCiCheckTableCells() {
-    // A check name containing '|' must be escaped so it cannot break the Markdown table layout.
     var checks =
         List.of(new ReviewResult.CiCheck("build | strict", "check-run", "failing", "failure"));
     var result =
@@ -447,7 +430,6 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(1, 10, 2, List.of(), null, result);
 
-    // A null name/conclusion renders as "-" rather than throwing.
     assertTrue(summary.contains("Required CI Checks Status"));
     assertTrue(summary.contains("⏳ Pending"));
   }
@@ -477,7 +459,6 @@ class PrSummaryGeneratorTest {
   @Test
   void shouldRenderDashWhenFileHasNoMatchingSummary() {
     var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/A.java", "modified"));
-    // AI summarized a different file; the changed file still appears, with "-" for its summary.
     var aiSummary = summaryWithFiles(new ReviewResponse.FileSummary("src/Other.java", "unrelated"));
     var result =
         new ReviewResult(
@@ -512,7 +493,6 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(total, 0, 0, changedFiles, null, result);
 
-    // Only MAX_FILE_ROWS rows render; the first is present, the (MAX+1)th is rolled into the note.
     assertTrue(summary.contains("`src/F0.java`"));
     assertTrue(summary.contains("`src/F" + (PrSummaryGenerator.MAX_FILE_ROWS - 1) + ".java`"));
     assertFalse(summary.contains("`src/F" + PrSummaryGenerator.MAX_FILE_ROWS + ".java`"));
@@ -521,10 +501,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void changesOverviewUsesAuthoritativeTotalsWhenReviewableCountsDiverge() {
-    // #298: the "Changes Overview" and the walkthrough rollup report GitHub's authoritative PR
-    // totals passed in, not the ignore-glob-filtered reviewable-file counts. Mirrors MongOCOM#46:
-    // GitHub reports 27 files / +975 / -196, but only 26 files are reviewable (one dropped by the
-    // ignore-glob), so counts derived from the reviewable list alone would undercount.
     var reviewable = new java.util.ArrayList<PrSummaryGenerator.ChangedFile>();
     for (int i = 0; i < 26; i++) {
       reviewable.add(new PrSummaryGenerator.ChangedFile("src/F" + i + ".java", "modified"));
@@ -535,15 +511,11 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(27, 975, 196, reviewable, null, result);
 
-    // Overview reflects GitHub's authoritative totals, not the 26 reviewable files.
     assertTrue(summary.contains("**Files changed:** 27"), summary);
     assertTrue(summary.contains("**Lines added:** +975"), summary);
     assertTrue(summary.contains("**Lines removed:** -196"), summary);
-    // The walkthrough still caps at MAX_FILE_ROWS rows (row 19 present, row 20 rolled up)...
     assertTrue(summary.contains("`src/F19.java`"));
     assertFalse(summary.contains("`src/F20.java`"));
-    // ...and the rollup counts against the authoritative total (27 - 20 = 7), not the reviewable
-    // list (26 - 20 = 6), so it matches the "Changes Overview" file total above it.
     assertTrue(summary.contains("…and 7 more file(s)."), summary);
   }
 
@@ -573,8 +545,6 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
 
-    // A newline in a cell would break the row; it must be folded to a space so the row stays
-    // intact.
     assertTrue(summary.contains("first line second line"));
     assertFalse(summary.contains("first line\nsecond line"));
   }
@@ -628,8 +598,6 @@ class PrSummaryGeneratorTest {
         List.of(
             new PrSummaryGenerator.ChangedFile("src/A.java", "modified"),
             new PrSummaryGenerator.ChangedFile("src/B.java", "added"));
-    // Malformed entries (null/blank path, null summary) are dropped; a duplicate path keeps the
-    // first usable note rather than throwing from Collectors.toMap.
     var aiSummary =
         summaryWithFiles(
             new ReviewResponse.FileSummary(null, "no path"),
@@ -672,8 +640,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldRenderCiUnavailableNoteWhenCiUnreadableInsteadOfCelebrating() {
-    // #6: unreadable CI renders its own distinct note (not a fake required-check row), and the
-    // clean-review celebration is suppressed because approval is held.
     var result =
         new ReviewResult(
             List.of(),
@@ -695,8 +661,6 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("CI Status Unavailable"));
     assertTrue(summary.contains("could not be read"));
     assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE));
-    // #302 follow-up: an unreadable-only hold must read as "could not be read", not be framed as a
-    // "not confirmed green" result — that lead misreports an unread status as failing.
     assertTrue(
         summary.contains(
             "the CI status could not be read, so the review cannot be approved until it can be"
@@ -707,9 +671,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void unreadableCiWithTruncationReportsBothWithoutClaimingNotGreen() {
-    // #302 follow-up: an unreadable-only CI hold alongside a truncated diff reports the read
-    // failure
-    // as "could not be read" (not "not confirmed green") and still discloses the partial review.
     var result =
         new ReviewResult(
             List.of(),
@@ -739,8 +700,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldNotRenderDiagramWhenFeatureDisabledEvenIfModelVolunteersOne() {
-    // The kill switch must hold at render too: a model that returns a walkthrough_diagram the
-    // prompt never requested must not produce a Control-Flow Diagram block when the feature is off.
     var disabled = new PrSummaryGenerator(false);
     var aiSummary = summaryWithDiagram("flowchart TD\n  A[Start] --> B[End]");
     var result =
@@ -768,7 +727,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldStripBacktickFencesSoTheDiagramCannotBreakOut() {
-    // A model that ignores the "no fences" rule and wraps the source must not escape our block.
     var aiSummary = summaryWithDiagram("```mermaid\nflowchart TD\n  A --> B\n```");
     var result =
         new ReviewResult(
@@ -776,7 +734,6 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
 
-    // Exactly one opening and one closing fence — the wrapper backticks were stripped.
     assertEquals(1, countOccurrences(summary, "```mermaid"));
     assertEquals(2, countOccurrences(summary, "```"));
     assertTrue(summary.contains("flowchart TD"));
@@ -784,7 +741,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldDropUnrecognizedDiagramSource() {
-    // Prose that is not a Mermaid diagram would render as a broken block, so it is dropped.
     var aiSummary = summaryWithDiagram("This change refactors the parser and adds a cache.");
     var result =
         new ReviewResult(
@@ -810,8 +766,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldDropDiagramThatIsOnlyAFenceTag() {
-    // An empty ```mermaid fence collapses to a bare "mermaid" tag with nothing after it; stripping
-    // the tag leaves an empty string, which must be dropped rather than rendered.
     var aiSummary = summaryWithDiagram("```mermaid```");
     var result =
         new ReviewResult(
@@ -824,8 +778,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldRenderSequenceDiagramWithAsParticipantSyntax() {
-    // #311: the valid `participant X as Label` shape (no bracket labels, plain message text) must
-    // render as a normal collapsible block.
     var aiSummary =
         summaryWithDiagram(
             """
@@ -848,11 +800,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldRenderSequenceDiagramWhenBracketsAppearOnlyInTheAsDisplayName() {
-    // #332 review: the bracket-label guard must not over-reach. A valid `participant X as Display`
-    // whose display name legitimately carries brackets is renderable — the invalid leak is a
-    // bracket
-    // in the alias position (`participant X["Y"]`), which never uses the `as` form — so it must not
-    // be dropped.
     var aiSummary =
         summaryWithDiagram(
             """
@@ -873,9 +820,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldDropSequenceDiagramWithBracketLabeledParticipants() {
-    // #311: the model over-generalized the flowchart double-quote rule onto sequence participants
-    // (`participant X["Y"]`), which is a parse error GitHub silently drops. Reject the whole
-    // diagram rather than post an unrenderable block.
     var aiSummary =
         summaryWithDiagram(
             """
@@ -896,8 +840,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldDropSequenceDiagramWithBraceLabeledActor() {
-    // The guard also fires on an `actor` declaration (not just `participant`) and on a brace label
-    // (`{`, not just `[`) — the alternate shapes the leaked flowchart quoting can take.
     var aiSummary =
         summaryWithDiagram(
             "sequenceDiagram\n  actor U as User\n  actor B{\"Bot\"}\n  U->>B: ask()");
@@ -913,8 +855,6 @@ class PrSummaryGeneratorTest {
 
   @Test
   void shouldKeepFlowchartWithBracketLabelsWhenRejectingSequenceParticipants() {
-    // The #311 rejection is scoped to sequenceDiagram participants — a flowchart's quoted bracket
-    // labels (#299) are valid and must still render, so the guard must not over-reach.
     var aiSummary = summaryWithDiagram("flowchart TD\n  A[\"call foo()\"] --> B{\"ready?\"}");
     var result =
         new ReviewResult(

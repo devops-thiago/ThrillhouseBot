@@ -25,10 +25,10 @@ import java.util.Optional;
 
 /**
  * Applies the operator's model tuning to the OpenAI-compatible chat models: the reasoning-effort
- * setting ({@code thrillhousebot.ai.reasoning.*}, #65) and the active model's generation parameters
- * ({@code thrillhousebot.ai.models.*} — temperature, top-p, max output tokens; #50). Every
- * parameter is applied only when configured, so an untouched knob keeps the provider default and
- * non-reasoning models never see a reasoning argument they might reject.
+ * setting ({@code thrillhousebot.ai.reasoning.*}) and the active model's generation parameters
+ * ({@code thrillhousebot.ai.models.*} — temperature, top-p, max output tokens). Every parameter is
+ * applied only when configured, so an untouched knob keeps the provider default and non-reasoning
+ * models never see a reasoning argument they might reject.
  *
  * <p>Wiring goes through {@link ModelBuilderCustomizer} beans rather than the extension's {@code
  * quarkus.langchain4j.openai.chat-model.*} properties for two reasons: the values must be

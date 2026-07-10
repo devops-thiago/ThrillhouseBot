@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "docs:archive": "node scripts/archive-docs-version.mjs",
+    "docs:archive-historical": "node scripts/archive-historical-releases.mjs"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +19,8 @@
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.16.0",
     "sharp": "^0.35.3",
-    "starlight-links-validator": "^0.25.2"
+    "starlight-links-validator": "^0.25.2",
+    "starlight-versions": "^0.9.1"
   },
   "devDependencies": {
     "unist-util-visit": "^5.1.0"

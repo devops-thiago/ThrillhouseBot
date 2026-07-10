@@ -279,9 +279,9 @@ public final class PrReviewPrompts {
             """;
 
   /**
-   * System prompt for the final summary call of a large multi-call review (#53). The per-file
-   * findings are computed by the per-batch review calls; this pass only rolls them up into the
-   * PR-level summary and reconciles previous-review status — it must not invent new findings.
+   * System prompt for the final summary call of a large multi-call review. The per-file findings
+   * are computed by the per-batch review calls; this pass only rolls them up into the PR-level
+   * summary and reconciles previous-review status — it must not invent new findings.
    */
   public static final String SUMMARY_SYSTEM =
       """
