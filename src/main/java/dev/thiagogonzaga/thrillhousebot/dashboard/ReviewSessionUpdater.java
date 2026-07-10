@@ -31,6 +31,11 @@ public class ReviewSessionUpdater {
     this.repository = repository;
   }
 
+  /**
+   * Records one AI call's usage onto the session. Map-reduce and verifier reviews issue several
+   * calls per session; tokens, cost, and duration are accumulated so the dashboard reflects the
+   * full review spend rather than only the last call.
+   */
   @Transactional(TxType.REQUIRES_NEW)
   public void recordModelUsage(
       long sessionId,
@@ -45,11 +50,12 @@ public class ReviewSessionUpdater {
       return;
     }
     session.setModel(model);
-    session.setInputTokens(inputTokens);
-    session.setOutputTokens(outputTokens);
-    session.setCost(cost);
-    session.setPricingMissing(pricingMissing);
-    session.setDurationMs(durationMs);
+    session.setInputTokens(session.getInputTokens() + inputTokens);
+    session.setOutputTokens(session.getOutputTokens() + outputTokens);
+    session.setCost(session.getCost() + cost);
+    // Sticky: any call without pricing keeps the session flagged until backfill clears it.
+    session.setPricingMissing(session.isPricingMissing() || pricingMissing);
+    session.setDurationMs(session.getDurationMs() + durationMs);
     session.persist();
   }
 
