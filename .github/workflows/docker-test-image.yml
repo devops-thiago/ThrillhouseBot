@@ -3,6 +3,10 @@ name: Docker test image
 # Build and push a disposable image for a branch or PR. Does not tag latest or
 # release versions. Trigger from Actions → Docker test image → Run workflow.
 on:
+  # TEMP: register this workflow (not yet on main) via one push run — revert after.
+  push:
+    branches:
+      - fix/accumulate-session-model-usage
   workflow_dispatch:
     inputs:
       pr_number:
@@ -33,6 +37,8 @@ permissions:
 
 env:
   IMAGE: ghcr.io/devops-thiago/thrillhousebot
+  # push has no inputs — default this one-shot registration run to native.
+  VARIANT: ${{ inputs.variant || 'native' }}
 
 jobs:
   build-push:
@@ -72,7 +78,6 @@ jobs:
         env:
           PR: ${{ inputs.pr_number }}
           EXTRA: ${{ inputs.extra_tag }}
-          VARIANT: ${{ inputs.variant }}
         run: |
           SHORT_SHA="$(git rev-parse --short=7 HEAD)"
           FULL_SHA="$(git rev-parse HEAD)"
@@ -159,11 +164,11 @@ jobs:
         working-directory: frontend
 
       - name: Package (JVM)
-        if: inputs.variant == 'jvm'
+        if: env.VARIANT == 'jvm'
         run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
 
       - name: Package (native amd64)
-        if: inputs.variant == 'native'
+        if: env.VARIANT == 'native'
         run: |
           ./mvnw -B package -Pnative -DskipTests -Dquarkus.native.container-build=true
           mkdir -p target/amd64
@@ -182,12 +187,12 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          file: ${{ inputs.variant == 'native' && 'src/main/docker/Dockerfile.runtime' || 'src/main/docker/Dockerfile.jvm' }}
+          file: ${{ env.VARIANT == 'native' && 'src/main/docker/Dockerfile.runtime' || 'src/main/docker/Dockerfile.jvm' }}
           push: true
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.list }}
-          cache-from: type=gha,scope=docker-test-${{ inputs.variant }}
-          cache-to: type=gha,mode=max,scope=docker-test-${{ inputs.variant }}
+          cache-from: type=gha,scope=docker-test-${{ env.VARIANT }}
+          cache-to: type=gha,mode=max,scope=docker-test-${{ env.VARIANT }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.tags.outputs.sha }}
@@ -200,7 +205,6 @@ jobs:
           PR: ${{ inputs.pr_number }}
           PRIMARY: ${{ steps.tags.outputs.primary }}
           TAGS: ${{ steps.tags.outputs.list }}
-          VARIANT: ${{ inputs.variant }}
         run: |
           body=$(cat <<EOF
           Test image ready (\`${VARIANT}\`, amd64).
