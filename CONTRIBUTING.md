@@ -37,11 +37,6 @@ If you changed the dashboard, also run `cd frontend && npm ci && npm run test &&
 To exercise the UI without a backend, run `cd frontend && npm run dev:mock`.
 CI additionally runs SonarCloud, Trivy, and a Docker build check on pull requests.
 
-To publish a disposable image from a PR or branch for manual testing, run the
-**Docker test image** workflow (Actions → Run workflow). See
-[Container images](https://github.com/devops-thiago/ThrillhouseBot#test-images-for-a-pr-or-branch)
-in the README.
-
 The bar, enforced by CI:
 
 - **All tests pass** — and new code comes with tests. Test behavior, not implementation: prefer asserting observable outcomes over `assertDoesNotThrow`, and avoid reflection on private members (relax to package-private instead if a test genuinely needs the seam).
