@@ -53,6 +53,15 @@ public class ReviewSession extends PanacheEntity {
   int inputTokens;
   int outputTokens;
   double cost;
+
+  /**
+   * True when the session's cost was recorded as 0 because the model had no {@code
+   * thrillhousebot.ai.pricing} entry — distinguishes "pricing not configured" from a genuine $0 so
+   * the dashboard can flag under-reported spend. Cleared by {@link SessionCostBackfill} once
+   * pricing is added and the cost is recomputed.
+   */
+  boolean pricingMissing;
+
   long durationMs;
 
   int criticalFindings;
@@ -108,6 +117,10 @@ public class ReviewSession extends PanacheEntity {
 
   public double getCost() {
     return cost;
+  }
+
+  public boolean isPricingMissing() {
+    return pricingMissing;
   }
 
   public long getDurationMs() {
@@ -177,6 +190,10 @@ public class ReviewSession extends PanacheEntity {
 
   public void setCost(double cost) {
     this.cost = cost;
+  }
+
+  public void setPricingMissing(boolean pricingMissing) {
+    this.pricingMissing = pricingMissing;
   }
 
   public void setDurationMs(long durationMs) {

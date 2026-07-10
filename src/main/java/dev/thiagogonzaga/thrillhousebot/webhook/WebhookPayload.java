@@ -97,8 +97,7 @@ public record WebhookPayload(
       String body,
       User user,
       @JsonProperty("author_association") String authorAssociation,
-      // The fields below are populated only on pull_request_review_comment events (inline review
-      // comments); they are null for issue_comment events.
+      // Fields below are populated only on pull_request_review_comment events; null otherwise.
       @JsonProperty("in_reply_to_id") Long inReplyToId,
       String path,
       @JsonProperty("diff_hunk") String diffHunk) {}

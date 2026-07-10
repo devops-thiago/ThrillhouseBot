@@ -20,15 +20,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the config/IaC severity-recalibration guidance added for #238 so a future prompt edit cannot
- * silently revert it and re-introduce the suppression. The reviewer was high-precision but
- * suppressed declarative/config/IaC findings (RBAC, container hardening, schema-invalid manifests)
- * because the SECURITY dimension named only application-code threats and severity was anchored on
- * "will fail at runtime". These assertions are intentionally coarse — they check the recalibration
- * intent survives, not exact wording; an intentional rewording should update the matching anchor.
+ * Pins the config/IaC severity-recalibration guidance so a future prompt edit cannot silently
+ * revert it and re-introduce the suppression. The reviewer was high-precision but suppressed
+ * declarative/config/IaC findings (RBAC, container hardening, schema-invalid manifests) because the
+ * SECURITY dimension named only application-code threats and severity was anchored on "will fail at
+ * runtime". These assertions are intentionally coarse — they check the recalibration intent
+ * survives, not exact wording; an intentional rewording should update the matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
- * tracked separately (#113); this is the cheap deterministic guard.
+ * tracked separately; this is the cheap deterministic guard.
  */
 class PrReviewPromptsContentTest {
 
@@ -91,9 +91,6 @@ class PrReviewPromptsContentTest {
   @Test
   void generatorPromptKeepsTheCrossLocationConsistencyGuard() {
     String sys = PrReviewPrompts.SYSTEM;
-    // Regression: adding the config/IaC bullet once overwrote this bullet's opening line, orphaning
-    // its body and dropping the guard that forces the model to verify both sides of an "X does this
-    // but Y does not" claim before flagging it. Both header and body must remain, as one bullet.
     assertContains(
         sys,
         "A claim that two places are inconsistent",
@@ -106,10 +103,6 @@ class PrReviewPromptsContentTest {
 
   @Test
   void diagramRequestRequiresQuotedNodeLabels() {
-    // GitHub's Mermaid parser rejects unquoted (), &, : etc. inside a node label and fails to
-    // render
-    // the whole diagram. Quoting at generation time is the guard (server-side rewriting can't
-    // disambiguate Mermaid's shape grammar safely), so pin the instruction and its escape.
     String req = PrReviewPrompts.DIAGRAM_REQUEST;
     assertContains(
         req,
@@ -117,8 +110,6 @@ class PrReviewPromptsContentTest {
         "the diagram prompt must require quoted node labels so GitHub can render them");
     assertContains(
         req, "#quot;", "the diagram prompt must give the escape for a literal double quote");
-    // #311: the quoting rule must be scoped to flowcharts, or the model over-generalizes it to
-    // sequence participants (`participant X["Y"]`), which is a parse error GitHub silently drops.
     assertContains(
         req,
         "flowchart ONLY",
@@ -127,9 +118,6 @@ class PrReviewPromptsContentTest {
 
   @Test
   void diagramRequestGivesSequenceDiagramItsOwnSyntaxRules() {
-    // #311: a sequenceDiagram must declare participants with `as`, not flowchart bracket labels,
-    // and must not quote-wrap message text. Pin the sequence-specific guidance and an example so a
-    // future prompt edit cannot silently reintroduce the bracket-label breakage.
     String req = PrReviewPrompts.DIAGRAM_REQUEST;
     assertContains(
         req,

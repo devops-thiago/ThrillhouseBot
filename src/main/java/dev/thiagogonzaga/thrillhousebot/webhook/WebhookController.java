@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
@@ -40,12 +41,14 @@ public class WebhookController {
   private final WebhookVerifier verifier;
   private final TriggerDetector triggerDetector;
   private final ReviewTriggerFilter triggerFilter;
+  private final AutoReviewRateLimiter autoReviewRateLimiter;
   private final ReviewDispatcher reviewDispatcher;
   private final MaintainerReplyDispatcher replyDispatcher;
   private final WebhookDeduplicator deduplicator;
   private final ManualReviewAuthorizer manualReviewAuthorizer;
   private final CommentCommandService commentCommandService;
   private final PrPauseService prPauseService;
+  private final AckReactionService ackReactionService;
   private final ObjectMapper mapper;
 
   @Inject
@@ -54,23 +57,27 @@ public class WebhookController {
       WebhookVerifier verifier,
       TriggerDetector triggerDetector,
       ReviewTriggerFilter triggerFilter,
+      AutoReviewRateLimiter autoReviewRateLimiter,
       ReviewDispatcher reviewDispatcher,
       MaintainerReplyDispatcher replyDispatcher,
       WebhookDeduplicator deduplicator,
       ManualReviewAuthorizer manualReviewAuthorizer,
       CommentCommandService commentCommandService,
       PrPauseService prPauseService,
+      AckReactionService ackReactionService,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
     this.triggerDetector = triggerDetector;
     this.triggerFilter = triggerFilter;
+    this.autoReviewRateLimiter = autoReviewRateLimiter;
     this.reviewDispatcher = reviewDispatcher;
     this.replyDispatcher = replyDispatcher;
     this.deduplicator = deduplicator;
     this.manualReviewAuthorizer = manualReviewAuthorizer;
     this.commentCommandService = commentCommandService;
     this.prPauseService = prPauseService;
+    this.ackReactionService = ackReactionService;
     this.mapper = mapper;
   }
 
@@ -100,8 +107,7 @@ public class WebhookController {
     log.info(
         "Received {} event (action: {}, delivery: {})", eventType, payload.action(), deliveryId);
 
-    // GitHub redelivers webhooks — manual redelivery or an automatic retry — reusing the same
-    // delivery id, so drop repeats to avoid a duplicate review and duplicate AI cost.
+    // GitHub redeliveries (manual or automatic retry) reuse the same delivery id.
     if (deduplicator.isDuplicate(deliveryId)) {
       log.info("Ignoring redelivered {} event (delivery: {})", eventType, deliveryId);
       return Response.ok("{\"status\":\"ignored\"}").build();
@@ -109,7 +115,7 @@ public class WebhookController {
 
     routeEvent(eventType, payload, deliveryId);
 
-    // GitHub expects 200 within 10 seconds; we acknowledge immediately
+    // GitHub expects a 200 within 10 seconds.
     return Response.ok("{\"status\":\"ok\"}").build();
   }
 
@@ -137,13 +143,9 @@ public class WebhookController {
             }
           };
       if (!handled) {
-        // The executor rejected the review (e.g. it is saturated), so nothing ran. Roll back the
-        // dedup slot so a manual redelivery of this id can retry.
         deduplicator.forget(deliveryId);
       }
     } catch (RuntimeException e) {
-      // An unexpected failure means the review was never handed off either, so roll back the dedup
-      // slot for the same reason before acknowledging.
       deduplicator.forget(deliveryId);
       log.error("Error processing webhook event", e);
     }
@@ -159,8 +161,7 @@ public class WebhookController {
     if (action == null) return true;
 
     return switch (action) {
-      // ready_for_review fires when a draft PR is marked ready; it is not followed by a
-      // synchronize, so without this the PR stays unreviewed until the next push.
+      // ready_for_review fires when a draft is marked ready and is not followed by a synchronize.
       case "opened", "reopened", "synchronize", "ready_for_review" -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
@@ -168,15 +169,11 @@ public class WebhookController {
           log.debug("Ignoring pull_request with missing pull_request, repository, or installation");
           yield true;
         }
-        // head/base drive the review request; a payload missing either would NPE below. The trigger
-        // filter already treats base as nullable, so guard here rather than crash the delivery.
         if (pr.head() == null || pr.base() == null) {
           log.debug("Ignoring pull_request #{} with missing head or base", pr.number());
           yield true;
         }
 
-        // A /pause on this PR silences automatic reviews until /resume — stay silent here, no
-        // comment, since the event was not user-initiated.
         if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
           log.info("Skipping review for paused PR #{} in {}", pr.number(), repo.fullName());
           yield true;
@@ -189,6 +186,16 @@ public class WebhookController {
               pr.number(),
               repo.fullName(),
               skipReason.get());
+          yield true;
+        }
+
+        if (autoReviewRateLimiter.isThrottled(repo.owner().login(), repo.name(), pr.number())) {
+          log.info(
+              "Skipping automatic review for PR #{} in {} — last automatic review completed "
+                  + "less than {} ago (manual /review bypasses)",
+              pr.number(),
+              repo.fullName(),
+              config.review().autoReviewMinInterval());
           yield true;
         }
 
@@ -220,14 +227,12 @@ public class WebhookController {
    *     ignored.
    */
   private boolean handleIssueComment(WebhookPayload payload) {
-    // Only a freshly created comment is a trigger; editing or deleting one must not re-run a
-    // review.
     if (!"created".equals(payload.action())) {
       log.debug("Ignoring issue_comment action: {}", payload.action());
       return true;
     }
 
-    // Only act on PR comments, not issue comments
+    // issue_comment fires for both issues and PRs; the pull_request link marks a PR.
     if (payload.issue() == null || payload.issue().pullRequest() == null) {
       log.debug("Ignoring comment on issue (not PR)");
       return true;
@@ -238,7 +243,6 @@ public class WebhookController {
       return true;
     }
 
-    // Prevent infinite loops — skip bot's own comments
     if (triggerDetector.isBotComment(payload.comment().user().login())) {
       log.debug("Ignoring own comment");
       return true;
@@ -248,7 +252,6 @@ public class WebhookController {
     if (command != CommentCommand.NONE) {
       return handleCommentCommand(payload, command);
     }
-    // Not a command: a bare @thrillhousebot mention on a PR is a conversational question.
     return maybeDispatchConversationalMention(payload);
   }
 
@@ -263,6 +266,12 @@ public class WebhookController {
       log.debug("Ignoring {} command with missing repository or installation", command);
       return true;
     }
+    ackReactionService.addEyes(
+        payload.installation().id(),
+        repo.owner().login(),
+        repo.name(),
+        payload.comment().id(),
+        AckReactionService.CommentKind.ISSUE);
     // On issue_comment the issue number equals the PR number.
     var ctx =
         new CommentCommandService.CommandContext(
@@ -293,7 +302,6 @@ public class WebhookController {
       log.debug("Ignoring bot mention with missing repository or installation");
       return true;
     }
-    // A /pause silences the bot on this PR — stay quiet rather than spend a paid reply.
     if (prPauseService.isPaused(repo.owner().login(), repo.name(), payload.issue().number())) {
       log.info(
           "Skipping conversational mention on paused PR #{} in {}",
@@ -345,7 +353,6 @@ public class WebhookController {
       log.debug("Ignoring review comment with missing author info");
       return true;
     }
-    // Prevent infinite loops — never answer the bot's own comments.
     if (triggerDetector.isBotComment(comment.user().login())) {
       log.debug("Ignoring own review comment");
       return true;
@@ -358,14 +365,11 @@ public class WebhookController {
       return true;
     }
 
-    // Only an explicit @-mention addresses the bot; a bare reply on a thread (even the bot's own
-    // finding) must not pull it in.
     if (!triggerDetector.containsBotMention(comment.body())) {
       log.debug("Ignoring review comment that does not mention the bot");
       return true;
     }
 
-    // A /pause silences the bot on this PR — stay quiet rather than spend a paid reply.
     if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
       log.info(
           "Skipping conversational review-thread reply on paused PR #{} in {}",
@@ -374,8 +378,7 @@ public class WebhookController {
       return true;
     }
 
-    // The thread root is the reply target; a mention that is itself a reply targets the thread it
-    // replies to, otherwise the mention comment is its own root.
+    // GitHub thread roots carry no in_reply_to_id; a reply targets its thread's root.
     boolean isReply = comment.inReplyToId() != null;
     Long rootCommentId = isReply ? comment.inReplyToId() : comment.id();
     log.info(
@@ -414,8 +417,6 @@ public class WebhookController {
       commentCommandService.notifyPaused(ctx);
       return true;
     }
-    // Manual triggers spend the operator's API budget, so restrict them to users who actually
-    // hold write access to the repository (or are explicitly allowlisted).
     if (!manualReviewAuthorizer.isAuthorized(
         ctx.owner(), ctx.repo(), ctx.installationId(), ctx.login(), ctx.authorAssociation())) {
       log.info(

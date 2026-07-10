@@ -36,14 +36,18 @@ public final class ReviewDispatcher {
 
   private final ExecutorService reviewExecutor;
   private final ReviewOrchestrator orchestrator;
+  private final AutoReviewRateLimiter autoReviewRateLimiter;
 
   private final ConcurrentHashMap<PrKey, PerPrState> states = new ConcurrentHashMap<>();
 
   @Inject
   public ReviewDispatcher(
-      @ReviewExecutor ExecutorService reviewExecutor, ReviewOrchestrator orchestrator) {
+      @ReviewExecutor ExecutorService reviewExecutor,
+      ReviewOrchestrator orchestrator,
+      AutoReviewRateLimiter autoReviewRateLimiter) {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
+    this.autoReviewRateLimiter = autoReviewRateLimiter;
   }
 
   /**
@@ -97,8 +101,8 @@ public final class ReviewDispatcher {
       log.error("Review worker aborted for {}/{} #{}", key.owner(), key.repo(), key.prNumber(), e);
       retire(key, state);
     } finally {
-      // Errors (OOM, assertion failures) propagate to the executor thread, but the state
-      // must still be retired so later dispatches for this PR are not coalesced forever
+      // Even when an Error propagates, the state must be retired or later dispatches for this
+      // PR would be coalesced forever.
       if (!completed) {
         log.error(
             "Review worker aborted fatally for {}/{} #{}", key.owner(), key.repo(), key.prNumber());
@@ -110,23 +114,45 @@ public final class ReviewDispatcher {
   private void drainReviews(PrKey key, PerPrState state) {
     while (true) {
       var batch = state.takeNextReview();
-      logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
 
-      try {
-        orchestrator.review(batch.request());
-      } catch (RuntimeException e) {
-        log.error(
-            "Review failed for {}/{} #{}",
-            batch.request().owner(),
-            batch.request().repo(),
-            batch.request().prNumber(),
-            e);
+      // Re-check after dispatch: a request can pass the controller gate then reach here once the
+      // window closed (coalesce or recordCompletion gap).
+      var req = batch.request();
+      if (!req.isManualTrigger()
+          && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+        log.info(
+            "Skipping automatic review for {}/{} #{} — within the auto-review "
+                + "rate window (manual /review bypasses)",
+            req.owner(),
+            req.repo(),
+            req.prNumber());
+      } else {
+        reviewBatch(batch);
       }
 
       if (state.tryRetireIfIdle()) {
         states.remove(key, state);
         return;
       }
+    }
+  }
+
+  private void reviewBatch(PerPrState.ReviewBatch batch) {
+    logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
+    try {
+      var surfaced = orchestrator.review(batch.request());
+      // recordCompletion at post time, not dispatch; manual reviews are out of scope.
+      if (surfaced && !batch.request().isManualTrigger()) {
+        autoReviewRateLimiter.recordCompletion(
+            batch.request().owner(), batch.request().repo(), batch.request().prNumber());
+      }
+    } catch (RuntimeException e) {
+      log.error(
+          "Review failed for {}/{} #{}",
+          batch.request().owner(),
+          batch.request().repo(),
+          batch.request().prNumber(),
+          e);
     }
   }
 
@@ -217,9 +243,8 @@ public final class ReviewDispatcher {
 
     DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req) {
       synchronized (lock) {
-        // A finishing worker can retire the state between the map lookup above and this
-        // lock; reviving a retired state would let two workers run for the same PR, so
-        // drop the dead mapping and retry with a fresh state.
+        // A finishing worker can retire the state between the map lookup and this lock;
+        // reviving it would let two workers run for the same PR.
         if (retired) {
           return new DispatchResult(true, false, 0);
         }

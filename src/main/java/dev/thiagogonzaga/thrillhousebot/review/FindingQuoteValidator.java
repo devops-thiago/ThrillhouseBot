@@ -28,11 +28,8 @@ import java.util.Set;
 
 /**
  * Deterministic guard against findings that quote code which is not in the diff. The model
- * occasionally reviews a paraphrase of the change instead of the change itself (historically also a
- * symptom of prompt-pipeline corruption) and then flags defects in code nobody wrote. Dogfooding
- * examples: a critical "broken type inference" finding whose suggested fix was byte-identical to
- * the committed line, and two critical "invalid syntax" findings quoting single-brace expressions
- * where the file has double braces.
+ * occasionally reviews a paraphrase of the change instead of the change itself and then flags
+ * defects in code nobody wrote.
  *
  * <p>The check is conservative: a finding is dropped only when none of its quoted lines exist in
  * the diff (pure phantom). When the quote is partially wrong, the unreliable suggestion block is
@@ -95,9 +92,8 @@ public class FindingQuoteValidator {
               finding.title(), finding.file(), finding.line());
           changed = true;
         }
-        // FULL and NO_QUOTE keep the finding; default also keeps any future verdict rather than
-        // silently dropping it. Being a real, test-covered default removes the enum switch's
-        // synthetic-default branch, which otherwise left this line only partially covered.
+        // FULL and NO_QUOTE fall through here; default also keeps any future verdict rather than
+        // silently dropping it.
         default -> {
           if (descriptionCitesAbsentCode(finding, index)) {
             Log.infof(
@@ -191,10 +187,8 @@ public class FindingQuoteValidator {
     for (String expression : cited) {
       String needle = stripWhitespace(expression);
       if (appearsIn(needle, compactedScope)) {
-        // Present verbatim in the diff: the finding is grounded — keep it, whatever else it cites.
         return false;
       }
-      // Absent from the diff: a fabricated mechanism unless it merely restates the proposed fix.
       if (!compactedSuggestion.contains(needle)) {
         fabricated = true;
       }
@@ -270,7 +264,7 @@ public class FindingQuoteValidator {
     while (i < s.length() && s.charAt(i) == '.') {
       int nameEnd = skipIdentifier(s, i + 1);
       if (nameEnd == i + 1) {
-        break; // a '.' not followed by an identifier ends the chain
+        break;
       }
       i = nameEnd;
       afterArgs = skipBalancedParens(s, i);
@@ -326,7 +320,7 @@ public class FindingQuoteValidator {
       }
       i++;
     }
-    return start; // unbalanced — consume nothing
+    return start;
   }
 
   /**
@@ -344,7 +338,7 @@ public class FindingQuoteValidator {
     while (i < n) {
       char c = s.charAt(i);
       if (c == '\\') {
-        i += 2; // skip the escaped character
+        i += 2;
         continue;
       }
       if (c == quote) {
@@ -352,7 +346,7 @@ public class FindingQuoteValidator {
       }
       i++;
     }
-    return start + 1; // unterminated literal: treat the lone quote as an ordinary character
+    return start + 1;
   }
 
   private static boolean isIdentifierStart(char c) {
@@ -574,8 +568,8 @@ public class FindingQuoteValidator {
     for (String raw : diff.split("\n", -1)) {
       if (raw.startsWith("### ")) {
         current = fileLines.computeIfAbsent(sectionFilename(raw), k -> new ArrayList<>());
-        // A new file section restarts right-side numbering; don't carry the previous file's
-        // counter forward in case its first hunk header is missing or unparseable.
+        // A new file section restarts right-side numbering in case its first hunk header is
+        // missing or unparseable.
         rightLine = 0;
       } else if (raw.startsWith("@@")) {
         rightLine = hunkStartLine(raw, rightLine);

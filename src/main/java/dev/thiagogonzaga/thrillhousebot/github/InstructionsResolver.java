@@ -49,10 +49,9 @@ public class InstructionsResolver {
   private final GitHubAuthClient authClient;
   private final GitHubPullRequestClient prClient;
 
-  // Simple TTL cache: repo + chain -> (content, expiry)
   private record CachedInstructions(String content, String source, long expiresAt) {}
 
-  // Package-private so tests can inspect cache state without reflection
+  // Package-private for tests.
   final ConcurrentHashMap<String, CachedInstructions> cache = new ConcurrentHashMap<>();
   static final long CACHE_TTL_MS = 5L * 60 * 1000; // 5 minutes
   static final int CACHE_SWEEP_THRESHOLD = 1_000;
@@ -120,8 +119,7 @@ public class InstructionsResolver {
     for (String path : fallbackChain) {
       try {
         var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
-        // GitHub wraps base64 content in newlines — the strict decoder rejects any file beyond
-        // one base64 line (~57 bytes), so use the MIME decoder
+        // GitHub wraps base64 content in newlines; only the MIME decoder tolerates them.
         var content =
             new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
 
@@ -132,12 +130,11 @@ public class InstructionsResolver {
         log.info("Using instructions file: {} ({} bytes)", path, content.length());
         return new ResolvedInstructions(content, path);
       } catch (WebApplicationException | ProcessingException _) {
-        // 404 or network error — try next fallback
         log.debug("Instructions file not found: {}", path);
       }
     }
 
-    // No instructions file found — cache the negative result briefly (1 min)
+    // Cache the negative result briefly (1 min).
     cache.put(cacheKey, new CachedInstructions("", "none", clock.getAsLong() + 60_000));
     sweepExpiredEntries();
     log.debug("No instructions file found for {}/{}", owner, repo);

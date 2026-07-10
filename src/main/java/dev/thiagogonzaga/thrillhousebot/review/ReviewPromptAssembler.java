@@ -31,8 +31,7 @@ import jakarta.inject.Inject;
 @ApplicationScoped
 public class ReviewPromptAssembler {
 
-  // The command-specific guidance line(s) for the review path's repository-instructions section
-  // (PromptSections.instructionsSection renders the shared header, source attribution, and escape).
+  // Command-specific guidance for the review path's repository-instructions section.
   private static final String INSTRUCTIONS_GUIDANCE =
       """
       The repository maintainers have provided these additional review guidelines.
@@ -53,17 +52,10 @@ public class ReviewPromptAssembler {
 
   AiReviewService.PromptInputs assemble(
       ReviewContextLoader.ReviewContext ctx, ReviewOrchestrator.ReviewRequest req) {
-    // The diff carries the code under review, so it is enclosed in a per-review random fence and
-    // passed byte-exact (no marker rewriting that would corrupt marker-handling code). The
-    // smaller prose slots keep the lightweight marker neutralization as defense-in-depth.
     String fencedDiff = PromptTemplateEscaper.fence(ctx.diff());
     String escapedStack = PromptTemplateEscaper.escape(ctx.projectStack());
-    // The label guidance and the repo-instructions file share the prompt's trailing
-    // {{repoInstructions}} slot; the label section is escaped (it carries repo label names),
-    // the instructions section escapes its own maintainer content.
     String labelGuidance = PrLabeler.buildLabelGuidance(ctx.repoLabels(), labeler.allowNewLabels());
-    // The diagram request is fixed guidance (no repo content), so it needs no escaping; its
-    // presence is what gates the model's walkthrough_diagram field.
+    // The diagram request's presence is what gates the model's walkthrough_diagram field.
     String diagramGuidance =
         config.review().diagram().enabled() ? PrReviewPrompts.DIAGRAM_REQUEST : "";
     String trailingGuidance =

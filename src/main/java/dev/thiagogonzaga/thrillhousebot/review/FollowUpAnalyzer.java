@@ -90,10 +90,9 @@ public class FollowUpAnalyzer {
 
   /**
    * Variant that additionally renders findings from review rounds older than the previous one.
-   * Sessions only carry the immediately previous response, so a finding a maintainer answered two
-   * rounds ago would otherwise fall out of context and be rediscovered as new — dogfooding showed
-   * exactly that, with the severity drifting upward on each rediscovery. Older answered findings
-   * are listed unnumbered, outside previous_findings_status.
+   * Sessions only carry the immediately previous response, so a finding answered two rounds ago
+   * would otherwise fall out of context. Older answered findings are listed unnumbered, outside
+   * previous_findings_status.
    */
   public String buildPreviousFindingsContext(
       String previousAiResponseJson,
@@ -288,11 +287,10 @@ public class FollowUpAnalyzer {
    *
    * <p>A titled finding is matched on the header framing {@code " — {title}**"}, not a bare title
    * substring, so a short title does not match an unrelated comment that merely mentions the word
-   * and a title does not match a longer title that contains it as a prefix (a dogfooded case). A
-   * null-title finding has no usable header title — the bot renders the literal {@code "null"},
-   * which is too generic — so it falls back to its description, which the bot prints verbatim in
-   * the body. A finding with neither matches nothing, so the caller holds rather than risk an
-   * over-clear.
+   * and a title does not match a longer title that contains it as a prefix. A null-title finding
+   * has no usable header title — the bot renders the literal {@code "null"}, which is too generic —
+   * so it falls back to its description, which the bot prints verbatim in the body. A finding with
+   * neither matches nothing, so the caller holds rather than risk an over-clear.
    */
   private static boolean bodyCarriesOwnContent(ReviewResponse.Finding finding, String body) {
     String title = finding.title();
@@ -401,9 +399,8 @@ public class FollowUpAnalyzer {
    * prior round at the same location already has a maintainer reply on its thread. The prompt
    * forbids re-raising prior findings, but the model occasionally disobeys when it privately
    * disagrees with the reply — the human answered once and should not have to answer again. A prior
-   * finding counts as the same when the severity matches or the titles describe the same defect;
-   * matching on severity alone let a re-raise through by simply escalating its rating, which
-   * dogfooding observed (medium re-raised as high after the reply).
+   * finding counts as the same when the titles describe the same defect (not severity alone), so
+   * escalating the rating cannot bypass the drop.
    */
   public ReviewResponse dropRepliedDuplicates(
       ReviewResponse response,
@@ -466,8 +463,8 @@ public class FollowUpAnalyzer {
         if (!isSameFinding(finding, prior)) {
           continue;
         }
-        // Marker indices are only meaningful within their own round; across rounds the same
-        // index names unrelated findings, so the thread is located by file and title instead
+        // Marker indices are only meaningful within their own round; across rounds the same index
+        // names unrelated findings, so the thread is located by file and title instead.
         if (answeredRootComment(prior, inlineComments, botIdentity) != null) {
           return prior;
         }
@@ -481,21 +478,11 @@ public class FollowUpAnalyzer {
     if (finding.file() == null || !FilePaths.same(finding.file(), prior.file())) {
       return false;
     }
-    // Same file + close lines + similar title is the same finding re-raised. Severity is NOT part
-    // of identity: two distinct findings that merely share a severity (or both carry null/unknown
-    // risk, which maps to LOW) near the same line are different defects and must not be collapsed —
-    // doing so silently dropped a new finding whenever a same-severity neighbour had been replied
-    // to. A paraphrased re-raise whose title drifted is still caught by the content-overlap
-    // fallback below.
     if (Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE
         && FindingDeduplicator.titleSimilarity(finding.title(), prior.title())
             >= FindingDeduplicator.TITLE_SIMILARITY_THRESHOLD) {
       return true;
     }
-    // Paraphrased re-raises drift in both wording and line numbers as the PR evolves
-    // (observed: 29 lines and 0.12 title similarity); same file plus strongly overlapping
-    // title+description still identifies them, and suppression only ever fires when the
-    // prior thread carries a maintainer reply
     return FindingDeduplicator.contentOverlap(finding, prior)
         >= FindingDeduplicator.CONTENT_OVERLAP_THRESHOLD;
   }
@@ -566,7 +553,7 @@ public class FollowUpAnalyzer {
    *
    * <p>The findings are reconstructed from the persisted prior responses (keyed by repo+PR, so they
    * survive a force-push/rebase), which means the backstop fires even when the model received the
-   * previous-findings context but ignored it — the exact dogfood symptom.
+   * previous-findings context but ignored it.
    *
    * <p>It considers <em>all</em> prior rounds, not just the newest. Each round persists only its
    * own new findings; a finding raised in round 1 is referenced in later rounds only via their
@@ -830,6 +817,21 @@ public class FollowUpAnalyzer {
     return status != null && RECOGNIZED_STATUSES.contains(status.toLowerCase(Locale.ROOT));
   }
 
+  /**
+   * File of each prior finding keyed by its 1-based listed number — the id space the model's {@code
+   * previous_findings_status} entries reference. Lets the multi-call merge accept a
+   * "resolved"/"justified" claim only from a batch whose diff slice actually contained the
+   * finding's file.
+   */
+  public Map<Integer, String> previousFindingFilesById(String previousAiResponseJson) {
+    var previous = parsePreviousFindings(previousAiResponseJson);
+    var filesById = new HashMap<Integer, String>();
+    for (var i = 0; i < previous.size(); i++) {
+      filesById.put(i + 1, previous.get(i).file());
+    }
+    return filesById;
+  }
+
   private List<ReviewResponse.Finding> parsePreviousFindings(String aiResponseJson) {
     return parseResponse(aiResponseJson).findings();
   }
@@ -862,7 +864,7 @@ public class FollowUpAnalyzer {
     var lastBotReview =
         priorReviews.stream()
             .filter(r -> botIdentity.matches(r.user().login()))
-            .reduce((first, second) -> second); // get last
+            .reduce((first, second) -> second);
 
     if (lastBotReview.isEmpty()) return "";
 

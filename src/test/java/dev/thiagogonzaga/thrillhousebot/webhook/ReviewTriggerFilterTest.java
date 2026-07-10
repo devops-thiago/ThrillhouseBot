@@ -88,7 +88,6 @@ class ReviewTriggerFilterTest {
   void shouldLetExcludedLabelWinOverRequiredLabel() {
     var filter = filter(false, List.of("ai-review"), List.of("hold"), List.of(), List.of());
 
-    // The PR satisfies the required label but also carries the excluded one — exclusion wins.
     assertTrue(filter.skipReason(pr("main", false, "ai-review", "hold")).isPresent());
   }
 
@@ -96,7 +95,6 @@ class ReviewTriggerFilterTest {
   void shouldIgnoreLabelsWithBlankOrMissingNames() {
     var filter = filter(false, List.of("ai-review"), List.of(), List.of(), List.of());
 
-    // A label with a null name and one with a blank name are skipped; the real one still matches.
     assertTrue(filter.skipReason(pr("main", false, "ai-review", null, "  ")).isEmpty());
     assertTrue(filter.skipReason(pr("main", false, null, "  ")).isPresent());
   }
@@ -112,14 +110,11 @@ class ReviewTriggerFilterTest {
 
   @Test
   void shouldTreatStarAsSegmentBoundButDoubleStarAsCrossingSlashes() {
-    // Documented gitignore-style contract: '*' does not cross '/', so an operator who sets the
-    // allowlist to "*" expecting "every branch" silently excludes nested bases like feature/foo.
     var singleStar = filter(false, List.of(), List.of(), List.of("*"), List.of());
     assertTrue(singleStar.skipReason(pr("main", false)).isEmpty());
     assertTrue(
         singleStar.skipReason(pr("feature/foo", false)).isPresent(), "'*' must not cross '/'");
 
-    // '**' is the way to match every branch, including nested ones.
     var doubleStar = filter(false, List.of(), List.of(), List.of("**"), List.of());
     assertTrue(doubleStar.skipReason(pr("main", false)).isEmpty());
     assertTrue(doubleStar.skipReason(pr("feature/foo", false)).isEmpty(), "'**' spans '/'");
@@ -153,14 +148,12 @@ class ReviewTriggerFilterTest {
   void shouldSkipWhenBaseBranchIsUnusableAndAllowlistSet() {
     var filter = filter(false, List.of(), List.of(), List.of("main"), List.of());
 
-    // Blank and path-invalid (embedded NUL) base refs cannot match the allowlist; both are skipped.
     assertTrue(filter.skipReason(pr("   ", false)).isPresent());
     assertTrue(filter.skipReason(pr("x" + ((char) 0) + "y", false)).isPresent());
   }
 
   @Test
   void shouldIgnoreBlankConfigEntries() {
-    // Mirrors the empty-string default that comes from an unset env var.
     var filter = filter(false, List.of(""), List.of("  "), List.of(""), List.of(" "));
 
     assertTrue(filter.skipReason(pr("anything", false)).isEmpty());
@@ -169,7 +162,6 @@ class ReviewTriggerFilterTest {
 
   @Test
   void shouldIgnoreNullConfigEntriesAndInvalidGlobs() {
-    // null elements (from config parsing) and an unparseable glob must be dropped, not throw.
     var filter =
         filter(
             false,
@@ -178,7 +170,6 @@ class ReviewTriggerFilterTest {
             Arrays.asList("main", "[unclosed", null),
             List.of());
 
-    // required-labels kept only "ai-review"; base-branches kept only the valid "main".
     assertTrue(filter.skipReason(pr("main", false, "ai-review")).isEmpty());
     assertTrue(filter.skipReason(pr("main", false)).isPresent(), "missing required label");
     assertTrue(filter.skipReason(pr("other", false, "ai-review")).isPresent(), "base not allowed");
@@ -186,7 +177,6 @@ class ReviewTriggerFilterTest {
 
   @Test
   void shouldTreatNullConfigListsAsNoFilter() {
-    // The package-private constructor must tolerate null lists (defensive null guards).
     var filter = filter(false, null, null, null, null);
 
     assertTrue(filter.skipReason(pr("anything", false, "whatever")).isEmpty());

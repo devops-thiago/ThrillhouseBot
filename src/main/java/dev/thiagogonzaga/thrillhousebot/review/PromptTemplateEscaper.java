@@ -21,10 +21,7 @@ import java.util.HexFormat;
 /** Escapes user-provided prompt fragments before they are bound into a LangChain4j prompt. */
 public final class PromptTemplateEscaper {
 
-  // Per-review random fence around the diff. Because the token is unguessable, PR content cannot
-  // forge the boundary, so the diff is passed byte-exact — no rewriting that would corrupt
-  // marker-handling code under review. The prefix is fixed (the prompt names it); only the
-  // random suffix makes the full line unforgeable.
+  // The prefix is fixed (the prompt names it); only the random suffix makes a fence unforgeable.
   private static final String FENCE_PREFIX = "[[THRILLHOUSEBOT-UNTRUSTED-DATA-";
   private static final String FENCE_SUFFIX = "]]";
   private static final SecureRandom RANDOM = new SecureRandom();
@@ -39,10 +36,10 @@ public final class PromptTemplateEscaper {
   /**
    * Wraps untrusted code (the diff) between two identical, per-call random fence lines so the model
    * can separate data from instructions. The fence token is drawn from a CSPRNG, so PR content
-   * cannot reproduce the boundary; this is why the content between the fences is passed <em>byte
-   * exact</em> rather than run through {@link #neutralizeMarkers} — that rewriting corrupted
-   * marker-handling code under review and produced false findings (the dogfooding bug). This is the
-   * "random sequence enclosure" / Microsoft "spotlighting" delimiting defense.
+   * cannot reproduce the boundary; content between the fences is passed <em>byte exact</em> rather
+   * than through {@link #neutralizeMarkers}, which would rewrite marker-like sequences in the
+   * reviewed code. This is the "random sequence enclosure" / Microsoft "spotlighting" delimiting
+   * defense.
    *
    * <p>Empty content is returned unchanged so a {@code {#if}} section around it stays falsy.
    */

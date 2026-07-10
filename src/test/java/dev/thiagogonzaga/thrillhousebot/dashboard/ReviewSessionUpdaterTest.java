@@ -30,14 +30,28 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   void shouldRecordModelUsageOnExistingSession() throws Exception {
     var session = persistSession();
 
-    updater.recordModelUsage(session.id, "deepseek-chat", 120, 80, 0.42, 1500);
+    updater.recordModelUsage(session.id, "deepseek-chat", 120, 80, 0.42, false, 1500);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
     assertEquals("deepseek-chat", loaded.getModel());
     assertEquals(120, loaded.getInputTokens());
     assertEquals(80, loaded.getOutputTokens());
     assertEquals(0.42, loaded.getCost(), 0.001);
+    assertFalse(loaded.isPricingMissing());
     assertEquals(1500, loaded.getDurationMs());
+  }
+
+  @Test
+  void shouldFlagMissingPricingOnTheSession() throws Exception {
+    var session = persistSession();
+
+    updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true, 1500);
+
+    ReviewSession loaded = ReviewSession.findById(session.id);
+    assertTrue(loaded.isPricingMissing());
+    assertEquals(0.0, loaded.getCost(), 0.001);
+    assertEquals(120, loaded.getInputTokens());
+    assertEquals(80, loaded.getOutputTokens());
   }
 
   @Test
@@ -54,10 +68,9 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldIgnoreMissingSessionId() {
-    assertDoesNotThrow(() -> updater.recordModelUsage(999_999L, "model", 1, 1, 0.0, 1));
+    assertDoesNotThrow(() -> updater.recordModelUsage(999_999L, "model", 1, 1, 0.0, false, 1));
     assertDoesNotThrow(() -> updater.recordFailure(999_999L, "gone", 1));
 
-    // No session may be created as a side effect of updating a missing ID
     assertEquals(0, ReviewSession.count());
   }
 

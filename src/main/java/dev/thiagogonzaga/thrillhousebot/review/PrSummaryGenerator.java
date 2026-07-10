@@ -28,9 +28,8 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class PrSummaryGenerator {
 
-  // The walkthrough-diagram master switch, read once. The render is gated on it as well as the
-  // prompt request, so the documented "no diagram is requested or rendered unless enabled" holds
-  // even if the model volunteers a walkthrough_diagram the prompt never asked for.
+  // Walkthrough-diagram master switch; also gates rendering when the model volunteers an
+  // unrequested walkthrough_diagram.
   private final boolean diagramEnabled;
 
   @Inject
@@ -243,8 +242,6 @@ public class PrSummaryGenerator {
       }
       sb.append("\n");
     }
-    // Unreadable CI is a distinct hold from an offending check: render it as its own note rather
-    // than as a counterfeit row in the required-checks table.
     if (result.ciUnreadable()) {
       sb.append("### ⚠️ CI Status Unavailable\n");
       sb.append(
@@ -392,11 +389,10 @@ public class PrSummaryGenerator {
     if (raw == null || raw.isBlank()) {
       return null;
     }
-    // Drop every backtick run: Mermaid source never contains one, and removing them both unwraps an
-    // accidental ```mermaid ... ``` and prevents a stray ``` from closing our fence early.
+    // Mermaid source never contains a backtick; dropping them all unwraps an accidental
+    // ```mermaid fence and keeps a stray ``` from closing our fence early.
     String cleaned = raw.replace("`", "").strip();
-    // Unwrapping a ```mermaid fence leaves a bare "mermaid" language tag as the first line; drop it
-    // so the diagram keyword underneath is what gets validated.
+    // An unwrapped fence leaves a bare "mermaid" language tag as the first line; drop it.
     if (cleaned.regionMatches(true, 0, "mermaid", 0, "mermaid".length())) {
       int firstBreak = cleaned.indexOf('\n');
       cleaned = firstBreak < 0 ? "" : cleaned.substring(firstBreak + 1).strip();

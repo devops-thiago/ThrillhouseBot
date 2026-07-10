@@ -48,3 +48,8 @@ out*.txt
 
 # Local-only
 rewrite.yml
+
+# Docs site (Astro Starlight) build artifacts
+website/node_modules/
+website/dist/
+website/.astro/

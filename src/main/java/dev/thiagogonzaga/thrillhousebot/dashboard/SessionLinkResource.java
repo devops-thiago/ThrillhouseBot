@@ -45,7 +45,7 @@ public class SessionLinkResource {
   @GET
   @Path("/{publicId}")
   public Response redirectToSession(@PathParam("publicId") String publicId) {
-    // A matched path segment is never null, so the format check is the only guard needed
+    // A matched path segment is never null.
     if (!PUBLIC_ID_PATTERN.matcher(publicId).matches()) {
       return Response.seeOther(SESSIONS_PAGE).build();
     }

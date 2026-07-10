@@ -24,14 +24,11 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 @RegisterAiService
 public interface PrReviewer {
 
-  // {{repoInstructions}} carries the orchestrator's pre-rendered trailing guidance: the available
-  // repository labels (when labelling is on) followed by any repo instructions file. Folding both
-  // into one template variable keeps this method within a sane parameter count.
+  // {{repoInstructions}} carries the pre-rendered trailing guidance: available repository labels
+  // (when labelling is on) followed by any repo instructions file.
   //
-  // @UserMessage MUST stay on the method, not on a parameter: on a parameter quarkus-langchain4j
-  // uses that parameter's raw value (the diff) as the whole user message and never renders this
-  // template, silently dropping prContext, baseComparison, projectStack, relatedTests,
-  // previousFindings and repoInstructions.
+  // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
+  // parameter's raw value and silently drops every other @V.
   @SystemMessage(PrReviewPrompts.SYSTEM)
   @UserMessage(PrReviewPrompts.USER)
   TokenStream reviewStream(
@@ -40,6 +37,16 @@ public interface PrReviewer {
       @V("baseComparison") String baseComparison,
       @V("projectStack") String projectStack,
       @V("relatedTests") String relatedTests,
+      @V("previousFindings") String previousFindings,
+      @V("repoInstructions") String repoInstructions);
+
+  // @UserMessage MUST stay on the method (same reason as reviewStream).
+  @SystemMessage(PrReviewPrompts.SUMMARY_SYSTEM)
+  @UserMessage(PrReviewPrompts.SUMMARY_USER)
+  TokenStream summarizeStream(
+      @V("prContext") String prContext,
+      @V("findings") String findings,
+      @V("changedFiles") String changedFiles,
       @V("previousFindings") String previousFindings,
       @V("repoInstructions") String repoInstructions);
 }

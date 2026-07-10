@@ -1,0 +1,44 @@
+---
+slug: 0.3.0
+title: ThrillhouseBot
+description: Self-hosted AI pull-request reviewer — a GraalVM-native GitHub App built with Quarkus.
+---
+
+> **"Everything's coming up Thrillhouse!"**
+
+A self-hosted, GraalVM-native PR review bot, built as a GitHub App with Quarkus.
+Documentation snapshot for **v0.3.0**.
+
+![ThrillhouseBot approving a clean pull request](../../../assets/0.3.0/pr-approval.png)
+
+## Features
+
+- Reviews diffs for correctness, security, regressions, stale comments, and code quality
+- Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch
+- Inline code suggestions on review comments that you can apply with one click
+- Every finding is tagged `critical`, `high`, `medium`, or `low`
+- Follow-up reviews track whether earlier findings were addressed or justified
+- Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
+- A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`
+- Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
+- OpenTelemetry traces, token histograms, cost counters, and latency metrics
+- Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
+- Compiles ahead-of-time with GraalVM/Mandrel, so it starts fast and stays small
+
+## Where to go next
+
+- **[Getting started](/ThrillhouseBot/0.3.0/getting-started)** — create the GitHub App and run the bot
+- **[Commands](/ThrillhouseBot/0.3.0/commands)** — drive the bot from a PR
+- **[Configuration](/ThrillhouseBot/0.3.0/configuration)** — environment variables and defaults
+- **[AI providers](/ThrillhouseBot/0.3.0/providers)** — OpenAI-compatible endpoints
+- **[Architecture](/ThrillhouseBot/0.3.0/architecture)** — how a review flows through the system
+- **[How it compares](/ThrillhouseBot/0.3.0/comparison)** — vs other AI code-review tools
+- **[Contributing](/ThrillhouseBot/0.3.0/contributing)** — development setup
+
+## Dashboard
+
+The built-in dashboard shows summary cards, a live activity feed, cost charts,
+token breakdowns, and session history:
+
+![Dashboard Overview](../../../assets/0.3.0/live-streaming.png)

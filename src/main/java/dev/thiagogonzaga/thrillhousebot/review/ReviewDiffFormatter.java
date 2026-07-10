@@ -185,7 +185,7 @@ public class ReviewDiffFormatter {
     return formatWithLineBudget(header, files, namesOf(reviewableFiles));
   }
 
-  private static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
+  static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream()
         .map(GitHubPullRequestClient.FileDiff::filename)
         .collect(Collectors.toSet());
@@ -252,9 +252,17 @@ public class ReviewDiffFormatter {
     return formatWithLineBudget(header, withPatch, namesOf(reviewableFiles(withPatch)));
   }
 
+  /**
+   * Line cap applied to every render from this class. Token-budgeted review calls never use these
+   * renders (the planner sections and clips per batch), so everything here is a single AI call —
+   * the on-demand commands, maintainer replies, the base comparison, and the budgeting-disabled
+   * legacy review — guarded by the 5000-line config default. An explicit {@code max-diff-lines=0}
+   * keeps its released meaning: the cap is off and the render is unbounded.
+   */
   private FormattedDiff formatWithLineBudget(
       String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {
-    if (maxDiffLines <= 0) {
+    var maxLines = maxDiffLines;
+    if (maxLines <= 0) {
       var sb = new StringBuilder(header);
       for (var file : files) {
         sb.append(formatFileSection(file, reviewableNames));
@@ -271,11 +279,11 @@ public class ReviewDiffFormatter {
       var section = formatFileSection(file, reviewableNames);
       var sectionLines = lineCount(section);
 
-      if (usedLines + sectionLines <= maxDiffLines) {
+      if (usedLines + sectionLines <= maxLines) {
         output.append(section);
         usedLines += sectionLines;
       } else {
-        var remaining = maxDiffLines - usedLines;
+        var remaining = maxLines - usedLines;
         var tail = files.subList(i, files.size());
         int footerLines = tail.size() > 1 ? 2 : 1;
         if (remaining <= footerLines) {
@@ -295,7 +303,7 @@ public class ReviewDiffFormatter {
       appendTruncationFooter(output, omitted, usedLines);
       Log.warnf(
           "Diff truncated to %d lines (max: %d, %d files omitted)",
-          maxDiffLines, maxDiffLines, omitted.size());
+          maxLines, maxLines, omitted.size());
     }
 
     return new FormattedDiff(output.toString(), omitted.size());
@@ -308,19 +316,19 @@ public class ReviewDiffFormatter {
 
   void appendTruncationFooter(
       StringBuilder output, List<GitHubPullRequestClient.FileDiff> omitted, int usedLines) {
-    if (maxDiffLines - usedLines < 1) {
+    var maxLines = maxDiffLines;
+    if (maxLines - usedLines < 1) {
       return;
     }
 
     String summary =
-        String.format(
-            "(diff truncated at %d lines — %d files omitted)", maxDiffLines, omitted.size());
+        String.format("(diff truncated at %d lines — %d files omitted)", maxLines, omitted.size());
     var summaryBlock = "\n" + summary + "\n";
     output.append(summaryBlock);
     usedLines += lineCount(summaryBlock);
 
     for (GitHubPullRequestClient.FileDiff file : omitted) {
-      if (maxDiffLines - usedLines < 1) {
+      if (maxLines - usedLines < 1) {
         break;
       }
       String line =
@@ -332,8 +340,7 @@ public class ReviewDiffFormatter {
     }
   }
 
-  private String formatFileSection(
-      GitHubPullRequestClient.FileDiff file, Set<String> reviewableNames) {
+  String formatFileSection(GitHubPullRequestClient.FileDiff file, Set<String> reviewableNames) {
     var sb =
         new StringBuilder("### ")
             .append(file.filename())
@@ -344,8 +351,6 @@ public class ReviewDiffFormatter {
             .append(" -")
             .append(file.deletions())
             .append(")\n");
-    // Membership in the caller's precomputed reviewable set, not a fresh isIgnored() glob match, so
-    // the ignore-glob filter is walked once per review rather than again here for every file.
     if (!reviewableNames.contains(file.filename())) {
       sb.append(
               String.format(

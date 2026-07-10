@@ -9,6 +9,7 @@ export interface SessionEvent {
     | "review.started"
     | "review.stream"
     | "review.stream.failed"
+    | "review.batch"
     | "review.retry"
     | "review.progress"
     | "review.completed"

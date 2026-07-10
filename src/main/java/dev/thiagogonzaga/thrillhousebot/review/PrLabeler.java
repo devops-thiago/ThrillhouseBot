@@ -250,18 +250,14 @@ public class PrLabeler {
   }
 
   private void applyLabels(LabelRequest request, List<String> resolved) {
-    // GitHub's add-labels endpoint is additive, so without this guard a re-review with shifting
-    // suggestions would keep piling labels onto the PR — pushing it well past max-labels over time
-    // (max-labels is documented as a per-PR bound). Bound the additions against the labels already
-    // on the PR: skip ones already present and only top the PR up to max-labels in total.
+    // GitHub's add-labels endpoint is additive, so bound the additions against the labels
+    // already on the PR to keep max-labels a per-PR total.
     var current = currentLabelKeys(request);
     int max = Math.max(0, config.review().labels().maxLabels());
     int budget = Math.max(0, max - current.size());
     if (budget == 0) {
       return;
     }
-    // Skip labels already on the PR (re-adding is a no-op that wastes budget) and take only enough
-    // new ones to reach max-labels.
     var toAdd =
         resolved.stream()
             .filter(name -> !current.contains(name.toLowerCase(Locale.ROOT)))
@@ -270,8 +266,8 @@ public class PrLabeler {
     if (toAdd.isEmpty()) {
       return;
     }
-    // In allow-create mode, drop any label whose creation failed — GitHub 422s the whole
-    // add-labels request if a single name doesn't exist, which would apply nothing at all.
+    // GitHub 422s the whole add-labels request if a single name doesn't exist, so drop any
+    // label whose creation failed.
     List<String> applicable =
         config.review().labels().allowCreate() ? ensureLabelsExist(request, toAdd) : toAdd;
     if (applicable.isEmpty()) {

@@ -49,7 +49,7 @@ public class DashboardWebSocketKeepAlive {
 
   void onStart(@Observes StartupEvent event) {
     var intervalMs = config.websocketKeepAliveMs();
-    // vertx.setPeriodic rejects delays < 1 with an exception that would abort startup
+    // vertx.setPeriodic rejects delays < 1 with an exception that would abort startup.
     if (intervalMs <= 0) {
       log.warn(
           "WEBSOCKET_KEEPALIVE_MS={} — keepalive disabled; stale session replay buffers "

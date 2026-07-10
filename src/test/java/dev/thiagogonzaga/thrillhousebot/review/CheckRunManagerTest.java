@@ -28,8 +28,7 @@ import org.mockito.MockitoAnnotations;
 
 /**
  * Unit tests for {@link CheckRunManager} — the check-run create/update subsystem extracted from
- * {@code ReviewOrchestrator} (#250), including the completion-only retry after a failed full
- * update.
+ * {@code ReviewOrchestrator}, including the completion-only retry after a failed full update.
  */
 class CheckRunManagerTest {
 

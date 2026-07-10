@@ -1,0 +1,216 @@
+name: Docker test image
+
+# Build and push a disposable image for a branch or PR. Does not tag latest or
+# release versions. Trigger from Actions → Docker test image → Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to build (checks out the PR head). Leave empty to use the branch selected above."
+        required: false
+        type: string
+        default: ""
+      variant:
+        description: "jvm = fast behavior testing; native = production-like (amd64 only)"
+        required: true
+        type: choice
+        options:
+          - jvm
+          - native
+        default: jvm
+      extra_tag:
+        description: "Optional extra image tag (letters, digits, ._- only). Prefixed with test-."
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: docker-test-image-${{ inputs.pr_number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/devops-thiago/thrillhousebot
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Check out PR head
+        if: inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr_number }}
+        run: |
+          if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+            echo "::error::pr_number must be digits only"
+            exit 1
+          fi
+          # Same-repo PRs only — fork heads must not publish to our GHCR package.
+          meta=$(gh pr view "$PR" --json headRepository,isCrossRepository \
+            --jq '[.headRepository.owner.login, .headRepository.name, (.isCrossRepository|tostring)] | join(" ")')
+          read -r owner name is_cross <<< "$meta"
+          head_repo="${owner}/${name}"
+          if [ "$is_cross" = "true" ] || [ "$head_repo" != "${{ github.repository }}" ]; then
+            echo "::error::Refusing to build a fork PR ($head_repo). Push a branch in ${{ github.repository }} instead."
+            exit 1
+          fi
+          gh pr checkout "$PR"
+
+      - name: Derive tags
+        id: tags
+        env:
+          PR: ${{ inputs.pr_number }}
+          EXTRA: ${{ inputs.extra_tag }}
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          FULL_SHA="$(git rev-parse HEAD)"
+          echo "sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
+
+          tags=()
+          tags+=("test-sha-${SHORT_SHA}")
+          if [ -n "$PR" ]; then
+            tags+=("test-pr-${PR}")
+          else
+            branch="${GITHUB_REF_NAME}"
+            safe=$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')
+            safe="${safe:0:80}"
+            if [ -n "$safe" ]; then
+              tags+=("test-branch-${safe}")
+            fi
+          fi
+          if [ -n "$EXTRA" ]; then
+            if ! [[ "$EXTRA" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::extra_tag may only contain letters, digits, . _ -"
+              exit 1
+            fi
+            tags+=("test-${EXTRA}")
+          fi
+
+          list=""
+          for t in "${tags[@]}"; do
+            if [ "$VARIANT" = "native" ]; then
+              list="${list},${IMAGE}:${t}-native"
+            else
+              list="${list},${IMAGE}:${t}"
+            fi
+          done
+          echo "list=${list#,}" >> "$GITHUB_OUTPUT"
+          if [ "$VARIANT" = "native" ]; then
+            echo "primary=${IMAGE}:${tags[0]}-native" >> "$GITHUB_OUTPUT"
+          else
+            echo "primary=${IMAGE}:${tags[0]}" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "### Tags"
+            for t in "${tags[@]}"; do
+              if [ "$VARIANT" = "native" ]; then
+                echo "- \`${IMAGE}:${t}-native\`"
+              else
+                echo "- \`${IMAGE}:${t}\`"
+              fi
+            done
+            echo
+            echo "\`\`\`bash"
+            if [ "$VARIANT" = "native" ]; then
+              echo "docker pull ${IMAGE}:${tags[0]}-native"
+              echo "IMAGE_TAG=${tags[0]}-native docker compose up -d"
+            else
+              echo "docker pull ${IMAGE}:${tags[0]}"
+              echo "IMAGE_TAG=${tags[0]} docker compose up -d"
+            fi
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5
+        with:
+          java-version: "25"
+          distribution: "temurin"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build dashboard
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          mkdir -p ../src/main/resources/META-INF/resources/dashboard
+          cp -a out/. ../src/main/resources/META-INF/resources/dashboard/
+        working-directory: frontend
+
+      - name: Package (JVM)
+        if: inputs.variant == 'jvm'
+        run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
+
+      - name: Package (native amd64)
+        if: inputs.variant == 'native'
+        run: |
+          ./mvnw -B package -Pnative -DskipTests -Dquarkus.native.container-build=true
+          mkdir -p target/amd64
+          cp -f target/*-runner target/amd64/
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: devops-thiago
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ${{ inputs.variant == 'native' && 'src/main/docker/Dockerfile.runtime' || 'src/main/docker/Dockerfile.jvm' }}
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: type=gha,scope=docker-test-${{ inputs.variant }}
+          cache-to: type=gha,mode=max,scope=docker-test-${{ inputs.variant }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.tags.outputs.sha }}
+            thrillhousebot.image.purpose=test
+
+      - name: Comment on PR
+        if: inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr_number }}
+          PRIMARY: ${{ steps.tags.outputs.primary }}
+          TAGS: ${{ steps.tags.outputs.list }}
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          body=$(cat <<EOF
+          Test image ready (\`${VARIANT}\`, amd64).
+
+          \`\`\`bash
+          docker pull ${PRIMARY}
+          IMAGE_TAG=${PRIMARY#ghcr.io/devops-thiago/thrillhousebot:} docker compose up -d
+          \`\`\`
+
+          Tags: \`${TAGS}\`
+          EOF
+          )
+          gh pr comment "$PR" --body "$body"

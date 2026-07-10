@@ -28,12 +28,11 @@ import java.util.Set;
 
 /**
  * Collapses duplicate findings within a single review response. The model occasionally reports one
- * underlying defect several times — dogfooding produced the same issue three times in one review at
- * three different severities. Findings are considered duplicates when they sit on the same file
- * within a small line tolerance and their titles describe the same thing; the merged finding keeps
- * the richest description and the cluster's median severity (the more severe of the two central
- * values for an even cluster), so a single outlier cannot decide the posted severity or downgrade a
- * blocking finding.
+ * underlying defect several times at different severities. Findings are considered duplicates when
+ * they sit on the same file within a small line tolerance and their titles describe the same thing;
+ * the merged finding keeps the richest description and the cluster's median severity (the more
+ * severe of the two central values for an even cluster), so a single outlier cannot decide the
+ * posted severity or downgrade a blocking finding.
  */
 @ApplicationScoped
 public class FindingDeduplicator {
@@ -94,10 +93,9 @@ public class FindingDeduplicator {
   }
 
   /**
-   * Paraphrased re-raises evade title matching (dogfooding measured 0.12 title similarity on a
-   * re-raise) but keep most of their substance: the overlap coefficient over combined title and
-   * description tokens scored 0.47 and 0.59 on observed re-raise pairs against 0.28 for genuinely
-   * distinct same-file claims.
+   * Paraphrased re-raises can evade title matching while keeping most of their substance. The
+   * overlap coefficient over combined title and description tokens separates those pairs from
+   * genuinely distinct same-file claims.
    */
   static final double CONTENT_OVERLAP_THRESHOLD = 0.45;
 
@@ -179,19 +177,12 @@ public class FindingDeduplicator {
             .map(f -> RiskLevel.fromString(f.risk()))
             .sorted(Comparator.naturalOrder())
             .toList();
-    // The list is sorted most-severe first (RiskLevel natural order is CRITICAL..LOW). An odd
-    // cluster uses the true median so a lone outlier cannot decide the severity; an even cluster
-    // has
-    // no single middle, so take the more severe of the two central values (the lower index) — never
-    // the less severe — so a single hedged duplicate cannot downgrade a blocking finding.
+    // RiskLevel natural order is most-severe-first (CRITICAL..LOW); an even cluster takes the more
+    // severe of the two central values (the lower index).
     int mid = ranked.size() / 2;
     RiskLevel severity = ranked.size() % 2 == 0 ? ranked.get(mid - 1) : ranked.get(mid);
-    // Confidence stays paired with the chosen severity: the highest confidence among the members
-    // that carry it. Taking it from an arbitrary member could either defuse a blocking
-    // critical/high-confidence finding via a hedged duplicate, or synthesize a blocking pair no
-    // single member ever asserted. Confidence is declared most-certain-first (HIGH < MEDIUM < LOW
-    // in
-    // natural order), so min() selects the highest confidence.
+    // Confidence natural order is most-certain-first (HIGH < MEDIUM < LOW), so min() selects the
+    // highest confidence among members carrying the chosen severity.
     Confidence confidence =
         cluster.stream()
             .filter(f -> RiskLevel.fromString(f.risk()) == severity)

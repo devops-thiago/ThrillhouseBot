@@ -188,7 +188,8 @@ class OtelObservabilityListenerTest {
     ReviewSessionUpdater failingUpdater = mock(ReviewSessionUpdater.class);
     doThrow(new RuntimeException("db down"))
         .when(failingUpdater)
-        .recordModelUsage(anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyLong());
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
     Vertx failingVertx = mock(Vertx.class);
 
     var failedFuture = mock(Future.class);
@@ -206,7 +207,6 @@ class OtelObservabilityListenerTest {
     var attrs = requestAttributes(failingListener, 16L, 1);
 
     assertDoesNotThrow(() -> failingListener.onResponse(responseContext(attrs)));
-    // A failing session persistence must not stop OTel metrics from being recorded
     verify(tokenHist, atLeastOnce()).record(anyLong(), any());
     verify(durationHist).record(anyDouble(), any());
     verify(costCnt).add(anyDouble(), any());
@@ -250,7 +250,6 @@ class OtelObservabilityListenerTest {
 
     blankOverride.onResponse(responseContext(requestAttributes(blankOverride, 1L, 1)));
 
-    // Blank override is ignored; the label is derived from the base URL instead.
     assertEquals("deepseek", recordedProviderName());
   }
 
@@ -270,13 +269,13 @@ class OtelObservabilityListenerTest {
     listener.onResponse(ctx);
 
     verify(sessionUpdater, never())
-        .recordModelUsage(anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyLong());
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
   }
 
   @Test
   void onResponseShouldIgnoreCallbackFromPreviousAttemptDuringRetry() {
     var attrs = requestAttributes(42L, 1);
-    // The retry attempt re-registered the session — attempt 1's late callback is stale
     ReviewSessionContext.bind(42L, 2);
     ReviewSessionContext.clear();
     var ctx = responseContext(attrs);
@@ -284,7 +283,8 @@ class OtelObservabilityListenerTest {
     listener.onResponse(ctx);
 
     verify(sessionUpdater, never())
-        .recordModelUsage(anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyLong());
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
   }
 
   @Test
@@ -295,7 +295,8 @@ class OtelObservabilityListenerTest {
     listener.onResponse(ctx);
 
     verify(sessionUpdater)
-        .recordModelUsage(eq(42L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyLong());
+        .recordModelUsage(
+            eq(42L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyBoolean(), anyLong());
   }
 
   @Test
@@ -317,7 +318,13 @@ class OtelObservabilityListenerTest {
     var costCaptor = ArgumentCaptor.forClass(Double.class);
     verify(sessionUpdater)
         .recordModelUsage(
-            eq(7L), eq("deepseek-chat"), eq(1000), eq(1000), costCaptor.capture(), anyLong());
+            eq(7L),
+            eq("deepseek-chat"),
+            eq(1000),
+            eq(1000),
+            costCaptor.capture(),
+            eq(false),
+            anyLong());
     assertEquals(0.42, costCaptor.getValue(), 0.001);
   }
 
@@ -336,8 +343,27 @@ class OtelObservabilityListenerTest {
     listener.onResponse(ctx);
 
     verify(sessionUpdater)
-        .recordModelUsage(eq(8L), eq("unknown-model"), eq(500), eq(300), eq(0.0), anyLong());
+        .recordModelUsage(
+            eq(8L), eq("unknown-model"), eq(500), eq(300), eq(0.0), eq(true), anyLong());
     verify(costCounter).add(eq(0.0), any());
+  }
+
+  @Test
+  void onResponseShouldKeepFlaggingMissingPricingOnRepeatedCalls() {
+    when(aiConfig.pricing()).thenReturn(Map.of());
+
+    for (var sessionId = 30L; sessionId <= 31L; sessionId++) {
+      var ctx = responseContext(requestAttributes(sessionId, 1));
+      when(ctx.chatResponse().modelName()).thenReturn("unknown-model");
+      listener.onResponse(ctx);
+    }
+
+    verify(sessionUpdater)
+        .recordModelUsage(
+            eq(30L), eq("unknown-model"), anyInt(), anyInt(), eq(0.0), eq(true), anyLong());
+    verify(sessionUpdater)
+        .recordModelUsage(
+            eq(31L), eq("unknown-model"), anyInt(), anyInt(), eq(0.0), eq(true), anyLong());
   }
 
   @Test
@@ -348,7 +374,8 @@ class OtelObservabilityListenerTest {
 
     assertDoesNotThrow(() -> listener.onResponse(ctx));
     verify(sessionUpdater, never())
-        .recordModelUsage(anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyLong());
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
     verify(tokenHistogram, atLeastOnce()).record(anyLong(), any());
   }
 
@@ -368,11 +395,13 @@ class OtelObservabilityListenerTest {
     listener.onResponse(responseContext(attrsB));
 
     verify(sessionUpdater)
-        .recordModelUsage(eq(10L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyLong());
+        .recordModelUsage(
+            eq(10L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyBoolean(), anyLong());
     verify(sessionUpdater)
-        .recordModelUsage(eq(20L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyLong());
+        .recordModelUsage(
+            eq(20L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyBoolean(), anyLong());
     verify(sessionUpdater, never())
-        .recordModelUsage(eq(99L), any(), anyInt(), anyInt(), anyDouble(), anyLong());
+        .recordModelUsage(eq(99L), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
   }
 
   @Test

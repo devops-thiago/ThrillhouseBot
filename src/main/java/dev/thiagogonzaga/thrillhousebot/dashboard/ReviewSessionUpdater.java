@@ -38,6 +38,7 @@ public class ReviewSessionUpdater {
       int inputTokens,
       int outputTokens,
       double cost,
+      boolean pricingMissing,
       long durationMs) {
     var session = repository.findById(sessionId);
     if (session == null) {
@@ -47,6 +48,7 @@ public class ReviewSessionUpdater {
     session.setInputTokens(inputTokens);
     session.setOutputTokens(outputTokens);
     session.setCost(cost);
+    session.setPricingMissing(pricingMissing);
     session.setDurationMs(durationMs);
     session.persist();
   }

@@ -39,8 +39,6 @@ public class TriggerDetector {
   private static final Pattern MENTION_PATTERN =
       Pattern.compile(".*@thrillhousebot\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
-  // Fenced code (``` … ``` or ~~~ … ~~~), blockquote lines (> …) and inline code (`…`) are quoted
-  // context, not instructions: a maintainer quoting or documenting a command must not execute it.
   private static final Pattern FENCED_CODE = Pattern.compile("(?s)```.*?```|~~~.*?~~~");
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]*>.*$");
   private static final Pattern INLINE_CODE = Pattern.compile("`[^`\\n]*`");

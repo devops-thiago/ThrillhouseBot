@@ -124,35 +124,17 @@ public class ReviewContextLoader {
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     var prTotals = fetchPrTotals(auth, req.owner(), req.repo(), req.prNumber());
-    // The ignore-glob filter runs once here; the already-filtered list feeds the diff render (so
-    // formatFileSection does not re-glob each file) and the line resolver alike, instead of either
-    // re-walking it.
     var reviewableFiles = diffFormatter.reviewableFiles(files);
     var diffResult = diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
     var baseComparisonResult =
         buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
-    // Only the PR diff's omitted files gate the verdict: the base↔head comparison is
-    // supplementary regression context, so trimming it must not hold APPROVE or claim a partial
-    // review when the PR diff itself was reviewed in full.
     var omittedFiles = diffResult.omittedFiles();
-    // Built once here and shared via the context: the finding pipeline (anchor backfill), the
-    // verdict backstop, and the publisher's inline comments all resolve against the same diff.
     var lineResolver =
         new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewableFiles));
 
     var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
-    // Two independent flags decouple UX presentation from context loading:
-    //  • isFirstVisibleReview — true when the bot has posted nothing user-visible on the PR yet:
-    //    neither a review nor a summary comment. Gates the first-review summary issue-comment and
-    //    the APPROVE celebration body. A review alone is not a reliable proxy: a first round held
-    //    back only by pending CI posts the summary comment but no review, so keying off the
-    //    review would re-post the summary every round until one finally creates a review. The
-    //    summary comment is the artifact we must not duplicate, so we look for it directly.
-    //  • hasContext — true when persistence holds prior AI responses (surviving force-push/
-    //    rebase). Gates previous-findings context loading, inline comment fetching, and the
-    //    deterministic backstop. A persisted-but-unreviewed prior round (e.g. createReview
-    //    failed after persistAiResponse) must still reconstruct context without suppressing
-    //    the first user-visible summary.
+    // isFirstVisibleReview keys off the summary comment directly, not reviews alone: a first
+    // round held back only by pending CI posts the summary comment but no review.
     List<String> priorAiResponseJsons =
         sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
     var isFirstVisibleReview =
@@ -184,9 +166,8 @@ public class ReviewContextLoader {
         instructionsResolver.resolve(
             req.owner(), req.repo(), req.defaultBranch(), req.installationId());
 
-    // Existing repo labels are fetched once (when the feature is on): they both constrain the
-    // model's suggestions in the prompt and are reused to reconcile its output afterwards.
     var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
+    var projectStack = resolveProjectStack(req);
 
     return new ReviewContext(
         files,
@@ -202,7 +183,7 @@ public class ReviewContextLoader {
         previousFindings,
         instructions,
         repoLabels,
-        resolveProjectStack(req),
+        projectStack,
         reviewableFiles,
         lineResolver,
         prTotals);
@@ -246,10 +227,6 @@ public class ReviewContextLoader {
 
   List<GitHubPullRequestClient.FileDiff> fetchPrFiles(
       String auth, String owner, String repo, int prNumber) {
-    // A fetch failure must propagate to review()'s handler (failed check + "could not complete"
-    // notice). Swallowing it into an empty list is indistinguishable from a PR with no changes and
-    // produces a false APPROVE + green check on code that was never read. A genuinely empty
-    // PR returns an empty list with no exception and still takes the normal path.
     return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
   }
 
@@ -333,8 +310,7 @@ public class ReviewContextLoader {
   List<GitHubCommentClient.IssueComment> fetchIssueComments(
       String auth, String owner, String repo, int prNumber) {
     try {
-      // listComments paginates internally and always returns a non-null list (empty when there are
-      // no comments), so the only best-effort fallback needed here is the fetch throwing.
+      // listComments paginates internally and always returns a non-null list (empty when none).
       return commentClient.listComments(auth, ACCEPT, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.debug("Could not fetch PR issue comments (continuing as if none exist)", e);
@@ -345,8 +321,7 @@ public class ReviewContextLoader {
   List<GitHubReviewClient.PullRequestComment> fetchPullRequestComments(
       String auth, String owner, String repo, int prNumber) {
     try {
-      // The client walks every page and never returns null, so the only failure to absorb here is
-      // the fetch throwing.
+      // The client walks every page and never returns null.
       return reviewClient.listPullRequestComments(auth, ACCEPT, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch PR inline comments, continuing without thread context", e);

@@ -1,4 +1,5 @@
 # Review-quality evaluation
+<!-- docs:review-eval:start -->
 
 A repeatable check of the bot's review quality against the failure cases
 collected while dogfooding the v0.1.0 release PRs. Run it after every deploy of
@@ -52,3 +53,4 @@ Record the outcome (date, deployed version, pass/fail per check) in the PR
 description on the test repository, then close the PR. A failed check means
 the deploy regressed review quality; compare the bot's session log with the
 matching check above before shipping anything else.
+<!-- docs:review-eval:end -->

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import io.quarkus.runtime.annotations.RegisterForReflection;
+import java.util.ArrayList;
 import java.util.List;
 
 /** Aggregated result of a full review orchestration. */
@@ -34,15 +35,16 @@ public record ReviewResult(
     List<CiCheck> offendingCiChecks,
     int omittedFiles,
     boolean ciUnreadable,
-    // False when the required-context set could not be resolved and every check is gated; the
-    // rendered CI copy then drops "required".
-    boolean requiredContextsKnown) {
+    // False when the required-context set could not be resolved; rendered CI copy then drops
+    // "required".
+    boolean requiredContextsKnown,
+    TruncationDetail truncation) {
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
     offendingCiChecks = offendingCiChecks == null ? List.of() : List.copyOf(offendingCiChecks);
-    // Check-run conclusion derivation relies on a non-null state; fall back to the
-    // canonical risk mapping rather than NPE on an inconsistent record
+    truncation = truncation == null ? TruncationDetail.EMPTY : truncation;
+    // Check-run conclusion derivation relies on a non-null state.
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
@@ -112,7 +114,28 @@ public record ReviewResult(
         offendingCiChecks,
         omittedFiles,
         ciUnreadable,
-        true);
+        true,
+        TruncationDetail.EMPTY);
+  }
+
+  /**
+   * Which files the token budget left uncovered, by name: {@code omittedFileNames} were never sent
+   * at all, {@code clippedFileNames} were hunk-clipped and only partially analyzed. Empty on the
+   * legacy line-cap path, where only a count is known — the rendered copy then falls back to the
+   * numeric clause.
+   */
+  @RegisterForReflection
+  public record TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
+    public static final TruncationDetail EMPTY = new TruncationDetail(List.of(), List.of());
+
+    public TruncationDetail {
+      omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
+      clippedFileNames = clippedFileNames == null ? List.of() : List.copyOf(clippedFileNames);
+    }
+
+    public boolean isEmpty() {
+      return omittedFileNames.isEmpty() && clippedFileNames.isEmpty();
+    }
   }
 
   /** How many findings the PR summary lists under "Key Findings". */
@@ -149,11 +172,8 @@ public record ReviewResult(
     return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
   }
 
-  // A backstop-held finding can be summary-only — its flagged line was outside the diff when first
-  // raised, so it was never posted as an inline comment and has no thread to reply on.
-  // The guidance therefore qualifies the reply path ("where one exists") instead of promising a
-  // thread that may not be there; fixing the code, or a model resolved/justified verdict, still
-  // clears such a finding.
+  // A backstop-held finding may have no inline thread (its line was outside the diff when raised),
+  // hence the "where one exists" qualifier.
   public static String unresolvedPreviousMessage(long unresolved) {
     return String.format(
         "No new issues in this revision, but %d previous finding(s) remain unresolved — "
@@ -177,10 +197,87 @@ public record ReviewResult(
    * partial — the verdict is also held back from APPROVE in that case.
    */
   public static String truncationNotice(int omittedFiles) {
+    return truncationNotice(omittedFiles, TruncationDetail.EMPTY);
+  }
+
+  /**
+   * Banner variant that names the uncovered files when the token-budget plan knows them — "reported
+   * by name, never silently dropped" must hold on the user-facing surfaces, not only in the model's
+   * prompt. Falls back to the numeric clause when only a count is known.
+   */
+  public static String truncationNotice(int omittedFiles, TruncationDetail detail) {
     return String.format(
         "> ⚠️ **Large PR — partial review.** %s; the findings and verdict below cover only the"
             + " reviewed portion.%n%n",
-        omittedFilesClause(omittedFiles));
+        coverageGapClause(omittedFiles, detail));
+  }
+
+  /** The truncation banner for this result, carrying the uncovered-file names when known. */
+  public String truncationNotice() {
+    return truncationNotice(omittedFiles, truncation);
+  }
+
+  /**
+   * "N file(s) omitted entirely (a.java, …) and M file(s) only partially analyzed (b.java, …)" — or
+   * the legacy numeric clause when no names are known. Shared by the review banner and the
+   * check-run summary so the two surfaces never drift.
+   */
+  static String coverageGapClause(int omittedFiles, TruncationDetail detail) {
+    if (detail == null || detail.isEmpty()) {
+      return omittedFilesClause(omittedFiles);
+    }
+    var parts = new ArrayList<String>(2);
+    if (!detail.omittedFileNames().isEmpty()) {
+      parts.add(
+          String.format(
+              "%d file(s) were omitted entirely (%s)",
+              detail.omittedFileNames().size(), nameList(detail.omittedFileNames())));
+    }
+    if (!detail.clippedFileNames().isEmpty()) {
+      parts.add(
+          String.format(
+              "%d file(s) were only partially analyzed (%s)",
+              detail.clippedFileNames().size(), nameList(detail.clippedFileNames())));
+    }
+    return String.join(" and ", parts) + " because the diff exceeded the review budget";
+  }
+
+  /** This result's coverage-gap clause, for surfaces that already hold the record. */
+  public String coverageGapClause() {
+    return coverageGapClause(omittedFiles, truncation);
+  }
+
+  /**
+   * Compact per-class counts for the check-run summary: "2 file(s) omitted, 1 partially analyzed" —
+   * a clipped file was analyzed in part, so calling it "omitted" would misstate the coverage. Falls
+   * back to the plain omitted count when no names are known (legacy line cap).
+   */
+  public String coverageGapBrief() {
+    if (truncation.isEmpty()) {
+      return String.format("%d file(s) omitted", omittedFiles);
+    }
+    var parts = new ArrayList<String>(2);
+    if (!truncation.omittedFileNames().isEmpty()) {
+      parts.add(String.format("%d file(s) omitted", truncation.omittedFileNames().size()));
+    }
+    if (!truncation.clippedFileNames().isEmpty()) {
+      parts.add(
+          String.format("%d file(s) partially analyzed", truncation.clippedFileNames().size()));
+    }
+    return String.join(", ", parts);
+  }
+
+  /** How many names the rendered copy lists per class before rolling the rest up as a count. */
+  private static final int NAMED_FILES_LIMIT = 10;
+
+  private static String nameList(List<String> names) {
+    if (names.size() <= NAMED_FILES_LIMIT) {
+      return String.join(", ", names);
+    }
+    return String.join(", ", names.subList(0, NAMED_FILES_LIMIT))
+        + ", +"
+        + (names.size() - NAMED_FILES_LIMIT)
+        + " more";
   }
 
   /**

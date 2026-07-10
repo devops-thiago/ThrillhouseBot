@@ -4,20 +4,12 @@ import { useMemo } from 'react';
 import { api, SessionSummary } from '@/lib/api';
 import { useWebSocket, SessionEvent } from '@/hooks/useWebSocket';
 import { useDashboardFetch } from '@/hooks/useDashboardFetch';
-
-interface LiveReviewState {
-  sessionId: number;
-  repository: string;
-  prNumber: number;
-  prTitle: string;
-  status: 'streaming' | 'retrying' | 'stream_failed' | 'completed' | 'failed';
-  attempt: number;
-  maxAttempts: number;
-  tail: string;
-  totalChars: number;
-  reason?: string;
-  updatedAt: string;
-}
+import {
+  buildLiveReviews,
+  liveReviewProgressMessage,
+  liveReviewStatusLabel,
+  type LiveReviewState,
+} from '@/lib/live-reviews';
 
 export default function OverviewPage() {
   const { events, connected } = useWebSocket();
@@ -117,176 +109,6 @@ export default function OverviewPage() {
   );
 }
 
-function buildLiveReviews(events: SessionEvent[]): LiveReviewState[] {
-  const bySession = new Map<number, LiveReviewState>();
-
-  for (const event of [...events].reverse()) {
-    const data = event.data ?? {};
-    const attempt = Number(data.attempt ?? 1);
-    const maxAttempts = Number(data.maxAttempts ?? 5);
-
-    if (event.type === 'review.started') {
-      bySession.set(event.sessionId, {
-        sessionId: event.sessionId,
-        repository: event.repository,
-        prNumber: event.prNumber,
-        prTitle: event.prTitle,
-        status: 'streaming',
-        attempt: 1,
-        maxAttempts,
-        tail: '',
-        totalChars: 0,
-        updatedAt: event.timestamp,
-      });
-      continue;
-    }
-
-    const current = bySession.get(event.sessionId) ?? createLiveReviewFromEvent(event);
-    if (!bySession.has(event.sessionId)) {
-      bySession.set(event.sessionId, current);
-    }
-
-    if (event.type === 'review.stream') {
-      bySession.set(event.sessionId, {
-        ...current,
-        status: 'streaming',
-        attempt,
-        maxAttempts,
-        tail: String(data.tail ?? current.tail),
-        totalChars: Number(data.totalChars ?? current.totalChars),
-        updatedAt: event.timestamp,
-      });
-      continue;
-    }
-
-    if (event.type === 'review.retry') {
-      bySession.set(event.sessionId, {
-        ...current,
-        status: 'retrying',
-        attempt,
-        maxAttempts,
-        reason: String(data.reason ?? ''),
-        tail: '',
-        totalChars: 0,
-        updatedAt: event.timestamp,
-      });
-      continue;
-    }
-
-    if (event.type === 'review.stream.failed') {
-      bySession.set(event.sessionId, {
-        ...current,
-        status: 'stream_failed',
-        attempt,
-        maxAttempts,
-        reason: String(data.reason ?? ''),
-        updatedAt: event.timestamp,
-      });
-      continue;
-    }
-
-    if (event.type === 'review.completed') {
-      bySession.delete(event.sessionId);
-      continue;
-    }
-
-    if (event.type === 'review.failed') {
-      bySession.set(event.sessionId, {
-        ...current,
-        status: 'failed',
-        reason: String(data.errorType ?? 'Review failed'),
-        updatedAt: event.timestamp,
-      });
-    }
-  }
-
-  return [...bySession.values()]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 5);
-}
-
-function createLiveReviewFromEvent(event: SessionEvent): LiveReviewState {
-  const data = event.data ?? {};
-  const attempt = Number(data.attempt ?? 1);
-  const maxAttempts = Number(data.maxAttempts ?? 5);
-
-  if (event.type === 'review.stream') {
-    return {
-      sessionId: event.sessionId,
-      repository: event.repository,
-      prNumber: event.prNumber,
-      prTitle: event.prTitle,
-      status: 'streaming',
-      attempt,
-      maxAttempts,
-      tail: String(data.tail ?? ''),
-      totalChars: Number(data.totalChars ?? 0),
-      updatedAt: event.timestamp,
-    };
-  }
-
-  if (event.type === 'review.retry') {
-    return {
-      sessionId: event.sessionId,
-      repository: event.repository,
-      prNumber: event.prNumber,
-      prTitle: event.prTitle,
-      status: 'retrying',
-      attempt,
-      maxAttempts,
-      tail: '',
-      totalChars: 0,
-      reason: String(data.reason ?? ''),
-      updatedAt: event.timestamp,
-    };
-  }
-
-  if (event.type === 'review.stream.failed') {
-    return {
-      sessionId: event.sessionId,
-      repository: event.repository,
-      prNumber: event.prNumber,
-      prTitle: event.prTitle,
-      status: 'stream_failed',
-      attempt,
-      maxAttempts,
-      tail: '',
-      totalChars: 0,
-      reason: String(data.reason ?? ''),
-      updatedAt: event.timestamp,
-    };
-  }
-
-  if (event.type === 'review.failed') {
-    return {
-      sessionId: event.sessionId,
-      repository: event.repository,
-      prNumber: event.prNumber,
-      prTitle: event.prTitle,
-      status: 'failed',
-      attempt,
-      maxAttempts,
-      tail: '',
-      totalChars: 0,
-      reason: String(data.errorType ?? 'Review failed'),
-      updatedAt: event.timestamp,
-    };
-  }
-
-  return {
-    sessionId: event.sessionId,
-    repository: event.repository,
-    prNumber: event.prNumber,
-    prTitle: event.prTitle,
-    status: 'streaming',
-    attempt,
-    maxAttempts,
-    tail: '',
-    totalChars: 0,
-    updatedAt: event.timestamp,
-  };
-}
-
 function Card({ label, value, color }: { label: string; value: string | number; color?: string }) {
   return (
     <div style={styles.card}>
@@ -297,14 +119,7 @@ function Card({ label, value, color }: { label: string; value: string | number; 
 }
 
 function LiveReviewCard({ review }: { review: LiveReviewState }) {
-  const statusLabel =
-    review.status === 'streaming'
-      ? `Streaming attempt ${review.attempt}/${review.maxAttempts}`
-      : review.status === 'retrying'
-        ? `Retrying attempt ${review.attempt}/${review.maxAttempts}`
-        : review.status === 'stream_failed'
-          ? `Attempt ${review.attempt}/${review.maxAttempts} failed`
-          : 'Review failed';
+  const statusLabel = liveReviewStatusLabel(review);
 
   return (
     <div style={styles.liveCard}>
@@ -325,7 +140,7 @@ function LiveReviewCard({ review }: { review: LiveReviewState }) {
         </pre>
       ) : (
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
-          Waiting for model tokens…
+          {liveReviewProgressMessage(review)}
         </p>
       )}
       {review.totalChars > 0 && (

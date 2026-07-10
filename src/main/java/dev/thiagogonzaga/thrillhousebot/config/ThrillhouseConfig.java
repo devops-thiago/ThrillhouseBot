@@ -149,9 +149,49 @@ public interface ThrillhouseConfig {
     @WithName("ai-timeout-seconds")
     int aiTimeoutSeconds();
 
+    /**
+     * Line cap on single-call diff renders: the on-demand commands (/describe, /changelog,
+     * /add-docs), maintainer replies, the base comparison, and the budgeting-disabled legacy
+     * review. Token-budgeted review calls are governed by {@link #maxInputTokens()} instead. Keeps
+     * its previous default and released semantics: 5000 lines, and an explicit {@code 0} turns the
+     * cap off (unbounded render).
+     */
     @WithDefault("5000")
     @WithName("max-diff-lines")
     int maxDiffLines();
+
+    /**
+     * Per-call input-token budget for the review prompt. The diff is split into batches that each
+     * fit this budget after the shared prompt overhead and {@link #outputBufferTokens()} are
+     * subtracted; a PR whose diff exceeds one batch is reviewed in multiple calls. Sized for the
+     * model's context window — keep headroom for output. 0 disables token budgeting (single call).
+     */
+    @WithDefault("48000")
+    @WithName("max-input-tokens")
+    int maxInputTokens();
+
+    /** Tokens reserved out of the context window for the model's response (findings JSON). */
+    @WithDefault("8192")
+    @WithName("output-buffer-tokens")
+    int outputBufferTokens();
+
+    /**
+     * Hard cap on model calls per review across all batches plus the final summary call, so a
+     * pathologically large PR can never fan out without bound. Files that do not fit within this
+     * many calls are reported by name, never silently dropped.
+     */
+    @WithDefault("6")
+    @WithName("max-ai-calls")
+    int maxAiCalls();
+
+    /**
+     * Fraction of {@link #maxInputTokens()} actually used when budgeting, so an under-estimate from
+     * the provider-agnostic token counter never pushes a call over the real limit. Self-calibration
+     * against the API's reported usage is a follow-up.
+     */
+    @WithDefault("0.9")
+    @WithName("token-safety-margin")
+    double tokenSafetyMargin();
 
     @WithDefault(".github/thrillhousebot.md")
     @WithName("instructions-file")
@@ -203,6 +243,27 @@ public interface ThrillhouseConfig {
     @WithDefault("5s")
     @WithName("manual-trigger-auth-timeout")
     Duration manualTriggerAuthTimeout();
+
+    /**
+     * Upper bound on the 👀 command-ack reaction (token mint on a cold cache plus the reaction
+     * POST), which runs on the synchronous webhook acknowledgement thread. GitHub expects the
+     * {@code 200} ACK within ~10s, so when this elapses the wait is abandoned — the reaction may
+     * still land late in the background — instead of letting a degraded GitHub delay the ACK.
+     */
+    @WithDefault("3s")
+    @WithName("ack-reaction-timeout")
+    Duration ackReactionTimeout();
+
+    /**
+     * Minimum interval between automatic (webhook-triggered) reviews of the same PR. While the last
+     * automatic review completed less than this ago, {@code pull_request} events for the PR are
+     * skipped silently — even when the head SHA changed — capping AI spend on noisy repositories. A
+     * manual {@code /review} always bypasses and never shifts the window. Zero (or negative)
+     * disables throttling. Tracked in-memory per replica.
+     */
+    @WithDefault("1h")
+    @WithName("auto-review-min-interval")
+    Duration autoReviewMinInterval();
 
     LabelsConfig labels();
 
@@ -292,7 +353,111 @@ public interface ThrillhouseConfig {
     @WithName("provider-name")
     Optional<String> providerName();
 
+    ReasoningConfig reasoning();
+
     Map<String, ModelPricing> pricing();
+
+    /**
+     * Per-model AI settings keyed by the model name (the {@code AI_MODEL} value), mirroring the
+     * {@link #pricing()} key scheme. Only the active model's entry is read; keeping entries for
+     * several models lets an operator switch {@code AI_MODEL} without retuning. All values are
+     * optional — an absent value falls back as documented on each key — so a model needs an entry
+     * only for the values that differ from the defaults. Resolution for the active model lives in
+     * {@link ActiveModelSettings}.
+     */
+    Map<String, ModelSettings> models();
+
+    /**
+     * Reasoning-effort control for reasoning-capable models. Off by default so no reasoning
+     * parameter is sent and today's provider-default behavior is preserved; when {@link #enabled()}
+     * the configured {@link #effort()} is sent as the OpenAI-compatible {@code reasoning_effort} on
+     * every chat call, which providers map to their thinking budgets. Reasoning tokens are billed
+     * as output tokens, so this is the operator's cost/quality dial.
+     */
+    interface ReasoningConfig {
+      /** Effort values accepted by {@link #effort()}, in ascending cost/quality order. */
+      List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high");
+
+      /** Master switch — no reasoning parameter is sent unless this is {@code true}. */
+      @WithDefault("false")
+      boolean enabled();
+
+      /**
+       * Effort sent while {@link #enabled()}: one of {@code none}, {@code low}, {@code medium},
+       * {@code high} (case-insensitive). {@code none} explicitly asks the model not to reason —
+       * useful to pin down a reasoning-capable model that reasons by default. Validated at boot by
+       * {@link StartupConfigValidator}.
+       */
+      @WithDefault("low")
+      String effort();
+
+      /** An {@link #effort()} value normalized to the lowercase wire value providers expect. */
+      static String normalize(String effort) {
+        return effort.strip().toLowerCase(java.util.Locale.ROOT);
+      }
+    }
+
+    /**
+     * One model's settings: the input-token hard cap the budgeter respects, per-model overrides of
+     * the token-budget knobs, and generation parameters sent on every chat call. Generation
+     * parameters ride the OpenAI-compatible wire, which carries {@code temperature}, {@code top_p},
+     * and {@code max_tokens} but has no {@code top_k} — a top-k dial needs a native provider
+     * integration.
+     */
+    interface ModelSettings {
+      /**
+       * Input-token cap assumed for a model with no explicit {@link #maxInputTokens()} — sized to
+       * the smallest context window among commonly deployed models, so an unknown model is never
+       * assumed larger than it may be.
+       */
+      int DEFAULT_MAX_INPUT_TOKENS = 128_000;
+
+      /**
+       * Hard cap on the per-call input tokens for this model — its context window. The effective
+       * review budget is the smaller of {@code thrillhousebot.review.max-input-tokens} and this cap
+       * ({@link #DEFAULT_MAX_INPUT_TOKENS} when absent), so a raised global budget can never
+       * overshoot a model's real window unless the operator raises the cap too.
+       */
+      @WithName("max-input-tokens")
+      Optional<Integer> maxInputTokens();
+
+      /**
+       * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens reserved
+       * out of the context window for the model's response.
+       */
+      @WithName("output-buffer-tokens")
+      Optional<Integer> outputBufferTokens();
+
+      /**
+       * Per-model override of {@code thrillhousebot.review.token-safety-margin} — the fraction of
+       * the input budget actually used, absorbing token-estimate error (which varies by model
+       * family; the estimator BPE is cl100k_base).
+       */
+      @WithName("token-safety-margin")
+      Optional<Double> tokenSafetyMargin();
+
+      /**
+       * Sampling temperature sent on every chat call; absent keeps the default already in effect
+       * (the extension's 1.0).
+       */
+      Optional<Double> temperature();
+
+      /**
+       * Nucleus-sampling {@code top_p} sent on every chat call; absent keeps the default already in
+       * effect (the extension's 1.0).
+       */
+      @WithName("top-p")
+      Optional<Double> topP();
+
+      /**
+       * OpenAI-compatible {@code max_tokens} sent on every chat call, bounding the response length
+       * (and spend). Absent leaves the provider default. Independent of {@link
+       * #outputBufferTokens()}, which only reserves input-budget headroom — set both when capping
+       * output.
+       */
+      @WithName("max-output-tokens")
+      Optional<Integer> maxOutputTokens();
+    }
 
     interface ModelPricing {
       @WithName("input-per-1k")

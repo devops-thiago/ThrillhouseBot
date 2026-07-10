@@ -28,7 +28,7 @@ public record Finding(
     String suggestionOld,
     String suggestionNew) {
   public Finding {
-    // Findings created before the confidence field existed keep their blocking semantics
+    // Findings persisted before the confidence field existed keep their blocking semantics.
     if (confidence == null) {
       confidence = Confidence.HIGH;
     }

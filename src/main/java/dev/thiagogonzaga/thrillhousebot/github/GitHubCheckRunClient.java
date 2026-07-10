@@ -27,10 +27,7 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterRestClient(configKey = "github-api")
 public interface GitHubCheckRunClient {
 
-  // GitHub serves 30 rows per page by default; request the 100 max and bound the page walk so the
-  // aggregating helpers below own the pagination (like the other GitHub clients) rather than
-  // leaking
-  // per_page/page to callers.
+  // GitHub serves 30 rows per page by default; 100 is the maximum.
   int CI_PER_PAGE = 100;
   int CI_MAX_PAGES = 50;
 

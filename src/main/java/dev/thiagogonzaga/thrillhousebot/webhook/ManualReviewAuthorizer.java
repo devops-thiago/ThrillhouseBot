@@ -137,8 +137,7 @@ public class ManualReviewAuthorizer {
           login,
           timeout);
     } catch (ExecutionException e) {
-      // Fail closed on an expected runtime failure, but let a fatal Error (OOM, etc.) propagate as
-      // it would have before the check ran on a separate thread, rather than masking it.
+      // Rethrow fatal Errors (OOM, etc.) instead of masking them as a denied check.
       if (e.getCause() instanceof Error error) {
         throw error;
       }

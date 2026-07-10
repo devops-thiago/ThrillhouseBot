@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Unit tests for {@link ReviewPromptAssembler} — the prompt-shaping transform extracted from {@code
- * ReviewOrchestrator} (#250). The {@code assemble} path is exercised end-to-end by
+ * ReviewOrchestrator}. The {@code assemble} path is exercised end-to-end by
  * ReviewOrchestratorTest's review() integration cases; these pin the {@code combineSections}
  * helper.
  */

@@ -237,10 +237,8 @@ public class DashboardAccessChecker {
       }
     } catch (RuntimeException e) {
       log.warn("Failed to list installed repositories for {}: {}", accountOwner, e.getMessage());
-      // Fail closed on owner mismatch: the cached snapshot may belong to a previous owner, so
-      // returning it here would re-introduce the cross-owner reuse this cache is keyed to prevent.
-      // Only fall back to it when it was resolved for the same owner (graceful degradation during a
-      // transient GitHub outage); otherwise deny by returning an empty snapshot for this owner.
+      // Fall back to the cached snapshot only if it was resolved for the same owner; a previous
+      // owner's snapshot must not be reused.
       var previous = cachedSnapshot.get();
       return accountOwner.equalsIgnoreCase(previous.owner())
           ? previous
@@ -359,9 +357,7 @@ public class DashboardAccessChecker {
           e.getMessage());
     }
 
-    // Cache both success and failure: the negative result is short-lived (OWNER_NEGATIVE_CACHE_TTL)
-    // so a misconfigured deployment stops hammering the GitHub App endpoint every request, while
-    // still recovering promptly once the owner becomes resolvable.
+    // Failures are cached too, briefly (OWNER_NEGATIVE_CACHE_TTL).
     ownerCache.set(new OwnerCache(resolved, clock.get()));
     return Optional.ofNullable(resolved);
   }
