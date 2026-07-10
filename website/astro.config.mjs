@@ -1,9 +1,33 @@
 // @ts-check
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLinksValidator from "starlight-links-validator";
+import starlightVersions from "starlight-versions";
 import mermaid from "astro-mermaid";
 import remarkInclude from "./plugins/remark-include.mjs";
+
+const websiteRoot = dirname(fileURLToPath(import.meta.url));
+/** @type {{ current: { label: string }, versions: { slug: string, label?: string }[] }} */
+const docVersions = JSON.parse(
+  readFileSync(resolve(websiteRoot, "versions.json"), "utf8"),
+);
+
+// starlight-versions requires ≥1 archived slug. Until the first
+// `npm run docs:archive`, ship a single unversioned site labeled by
+// versions.json current (the release being cut). The dropdown appears
+// once a prior release is archived.
+const versioningPlugins =
+  docVersions.versions.length > 0
+    ? [
+        starlightVersions({
+          current: docVersions.current,
+          versions: docVersions.versions,
+        }),
+      ]
+    : [];
 
 export default defineConfig({
   site: "https://devops-thiago.github.io",
@@ -43,7 +67,7 @@ export default defineConfig({
         { label: "Review-quality evaluation", slug: "review-eval" },
         { label: "Contributing", slug: "contributing" },
       ],
-      plugins: [starlightLinksValidator()],
+      plugins: [...versioningPlugins, starlightLinksValidator()],
     }),
   ],
 });
