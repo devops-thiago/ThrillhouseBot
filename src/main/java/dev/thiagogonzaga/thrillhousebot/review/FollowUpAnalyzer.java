@@ -90,10 +90,9 @@ public class FollowUpAnalyzer {
 
   /**
    * Variant that additionally renders findings from review rounds older than the previous one.
-   * Sessions only carry the immediately previous response, so a finding a maintainer answered two
-   * rounds ago would otherwise fall out of context and be rediscovered as new — dogfooding showed
-   * exactly that, with the severity drifting upward on each rediscovery. Older answered findings
-   * are listed unnumbered, outside previous_findings_status.
+   * Sessions only carry the immediately previous response, so a finding answered two rounds ago
+   * would otherwise fall out of context. Older answered findings are listed unnumbered, outside
+   * previous_findings_status.
    */
   public String buildPreviousFindingsContext(
       String previousAiResponseJson,
@@ -288,11 +287,10 @@ public class FollowUpAnalyzer {
    *
    * <p>A titled finding is matched on the header framing {@code " — {title}**"}, not a bare title
    * substring, so a short title does not match an unrelated comment that merely mentions the word
-   * and a title does not match a longer title that contains it as a prefix (a dogfooded case). A
-   * null-title finding has no usable header title — the bot renders the literal {@code "null"},
-   * which is too generic — so it falls back to its description, which the bot prints verbatim in
-   * the body. A finding with neither matches nothing, so the caller holds rather than risk an
-   * over-clear.
+   * and a title does not match a longer title that contains it as a prefix. A null-title finding
+   * has no usable header title — the bot renders the literal {@code "null"}, which is too generic —
+   * so it falls back to its description, which the bot prints verbatim in the body. A finding with
+   * neither matches nothing, so the caller holds rather than risk an over-clear.
    */
   private static boolean bodyCarriesOwnContent(ReviewResponse.Finding finding, String body) {
     String title = finding.title();
@@ -401,9 +399,8 @@ public class FollowUpAnalyzer {
    * prior round at the same location already has a maintainer reply on its thread. The prompt
    * forbids re-raising prior findings, but the model occasionally disobeys when it privately
    * disagrees with the reply — the human answered once and should not have to answer again. A prior
-   * finding counts as the same when the severity matches or the titles describe the same defect;
-   * matching on severity alone let a re-raise through by simply escalating its rating, which
-   * dogfooding observed (medium re-raised as high after the reply).
+   * finding counts as the same when the titles describe the same defect (not severity alone), so
+   * escalating the rating cannot bypass the drop.
    */
   public ReviewResponse dropRepliedDuplicates(
       ReviewResponse response,
@@ -556,7 +553,7 @@ public class FollowUpAnalyzer {
    *
    * <p>The findings are reconstructed from the persisted prior responses (keyed by repo+PR, so they
    * survive a force-push/rebase), which means the backstop fires even when the model received the
-   * previous-findings context but ignored it — the exact dogfood symptom.
+   * previous-findings context but ignored it.
    *
    * <p>It considers <em>all</em> prior rounds, not just the newest. Each round persists only its
    * own new findings; a finding raised in round 1 is referenced in later rounds only via their

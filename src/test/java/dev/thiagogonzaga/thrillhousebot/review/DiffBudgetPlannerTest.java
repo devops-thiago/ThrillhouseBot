@@ -36,7 +36,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
-/** Unit tests for {@link DiffBudgetPlanner}: packing, priority, clipping, omitted-by-name (#53). */
+/** Unit tests for {@link DiffBudgetPlanner}: packing, priority, clipping, omitted-by-name. */
 class DiffBudgetPlannerTest {
 
   private static final String MODEL = "test-model";
@@ -128,7 +128,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void splitsAcrossBatchesEachWithinBudget() {
-    // Four equal-size files; a budget of two files forces two batches of two.
     var files =
         List.of(
             file("dir/f1.java", 6, patch(6)),
@@ -148,7 +147,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void maxBatchesCapOmitsLowestImpactByName() {
-    // Equal-size sections (same patch + equal-length names), different impact so priority is clear.
     var files =
         List.of(
             file("dir/fa.java", 40, patch(6)),
@@ -160,7 +158,6 @@ class DiffBudgetPlannerTest {
 
     assertEquals(2, plan.batches().size());
     assertTrue(plan.truncated());
-    // Highest-impact kept; the two lowest-impact reported by name (never silently dropped).
     assertEquals(List.of("dir/fc.java", "dir/fd.java"), plan.omittedFiles());
     assertEquals(List.of("dir/fa.java", "dir/fb.java"), coveredFilenames(plan));
   }
@@ -171,7 +168,6 @@ class DiffBudgetPlannerTest {
     var budget = 80;
     var plan = planner.plan(List.of(big), budget, 3);
 
-    // Clipped = covered but partially analyzed; the plan reports it so the summary can say so.
     assertEquals(List.of("dir/huge.java"), plan.clippedFiles());
     assertEquals(1, plan.batches().size());
     var batch = plan.batches().get(0);
@@ -183,8 +179,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void largePrStaysWithinCallCapAndAccountsForEveryFile() {
-    // Acceptance check (#53): a big PR splits into <= maxBatches batches, each within budget, and
-    // every file is either covered by a batch or reported by name — never silently dropped.
     var files = new ArrayList<FileDiff>();
     for (var i = 0; i < 120; i++) {
       files.add(file(String.format("src/F%03d.java", i), 6, patch(6)));
@@ -208,9 +202,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void absurdlySmallBudgetOmitsTheFileByName() {
-    // A budget of a couple tokens can't fit even one clipped line; content the model never sees
-    // must not count as reviewed, so the file is reported by name and the review is disclosed as
-    // partial instead of a placeholder stub passing for coverage.
     var big = file("dir/huge.java", 400, patch(400));
     var plan = planner.plan(List.of(big), 2, 1);
     assertTrue(plan.batches().isEmpty(), "an unclippable file must not be packed");
@@ -229,9 +220,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void overheadConsumingTheBudgetKeepsBudgetingOnAndDisclosesOmissions() {
-    // Shared overhead >= input budget must not silently disable budgeting (the old behavior sent
-    // one uncapped call exactly when the prompt was largest); instead the diff budget floors at 1
-    // token and the files overflow into omittedFiles, disclosed by name.
     var files = List.of(file("dir/f1.java", 5, patch(5)), file("dir/f2.java", 5, patch(5)));
     var overhead = patch(200); // far more tokens than the input budget below
     var plan = planner.plan(files, overhead, 50, 3);
@@ -242,10 +230,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void aClippedFileThatOverflowsEveryBinIsOnlyOmittedNeverAlsoClipped() {
-    // Several oversized files, one bin: every file gets clipped, but only some fit the single
-    // batch — the overflow is omitted by name and must not also stay in clippedFiles. Each file
-    // lands in exactly one class, or the disclosure would list it twice and the verdict
-    // double-count it.
     var files = new ArrayList<FileDiff>();
     for (var i = 0; i < 5; i++) {
       files.add(file("dir/huge" + i + ".java", 400 - i, patch(400)));
@@ -303,8 +287,6 @@ class DiffBudgetPlannerTest {
 
   @Test
   void perCallInputBudgetIsCappedByTheDefaultModelInputCap() {
-    // No per-model entry: a global budget raised past the 128k default cap must not overshoot an
-    // unknown model's window (#50).
     when(reviewConfig.maxInputTokens()).thenReturn(500_000);
     when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
     when(reviewConfig.outputBufferTokens()).thenReturn(0);

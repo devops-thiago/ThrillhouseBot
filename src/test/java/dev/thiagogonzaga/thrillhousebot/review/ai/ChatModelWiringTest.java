@@ -31,8 +31,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Boots the real quarkus-langchain4j wiring with reasoning enabled and a per-model settings entry
  * for the configured model, and asserts both model beans carry the configured {@code
- * reasoning_effort} (normalized to lowercase, #65) and the per-model generation parameters (#50) in
- * their default request parameters.
+ * reasoning_effort} (normalized to lowercase) and the per-model generation parameters in their
+ * default request parameters.
  *
  * <p>The streaming assertions are the important ones: in quarkus-langchain4j 1.11.2 the {@code
  * quarkus.langchain4j.openai.chat-model.*} properties are applied to the blocking model only, so
@@ -70,8 +70,6 @@ class ChatModelWiringTest {
   public static class TuningEnabled implements QuarkusTestProfile {
     @Override
     public Map<String, String> getConfigOverrides() {
-      // Mixed case on purpose: the wire value must arrive normalized. The models key matches the
-      // default test model name (AI_MODEL is unset in tests, so deepseek-chat applies).
       return Map.of(
           "thrillhousebot.ai.reasoning.enabled", "true",
           "thrillhousebot.ai.reasoning.effort", "Medium",

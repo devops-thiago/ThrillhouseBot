@@ -104,7 +104,7 @@ public class StartupConfigValidator {
   }
 
   /**
-   * Validates the token-budget settings (#53) so a misconfiguration is rejected at boot rather than
+   * Validates the token-budget settings so a misconfiguration is rejected at boot rather than
    * silently producing a degenerate budget (e.g. a negative input budget disables batching when the
    * operator meant to set a limit). Token budgeting is off when {@code max-input-tokens} is 0.
    */
@@ -137,9 +137,9 @@ public class StartupConfigValidator {
   }
 
   /**
-   * Validates every per-model settings entry (#50) — not just the active model's — because an
-   * operator who wrote an invalid value has expressed clear intent, and rejecting the typo at boot
-   * beats discovering it when {@code AI_MODEL} is later switched to that model.
+   * Validates every per-model settings entry — not just the active model's — because an operator
+   * who wrote an invalid value has expressed clear intent, and rejecting the typo at boot beats
+   * discovering it when {@code AI_MODEL} is later switched to that model.
    */
   private static void validateModelSettings(
       List<String> problems, Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models) {
@@ -178,7 +178,7 @@ public class StartupConfigValidator {
    * degenerate. The buffer is subtracted from the margin-scaled ceiling at runtime, so validating
    * it against the raw max would pass configs whose effective budget is still {@code <= 0} (e.g.
    * 48000/45000/0.9 -> -1800) — the silent-disable this validator exists to reject. Checked on the
-   * active model's resolved values (per-model overrides and input cap, #50), because that is the
+   * active model's resolved values (per-model overrides and input cap), because that is the
    * combination the budgeter will actually run with — the global combination alone may be broken
    * yet fixed by an override, or vice versa.
    */
@@ -259,10 +259,10 @@ public class StartupConfigValidator {
   }
 
   /**
-   * Surfaces the per-model resolution at boot (#50): warns when the model's input cap silently
-   * lowers the configured global budget (the operator raised {@code REVIEW_MAX_INPUT_TOKENS} past
-   * the model's window — or past the 128k default for a model with no entry — and should raise the
-   * cap deliberately), and logs the active generation parameters so a tuning entry that targets the
+   * Surfaces the per-model resolution at boot: warns when the model's input cap silently lowers the
+   * configured global budget (the operator raised {@code REVIEW_MAX_INPUT_TOKENS} past the model's
+   * window — or past the 128k default for a model with no entry — and should raise the cap
+   * deliberately), and logs the active generation parameters so a tuning entry that targets the
    * wrong model name is visible immediately.
    */
   private void logActiveModelStatus() {

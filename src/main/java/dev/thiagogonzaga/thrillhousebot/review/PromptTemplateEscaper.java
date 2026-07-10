@@ -36,10 +36,10 @@ public final class PromptTemplateEscaper {
   /**
    * Wraps untrusted code (the diff) between two identical, per-call random fence lines so the model
    * can separate data from instructions. The fence token is drawn from a CSPRNG, so PR content
-   * cannot reproduce the boundary; this is why the content between the fences is passed <em>byte
-   * exact</em> rather than run through {@link #neutralizeMarkers} — that rewriting corrupted
-   * marker-handling code under review and produced false findings (the dogfooding bug). This is the
-   * "random sequence enclosure" / Microsoft "spotlighting" delimiting defense.
+   * cannot reproduce the boundary; content between the fences is passed <em>byte exact</em> rather
+   * than through {@link #neutralizeMarkers}, which would rewrite marker-like sequences in the
+   * reviewed code. This is the "random sequence enclosure" / Microsoft "spotlighting" delimiting
+   * defense.
    *
    * <p>Empty content is returned unchanged so a {@code {#if}} section around it stays falsy.
    */

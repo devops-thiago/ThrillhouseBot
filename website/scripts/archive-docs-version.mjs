@@ -3,17 +3,11 @@
  * Freeze the current docs tree as a starlight-versions archive.
  *
  * Usage:
- *   node scripts/archive-docs-version.mjs <slug> [label]
- *   npm run docs:archive -- 0.4.0
- *   npm run docs:archive -- 0.4.0 "v0.4.0"
+ * node scripts/archive-docs-version.mjs <slug> [label]
+ * npm run docs:archive -- 0.4.0
  *
- * Expands `<!-- include: path#section -->` markers into the archived pages so
- * a later README / ARCHITECTURE edit cannot change an old version at build time.
- * Also writes src/content/versions/<slug>.json (sidebar snapshot) required by
- * starlight-versions, and records the slug in versions.json (newest first).
- *
- * After archiving, set versions.json "current.label" to the next release and
- * keep editing src/content/docs/ as usual. Publish a GitHub Release to deploy.
+ * Expands include markers, copies assets, writes versions/<slug>.json,
+ * and prepends the slug in versions.json. Then bump current.label for the next release.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -76,7 +70,7 @@ function expandIncludes(markdown, filePath) {
       }
       content = content.slice(startIdx + start.length, endIdx);
     }
-    return `\n<!-- archived include of ${relPath}${section ? "#" + section : ""} -->\n${content}\n`;
+    return `\n${content}\n`;
   });
 }
 

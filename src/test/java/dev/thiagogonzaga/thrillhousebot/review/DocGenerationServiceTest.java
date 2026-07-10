@@ -50,7 +50,6 @@ class DocGenerationServiceTest {
   private static final String AUTH = "token gh-abc";
   private static final String HEAD_SHA = "headsha1234567";
 
-  // A two-method diff: bar() on right-side line 1, baz() on right-side line 4.
   private static final String PATCH =
       """
       @@ -0,0 +1,6 @@
@@ -61,7 +60,6 @@ class DocGenerationServiceTest {
       +  return y + 1;
       +}""";
 
-  // A method whose signature wraps across right-side lines 1-3.
   private static final String WRAP_PATCH =
       """
       @@ -0,0 +1,5 @@
@@ -81,7 +79,6 @@ class DocGenerationServiceTest {
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
-  // Real collaborators — their formatting/line-resolution logic is what we want exercised.
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
   private final SuggestionFormatter suggestionFormatter = new SuggestionFormatter();
   private final DocGenerationParser parser = new DocGenerationParser(new ObjectMapper());
@@ -164,14 +161,11 @@ class DocGenerationServiceTest {
     assertTrue(inline.body().contains("bar(int)"), inline.body());
     var summary = postedSummary();
     assertTrue(summary.contains("**1**"));
-    // Non-truncated PR: no partial-coverage disclosure appended.
     assertFalse(summary.contains("were omitted"), summary);
   }
 
   @Test
   void appendsPartialCoverageDisclosureToTheSummaryWhenFilesWereOmitted() {
-    // A large PR whose diff the line budget truncated (48 files dropped). The docs still post, but
-    // the summary must disclose the partial coverage so they are not read as covering the whole PR.
     var truncatingFormatter = mock(ReviewDiffFormatter.class);
     var foo = fooWithPatch();
     when(truncatingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
@@ -203,22 +197,16 @@ class DocGenerationServiceTest {
 
     truncatingService.handle(task());
 
-    // The committable suggestion still posts on a truncated PR...
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     var summary = postedSummary();
-    // ...and the summary discloses the 48 omitted files with the review path's wording.
     assertTrue(summary.contains("**1**"), summary);
     assertTrue(summary.contains("48 file(s) were omitted"), summary);
     assertTrue(summary.contains("partial coverage"), summary);
-    // The review-only "findings and verdict" framing must not leak onto an /add-docs summary.
     assertFalse(summary.contains("findings and verdict"), summary);
   }
 
   @Test
   void postsMultiLineSuggestionAnchoredToTheWholeDeclarationRange() {
-    // A wrapped signature (3 lines) must post as a multi-line suggestion spanning start_line..line,
-    // so applying it overwrites the whole declaration — not just line 1, which would corrupt the
-    // file (the #71 multi-line anchoring the review path already does).
     prWithFiles(new FileDiff("src/Wrap.java", "added", 5, 0, 5, WRAP_PATCH));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
@@ -238,10 +226,6 @@ class DocGenerationServiceTest {
 
   @Test
   void flagsMultiLineSuggestionThatCannotBeAnchoredWithoutACommittableSuggestion() {
-    // A multi-line suggestion whose old code does not match the diff contiguously can't be a
-    // committable suggestion (it would mis-apply), so it posts a single-line note that describes
-    // the
-    // missing-docs problem instead of dropping it silently — and without a ```suggestion block.
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
@@ -259,7 +243,6 @@ class DocGenerationServiceTest {
     assertFalse(inline.body().contains("```suggestion"), inline.body());
     assertTrue(inline.body().contains("missing documentation"), inline.body());
     assertTrue(inline.body().contains("bar"), inline.body());
-    // The summary must not tell the maintainer to "commit" a note — it has no committable block.
     assertTrue(postedSummary().contains("add manually"), postedSummary());
     assertFalse(
         postedSummary().contains("commit the suggestions you want to keep"), postedSummary());
@@ -267,9 +250,6 @@ class DocGenerationServiceTest {
 
   @Test
   void anchorsAMultiLineSuggestionByContentWhenTheReportedLineIsOffByOne() {
-    // The model reports doc.line()=10, but the wrapped declaration is on right-side lines 11-13.
-    // The exact-line gate must not drop a multi-line suggestion — its verbatim block still resolves
-    // a committable range, so it anchors 11..13 rather than being silently dropped (#6).
     var patch =
         """
         @@ -10,0 +11,3 @@
@@ -296,8 +276,6 @@ class DocGenerationServiceTest {
 
   @Test
   void aNoteThatGitHubRejectsIsNotCounted() {
-    // The note fallback can itself be rejected by GitHub; it must not be counted, leaving the
-    // could-not-place summary rather than claiming a note was drafted.
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
@@ -317,8 +295,6 @@ class DocGenerationServiceTest {
 
   @Test
   void summaryReportsBothCommittableSuggestionsAndNotes() {
-    // One symbol anchors as a committable suggestion; another (multi-line, can't anchor) posts a
-    // note. The summary must mention both kinds, not just "committable suggestions".
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
@@ -357,19 +333,14 @@ class DocGenerationServiceTest {
 
     service.handle(task());
 
-    // Only one inline comment despite two candidates.
     verify(reviewClient, times(1))
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    // ...and the cap-dropped doc is disclosed, not silently withheld.
     assertTrue(postedSummary().contains("1 more changed symbol"), postedSummary());
     assertTrue(postedSummary().contains("re-run"), postedSummary());
   }
 
   @Test
   void disclosesCapDropEvenWhenNothingWasPosted() {
-    // cap=0 → no docs posted at all, but postable docs were skipped. The summary must still
-    // disclose
-    // the cap, not fall back to the generic could-not-anchor message (which would misattribute it).
     when(reviewConfig.maxReviewComments()).thenReturn(0);
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
@@ -487,8 +458,6 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsFailureWhenDiffBuildThrows() {
-    // The diff build must stay inside the failure handler: a formatter RuntimeException has to
-    // surface GENERATION_FAILED to the user, not be swallowed by the outer catch with only a log.
     var throwingFormatter = mock(ReviewDiffFormatter.class);
     var foo = fooWithPatch();
     when(throwingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
@@ -543,8 +512,6 @@ class DocGenerationServiceTest {
 
     service.handle(task());
 
-    // prContext carries the PR title/description; stack and the rendered instructions section flow
-    // through their own prompt slots.
     verify(docGenerator)
         .generate(
             any(),
@@ -581,7 +548,6 @@ class DocGenerationServiceTest {
 
     service.handle(task());
 
-    // Best-effort enrichment failing must not fail the command — the empty result still posts.
     assertEquals(DocGenerationService.NOTHING_TO_DOCUMENT, postedSummary());
   }
 
@@ -680,7 +646,6 @@ class DocGenerationServiceTest {
 
     service.handle(task());
 
-    // Blank title/description collapse to an empty PR-context slot.
     verify(docGenerator).generate(any(), eq(""), any(), any());
   }
 
@@ -697,8 +662,6 @@ class DocGenerationServiceTest {
 
   @Test
   void ignoresChangedFilesThatCarryNoPatch() {
-    // A file with a null or blank patch (e.g. a binary or too-large file) contributes no lines to
-    // anchor against and must simply be skipped while the patched file is still documented.
     prWithFiles(
         fooWithPatch(),
         new FileDiff("src/Binary.bin", "modified", 0, 0, 0, null),

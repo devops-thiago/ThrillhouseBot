@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 /**
- * Build starlight-versions archives for already-published tags that predate
- * the Astro docs site (no website/ tree, no <!-- docs:* --> include markers).
+ * Build starlight-versions archives for tags that predate the Astro docs site.
  *
  * Usage (from website/):
- *   node scripts/archive-historical-releases.mjs
- *   node scripts/archive-historical-releases.mjs v0.3.0 v0.3.1
+ * node scripts/archive-historical-releases.mjs
+ * node scripts/archive-historical-releases.mjs v0.3.0 v0.3.1
  *
- * Default tags: v0.1.0 … v0.3.1. Content is taken from each git tag via
- * `git show` / `git archive`. Pages that did not exist yet (e.g. Commands
- * before v0.2.0) are omitted from that version's sidebar.
+ * Default: v0.1.0 … v0.3.1. Content from each tag via git show / git archive.
+ * Pages missing in that release (e.g. Commands before v0.2.0) are omitted.
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -147,15 +145,10 @@ function githubReadmeAnchor(tag, hash) {
   return `https://github.com/devops-thiago/ThrillhouseBot/blob/${tag}/README.md#${frag}`;
 }
 
-/**
- * Old release markdown used repo-relative links (SECURITY.md, README.md#…,
- * docs/ARCHITECTURE.md). Map those onto GitHub blob URLs for the tag or onto
- * versioned docs pages so starlight-links-validator stays happy.
- */
+/** Rewrite repo-relative markdown links for archived pages. */
 function rewriteRepoLinks(md, tag, slug) {
   let out = md;
 
-  // Hosted installer (old README pointed at the local helper port).
   out = out.replace(
     /\]\(https?:\/\/localhost:8081\/install\.html\)/g,
     "](/ThrillhouseBot/install.html)",
@@ -165,7 +158,6 @@ function rewriteRepoLinks(md, tag, slug) {
     "/ThrillhouseBot/install.html",
   );
 
-  // In-page hash that lived on the README, not on the extracted getting-started page.
   out = out.replace(
     /\]\(#provider-support\)/g,
     `](/ThrillhouseBot/${slug}/providers/)`,
@@ -208,7 +200,6 @@ function rewriteRepoLinks(md, tag, slug) {
 }
 
 function versionInternalLinks(md, slug) {
-  // Site-absolute docs links → versioned paths (leave install.html / external alone).
   return md.replace(
     /\]\(\/ThrillhouseBot\/(?!install\.html)([^)#?\s]+)(\/?)(#[^)]*)?\)/g,
     (_m, path, _slash, hash = "") => {

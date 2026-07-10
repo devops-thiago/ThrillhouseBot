@@ -48,7 +48,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
-/** Unit tests for {@link FindingPipeline}'s multi-call (map-reduce) path (#53). */
+/** Unit tests for {@link FindingPipeline}'s multi-call (map-reduce) path. */
 class FindingPipelineTest {
 
   @Mock private AiReviewService aiReviewService;
@@ -74,9 +74,6 @@ class FindingPipelineTest {
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             budgetPlanner,
             new TokenCounter());
-    // The post-AI chain is exercised elsewhere; here it passes the response through unchanged so
-    // the
-    // multi-call orchestration (batch fan-out, aggregation, summary merge) is what's asserted.
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
     when(findingVerificationService.verify(any(), any(), any(), any()))
@@ -137,8 +134,6 @@ class FindingPipelineTest {
 
     var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
     var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
-    // Prior finding #1 lives in b.java — batch 2's slice — so its resolved claim is
-    // evidence-backed.
     when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "b.java"));
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(
@@ -154,18 +149,11 @@ class FindingPipelineTest {
     var result =
         pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    // One blocking review call per batch, with the right index/count.
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), eq(2));
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), eq(2));
-    // Exactly one summary call rolls up the union.
     verify(aiReviewService).summarize(eq(session), any());
-    // Each batch's findings are verified against that batch's own in-budget diff — never the
-    // over-budget combined text (#53).
     verify(findingVerificationService, times(2)).verify(any(), any(), any(), any());
 
-    // Findings are the union of both batches; the PR-level summary comes from the summary call,
-    // but previous-finding statuses come from the batch calls (which saw the diff) — the
-    // code-blind summary call's statuses are discarded, and the evidence-backed "resolved" wins.
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
     assertEquals(List.of(batchTwoStatus), result.previousFindingsStatus());
@@ -186,8 +174,6 @@ class FindingPipelineTest {
 
     pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
-    // The (possibly hunk-clipped) batch text is what the model sees; the uncapped raw diff would
-    // bypass the budget in exactly the oversized-file case that motivated clipping (#53).
     assertTrue(captor.getValue().diff().contains("### clipped.java"), captor.getValue().diff());
     assertEquals("base", captor.getValue().baseComparison());
     verify(quoteValidator).validate(any(), eq("### clipped.java\n"));
@@ -216,14 +202,9 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
-    // Prior finding #1 lives in b.java, #2 in a.java: only the batch whose slice contains the
-    // file may close it.
     when(followUpAnalyzer.previousFindingFilesById(any()))
         .thenReturn(Map.of(1, "b.java", 2, "a.java"));
 
-    // Batch 1 (a.java) hallucinates "resolved" on #1 without ever seeing b.java, legitimately
-    // resolves #2 (its own slice), and claims #3 — unmappable to any file, so no batch can prove
-    // it saw it; batch 2 (b.java) — informed on #1 — says unresolved.
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(
             new ReviewResponse(
@@ -247,7 +228,6 @@ class FindingPipelineTest {
     assertEquals(3, result.previousFindingsStatus().size());
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
     assertEquals("resolved", result.previousFindingsStatus().get(1).status());
-    // The unmappable claim is demoted: with no id-to-file mapping, scoping cannot be bypassed.
     assertEquals("unresolved", result.previousFindingsStatus().get(2).status());
   }
 
@@ -256,8 +236,6 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "One clipped file", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("raw", "ctx", "base", "s", "t", "", "");
-    // Prior #1 lives in a.java (clipped: only leading hunks were sent); prior #2 in b.java (fully
-    // in the batch). The single call may close #2 but not #1.
     when(followUpAnalyzer.previousFindingFilesById(any()))
         .thenReturn(Map.of(1, "a.java", 2, "b.java"));
     var batchFiles =
@@ -286,8 +264,6 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
-    // Prior finding #1 lives in a.java — which is in batch 1's slice, but hunk-clipped: the batch
-    // saw only its leading hunks, so it cannot prove the fix in the unseen tail.
     when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "a.java"));
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
@@ -313,8 +289,6 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
-    // Budget just above the inherited sections: the overview cannot fit both file rows, so it is
-    // truncated line-wise with a rollup instead of blowing the summary prompt on file names.
     var tokenCounter = new TokenCounter();
     var inherited = PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d";
     when(budgetPlanner.perCallInputBudget())
@@ -365,8 +339,6 @@ class FindingPipelineTest {
 
     pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    // Nothing fits: an empty array is sent, but the true totals still ride along so the summary
-    // model does not describe the review as finding-free.
     assertTrue(captor.getValue().findings().startsWith("[]"), captor.getValue().findings());
     assertTrue(
         captor.getValue().findings().contains("more findings not shown"),
@@ -381,7 +353,6 @@ class FindingPipelineTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
-    // Finite budget with nothing to drop: the clamp is a no-op and serializes everything.
     when(budgetPlanner.perCallInputBudget()).thenReturn(1_000_000);
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -406,9 +377,6 @@ class FindingPipelineTest {
     var nullRisk = new ReviewResponse.Finding(null, "high", "a.java", 2, "N", "d", "o", "n");
     var critical = new ReviewResponse.Finding("critical", "high", "b.java", 1, "C", "d", "o", "n");
 
-    // Budget sized so the fixed summary sections plus exactly one finding fit: the critical one
-    // must win the remaining space; the high and null-risk ones are dropped from the
-    // serialization only.
     var tokenCounter = new TokenCounter();
     var overview = "a.java (modified, +3 -0)\nb.java (modified, +2 -0)\n";
     var fixedSections =
@@ -435,9 +403,6 @@ class FindingPipelineTest {
     var result =
         pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    // The response keeps every finding; only the summary-call serialization is clamped, keeping
-    // the most severe finding, and the true totals ride along so the summary model's counts and
-    // narrative describe the full review rather than the serialized subset.
     assertEquals(4, result.findings().size());
     var serialized = captor.getValue().findings();
     assertTrue(serialized.contains("\"C\""), serialized);
@@ -454,7 +419,6 @@ class FindingPipelineTest {
     var justifiedTwo = new ReviewResponse.PreviousFindingStatus(2, "justified", "author reply");
     var unresolvedTwo = new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still open");
     var unresolvedThree = new ReviewResponse.PreviousFindingStatus(3, "unresolved", "open");
-    // A malformed null status ranks lowest and never displaces a real verdict.
     var nullFour = new ReviewResponse.PreviousFindingStatus(4, null, "malformed");
     var justifiedFour = new ReviewResponse.PreviousFindingStatus(4, "justified", "reply");
 
@@ -469,9 +433,6 @@ class FindingPipelineTest {
 
   @Test
   void budgetedPlanWithNoFittingBatchSkipsTheReviewCall() {
-    // Every reviewable file overflowed the budget: sending the raw diff instead would bypass the
-    // budget on exactly the PR it was meant to bound. Only the diff-free summary call runs; the
-    // statuses stay empty (no call saw the diff) and the plan's omissions disclose the partial.
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
@@ -495,8 +456,6 @@ class FindingPipelineTest {
 
   @Test
   void budgetedPlanWithNoReviewableFilesKeepsTheLegacySingleCall() {
-    // Batches and omissions both empty (nothing reviewable): the ordinary single call proceeds
-    // with the assembled prompt, whose diff render is the tiny "(no changes detected)" text.
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template =
         new AiReviewService.PromptInputs("(no changes detected)", "ctx", "base", "s", "t", "", "");
@@ -524,8 +483,6 @@ class FindingPipelineTest {
     pipeline.run(
         session, template, ctx, multiBatchPlan(List.of("a.java")), new DiffLineResolver(Map.of()));
 
-    // An omitted reviewable file appears exactly once — as the omission note, not also as a
-    // covered row with change counts.
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("a.java (omitted"), changedFiles);
     assertFalse(changedFiles.contains("a.java (modified"), changedFiles);
@@ -558,9 +515,6 @@ class FindingPipelineTest {
 
     p.run(session, template, reviewContext(), multiBatchPlan(), new DiffLineResolver(Map.of()));
 
-    // The summary still gets a valid (empty) findings array rather than propagating the failure —
-    // but with real findings present, the true-totals note must ride along so the model does not
-    // describe a clean PR while the verdict posts findings.
     assertTrue(captor.getValue().findings().startsWith("[]"), captor.getValue().findings());
     assertTrue(
         captor.getValue().findings().contains("more findings not shown"),

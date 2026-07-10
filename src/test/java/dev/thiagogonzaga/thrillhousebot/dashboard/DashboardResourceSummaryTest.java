@@ -87,7 +87,6 @@ class DashboardResourceSummaryTest {
 
   @Test
   void toSessionDetailShouldExposeTheMissingPricingFlag() {
-    // "Pricing not configured" must be distinguishable from a genuine $0 in the dashboard (#48).
     var session = new ReviewSession();
     session.id = 8L;
     session.setPricingMissing(true);

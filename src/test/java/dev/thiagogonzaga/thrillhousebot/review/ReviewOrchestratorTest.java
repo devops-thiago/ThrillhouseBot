@@ -53,7 +53,6 @@ class ReviewOrchestratorTest {
 
   private static final String SESSION_URL = "https://bot.example/session/test-public-id";
 
-  // The bot login this test deployment runs under; the orchestrator resolves it from config.
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
   private static final BotIdentity BOT_ID = BotIdentity.of(BOT_LOGIN);
 
@@ -61,7 +60,6 @@ class ReviewOrchestratorTest {
 
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
-  // Created in setUp() (not @Mock) so individual tests can opt into the diagram feature.
   private ThrillhouseConfig.DiagramConfig diagramConfig;
 
   @Mock private GitHubAuthClient authClient;
@@ -104,21 +102,12 @@ class ReviewOrchestratorTest {
 
   private ReviewDiffFormatter diffFormatter;
 
-  // The real write-side collaborator, built from the mocked clients; exercised directly by the
-  // posting tests and injected into the orchestrator so the review() integration path is unchanged.
   private ReviewPublisher reviewPublisher;
 
-  // The real verdict collaborator (buildResult + check-run conclusion/title/summary), exercised
-  // directly by the verdict tests and injected so review()'s gating path is unchanged.
   private VerdictBuilder verdictBuilder;
 
-  // The real post-AI chain (validate/dedupe/verify/drop-replied/anchors/persist), exercised
-  // directly
-  // by the pipeline tests and injected so review()'s finding flow is unchanged.
   private FindingPipeline findingPipeline;
 
-  // Real virtual-thread executor: the CI resolution runs on it concurrently with the (stubbed) AI
-  // call and is joined before the verdict, so review() stays deterministic in tests.
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   private ReviewOrchestrator orchestrator;
@@ -126,8 +115,6 @@ class ReviewOrchestratorTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    // The orchestrator resolves its BotIdentity from config in the constructor, so stub github()
-    // before building it.
     ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
@@ -158,19 +145,14 @@ class ReviewOrchestratorTest {
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
-    // CI reads clean and green by default, so the verdict is not held by the #253 unreadable-CI
-    // guard; tests that exercise red/pending/unreadable CI override these. The unreadable-CI
-    // behaviour itself is unit-tested in CiStatusEvaluatorTest.
     lenient()
         .when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
         .thenReturn(List.of());
     lenient()
         .when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
         .thenReturn(List.of());
-    // Walkthrough diagram is off by default; individual tests opt in by re-stubbing enabled().
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
-    // Mimic the real create(): persist assigns an id to new entities only
     doAnswer(
             invocation -> {
               var created = invocation.getArgument(0, ReviewSession.class);
@@ -190,7 +172,6 @@ class ReviewOrchestratorTest {
     when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
     when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
         .thenReturn("");
-    // The verifier and dedup pass findings through untouched unless a test overrides them
     when(findingVerificationService.verify(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
@@ -228,8 +209,6 @@ class ReviewOrchestratorTest {
         reviewExecutor);
   }
 
-  // postReview now takes the DiffLineResolver from the context (built once in the loader), so the
-  // posting tests build it from the same files they would have passed before.
   private DiffLineResolver resolverFor(GitHubPullRequestClient.FileDiff... files) {
     return new DiffLineResolver(diffFormatter.patchesByFile(List.of(files)));
   }
@@ -270,7 +249,6 @@ class ReviewOrchestratorTest {
     void shouldHoldApproveAndDiscloseWhenDiffTruncated() {
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
 
-      // A clean review that would APPROVE, but 7 files were omitted by the line budget.
       var result =
           verdictBuilder.buildResult(
               aiResponse,
@@ -281,17 +259,13 @@ class ReviewOrchestratorTest {
               new CiStatusEvaluator.CiEvaluation(List.of(), false),
               List.of());
 
-      // The verdict is held back from APPROVE — a partial review must not gate-approve the PR...
       assertEquals(ReviewState.COMMENT, result.reviewState());
-      // ...and the summary discloses the omission (summaryGenerator is mocked to "").
       assertTrue(result.summaryMarkdown().contains("partial review"));
       assertTrue(result.summaryMarkdown().contains("7 file"));
     }
 
     @Test
     void diffStatsWithAuthoritativeTotalsOverridesCountsButKeepsOmittedFileCount() {
-      // #298: the "Changes Overview" uses GitHub's authoritative totals, but the reviewed-diff
-      // omitted-file count (which gates approval and drives truncation disclosure) is preserved.
       var reviewed = new VerdictBuilder.DiffStats(26, 958, 186, 3);
 
       var authoritative =
@@ -306,7 +280,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void diffStatsWithNullAuthoritativeTotalsFallsBackToDiffDerivedCounts() {
-      // When the PR-level totals can't be fetched, the reviewed-diff counts are used unchanged.
       var reviewed = new VerdictBuilder.DiffStats(26, 958, 186, 0);
 
       assertSame(reviewed, reviewed.withAuthoritativeTotals(null));
@@ -314,10 +287,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedCleanSummaryBodyDoesNotCelebrateEndToEnd() {
-      // Regression (#1): buildResult handed omittedFiles=0 to the summary generator, so the body's
-      // truncated() branch was dead and emitted the all-clear celebration directly under the
-      // partial-review banner. Exercise the REAL generator end-to-end (the mocked one returns "")
-      // and assert the body no longer contradicts the banner.
       var realVerdict = new VerdictBuilder(new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID);
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
 
@@ -339,9 +308,6 @@ class ReviewOrchestratorTest {
     @Test
     void truncatedFollowUpReviewBodyDisclosesPartialAndOmitsZeroUnresolved() {
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
-      // A follow-up (not first review) clean review with 7 files omitted by the line budget: held
-      // to
-      // COMMENT, but a follow-up posts no summary comment to carry the truncation banner (#245).
       var result =
           verdictBuilder.buildResult(
               aiResponse,
@@ -359,20 +325,14 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      // The follow-up review body itself now discloses the partial review and the omitted count...
       assertTrue(body.contains("partial review"), body);
       assertTrue(body.contains("7 file"), body);
-      // ...and never the bogus "0 previous finding(s) remain unresolved" the truncation hold used
-      // to
-      // emit when there were no unresolved findings.
       assertFalse(body.contains("remain unresolved"), body);
       assertEquals("COMMENT", captor.getValue().event());
     }
 
     @Test
     void truncatedFollowUpBodyAppendsTruncationAfterUnresolved() {
-      // A follow-up held to COMMENT by BOTH unresolved previous findings and a truncated diff: the
-      // body carries the unresolved message and then the partial-review banner.
       var result =
           new ReviewResult(
               List.of(),
@@ -401,10 +361,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedFirstReviewBodyNowDisclosesPartialReview() {
-      // Even on a FIRST review the body must disclose the truncation. The summary comment that used
-      // to carry the banner is posted best-effort (#282), so relying on it alone could lose the
-      // only
-      // PR-visible notice if that post fails — a duplicated notice is the acceptable cost.
       var result =
           new ReviewResult(
               List.of(),
@@ -433,13 +389,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncationOnlyHeldFirstReviewStillPostsThePartialReviewBody() {
-      // Regression (Sonnet final review): a clean-but-truncated FIRST review (no findings, no CI
-      // hold, nothing unresolved) is demoted to COMMENT, but postNoIssuesReview used to
-      // early-return
-      // and rely on the best-effort summary comment for the truncation banner. If that summary post
-      // failed, the partial review was disclosed nowhere on the PR comment surface. It must now
-      // post
-      // a review body carrying the truncation notice.
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 4);
@@ -457,10 +406,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedFirstReviewWithFindingsStillPostsBodyDisclosingPartialReview() {
-      // #338: a truncated review WITH findings disclosed the truncation only in the summary
-      // comment, which is posted best-effort — if that post failed, no PR surface carried the
-      // notice. With every finding anchored inline and no other hold, postReview used to post no
-      // body at all; it must now post one carrying the truncation notice.
       var aiResponse =
           new ReviewResponse(
               List.of(
@@ -490,11 +435,9 @@ class ReviewOrchestratorTest {
           result,
           resolverFor(fileDiffWithLine("src/Main.java", 10)));
 
-      // The finding anchors inline...
       verify(reviewClient)
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-      // ...and the review body still posts, carrying the partial-review notice.
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
@@ -845,9 +788,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkSummaryForResultShouldDiscloseTruncationInsteadOfCelebrating() {
-      // A clean-but-truncated review is held at neutral (#234); the check-run summary must say it
-      // is
-      // a partial review, not caption the held conclusion with the all-clear celebration.
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
@@ -861,8 +801,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkSummaryForResultShouldDiscloseTruncationAlongsideACiHold() {
-      // CI holds approval AND the diff was truncated: the caption surfaces CI first but must still
-      // disclose the partial review, not drop it.
       var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
       var result =
           new ReviewResult(
@@ -877,9 +815,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkSummaryForResultShouldDiscloseUnreadableCiAlongsideAnOffendingCheck() {
-      // An offending check and an unreadable CI source are independent holds that can both apply.
-      // The caption must disclose both, not let the offending branch suppress the unreadable note
-      // — the PR review comment already discloses both, so the check-run caption must agree.
       var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
       var result =
           new ReviewResult(
@@ -927,9 +862,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkSummaryForResultShouldDiscloseTruncationAlongsideFindingCounts() {
-      // #338: the finding-counts caption must also disclose a truncated diff — the summary comment
-      // that otherwise carries the banner is posted best-effort, so this surface can be the only
-      // one left to say the review was partial.
       var result =
           new ReviewResult(
               List.of(new Finding(RiskLevel.HIGH, "f", 1, "t", "d", null, null)),
@@ -965,9 +897,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkTitleForResultShouldNotCelebrateTruncatedButOtherwiseCleanReview() {
-      // A clean PR whose diff was truncated (#234) is held at COMMENT/neutral; the title must not
-      // show ✅ over that held conclusion. No findings, nothing unresolved, no offending CI, but
-      // omittedFiles > 0 → state COMMENT.
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
@@ -977,8 +906,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void unreadableCiHoldsApprovalAndIsDisclosedAsItsOwnSignal() {
-      // #6: an unreadable CI source holds approval and is surfaced as a first-class signal — not as
-      // a synthetic "CI status unavailable" check smuggled into the offending list.
       var clean = new ReviewResponse(List.of(), List.of(), null);
       var result =
           verdictBuilder.buildResult(
@@ -1001,8 +928,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldNotCelebrateWhenCiChecksAreOffendingDespiteNoFindings() {
-      // No findings and nothing unresolved, but a required check is failing: the bot's own check
-      // run must not show the green ✅ title nor the zero-issues celebration summary.
       var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
       var result =
           new ReviewResult(
@@ -1016,10 +941,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void checkSummaryUsesNeutralCiWordingWhenRequiredSetUnknown() {
-      // #302: in fail-closed gate-all mode (required set unresolved) the offending checks are gated
-      // because the required set was unknown, not because branch protection named them required —
-      // so
-      // the caption drops the word "required" and calls them plain "CI check(s)".
       var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
       var result =
           new ReviewResult(
@@ -1117,7 +1038,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldNotInjectDiagramRequestWhenDiagramDisabled() {
-      // diagramConfig.enabled() defaults to false from setUp()
       assertFalse(captureRepoInstructions().contains("Control-Flow Diagram Request"));
     }
 
@@ -1149,7 +1069,6 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        // Stop right after the prompt is built so the test stays focused on prompt assembly.
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenThrow(new RuntimeException("stop early"));
 
@@ -1401,15 +1320,10 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The review posts BEFORE the check run is concluded (#254), so a check-run-conclusion
-        // failure no longer discards the review: it is still posted, the session still completes,
-        // and no "review could not be completed" retry notice is sent.
         verify(reviewClient)
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        // The failure is in an EARLY post-result step (concluding the check run); the later
-        // completion step must still run and broadcast — started + completed both fire.
         verify(broadcaster, times(2)).broadcast(any());
         verify(commentClient, never())
             .createComment(
@@ -1455,10 +1369,8 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        // A first review with a non-blank summary, so publishSummary tries to post the comment...
         when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
             .thenReturn("## PR summary");
-        // ...and that comment post fails transiently.
         doThrow(new RuntimeException("comment 500"))
             .when(commentClient)
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -1476,8 +1388,6 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The summary comment is enrichment: its failure must not abort the review before it is
-        // posted. The review still lands and the session completes — no hard FAILED check.
         verify(reviewClient)
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
@@ -1515,7 +1425,6 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        // The review post itself fails, before the check run is concluded.
         when(reviewClient.createReview(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
             .thenThrow(new RuntimeException("502 Bad Gateway"));
@@ -1533,9 +1442,6 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // resultSurfaced was never set (post failed before it), so the failure path runs: the
-        // session is marked failed and a retry notice is posted — never a concluded check run with
-        // no review (#254).
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
         verify(commentClient)
             .createComment(
@@ -1578,10 +1484,6 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        // The completion persist fails (DB hiccup) AFTER the review is posted. The completed event
-        // must NOT be broadcast in that case: persist-then-broadcast is one step, so a failed write
-        // skips the broadcast and live state can't claim "completed" over a row still IN_PROGRESS
-        // (which would revert on reload). The review still stands and the session is never FAILED.
         doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
 
         orchestrator.review(
@@ -1601,9 +1503,6 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        // Only the initial "started" event fired; no "completed" broadcast, because the persist
-        // that
-        // would back it threw — DB and live state stay consistent rather than diverging.
         verify(broadcaster, times(1)).broadcast(any());
       }
     }
@@ -1626,7 +1525,6 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        // A transient files-fetch failure must not be swallowed into an empty diff + false APPROVE.
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenThrow(new RuntimeException("500 Server Error"));
@@ -1644,7 +1542,6 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // No review event of any kind (no APPROVE); the review takes the failure path instead.
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
@@ -1713,7 +1610,6 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The approval itself carries no body; the celebration lives in the summary comment
         verify(reviewClient)
             .createReview(
                 anyString(),
@@ -1765,11 +1661,8 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        // Return a real label so buildLabelGuidance produces a non-blank string — this exercises
-        // the labelGuidance.isBlank() = false branch in the orchestrator.
         when(labeler.fetchExistingLabels(anyString(), anyString(), anyString()))
             .thenReturn(List.of(new GitHubLabelClient.Label("bug", null, "ededed")));
-        // Non-null summary carrying suggested labels — exercises the orchestrator's label hand-off.
         var summary =
             new ReviewResponse.Summary(
                 0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of("bug", "docs"));
@@ -1834,7 +1727,6 @@ class ReviewOrchestratorTest {
                 0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of());
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
-        // A trailing step blows up only AFTER the verdict, summary and review are already posted.
         doThrow(new RuntimeException("labeler boom")).when(labeler).applyOrSuggest(any());
 
         orchestrator.review(
@@ -1850,7 +1742,6 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The clean approval was posted — the result is surfaced.
         verify(reviewClient)
             .createReview(
                 anyString(),
@@ -1859,8 +1750,6 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> "APPROVE".equals(req.event())));
-        // ...so the post-result failure must NOT post a "could not be completed — retry" notice,
-        // flip the session to failed, or broadcast a failure over the posted result.
         verify(commentClient, never())
             .createComment(
                 anyString(),
@@ -1870,8 +1759,6 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("could not be completed")));
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        // The apply-labels failure is an early post-result step; its isolation must not abort the
-        // later completion step — the session still completes and broadcasts (started + completed).
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(broadcaster, times(2)).broadcast(any());
       }
@@ -1904,7 +1791,6 @@ class ReviewOrchestratorTest {
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        // A stale pending review left by the bot, returned by the single listReviews fetch.
         var pending =
             new GitHubReviewClient.ReviewResponse(
                 99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
@@ -1933,11 +1819,8 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // listReviews is fetched exactly once for the whole run — dismissal reuses that list
-        // ...
         verify(reviewClient, times(1))
             .listReviews(anyString(), anyString(), anyString(), anyString(), anyInt());
-        // ...and the bot's stale pending review is still dismissed from the reused list.
         verify(reviewClient)
             .deletePendingReview(
                 anyString(), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L));
@@ -2134,7 +2017,6 @@ class ReviewOrchestratorTest {
 
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        // The summary must top the PR conversation: posted before the inline finding comments
         var inOrder = inOrder(commentClient, reviewClient);
         inOrder
             .verify(commentClient)
@@ -2198,7 +2080,6 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("Previous finding context");
-        // Two prior rounds: the newest becomes the numbered context, the rest the history
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of("{\"round\":2}", "{\"round\":1}"));
         when(followUpAnalyzer.toStatuses(any())).thenReturn(List.of());
@@ -2227,7 +2108,6 @@ class ReviewOrchestratorTest {
 
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        // The newest prior round feeds the numbered context; the older ones the answered list
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
                 eq("{\"round\":2}"), any(), any(), eq(List.of("{\"round\":1}")), eq(BOT_ID));
@@ -2240,8 +2120,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldRepostSummaryWhenForceSummarySetEvenThoughReviewExists() {
-      // The /summary regeneration path: a formal bot review already exists (so the first-review
-      // gate is off), yet the summary comment was deleted. forceSummary must re-post it anyway.
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -2270,8 +2148,6 @@ class ReviewOrchestratorTest {
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        // A prior bot review is present, so isFirstVisibleReview is false and the ordinary
-        // first-review gate would suppress the summary.
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -2303,16 +2179,11 @@ class ReviewOrchestratorTest {
                 "main",
                 true));
 
-        // The summary issue-comment IS re-posted despite the existing review, because forceSummary
-        // is set — this is the deleted-summary regeneration the /summary command relies on.
         var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
         verify(commentClient)
             .createComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), body.capture());
         assertTrue(body.getValue().body().startsWith(PrSummaryGenerator.SUMMARY_HEADING));
-        // ...but NO formal review is posted alongside it: the PR already carries one, so a fresh
-        // "no issues found" approval right after the summary would just restate it (the
-        // ThrillhouseBot#256 dogfood regression).
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
@@ -2321,9 +2192,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldStillPostReviewWhenForceSummarySetButSummaryPostFails() {
-      // The summary post is best-effort; when it fails on a summary-only re-run the skip must not
-      // fire too, or the run would leave nothing on the PR at all under a green check run. The
-      // no-issues review is the fallback visible outcome.
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -2397,9 +2265,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldSkipSummaryWhenABotSummaryCommentAlreadyExistsButNoReviewDoes() {
-      // Regression for the duplicate-summary bug: a first round held back only by pending CI posts
-      // the summary issue-comment but leaves no review. On the next round no bot review
-      // exists, yet the summary must not be re-posted — the prior summary comment is the signal.
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -2425,10 +2290,8 @@ class ReviewOrchestratorTest {
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        // No bot review on the PR ...
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
-        // ... but the bot already posted its summary comment on an earlier round.
         when(commentClient.listComments(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
@@ -2463,10 +2326,8 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The summary issue-comment is NOT posted a second time ...
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        // ... but the rest of the review still runs: the finding is posted inline.
         verify(reviewClient)
             .createPullRequestComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -2542,8 +2403,6 @@ class ReviewOrchestratorTest {
       var approved =
           new GitHubReviewClient.ReviewResponse(
               1L, "", "APPROVED", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
-      // A pending review by a human must be left alone: state is PENDING but the author is not the
-      // bot, so only the bot-identity check (not the state check) keeps it.
       var pendingHuman =
           new GitHubReviewClient.ReviewResponse(
               2L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User("other-user"));
@@ -2564,10 +2423,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldDismissBotPendingReviewDespiteAGhostReviewWithNullUser() {
-      // A prior review from a since-deleted account serializes with user:null. It must not
-      // NPE-abort
-      // the loop — otherwise the bot's own pending review (ordered after it) is never dismissed and
-      // the next review hits GitHub's one-pending-review-per-user limit.
       var ghost = new GitHubReviewClient.ReviewResponse(5L, "", "PENDING", "sha", null);
       var botPending =
           new GitHubReviewClient.ReviewResponse(
@@ -2594,7 +2449,6 @@ class ReviewOrchestratorTest {
           .deletePendingReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong());
 
-      // A delete that fails (e.g. GitHub unavailable) must not propagate out of dismissal.
       assertDoesNotThrow(
           () ->
               reviewPublisher.dismissPendingBotReviews(
@@ -2990,10 +2844,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldPostWithoutSuggestionWhenAMultiLineSuggestionCannotResolveItsRange() {
-      // A multi-line suggestion whose old code doesn't match the diff verbatim can't resolve a
-      // range. Posting it as a single-line suggestion would overwrite only the anchor line and
-      // corrupt the rest of the quoted block, so the finding is posted without the suggestion — the
-      // problem is still reported.
       var finding =
           new Finding(
               RiskLevel.HIGH,
@@ -3057,10 +2907,6 @@ class ReviewOrchestratorTest {
       verify(reviewClient, times(1))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-      // The over-cap finding is not posted inline, but it's returned as capSkipped so the review
-      // body still reports it with the right reason — capped on inline noise, never silently
-      // dropped
-      // or mislabeled as un-anchorable.
       assertTrue(inline.unanchored().isEmpty());
       assertEquals(1, inline.capSkipped().size());
       assertEquals("Two", inline.capSkipped().get(0).title());
@@ -3111,12 +2957,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldListFindingsWithDescriptionsInReviewBodyWhenNoneAnchorInlineOnFirstReview() {
-      // The finding's file is not in the diff, so no inline comment anchors (posted == 0). Even on
-      // a
-      // first review the body must LIST the findings with their descriptions, not point at the PR
-      // summary comment: the summary is posted best-effort (a transient failure leaves no such
-      // comment) and its Key Findings carries no descriptions, so the body is the one place the
-      // detail is guaranteed to appear.
       var finding =
           new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "the X path NPEs", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
@@ -3148,9 +2988,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedReviewDisclosesPartialReviewWhenNoFindingsAnchorInline() {
-      // #338: when no finding anchors inline on a truncated review, the fallback body that lists
-      // the findings must also carry the truncation notice — the summary comment that otherwise
-      // holds it is posted best-effort and only on first reviews.
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result =
           new ReviewResult(
@@ -3193,13 +3030,8 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldListFindingsInReviewBodyWhenNoneAnchorInlineOnFollowUp() {
-      // Regression: on a follow-up review (which posts no summary comment) findings whose
-      // lines fall outside the diff must still be listed in the review body, not show only as a red
-      // check run.
       var finding =
           new Finding(RiskLevel.CRITICAL, "missing.java", 10, "Auth bypass", "desc", null, null);
-      // Findings with a blank or null description must still be listed (just without a detail
-      // line).
       var blankDescription =
           new Finding(RiskLevel.MEDIUM, "gone.java", 20, "Dead code", "  ", null, null);
       var nullDescription =
@@ -3248,9 +3080,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldSurfaceAnUnanchoredFindingInBodyEvenWhenOthersAnchorInline() {
-      // Two findings: one on a line in the diff (anchors inline) and one whose line is outside it.
-      // The un-anchorable one must still be reported in the review body with its description — not
-      // dropped just because a sibling anchored (a suggestion can't be placed, but the problem is).
       var anchored =
           new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
       var floating =
@@ -3306,11 +3135,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void firstReviewStillReportsAnUnanchoredTopFindingWithItsDescriptionInTheBody() {
-      // Even on a first review where the summary comment names a top finding, an un-anchored one
-      // must
-      // still be reported in the review body WITH its description: the summary's Key Findings is a
-      // brief TOC (no description), so the body is the only place the detail is surfaced. Repeating
-      // the title is the acceptable cost of never dropping the problem.
       var anchored =
           new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
       var floating =
@@ -3332,7 +3156,6 @@ class ReviewOrchestratorTest {
               RiskLevel.CRITICAL,
               ReviewState.REQUEST_CHANGES,
               true, // first review: summary comment carries the Key Findings (brief, no
-              // description)
               "",
               List.of(),
               List.of(),
@@ -3363,15 +3186,10 @@ class ReviewOrchestratorTest {
 
     @Test
     void firstReviewStillListsAnUnanchoredFindingBeyondTheSummaryTopFive() {
-      // The summary lists only the top 5; an un-anchored finding beyond that is not in the summary,
-      // so it must still be reported in the review body — deduping must not drop it.
       var findings = new java.util.ArrayList<Finding>();
-      // Five high-risk findings that anchor cleanly fill the summary's Key Findings...
       for (int i = 1; i <= 5; i++) {
         findings.add(new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Top " + i, "d", null, null));
       }
-      // ...and a sixth, lower-risk finding whose line is outside the diff (un-anchored, beyond top
-      // 5).
       var beyond =
           new Finding(RiskLevel.LOW, "missing.java", 99, "Beyond top five", "d", null, null);
       findings.add(beyond);
@@ -3417,7 +3235,6 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolverFor());
 
-      // First review: the celebration lives in the summary comment, not the approval body
       verify(reviewClient)
           .createReview(
               anyString(),
@@ -3433,7 +3250,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldApproveCleanFollowUpWithCelebrationBody() {
-      // Follow-up reviews post no summary, so the celebration stays in the approval body
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
@@ -3530,7 +3346,6 @@ class ReviewOrchestratorTest {
               .posted();
 
       assertEquals(1, posted);
-      // The suggestion's old code spans lines 11-13, so the comment is posted as that range.
       verify(reviewClient, times(1))
           .createPullRequestComment(
               anyString(),
@@ -3575,7 +3390,6 @@ class ReviewOrchestratorTest {
               .posted();
 
       assertEquals(1, posted);
-      // First attempt is the multi-line range [11, 12] ...
       verify(reviewClient)
           .createPullRequestComment(
               anyString(),
@@ -3584,7 +3398,6 @@ class ReviewOrchestratorTest {
               anyString(),
               anyInt(),
               argThat(req -> req.startLine() != null && req.startLine() == 11 && req.line() == 12));
-      // ... the retry without a suggestion drops the range back to a single line.
       verify(reviewClient)
           .createPullRequestComment(
               anyString(),
@@ -3825,7 +3638,6 @@ class ReviewOrchestratorTest {
     void shouldHandleSerializationFailureGracefully() throws Exception {
       var session = new ReviewSession();
 
-      // ObjectMapper that always fails — a pipeline built with it must swallow the error.
       ObjectMapper badMapper = mock(ObjectMapper.class);
       when(badMapper.writeValueAsString(any()))
           .thenThrow(new com.fasterxml.jackson.core.JsonProcessingException("fail") {});
@@ -3890,16 +3702,12 @@ class ReviewOrchestratorTest {
 
       assertEquals(4, updated.findings().size());
 
-      // 1. Finding with existing anchor is left unchanged
       assertEquals("existing_anchor", updated.findings().get(0).suggestionOld());
 
-      // 2. Finding without anchor is populated from diff
       assertEquals("    new_line()", updated.findings().get(1).suggestionOld());
 
-      // 3. Finding on context line is populated from diff
       assertEquals("def unchanged():", updated.findings().get(2).suggestionOld());
 
-      // 4. Finding outside diff has no anchor and is left null
       assertNull(updated.findings().get(3).suggestionOld());
     }
 
@@ -4105,8 +3913,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldSkipDuplicateCommentReviewOnFirstReviewWhenOnlyCiPending() {
-      // First review, no findings, but a required check is still pending: the summary comment
-      // already conveys this, so postReview must not add a COMMENT review that duplicates it.
       var result =
           new ReviewResult(
               List.of(),
@@ -4130,7 +3936,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldStillPostCommentReviewOnFollowUpWhenCiPending() {
-      // A follow-up review posts no summary comment, so the COMMENT review remains its only signal.
       var result =
           new ReviewResult(
               List.of(),
@@ -4157,9 +3962,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldSkipNoIssuesReviewOnSummaryOnlyRerun() {
-      // /summary re-runs the review only to regenerate the summary comment; on a PR that already
-      // carries a formal bot review, an approval saying "no issues found" right after that summary
-      // would just restate it (the ThrillhouseBot#256 dogfood duplicate).
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
@@ -4174,8 +3976,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldSkipCiPendingCommentReviewOnSummaryOnlyRerun() {
-      // Same summary-only re-run, held back only by pending CI: the regenerated summary already
-      // carries the CI table, so the COMMENT review would duplicate it too.
       var result =
           new ReviewResult(
               List.of(),
@@ -4201,9 +4001,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldStillPostUnresolvedCommentReviewOnSummaryOnlyRerun() {
-      // Unresolved previous findings are excluded from the summary-only skip: their review
-      // carries "reply on the thread" guidance the summary lacks — same standard as the
-      // first-review skip.
       var result =
           new ReviewResult(
               List.of(),
@@ -4232,8 +4029,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldStillPostNoIssuesReviewOnSummaryTriggeredFirstReview() {
-      // /summary on a PR with no formal review yet runs the ordinary first review; its approval
-      // must still post.
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
@@ -4250,8 +4045,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void postReviewShouldStillPostReviewOnSummaryOnlyRerunWhenTruncated() {
-      // A truncated diff must stay disclosed on the PR even on a summary-only re-run: the summary
-      // is posted best-effort, so the review body is the surface that can never be dropped.
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", List.of(), List.of(), 3);
@@ -4301,7 +4094,6 @@ class ReviewOrchestratorTest {
 
       assertEquals(ReviewState.COMMENT, result.reviewState());
       assertFalse(VerdictBuilder.checkTitleForResult(result).contains("✅"));
-      // The message reflects the held finding — never the contradictory "0 previous finding(s)".
       assertTrue(
           VerdictBuilder.checkSummaryForResult(result)
               .contains("1 previous finding(s) remain unresolved"));
@@ -4322,7 +4114,6 @@ class ReviewOrchestratorTest {
     void shouldNeverEscalateBackstopBeyondComment() {
       delegateStatusGate();
 
-      // Even several silently dropped findings only neutralize approval — never REQUEST_CHANGES.
       var result =
           buildWithBackstop(
               List.of(
@@ -4350,10 +4141,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldQualifyReplyGuidanceSinceABackstopFindingMayHaveNoThread() {
-      // Issue 133 case a: a backstop-held finding can be summary-only when its flagged line was
-      // outside the diff at the time it was first raised, so no inline thread was ever posted for
-      // it. The COMMENT guidance must then qualify the reply path rather than point the maintainer
-      // at a thread that is not present.
       delegateStatusGate();
       var result =
           buildWithBackstop(
@@ -4393,10 +4180,8 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
-        // The model silently drops the still-open prior finding: no new findings, empty status.
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        // The deterministic backstop reconstructs it as unresolved from persistence.
         when(followUpAnalyzer.unreportedUnresolvedStatuses(any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn(
                 List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
@@ -4419,8 +4204,6 @@ class ReviewOrchestratorTest {
         mockedStatic
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
-        // No formal bot review exists (listReviews defaults to empty), but a prior round persisted
-        // its findings — context must still be reconstructed for follow-up analysis.
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
@@ -4430,7 +4213,6 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(followUpRequest());
 
-        // Previous-findings context IS reconstructed without any formal bot review
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
       }
@@ -4443,8 +4225,6 @@ class ReviewOrchestratorTest {
         mockedStatic
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
-        // No formal bot review exists, but persistence holds a prior round's AI response.
-        // The summary must still be posted: isFirstVisibleReview is true.
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
@@ -4456,7 +4236,6 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(followUpRequest());
 
-        // Summary IS posted because no bot review exists on the PR (first visible review)
         verify(commentClient)
             .createComment(
                 anyString(),
@@ -4465,7 +4244,6 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
-        // Context IS still loaded from persistence
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
       }
@@ -4543,7 +4321,6 @@ class ReviewOrchestratorTest {
                   300L, new ReviewThreadService.ThreadRef("T3", false),
                   400L, new ReviewThreadService.ThreadRef("T4", false)));
       when(reviewThreadService.resolve(AUTH, "T1")).thenReturn(true);
-      // T4's resolution is attempted but GitHub does not confirm it — must not throw
       when(reviewThreadService.resolve(AUTH, "T4")).thenReturn(false);
 
       reviewPublisher.resolveAddressedThreads(
@@ -4551,7 +4328,6 @@ class ReviewOrchestratorTest {
 
       verify(reviewThreadService).resolve(AUTH, "T1");
       verify(reviewThreadService).resolve(AUTH, "T4");
-      // T2 is already resolved and T3's finding is still unresolved — neither is touched
       verify(reviewThreadService, never()).resolve(AUTH, "T2");
       verify(reviewThreadService, never()).resolve(AUTH, "T3");
     }
@@ -4624,8 +4400,6 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(manualRequest(""));
 
-        // A failing PR fetch takes the standard failure path instead of escaping to the
-        // dispatcher: failure comment, failed session, broadcast — and no check run calls
         verify(commentClient)
             .createComment(
                 anyString(),
@@ -4686,7 +4460,6 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(manualRequest(""));
 
-        // The session is created with the placeholder, then updated with resolved PR details
         verify(session).setPrTitle("add new API");
         verify(session).setCommitSha("headsha1234");
         var checkRunCaptor =
@@ -4743,8 +4516,6 @@ class ReviewOrchestratorTest {
             new ReviewOrchestrator.ReviewRequest(
                 "owner", "repo", 7, "", "(manual review)", "", "", "main", 123L, true));
 
-        // The thrown getRequiredStatusChecks must be swallowed: the review still finalizes its
-        // check run and posts a review rather than failing the whole run.
         verify(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
         verify(reviewClient)
@@ -4792,9 +4563,6 @@ class ReviewOrchestratorTest {
     }
 
     private ReviewOrchestrator.ReviewRequest request() {
-      // baseRef "main" so resolveRequiredContexts resolves the required "build" check
-      // (gate-specific)
-      // rather than gating on all checks — exercising the required-context path these tests assert.
       return new ReviewOrchestrator.ReviewRequest(
           "owner",
           "repo",
@@ -4821,7 +4589,6 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        // The single required check ("build") has already succeeded — APPROVE must stand.
         stubCommonReviewMocks(
             new GitHubCheckRunClient.CheckRunsResponse(
                 1,
@@ -4860,10 +4627,6 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "success", null))));
-        // A prior review whose author account was deleted serializes as user=null. The
-        // first-visible-review check must not NPE on it (it simply isn't the bot's review); a
-        // normal
-        // review with a non-null author is also present so both sides of the null guard execute.
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -4897,8 +4660,6 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        // The required check ("build") is failing — a would-be APPROVE must downgrade so the check
-        // run is neutral rather than green.
         stubCommonReviewMocks(
             new GitHubCheckRunClient.CheckRunsResponse(
                 1,
@@ -4910,8 +4671,6 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(request());
 
-        // No new findings: the summary comment already lists the pending/failed checks, so the bot
-        // must NOT also post a COMMENT review that merely restates it (regression guard for).
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(commentClient)
@@ -4922,7 +4681,6 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().contains("**build**")));
-        // The downgrade is still enforced where it matters — on the bot's own check run.
         var captor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
         verify(checkRunClient)
             .updateCheckRun(
@@ -4949,8 +4707,6 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "success", null))));
-        // No base ref on the request: required-status-checks (and branch rules) must not be fetched
-        // and gating falls back to all checks (green here), so the review still approves.
         var noBaseRef =
             new ReviewOrchestrator.ReviewRequest(
                 "owner", "repo", 42, "abcdefgh", "Test PR", "", "base1234567", "main", 123L, false);
@@ -4991,8 +4747,6 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "success", null))));
-        // Branch protection lookup returns null (e.g. unprotected branch) — gating falls back to
-        // all checks; all green here, so the review approves.
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(null);
@@ -5022,10 +4776,6 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        // Repo uses rulesets, not classic protection: the classic endpoint 404s. The ruleset marks
-        // only "build" as required, so the failing-but-unrequired "flaky" check must be ignored and
-        // APPROVE must stand. (Were we falling back to gating on ALL checks, "flaky" would block
-        // it.)
         stubCommonReviewMocks(
             new GitHubCheckRunClient.CheckRunsResponse(
                 2,
@@ -5066,9 +4816,6 @@ class ReviewOrchestratorTest {
             .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
             .thenReturn(session);
 
-        // The ruleset requires "integration", which never reported on the head SHA — it is
-        // therefore
-        // pending, so a would-be APPROVE must downgrade to neutral.
         stubCommonReviewMocks(
             new GitHubCheckRunClient.CheckRunsResponse(
                 1,
@@ -5101,7 +4848,6 @@ class ReviewOrchestratorTest {
         checks.add(new GitHubCheckRunClient.BranchRule.Parameters.RequiredCheck(context, null));
       }
       return List.of(
-          // A non-status-check rule (pull_request) is included to prove it is skipped.
           new GitHubCheckRunClient.BranchRule("pull_request", null),
           new GitHubCheckRunClient.BranchRule(
               "required_status_checks", new GitHubCheckRunClient.BranchRule.Parameters(checks)));
@@ -5167,10 +4913,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldDiscloseUnreadableCiInTheFollowUpPostReviewBody() {
-      // #6: on a follow-up review (no summary comment), an unreadable CI hold must surface in the
-      // review body — not silently post nothing. With an unresolved previous finding it also
-      // appends
-      // the "Additionally, …" line.
       var result =
           new ReviewResult(
               List.of(),
@@ -5199,8 +4941,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldDiscloseUnreadableCiWithoutUnresolvedFindingsInTheFollowUpBody() {
-      // The unreadable-CI body with no unresolved previous findings: the "Additionally, …" line is
-      // omitted (covers the unresolved == 0 branch).
       var result =
           new ReviewResult(
               List.of(),
@@ -5229,10 +4969,6 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldDiscloseBothOffendingChecksAndUnreadableCiWhenHeldByEach() {
-      // A review can be held by BOTH an offending check and an unreadable CI source at once; the
-      // body
-      // must disclose each independently, not drop the unreadable note because offending is
-      // present.
       var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
       var result =
           new ReviewResult(

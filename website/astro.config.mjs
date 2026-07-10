@@ -15,10 +15,7 @@ const docVersions = JSON.parse(
   readFileSync(resolve(websiteRoot, "versions.json"), "utf8"),
 );
 
-// starlight-versions requires ≥1 archived slug. Until the first
-// `npm run docs:archive`, ship a single unversioned site labeled by
-// versions.json current (the release being cut). The dropdown appears
-// once a prior release is archived.
+// Enable starlight-versions only when versions.json lists ≥1 archived slug.
 const versioningPlugins =
   docVersions.versions.length > 0
     ? [

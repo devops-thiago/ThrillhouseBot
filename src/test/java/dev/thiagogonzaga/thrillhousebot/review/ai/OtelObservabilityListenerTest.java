@@ -207,7 +207,6 @@ class OtelObservabilityListenerTest {
     var attrs = requestAttributes(failingListener, 16L, 1);
 
     assertDoesNotThrow(() -> failingListener.onResponse(responseContext(attrs)));
-    // A failing session persistence must not stop OTel metrics from being recorded
     verify(tokenHist, atLeastOnce()).record(anyLong(), any());
     verify(durationHist).record(anyDouble(), any());
     verify(costCnt).add(anyDouble(), any());
@@ -251,7 +250,6 @@ class OtelObservabilityListenerTest {
 
     blankOverride.onResponse(responseContext(requestAttributes(blankOverride, 1L, 1)));
 
-    // Blank override is ignored; the label is derived from the base URL instead.
     assertEquals("deepseek", recordedProviderName());
   }
 
@@ -278,7 +276,6 @@ class OtelObservabilityListenerTest {
   @Test
   void onResponseShouldIgnoreCallbackFromPreviousAttemptDuringRetry() {
     var attrs = requestAttributes(42L, 1);
-    // The retry attempt re-registered the session — attempt 1's late callback is stale
     ReviewSessionContext.bind(42L, 2);
     ReviewSessionContext.clear();
     var ctx = responseContext(attrs);
@@ -353,8 +350,6 @@ class OtelObservabilityListenerTest {
 
   @Test
   void onResponseShouldKeepFlaggingMissingPricingOnRepeatedCalls() {
-    // The warning is deduplicated per model, but every session of an unpriced model must still be
-    // flagged — the flag is per-session data, not a one-shot signal like the log line (#48).
     when(aiConfig.pricing()).thenReturn(Map.of());
 
     for (var sessionId = 30L; sessionId <= 31L; sessionId++) {

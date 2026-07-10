@@ -366,9 +366,7 @@ public final class SessionEventBroadcaster {
               STATUS_IN_PROGRESS));
     }
 
-    /**
-     * Progress on a large multi-call review: reviewing batch {@code index} of {@code count} (#53).
-     */
+    /** Progress on a large multi-call review: reviewing batch {@code index} of {@code count}. */
     public static SessionEvent batch(ReviewSession session, int index, int count) {
       return new SessionEvent(
           "review.batch",

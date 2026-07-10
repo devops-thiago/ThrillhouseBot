@@ -21,14 +21,14 @@ import com.knuddels.jtokkit.api.EncodingType;
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Estimates the token count of prompt text so diff budgeting (#53) can size each model call by
- * tokens instead of lines — lines are a poor proxy (5000 lines of dense code ≈ 128k tokens).
+ * Estimates the token count of prompt text so diff budgeting can size each model call by tokens
+ * instead of lines — lines are a poor proxy (5000 lines of dense code ≈ 128k tokens).
  *
  * <p>Uses a single OpenAI BPE encoding ({@code cl100k_base}) as a provider-agnostic estimate: exact
  * for OpenAI models, close for most others (BPE vocabularies are broadly similar on code/English).
  * Callers apply their own safety margin on top so an under-estimate never blows the budget. Exact
- * per-model encodings and self-calibration against the API's real {@code usage.prompt_tokens} are
- * the follow-up in #239.
+ * per-model encodings and self-calibration against the API's real {@code usage.prompt_tokens} are a
+ * follow-up.
  *
  * <p>The {@code cl100k_base.tiktoken} table ships inside the jtokkit jar; it is registered for the
  * native image via {@code quarkus.native.resources.includes} in {@code application.properties}.
