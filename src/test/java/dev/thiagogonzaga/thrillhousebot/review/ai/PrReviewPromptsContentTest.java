@@ -20,12 +20,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the config/IaC severity-recalibration guidance added for so a future prompt edit cannot
- * silently revert it and re-introduce the suppression. The reviewer was high-precision but
- * suppressed declarative/config/IaC findings (RBAC, container hardening, schema-invalid manifests)
- * because the SECURITY dimension named only application-code threats and severity was anchored on
- * "will fail at runtime". These assertions are intentionally coarse — they check the recalibration
- * intent survives, not exact wording; an intentional rewording should update the matching anchor.
+ * Pins the config/IaC severity-recalibration guidance so a future prompt edit cannot silently
+ * revert it and re-introduce the suppression. The reviewer was high-precision but suppressed
+ * declarative/config/IaC findings (RBAC, container hardening, schema-invalid manifests) because the
+ * SECURITY dimension named only application-code threats and severity was anchored on "will fail at
+ * runtime". These assertions are intentionally coarse — they check the recalibration intent
+ * survives, not exact wording; an intentional rewording should update the matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
  * tracked separately; this is the cheap deterministic guard.

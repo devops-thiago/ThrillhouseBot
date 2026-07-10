@@ -945,6 +945,7 @@ class FindingQuoteValidatorTest {
         ```diff
         @@ -1,4 +1,4 @@
          public class Foo {
+             // can't fix config.value() .orElse(null) but here's why
         -    int unrelated = 1;
         +    int unrelated = 2;
          }
