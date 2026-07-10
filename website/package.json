@@ -6,7 +6,8 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "docs:archive": "node scripts/archive-docs-version.mjs"
+    "docs:archive": "node scripts/archive-docs-version.mjs",
+    "docs:archive-historical": "node scripts/archive-historical-releases.mjs"
   },
   "keywords": [],
   "author": "",

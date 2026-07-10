@@ -17,9 +17,11 @@ Unreleased edits on `main` / `release/*` can land anytime; Pages only updates wh
 version is published (or you manually re-run the Docs workflow).
 
 `starlight-versions` needs at least one archived slug before it enables the
-dropdown. The first docs-bearing release (`v0.4.0`) therefore ships as a single
-site; archive `0.4.0` when you start docs work for the *next* release so the
-selector can offer `v0.4.0` alongside the new current label.
+dropdown. Historical releases **v0.1.0–v0.3.1** (pre-Astro site) are already
+archived under `src/content/docs/<slug>/` via `npm run docs:archive-historical`,
+so the dropdown is available as soon as this branch deploys. When you cut
+`v0.4.0`, archive it with `npm run docs:archive -- 0.4.0` before bumping
+`current.label` for the next release.
 
 ## Local development
 
@@ -44,10 +46,21 @@ npm run docs:archive -- 0.4.0
 # Edit versions.json → set current.label to the next release (e.g. "v0.5.0")
 ```
 
-Commit `src/content/docs/<slug>/`, `src/assets/<slug>/` (if any), and `versions.json`.
+Commit `src/content/docs/<slug>/`, `src/assets/<slug>/` (if any),
+`src/content/versions/<slug>.json`, and `versions.json`.
 Then publish the GitHub Release — the Docs workflow builds that tag and deploys Pages.
+
+### Regenerating pre-site archives (v0.1.0–v0.3.1)
+
+Those tags had no `website/` tree. Rebuild snapshots from git:
+
+```bash
+cd website
+npm run docs:archive-historical
+# or: npm run docs:archive-historical -- v0.3.0 v0.3.1
+```
 
 ### First publish (`v0.4.0`)
 
-No archive step: `current.label` is already `v0.4.0` and `versions` is empty
-(no dropdown yet). Publishing the `v0.4.0` GitHub Release deploys the site.
+`current.label` is `v0.4.0`; archived versions already include `0.1.0`–`0.3.1`.
+Publishing the `v0.4.0` GitHub Release deploys current docs plus the version dropdown.
