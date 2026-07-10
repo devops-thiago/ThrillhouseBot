@@ -554,6 +554,28 @@ Published to GHCR from the same native binary:
 Both flavours are multi-arch (linux/amd64, linux/arm64), signed with cosign, and
 carry build-provenance attestations (see [Verifying a release](#verifying-a-release)).
 
+### Test images for a PR or branch
+
+To try a PR or branch without merging to `main`, run **Actions → Docker test
+image → Run workflow**:
+
+| Input | Purpose |
+|---|---|
+| Branch (UI dropdown) | Ref to build when `pr_number` is empty |
+| `pr_number` | Build that PR's head; tags `test-pr-<N>` |
+| `variant` | `jvm` (default, fast) or `native` (production-like, amd64) |
+| `extra_tag` | Optional extra `test-<name>` tag |
+
+Tags always include `test-sha-<shortsha>` and never overwrite `latest` or release
+tags. Example:
+
+```bash
+gh workflow run "Docker test image" -f pr_number=371 -f variant=jvm
+# then:
+docker pull ghcr.io/devops-thiago/thrillhousebot:test-pr-371
+IMAGE_TAG=test-pr-371 docker compose up -d
+```
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE) (SPDX: `Apache-2.0`).
