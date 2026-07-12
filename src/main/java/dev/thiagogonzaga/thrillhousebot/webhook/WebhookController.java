@@ -190,8 +190,6 @@ public class WebhookController {
         }
 
         if ("ready_for_review".equals(action)) {
-          // Draft → ready is not followed by synchronize; clear any throttle from pushes while
-          // draft (or a recent synchronize) so this transition always gets a review.
           autoReviewRateLimiter.clearForPr(repo.owner().login(), repo.name(), pr.number());
         } else if (autoReviewRateLimiter.isThrottled(
             repo.owner().login(), repo.name(), pr.number())) {

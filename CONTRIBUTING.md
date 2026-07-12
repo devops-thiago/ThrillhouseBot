@@ -36,6 +36,9 @@ If you changed the dashboard, also run `cd frontend && npm ci && npm run test &&
 
 To exercise the UI without a backend, run `cd frontend && npm run dev:mock`.
 CI additionally runs SonarCloud, Trivy, and a Docker build check on pull requests.
+To build a disposable test image for a branch or PR (JVM or native, without
+touching `latest`), use the **Docker test image** workflow in Actions
+(`.github/workflows/docker-test-image.yml`).
 
 The bar, enforced by CI:
 

@@ -114,8 +114,6 @@ public class OtelObservabilityListener implements ChatModelListener {
       ctx.attributes().put(ATTR_SESSION_ID, sessionId);
     }
     if (callId != null) {
-      // Unique per stream invocation — parallel map-reduce batches share a session but not a
-      // callId.
       ctx.attributes().put(ATTR_STREAM_ATTEMPT, callId);
     }
   }

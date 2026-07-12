@@ -39,7 +39,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 
 <!-- docs:features:start -->
 - Reviews diffs for correctness, security, regressions, stale comments, and code quality
-- Token-budgeted whole-PR review for large diffs — split into map-reduce batches with omitted files named, not silently dropped
+- Token-budgeted whole-PR review for large diffs — split into parallel map-reduce batches with omitted files named, not silently dropped
 - Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch — plus an optional per-PR auto-review interval (`AUTO_REVIEW_MIN_INTERVAL`) when you want to cap spend on noisy PRs (off by default; use `/pause` to silence a PR)
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
@@ -538,8 +538,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Layer | Choice |
 |---|---|
-| Framework | Quarkus 3.36 (REST) |
-| LLM | LangChain4j 1.10 (OpenAI-compatible API) |
+| Framework | Quarkus 3.37 (REST) |
+| LLM | LangChain4j 1.12 (OpenAI-compatible API) |
 | Frontend | Next.js 16 + React 19 (static export) |
 | Database | H2 (dev) / PostgreSQL (prod) + Panache |
 | Observability | OpenTelemetry |

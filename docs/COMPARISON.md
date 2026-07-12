@@ -27,8 +27,8 @@ how reviews are triggered and how cost visibility is surfaced.
 
 Among the tools in the table above, ThrillhouseBot is the only one that combines
 a GitHub App (webhook-driven reviews with inline PR comments), a built-in web
-dashboard for cost and token analytics, and a small native footprint, all under
-an OSI-approved license. If you want reviews to run on your own infrastructure
+dashboard for cost and token analytics, token-budgeted map-reduce reviews for
+large PRs, and a small native footprint, all under an OSI-approved license. If you want reviews to run on your own infrastructure
 against a local Ollama model so that no code leaves your network, and you want
 ongoing cost visibility in a dashboard rather than per-run CLI output, that is
 the niche it targets.

@@ -101,7 +101,7 @@ sequenceDiagram
             AI-->>TB: confirmed / downgraded / dropped findings
         end
     else Large diff — multi-call
-        loop Each batch (up to REVIEW_MAX_AI_CALLS − 1)
+        loop Each batch in parallel (up to REVIEW_MAX_AI_CALLS − 1)
             TB-->>TB: review.batch progress (no per-token stream)
             TB->>AI: POST chat (batch diff)
             AI-->>TB: batch findings
@@ -228,7 +228,9 @@ skips only the AI pass (a deterministic hedging-language guard still runs) and
 trades cost for more false positives. Expect two model spans per flagged
 single-call review (or N+N+1 under budgeting) in the traces and in the
 dashboard's session totals. Multi-call reviews do not stream tokens to the
-dashboard; they emit `review.batch` progress events instead.
+dashboard; they emit `review.batch` progress events instead. Batches run
+concurrently on virtual threads; a failed batch is retried once after the
+parallel pass completes.
 
 Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
 `thrillhousebot.review.ai-timeout-seconds`. Cost and token metrics come from
