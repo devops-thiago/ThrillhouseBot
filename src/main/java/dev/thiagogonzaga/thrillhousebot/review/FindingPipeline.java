@@ -35,6 +35,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
 
 /**
  * The post-AI finding chain: validate quotes, dedupe, verify against the diff, drop already-replied
@@ -135,15 +140,15 @@ public class FindingPipeline {
   }
 
   /**
-   * Map-reduce review for a large PR: review each token-budgeted batch in its own blocking call,
-   * quote-validating and verifying each batch's findings against that batch's own in-budget text
-   * (the combined diff would exceed the very budget the batches exist to respect), union the
-   * results through the finishing chain, then a single summary call rolls them up into the PR-level
-   * summary. Previous-findings statuses are aggregated from the batch calls — they saw the diff;
-   * the code-blind summary call must not decide what was resolved. The passed {@code promptInputs}
-   * is reused as the shared-context template — only the diff slot changes per batch, and the base
-   * comparison is dropped (it is a near-duplicate of the diff that would otherwise be re-sent in
-   * every call).
+   * Map-reduce review for a large PR: review each token-budgeted batch in parallel (blocking AI
+   * calls on virtual threads), quote-validating and verifying each batch's findings against that
+   * batch's own in-budget text (the combined diff would exceed the very budget the batches exist to
+   * respect), union the results through the finishing chain, then a single summary call rolls them
+   * up into the PR-level summary. Previous-findings statuses are aggregated from the batch calls —
+   * they saw the diff; the code-blind summary call must not decide what was resolved. The passed
+   * {@code promptInputs} is reused as the shared-context template — only the diff slot changes per
+   * batch, and the base comparison is dropped (it is a near-duplicate of the diff that would
+   * otherwise be re-sent in every call).
    */
   private ReviewResponse runMultiCall(
       ReviewSession session,
@@ -152,26 +157,66 @@ public class FindingPipeline {
       DiffBudgetPlanner.BudgetPlan plan,
       DiffLineResolver lineResolver) {
     var batches = plan.batches();
-    var allFindings = new ArrayList<ReviewResponse.Finding>();
-    var batchStatuses = new ArrayList<List<ReviewResponse.PreviousFindingStatus>>();
     // The id space of previous_findings_status entries maps 1-based onto the prior response's
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
     var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousAiResponseJson());
-    for (var i = 0; i < batches.size(); i++) {
-      var batch = batches.get(i);
-      var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
-      var batchResponse = aiReviewService.reviewBatch(session, batchInputs, i + 1, batches.size());
-      var validated = quoteValidator.validate(batchResponse, batch.text());
-      var verified =
-          findingVerificationService.verify(
-              validated,
-              batchInputs.diff(),
-              promptInputs.projectStack(),
-              promptInputs.previousFindings());
-      allFindings.addAll(verified.findings());
-      batchStatuses.add(
-          scopeStatusesToBatch(
-              batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
+
+    record BatchOutcome(
+        int index,
+        List<ReviewResponse.Finding> findings,
+        List<ReviewResponse.PreviousFindingStatus> statuses) {}
+
+    List<BatchOutcome> outcomes;
+    try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var futures =
+          IntStream.range(0, batches.size())
+              .mapToObj(
+                  i ->
+                      CompletableFuture.supplyAsync(
+                          () -> {
+                            var batch = batches.get(i);
+                            var batchInputs =
+                                withDiff(
+                                    promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
+                            var batchResponse =
+                                aiReviewService.reviewBatch(
+                                    session, batchInputs, i + 1, batches.size());
+                            var validated = quoteValidator.validate(batchResponse, batch.text());
+                            var verified =
+                                findingVerificationService.verify(
+                                    validated,
+                                    batchInputs.diff(),
+                                    promptInputs.projectStack(),
+                                    promptInputs.previousFindings());
+                            return new BatchOutcome(
+                                i,
+                                verified.findings(),
+                                scopeStatusesToBatch(
+                                    batchResponse.previousFindingsStatus(),
+                                    batch,
+                                    plan,
+                                    previousFilesById));
+                          },
+                          executor))
+              .toList();
+      outcomes =
+          futures.stream()
+              .map(CompletableFuture::join)
+              .sorted(Comparator.comparingInt(BatchOutcome::index))
+              .toList();
+    } catch (CompletionException e) {
+      var cause = e.getCause() != null ? e.getCause() : e;
+      if (cause instanceof RuntimeException re) {
+        throw re;
+      }
+      throw new IllegalStateException("Parallel batch review failed", cause);
+    }
+
+    var allFindings = new ArrayList<ReviewResponse.Finding>();
+    var batchStatuses = new ArrayList<List<ReviewResponse.PreviousFindingStatus>>();
+    for (var outcome : outcomes) {
+      allFindings.addAll(outcome.findings());
+      batchStatuses.add(outcome.statuses());
     }
 
     var aggregated = new ReviewResponse(allFindings, mergeBatchStatuses(batchStatuses), null);

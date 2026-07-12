@@ -15,35 +15,63 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
-/** Per-thread binding and per-session attempt tracking for AI observability callbacks. */
+/**
+ * Per-thread binding and per-session in-flight call tracking for AI observability callbacks.
+ * Multiple concurrent streams (parallel map-reduce batches, or a retry overlapping a late callback)
+ * each get a unique {@code callId}; invalidating one does not drop the others.
+ */
 final class ReviewSessionContext {
 
   private static final ThreadLocal<Binding> BINDING = new ThreadLocal<>();
-  private static final ConcurrentHashMap<Long, Integer> ACTIVE_ATTEMPT = new ConcurrentHashMap<>();
+  private static final ConcurrentHashMap<Long, Set<Long>> ACTIVE_CALLS = new ConcurrentHashMap<>();
+  private static final AtomicLong NEXT_CALL_ID = new AtomicLong();
 
   private ReviewSessionContext() {}
 
-  record Binding(long sessionId, int attempt) {}
+  /**
+   * @param attempt retry attempt within one logical AI call (1-based), for dashboard/logging
+   * @param callId unique id for this stream invocation, used to gate stale callbacks
+   */
+  record Binding(long sessionId, int attempt, long callId) {}
 
   static void bind(long sessionId, int attempt) {
-    BINDING.set(new Binding(sessionId, attempt));
-    ACTIVE_ATTEMPT.put(sessionId, attempt);
+    var callId = NEXT_CALL_ID.incrementAndGet();
+    BINDING.set(new Binding(sessionId, attempt, callId));
+    ACTIVE_CALLS.computeIfAbsent(sessionId, id -> ConcurrentHashMap.newKeySet()).add(callId);
   }
 
   static void clear() {
     BINDING.remove();
   }
 
+  /**
+   * Drops every in-flight call for {@code sessionId}. Prefer {@link #invalidate(long, long)} when
+   * only one concurrent stream finished.
+   */
   static void invalidate(long sessionId) {
-    ACTIVE_ATTEMPT.remove(sessionId);
+    ACTIVE_CALLS.remove(sessionId);
   }
 
-  /** Test-only: clears the thread binding and every attempt registration. */
+  /** Marks one stream invocation finished so late callbacks for it are ignored. */
+  static void invalidate(long sessionId, long callId) {
+    var calls = ACTIVE_CALLS.get(sessionId);
+    if (calls == null) {
+      return;
+    }
+    calls.remove(callId);
+    if (calls.isEmpty()) {
+      ACTIVE_CALLS.remove(sessionId, calls);
+    }
+  }
+
+  /** Test-only: clears the thread binding and every in-flight registration. */
   static void reset() {
     BINDING.remove();
-    ACTIVE_ATTEMPT.clear();
+    ACTIVE_CALLS.clear();
   }
 
   static Long currentSessionId() {
@@ -56,8 +84,13 @@ final class ReviewSessionContext {
     return binding != null ? binding.attempt() : null;
   }
 
-  static boolean isActiveAttempt(long sessionId, int attempt) {
-    var active = ACTIVE_ATTEMPT.get(sessionId);
-    return active != null && active == attempt;
+  static Long currentCallId() {
+    var binding = BINDING.get();
+    return binding != null ? binding.callId() : null;
+  }
+
+  static boolean isActiveCall(long sessionId, long callId) {
+    var calls = ACTIVE_CALLS.get(sessionId);
+    return calls != null && calls.contains(callId);
   }
 }

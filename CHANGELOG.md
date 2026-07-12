@@ -17,6 +17,7 @@ All notable changes to ThrillhouseBot.
 ### Fixed
 
 - **Multi-call reviews accumulate session tokens and cost**: token-budgeted map-reduce (and verifier) reviews issue several AI calls per session, but each completion replaced the session's `inputTokens` / `outputTokens` / `cost` / `durationMs` with that call alone — so the dashboard showed essentially the last call (usually the small summary) instead of the full review spend. Usage is now accumulated across calls, and `pricingMissing` stays sticky if any call lacked pricing
+- **Map-reduce batch reviews run in parallel**: token-budgeted multi-call reviews reviewed each batch sequentially; batches now fan out on virtual threads (summary call still waits for all), with per-call session tracking so concurrent usage callbacks do not clobber each other
 
 ## [0.3.1] — 2026-07-02
 

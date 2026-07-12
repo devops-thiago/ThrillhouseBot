@@ -135,9 +135,10 @@ class FindingPipelineTest {
     var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
     var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
     when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "b.java"));
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
-            new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null))
+            new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(
             new ReviewResponse(List.of(finding("b.java", "B")), List.of(batchTwoStatus), null));
 
@@ -205,7 +206,7 @@ class FindingPipelineTest {
     when(followUpAnalyzer.previousFindingFilesById(any()))
         .thenReturn(Map.of(1, "b.java", 2, "a.java"));
 
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
@@ -213,7 +214,8 @@ class FindingPipelineTest {
                     new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks done"),
                     new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here"),
                     new ReviewResponse.PreviousFindingStatus(3, "resolved", "no map entry")),
-                null))
+                null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
@@ -268,12 +270,13 @@ class FindingPipelineTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
                 List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks fixed")),
-                null))
+                null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
     when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -393,8 +396,9 @@ class FindingPipelineTest {
                 + tokenCounter.estimateTokens(criticalJson)
                 + 1);
 
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(high, medium, nullRisk), List.of(), null))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(high, medium, nullRisk), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(critical), List.of(), null));
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))

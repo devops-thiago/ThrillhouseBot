@@ -125,13 +125,14 @@ class OtelObservabilityListenerTest {
     when(ctx.attributes()).thenReturn(attrs);
 
     ReviewSessionContext.bind(42L, 3);
+    var callId = ReviewSessionContext.currentCallId();
     listener.onRequest(ctx);
     ReviewSessionContext.clear();
 
     assertTrue(attrs.containsKey(OtelObservabilityListener.ATTR_START_NANOS));
     assertTrue(attrs.get(OtelObservabilityListener.ATTR_START_NANOS) instanceof Long);
     assertEquals(42L, attrs.get(OtelObservabilityListener.ATTR_SESSION_ID));
-    assertEquals(3, attrs.get(OtelObservabilityListener.ATTR_STREAM_ATTEMPT));
+    assertEquals(callId, attrs.get(OtelObservabilityListener.ATTR_STREAM_ATTEMPT));
   }
 
   @Test
@@ -275,9 +276,17 @@ class OtelObservabilityListenerTest {
 
   @Test
   void onResponseShouldIgnoreCallbackFromPreviousAttemptDuringRetry() {
-    var attrs = requestAttributes(42L, 1);
+    ReviewSessionContext.bind(42L, 1);
+    var call1 = ReviewSessionContext.currentCallId();
+    ReviewSessionContext.clear();
+    ReviewSessionContext.invalidate(42L, call1);
     ReviewSessionContext.bind(42L, 2);
     ReviewSessionContext.clear();
+
+    var attrs = new HashMap<>();
+    attrs.put(OtelObservabilityListener.ATTR_SESSION_ID, 42L);
+    attrs.put(OtelObservabilityListener.ATTR_STREAM_ATTEMPT, call1);
+    attrs.put(OtelObservabilityListener.ATTR_START_NANOS, System.nanoTime() - 1_000_000L);
     var ctx = responseContext(attrs);
 
     listener.onResponse(ctx);
