@@ -204,7 +204,10 @@ public final class PrReviewPrompts {
             - description_gaps: when the PR title/description is provided, an array of concrete
               mismatches between what the author claims and what the code does (claimed changes
               that are missing, significant changes the description never mentions). Empty array
-              when there is no description or no mismatch.
+              when there is no description or no mismatch. Files marked "(path skipped: matches
+              ignored pattern, +N -M)" in the diff ARE changed in the PR — their patch is omitted
+              by design (pom.xml, lockfiles, etc.) — so do not report a gap when the only mismatch
+              is that such a file's patch is not shown.
             - file_summaries: an array of { path, summary } objects, one per changed file, that gives
               reviewers a file-by-file walkthrough. "path" must match the file path exactly as it
               appears in the diff; "summary" is a single line (max ~100 chars) describing what
@@ -237,7 +240,8 @@ public final class PrReviewPrompts {
             {{#if prContext}}
             ## PR Title and Description (author's stated intent)
             Compare the implementation against this stated intent and report mismatches
-            in summary.description_gaps.
+            in summary.description_gaps. Ignored files listed as "skipped: matches ignored
+            pattern" in the diff are still part of the PR — do not treat them as missing.
             {{prContext}}
             {{/if}}
 

@@ -91,13 +91,43 @@ public class VerdictBuilder {
                 botIdentity)
             : List.<ReviewResult.PreviousFindingStatus>of();
     return buildResult(
-        aiResponse,
+        withFilteredDescriptionGaps(aiResponse, ctx.files(), ctx.reviewableFiles()),
         ctx.isFirstVisibleReview(),
         diffStats,
         changedFiles,
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
+  }
+
+  private static ReviewResponse withFilteredDescriptionGaps(
+      ReviewResponse response,
+      List<GitHubPullRequestClient.FileDiff> allFiles,
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+    var summary = response.summary();
+    if (summary == null) {
+      return response;
+    }
+    var filtered =
+        DescriptionGapFilter.dropIgnoredFilePresenceGaps(
+            summary.descriptionGaps(), allFiles, reviewableFiles);
+    if (filtered.equals(summary.descriptionGaps())) {
+      return response;
+    }
+    var newSummary =
+        new ReviewResponse.Summary(
+            summary.totalFindings(),
+            summary.critical(),
+            summary.high(),
+            summary.medium(),
+            summary.low(),
+            summary.overallAssessment(),
+            summary.prPurpose(),
+            filtered,
+            summary.suggestedLabels(),
+            summary.fileSummaries(),
+            summary.walkthroughDiagram());
+    return new ReviewResponse(response.findings(), response.previousFindingsStatus(), newSummary);
   }
 
   static String conclusionForResult(ReviewResult result) {
