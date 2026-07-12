@@ -242,8 +242,8 @@ public final class ReviewDispatcher {
 
     DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req) {
       synchronized (lock) {
-        // A finishing worker can retire the state between the map lookup and this lock;
-        // reviving it would let two workers run for the same PR.
+        // A finishing worker can retire the state between the map lookup and this
+        // lock — reviving it would let two workers run for the same PR.
         if (retired) {
           return new DispatchResult(true, false, 0);
         }
