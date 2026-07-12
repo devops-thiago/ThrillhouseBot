@@ -26,7 +26,7 @@ flowchart TB
 
         WH --> RO --> AI
         RO --> GHC
-        AI -. live tokens / review.batch .-> DB
+        AI -.->|live tokens / review.batch| DB
     end
 
     IN -->|POST /api/webhook<br/>HMAC-verified| WH
@@ -50,7 +50,7 @@ flowchart TD
     AI -->|parse findings| RO
     RO -->|verify findings — 2nd AI call per batch, on by default| AI
     RO -->|post review + check run| GHC --> GH
-    AI -. live tokens or review.batch .-> DB[dashboard/ broadcaster]
+    AI -.->|live tokens or review.batch| DB[dashboard/ broadcaster]
     DB -->|WebSocket| FE[frontend/ Next.js UI]
     RO -->|persist session, cost, tokens| PG[(H2 / PostgreSQL)]
     AI -->|traces, token & cost metrics| OT[(OpenTelemetry)]
