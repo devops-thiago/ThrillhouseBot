@@ -182,7 +182,33 @@ class FindingPipelineTest {
 
     assertEquals("Parallel batch review failed", thrown.getMessage());
     assertSame(failure, thrown.getCause());
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
     verify(aiReviewService, never()).summarize(any(), any());
+  }
+
+  @Test
+  void multiCallRetriesFailedBatchWithoutDiscardingSuccessfulOnes() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var transientFailure = new AiReviewException("transient", 1, null);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(transientFailure)
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+
+    var summary = new ReviewResponse.Summary(2, 0, 0, 2, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), anyInt());
+    assertEquals(2, result.findings().size());
+    assertSame(summary, result.summary());
   }
 
   @Test

@@ -50,6 +50,11 @@ import java.util.stream.IntStream;
 @ApplicationScoped
 public class FindingPipeline {
 
+  private record BatchOutcome(
+      int index,
+      List<ReviewResponse.Finding> findings,
+      List<ReviewResponse.PreviousFindingStatus> statuses) {}
+
   private final AiReviewService aiReviewService;
   private final FindingQuoteValidator quoteValidator;
   private final FindingDeduplicator deduplicator;
@@ -144,11 +149,13 @@ public class FindingPipeline {
    * calls on virtual threads), quote-validating and verifying each batch's findings against that
    * batch's own in-budget text (the combined diff would exceed the very budget the batches exist to
    * respect), union the results through the finishing chain, then a single summary call rolls them
-   * up into the PR-level summary. Previous-findings statuses are aggregated from the batch calls —
-   * they saw the diff; the code-blind summary call must not decide what was resolved. The passed
-   * {@code promptInputs} is reused as the shared-context template — only the diff slot changes per
-   * batch, and the base comparison is dropped (it is a near-duplicate of the diff that would
-   * otherwise be re-sent in every call).
+   * up into the PR-level summary. A batch that fails after {@link AiReviewService}'s internal
+   * retries is retried once more synchronously after the parallel pass — other batches keep their
+   * results instead of being discarded. Previous-findings statuses are aggregated from the batch
+   * calls — they saw the diff; the code-blind summary call must not decide what was resolved. The
+   * passed {@code promptInputs} is reused as the shared-context template — only the diff slot
+   * changes per batch, and the base comparison is dropped (it is a near-duplicate of the diff that
+   * would otherwise be re-sent in every call).
    */
   private ReviewResponse runMultiCall(
       ReviewSession session,
@@ -161,52 +168,48 @@ public class FindingPipeline {
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
     var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousAiResponseJson());
 
-    record BatchOutcome(
-        int index,
-        List<ReviewResponse.Finding> findings,
-        List<ReviewResponse.PreviousFindingStatus> statuses) {}
-
-    List<BatchOutcome> outcomes;
+    var outcomesByIndex = new BatchOutcome[batches.size()];
+    var failedIndices = new ArrayList<Integer>();
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
       var futures =
           IntStream.range(0, batches.size())
               .mapToObj(
                   i ->
                       CompletableFuture.supplyAsync(
-                          () -> {
-                            var batch = batches.get(i);
-                            var batchInputs =
-                                withDiff(
-                                    promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
-                            var batchResponse =
-                                aiReviewService.reviewBatch(
-                                    session, batchInputs, i + 1, batches.size());
-                            var validated = quoteValidator.validate(batchResponse, batch.text());
-                            var verified =
-                                findingVerificationService.verify(
-                                    validated,
-                                    batchInputs.diff(),
-                                    promptInputs.projectStack(),
-                                    promptInputs.previousFindings());
-                            return new BatchOutcome(
-                                i,
-                                verified.findings(),
-                                scopeStatusesToBatch(
-                                    batchResponse.previousFindingsStatus(),
-                                    batch,
-                                    plan,
-                                    previousFilesById));
-                          },
+                          () ->
+                              processBatch(
+                                  i, batches, session, promptInputs, plan, previousFilesById),
                           executor))
               .toList();
-      outcomes =
-          futures.stream()
-              .map(CompletableFuture::join)
-              .sorted(Comparator.comparingInt(BatchOutcome::index))
-              .toList();
-    } catch (CompletionException e) {
-      throw unwrapParallelFailure(e);
+      for (int i = 0; i < futures.size(); i++) {
+        try {
+          outcomesByIndex[i] = futures.get(i).join();
+        } catch (CompletionException e) {
+          failedIndices.add(i);
+          Log.warnf(
+              e,
+              "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
+              i + 1,
+              batches.size());
+        }
+      }
     }
+
+    for (int index : failedIndices) {
+      try {
+        outcomesByIndex[index] =
+            processBatch(index, batches, session, promptInputs, plan, previousFilesById);
+        Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
+      } catch (RuntimeException e) {
+        throw new IllegalStateException("Parallel batch review failed", e);
+      }
+    }
+
+    var outcomes =
+        IntStream.range(0, batches.size())
+            .mapToObj(i -> outcomesByIndex[i])
+            .sorted(Comparator.comparingInt(BatchOutcome::index))
+            .toList();
 
     var allFindings = new ArrayList<ReviewResponse.Finding>();
     var batchStatuses = new ArrayList<List<ReviewResponse.PreviousFindingStatus>>();
@@ -238,6 +241,31 @@ public class FindingPipeline {
             refined.findings(), refined.previousFindingsStatus(), summaryResponse.summary());
     persistAiResponse(session, merged);
     return merged;
+  }
+
+  private BatchOutcome processBatch(
+      int index,
+      List<DiffBudgetPlanner.DiffBatch> batches,
+      ReviewSession session,
+      AiReviewService.PromptInputs promptInputs,
+      DiffBudgetPlanner.BudgetPlan plan,
+      Map<Integer, String> previousFilesById) {
+    var batch = batches.get(index);
+    var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
+    var batchResponse =
+        aiReviewService.reviewBatch(session, batchInputs, index + 1, batches.size());
+    var validated = quoteValidator.validate(batchResponse, batch.text());
+    var verified =
+        findingVerificationService.verify(
+            validated,
+            batchInputs.diff(),
+            promptInputs.projectStack(),
+            promptInputs.previousFindings());
+    return new BatchOutcome(
+        index,
+        verified.findings(),
+        scopeStatusesToBatch(
+            batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
   }
 
   /**
