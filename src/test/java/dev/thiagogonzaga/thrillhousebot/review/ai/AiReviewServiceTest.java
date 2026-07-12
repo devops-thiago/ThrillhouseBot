@@ -56,6 +56,7 @@ class AiReviewServiceTest {
 
   @BeforeEach
   void setUp() {
+    ReviewSessionContext.reset();
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxAiRetries()).thenReturn(3);
@@ -89,6 +90,58 @@ class AiReviewServiceTest {
                 e ->
                     "review.retry".equals(e.type())
                         && "Unknown error".equals(e.data().get("reason"))));
+  }
+
+  @Test
+  void shouldUseFailureMessageOnRetryWhenPresent() {
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new ErrorTokenStream(new RuntimeException("provider down")))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    assertTrue(
+        captor.getAllValues().stream()
+            .anyMatch(
+                e ->
+                    "review.retry".equals(e.type())
+                        && "provider down".equals(e.data().get("reason"))));
+  }
+
+  @Test
+  void reviewBatchInvalidatesOnlyItsOwnActiveCall() {
+    ReviewSession session = reviewSession();
+    ReviewSessionContext.bind(session.id, 1);
+    var siblingCall = ReviewSessionContext.currentCallId();
+    ReviewSessionContext.clear();
+
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.reviewBatch(session, PROMPT_INPUTS, 1, 2);
+
+    assertTrue(ReviewSessionContext.isActiveCall(session.id, siblingCall));
+    ReviewSessionContext.invalidate(session.id, siblingCall);
   }
 
   @Test
@@ -738,6 +791,14 @@ class AiReviewServiceTest {
   @Test
   void shouldSanitizeNullErrors() {
     assertEquals("Unknown error", AiReviewService.sanitize(null));
+  }
+
+  @Test
+  void retryFailureReasonUsesMessageOrFallsBack() {
+    assertEquals("Unknown error", AiReviewService.retryFailureReason(null));
+    assertEquals("Unknown error", AiReviewService.retryFailureReason(new RuntimeException()));
+    assertEquals(
+        "provider down", AiReviewService.retryFailureReason(new RuntimeException("provider down")));
   }
 
   @Test

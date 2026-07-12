@@ -262,6 +262,19 @@ class OtelObservabilityListenerTest {
   }
 
   @Test
+  void onResponseShouldSkipWhenCallIdMissingFromAttributes() {
+    var attrs = new HashMap<>();
+    attrs.put(OtelObservabilityListener.ATTR_SESSION_ID, 42L);
+    attrs.put(OtelObservabilityListener.ATTR_START_NANOS, System.nanoTime() - 1_000_000L);
+
+    listener.onResponse(responseContext(attrs));
+
+    verify(sessionUpdater, never())
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
+  }
+
+  @Test
   void onResponseShouldIgnoreStaleStreamAttempt() {
     var attrs = requestAttributes(42L, 1);
     ReviewSessionContext.invalidate(42L);

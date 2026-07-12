@@ -121,12 +121,9 @@ public class AiReviewService {
     // Parallel map-reduce batches share the session and must not wipe each other's active calls.
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       if (attempt > 1) {
-        String reason =
-            lastFailure != null && lastFailure.getMessage() != null
-                ? lastFailure.getMessage()
-                : "Unknown error";
         broadcaster.broadcast(
-            SessionEventBroadcaster.SessionEvent.retry(session, attempt, maxAttempts, reason));
+            SessionEventBroadcaster.SessionEvent.retry(
+                session, attempt, maxAttempts, retryFailureReason(lastFailure)));
         sleep(backoffDelay(attempt));
       }
 
@@ -409,5 +406,12 @@ public class AiReviewService {
       return error.getClass().getSimpleName();
     }
     return message.length() > 200 ? message.substring(0, 200) + "..." : message;
+  }
+
+  static String retryFailureReason(RuntimeException lastFailure) {
+    if (lastFailure == null || lastFailure.getMessage() == null) {
+      return "Unknown error";
+    }
+    return lastFailure.getMessage();
   }
 }
