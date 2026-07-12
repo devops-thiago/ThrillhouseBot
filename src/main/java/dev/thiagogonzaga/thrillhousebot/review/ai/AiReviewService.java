@@ -70,10 +70,11 @@ public class AiReviewService {
   }
 
   /**
-   * Reviews one batch of a large, multi-call PR. Runs blocking — no per-token dashboard stream (the
-   * live feed would interleave several batches) — and emits a {@code batch index/count} progress
-   * event instead. The same retry/timeout scaffolding applies; only the findings of the returned
-   * response are used by the caller (PR-level summary comes from the final summary call).
+   * Reviews one batch of a large, multi-call PR. Runs blocking on the caller's thread (map-reduce
+   * fans batches out on virtual threads) — no per-token dashboard stream (the live feed would
+   * interleave several batches) — and emits a {@code batch index/count} progress event instead. The
+   * same retry/timeout scaffolding applies; only the findings of the returned response are used by
+   * the caller (PR-level summary comes from the final summary call).
    */
   public ReviewResponse reviewBatch(
       ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
@@ -116,35 +117,30 @@ public class AiReviewService {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
-    try {
-      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-        if (attempt > 1) {
-          String reason =
-              lastFailure != null && lastFailure.getMessage() != null
-                  ? lastFailure.getMessage()
-                  : "Unknown error";
-          broadcaster.broadcast(
-              SessionEventBroadcaster.SessionEvent.retry(session, attempt, maxAttempts, reason));
-          sleep(backoffDelay(attempt));
-        }
-
-        try {
-          return streamOnce(session, streamFactory, attempt, broadcastTokens);
-        } catch (RuntimeException e) {
-          lastFailure = e;
-          Log.warnf(
-              e, "AI review attempt %d/%d failed for session %d", attempt, maxAttempts, session.id);
-          broadcaster.broadcast(
-              SessionEventBroadcaster.SessionEvent.streamFailed(
-                  session, attempt, maxAttempts, sanitize(e)));
-        }
+    // No blanket session invalidation after retries: each streamOnce clears its own callId.
+    // Parallel map-reduce batches share the session and must not wipe each other's active calls.
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        broadcaster.broadcast(
+            SessionEventBroadcaster.SessionEvent.retry(
+                session, attempt, maxAttempts, retryFailureReason(lastFailure)));
+        sleep(backoffDelay(attempt));
       }
 
-      throw new AiReviewException(
-          "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
-    } finally {
-      ReviewSessionContext.invalidate(session.id);
+      try {
+        return streamOnce(session, streamFactory, attempt, broadcastTokens);
+      } catch (RuntimeException e) {
+        lastFailure = e;
+        Log.warnf(
+            e, "AI review attempt %d/%d failed for session %d", attempt, maxAttempts, session.id);
+        broadcaster.broadcast(
+            SessionEventBroadcaster.SessionEvent.streamFailed(
+                session, attempt, maxAttempts, sanitize(e)));
+      }
     }
+
+    throw new AiReviewException(
+        "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
   }
 
   /**
@@ -190,6 +186,7 @@ public class AiReviewService {
             : () -> {};
 
     ReviewSessionContext.bind(session.id, attempt);
+    var callId = ReviewSessionContext.currentCallId();
     TokenStream stream = null;
     try {
       stream = streamFactory.get();
@@ -218,10 +215,10 @@ public class AiReviewService {
       throw new AiReviewException("AI review interrupted", 1, e);
     } finally {
       cancelled.set(true);
-      // Invalidate on every exit so a late callback from a dead stream never records session
-      // data. Safe on success: langchain4j notifies ChatModelListener.onResponse before
-      // completing the handler that resolves the future.
-      ReviewSessionContext.invalidate(session.id);
+      // Invalidate this call only — parallel map-reduce batches share the session id and must
+      // keep their own in-flight callIds active. Safe on success: langchain4j notifies
+      // ChatModelListener.onResponse before completing the handler that resolves the future.
+      ReviewSessionContext.invalidate(session.id, callId);
       ReviewSessionContext.clear();
     }
   }
@@ -409,5 +406,12 @@ public class AiReviewService {
       return error.getClass().getSimpleName();
     }
     return message.length() > 200 ? message.substring(0, 200) + "..." : message;
+  }
+
+  static String retryFailureReason(RuntimeException lastFailure) {
+    if (lastFailure == null || lastFailure.getMessage() == null) {
+      return "Unknown error";
+    }
+    return lastFailure.getMessage();
   }
 }

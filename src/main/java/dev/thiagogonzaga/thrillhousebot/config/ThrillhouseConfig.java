@@ -151,10 +151,12 @@ public interface ThrillhouseConfig {
 
     /**
      * Line cap on single-call diff renders: the on-demand commands (/describe, /changelog,
-     * /add-docs), maintainer replies, the base comparison, and the budgeting-disabled legacy
-     * review. Token-budgeted review calls are governed by {@link #maxInputTokens()} instead. Keeps
-     * its previous default and released semantics: 5000 lines, and an explicit {@code 0} turns the
-     * cap off (unbounded render).
+     * /add-docs), maintainer replies, and the budgeting-disabled legacy review ({@code
+     * max-input-tokens=0}). Token-budgeted reviews ({@code max-input-tokens > 0}) ignore this —
+     * {@link dev.thiagogonzaga.thrillhousebot.review.DiffBudgetPlanner} owns coverage by tokens per
+     * request, and the review context loader does not line-truncate the loaded diff or base
+     * comparison. Keeps its previous default and released semantics: 5000 lines, and an explicit
+     * {@code 0} turns the cap off (unbounded render) for the remaining single-call paths.
      */
     @WithDefault("5000")
     @WithName("max-diff-lines")
@@ -261,7 +263,7 @@ public interface ThrillhouseConfig {
      * manual {@code /review} always bypasses and never shifts the window. Zero (or negative)
      * disables throttling. Tracked in-memory per replica.
      */
-    @WithDefault("1h")
+    @WithDefault("0")
     @WithName("auto-review-min-interval")
     Duration autoReviewMinInterval();
 

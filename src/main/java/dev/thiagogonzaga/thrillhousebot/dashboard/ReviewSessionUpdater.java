@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.persistence.LockModeType;
 import jakarta.transaction.Transactional;
 import jakarta.transaction.Transactional.TxType;
 
@@ -45,7 +46,9 @@ public class ReviewSessionUpdater {
       double cost,
       boolean pricingMissing,
       long durationMs) {
-    var session = repository.findById(sessionId);
+    // Parallel map-reduce batches accumulate onto the same row — lock so concurrent
+    // REQUIRES_NEW transactions cannot lose updates.
+    var session = repository.findById(sessionId, LockModeType.PESSIMISTIC_WRITE);
     if (session == null) {
       return;
     }

@@ -57,10 +57,10 @@ jobs:
             exit 1
           fi
           # Same-repo PRs only — fork heads must not publish to our GHCR package.
+          # gh returns headRepository.nameWithOwner (no nested .owner.login).
           meta=$(gh pr view "$PR" --json headRepository,isCrossRepository \
-            --jq '[.headRepository.owner.login, .headRepository.name, (.isCrossRepository|tostring)] | join(" ")')
-          read -r owner name is_cross <<< "$meta"
-          head_repo="${owner}/${name}"
+            --jq '[.headRepository.nameWithOwner, (.isCrossRepository|tostring)] | join(" ")')
+          read -r head_repo is_cross <<< "$meta"
           if [ "$is_cross" = "true" ] || [ "$head_repo" != "${{ github.repository }}" ]; then
             echo "::error::Refusing to build a fork PR ($head_repo). Push a branch in ${{ github.repository }} instead."
             exit 1

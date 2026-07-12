@@ -34,8 +34,10 @@ import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
 
 /**
- * Applies review-scoping rules from config: skip ignored file patterns and cap total diff lines
- * sent to the AI prompt.
+ * Applies review-scoping rules from config: skip ignored file patterns, and optionally cap total
+ * diff lines for single-call renders (on-demand commands, maintainer replies, and
+ * budgeting-disabled legacy review). Token-budgeted reviews do not use the line cap — {@link
+ * DiffBudgetPlanner} owns coverage by tokens per request.
  */
 @ApplicationScoped
 public class ReviewDiffFormatter {
@@ -236,6 +238,19 @@ public class ReviewDiffFormatter {
   /** Like {@link #buildBaseComparison} but also reports how many files the line budget omitted. */
   FormattedDiff buildBaseComparisonWithStats(
       GitHubPullRequestClient.CompareResponse comparison, String base, String head) {
+    return buildBaseComparisonWithStats(comparison, base, head, true);
+  }
+
+  /**
+   * Base comparison render. When {@code applyLineBudget} is false (token-budgeted review path),
+   * every file with a patch is included — {@link DiffBudgetPlanner} counts the result in shared
+   * overhead and decides what still fits the per-call token budget.
+   */
+  FormattedDiff buildBaseComparisonWithStats(
+      GitHubPullRequestClient.CompareResponse comparison,
+      String base,
+      String head,
+      boolean applyLineBudget) {
     if (comparison.files().isEmpty()) {
       return new FormattedDiff(
           "(no changes between " + base.substring(0, 7) + " and " + head.substring(0, 7) + ")", 0);
@@ -249,19 +264,26 @@ public class ReviewDiffFormatter {
                     "Commits between %s..%s: %d%n%n",
                     base.substring(0, 7), head.substring(0, 7), comparison.totalCommits()))
             .toString();
-    return formatWithLineBudget(header, withPatch, namesOf(reviewableFiles(withPatch)));
+    return formatWithLineBudget(
+        header, withPatch, namesOf(reviewableFiles(withPatch)), applyLineBudget ? maxDiffLines : 0);
   }
 
   /**
-   * Line cap applied to every render from this class. Token-budgeted review calls never use these
-   * renders (the planner sections and clips per batch), so everything here is a single AI call —
-   * the on-demand commands, maintainer replies, the base comparison, and the budgeting-disabled
-   * legacy review — guarded by the 5000-line config default. An explicit {@code max-diff-lines=0}
-   * keeps its released meaning: the cap is off and the render is unbounded.
+   * Line-budgeted render for single-call diffs. Token-budgeted review calls never use this path for
+   * the main PR diff (the planner sections and clips per batch) or for base comparison (context
+   * load skips it). Callers that pass {@code maxLines <= 0} get an unbounded render — used for
+   * budgeting-disabled reviews with {@code max-diff-lines=0} and for on-demand commands.
    */
   private FormattedDiff formatWithLineBudget(
       String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {
-    var maxLines = maxDiffLines;
+    return formatWithLineBudget(header, files, reviewableNames, maxDiffLines);
+  }
+
+  private FormattedDiff formatWithLineBudget(
+      String header,
+      List<GitHubPullRequestClient.FileDiff> files,
+      Set<String> reviewableNames,
+      int maxLines) {
     if (maxLines <= 0) {
       var sb = new StringBuilder(header);
       for (var file : files) {

@@ -19,8 +19,13 @@ import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
 import io.quarkiverse.langchain4j.RegisterAiService;
+import jakarta.enterprise.context.ApplicationScoped;
 
-/** Second-pass AI call that audits candidate findings; returns raw JSON parsed by the caller. */
+/**
+ * Second-pass AI call that audits candidate findings; returns raw JSON parsed by the caller.
+ * Application-scoped (no chat memory) so parallel map-reduce batch threads can invoke it.
+ */
+@ApplicationScoped
 @RegisterAiService
 public interface FindingVerifier {
 

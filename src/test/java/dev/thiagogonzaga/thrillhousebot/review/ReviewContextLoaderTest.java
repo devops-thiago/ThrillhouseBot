@@ -19,7 +19,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import java.util.Collections;
@@ -47,6 +49,7 @@ class ReviewContextLoaderTest {
   @Mock private PrLabeler labeler;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private ReviewSessionPersistence sessionPersistence;
+  @Mock private ActiveModelSettings activeModel;
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
@@ -54,6 +57,8 @@ class ReviewContextLoaderTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    // Default: budgeting off so existing formatter-driven assertions keep the line-capped path.
+    when(activeModel.maxInputTokens()).thenReturn(0);
     loader =
         new ReviewContextLoader(
             prClient,
@@ -65,7 +70,8 @@ class ReviewContextLoaderTest {
             labeler,
             followUpAnalyzer,
             sessionPersistence,
-            BotIdentity.from(List.of(BOT_LOGIN)));
+            BotIdentity.from(List.of(BOT_LOGIN)),
+            activeModel);
   }
 
   @Nested
@@ -269,6 +275,104 @@ class ReviewContextLoaderTest {
               .text();
 
       assertEquals("(regression comparison unavailable)", result);
+    }
+  }
+
+  @Nested
+  class LoadWithTokenBudgeting {
+
+    private static ReviewOrchestrator.ReviewRequest request() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner",
+          "repo",
+          1,
+          "headsha1",
+          "Title",
+          "body",
+          "basesha1",
+          "main",
+          99L,
+          true,
+          "main",
+          false);
+    }
+
+    private void stubCommonLoadDeps(List<GitHubPullRequestClient.FileDiff> files) {
+      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(files);
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "body",
+                  new GitHubPullRequestClient.Ref("headsha1"),
+                  new GitHubPullRequestClient.Ref("basesha1"),
+                  2,
+                  10,
+                  3));
+      when(prClient.compareCommits(
+              any(), any(), eq("owner"), eq("repo"), eq("basesha1"), eq("headsha1")))
+          .thenReturn(
+              new GitHubPullRequestClient.CompareResponse(
+                  1,
+                  List.of(
+                      new GitHubPullRequestClient.FileDiff(
+                          "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+                      new GitHubPullRequestClient.FileDiff(
+                          "b.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+b"))));
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(commentClient.listComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(sessionPersistence.findAllPriorAiResponseJsons(any(), eq(1), anyLong()))
+          .thenReturn(List.of());
+      when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+          .thenReturn(new InstructionsResolver.ResolvedInstructions("", ""));
+      when(labeler.fetchExistingLabels(any(), any(), any())).thenReturn(List.of());
+      when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
+    }
+
+    @Test
+    void tokenBudgetedSkipsLineCappedMegaDiffAndDoesNotOmitByLines() {
+      when(activeModel.maxInputTokens()).thenReturn(48_000);
+      var manyLines = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10";
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff("a.java", "modified", 5, 0, 5, manyLines),
+              new GitHubPullRequestClient.FileDiff("b.java", "modified", 5, 0, 5, manyLines),
+              new GitHubPullRequestClient.FileDiff("c.java", "modified", 5, 0, 5, manyLines));
+      stubCommonLoadDeps(files);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals("", ctx.diff());
+      assertEquals("", ctx.baseComparison());
+      assertEquals(0, ctx.omittedFiles());
+      assertEquals(3, ctx.reviewableFiles().size());
+      // Line-capped mega-diff and uncapped base comparison must not run when budgeting is on —
+      // both would only inflate shared prompt overhead for multi-call batches.
+      verify(prClient).getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1));
+      verify(prClient, never()).compareCommits(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void budgetingDisabledStillBuildsLineCappedDiff() {
+      when(activeModel.maxInputTokens()).thenReturn(0);
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x"));
+      stubCommonLoadDeps(files);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertTrue(ctx.diff().contains("## Overview"));
+      assertTrue(ctx.diff().contains("### a.java"));
+      assertEquals(0, ctx.omittedFiles());
     }
   }
 

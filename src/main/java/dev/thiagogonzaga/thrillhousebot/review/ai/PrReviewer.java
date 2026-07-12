@@ -20,7 +20,14 @@ import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
 import io.quarkiverse.langchain4j.RegisterAiService;
+import jakarta.enterprise.context.ApplicationScoped;
 
+/**
+ * Stateless streaming AI service for PR review and summary. Application-scoped because there is no
+ * chat memory / {@code @MemoryId} — request scope would break parallel map-reduce batches that run
+ * on virtual threads without an inherited CDI request context.
+ */
+@ApplicationScoped
 @RegisterAiService
 public interface PrReviewer {
 

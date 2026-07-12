@@ -40,7 +40,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 <!-- docs:features:start -->
 - Reviews diffs for correctness, security, regressions, stale comments, and code quality
 - Token-budgeted whole-PR review for large diffs — split into map-reduce batches with omitted files named, not silently dropped
-- Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch — plus a per-PR auto-review interval (`AUTO_REVIEW_MIN_INTERVAL`) so busy PRs are not re-reviewed on every push
+- Configurable auto-review triggers — skip drafts, gate on labels, or filter by base branch — plus an optional per-PR auto-review interval (`AUTO_REVIEW_MIN_INTERVAL`) when you want to cap spend on noisy PRs (off by default; use `/pause` to silence a PR)
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
 - Follow-up reviews track whether earlier findings were addressed or justified
@@ -234,7 +234,7 @@ will change per provider:
 | `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |
 | `MANUAL_TRIGGER_AUTH_TIMEOUT` | Upper bound on the manual-trigger write-access check on the webhook ACK thread; fails closed (denies) if GitHub is slower | `5s` |
 | `ACK_REACTION_TIMEOUT` | Upper bound on the 👀 command-ack reaction on the webhook ACK thread; the wait is abandoned (reaction may land late) if GitHub is slower | `3s` |
-| `AUTO_REVIEW_MIN_INTERVAL` | Minimum interval between automatic reviews of the same PR — pushes within the window are skipped silently, even on a new head SHA (in-memory, per replica). A manual `/review` always bypasses; `0` disables | `1h` |
+| `AUTO_REVIEW_MIN_INTERVAL` | Minimum interval between automatic reviews of the same PR — pushes within the window are skipped silently, even on a new head SHA (in-memory, per replica). A manual `/review` always bypasses; unset or `0` reviews every push | `0` (disabled) |
 | `WEBHOOK_SKIP_DRAFTS` | Skip auto-review while a PR is a draft (reviewed once marked ready / on later pushes) | `false` |
 | `WEBHOOK_REQUIRED_LABELS` | Comma-separated labels; only auto-review PRs carrying at least one (case-insensitive) | _(empty — no gate)_ |
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
@@ -248,7 +248,7 @@ will change per provider:
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, base comparison, budgeting-disabled review); token-budgeted review calls ignore it; `0` disables the cap | `5000` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, budgeting-disabled review). Token-budgeted reviews ignore it (planner owns coverage by tokens); `0` disables the cap | `5000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
 | `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
@@ -323,9 +323,14 @@ Notes:
   model's real window. To use a large-context model beyond 128k, raise both.
   Startup logs a warning whenever the cap lowers your configured budget.
 - **Quote keys with `.` or `/`** (`thrillhousebot.ai.models."gpt-5.5".…`), the
-  same rule as the pricing map. Map keys don't survive env-var name mangling,
-  so set these in an external `application.properties` or as `-D` system
-  properties rather than environment variables.
+  same rule as the pricing map. Override via env — hyphen-only keys use underscores
+  (`THRILLHOUSEBOT_AI_MODELS_DEEPSEEK_V4_PRO_MAX_INPUT_TOKENS=1000000`); dotted keys use the
+  quoted-key form (`THRILLHOUSEBOT_AI_MODELS__GPT_5_5__MAX_INPUT_TOKENS=256000`).
+  `application.properties` ships empty stubs for known models so SmallRye can
+  disambiguate hyphenated keys — [Quarkus env mapping](https://quarkus.io/guides/config-reference#environment-variables).
+  For a model without a stub, add an empty
+  `thrillhousebot.ai.models."<model>".max-input-tokens=` line (external
+  `application.properties` or `-D`) alongside the env var.
 - **`top_k` is not available** on the OpenAI-compatible wire; it becomes
   relevant only with native provider integrations.
 - **Generation-parameter validation** happens at boot: temperature must be in

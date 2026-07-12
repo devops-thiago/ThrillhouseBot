@@ -109,12 +109,14 @@ public class OtelObservabilityListener implements ChatModelListener {
   public void onRequest(ChatModelRequestContext ctx) {
     ctx.attributes().put(ATTR_START_NANOS, System.nanoTime());
     Long sessionId = ReviewSessionContext.currentSessionId();
-    Integer attempt = ReviewSessionContext.currentAttempt();
+    Long callId = ReviewSessionContext.currentCallId();
     if (sessionId != null) {
       ctx.attributes().put(ATTR_SESSION_ID, sessionId);
     }
-    if (attempt != null) {
-      ctx.attributes().put(ATTR_STREAM_ATTEMPT, attempt);
+    if (callId != null) {
+      // Unique per stream invocation — parallel map-reduce batches share a session but not a
+      // callId.
+      ctx.attributes().put(ATTR_STREAM_ATTEMPT, callId);
     }
   }
 
@@ -237,16 +239,17 @@ public class OtelObservabilityListener implements ChatModelListener {
 
   private boolean shouldPersistSessionUsage(java.util.Map<Object, Object> attributes) {
     var sessionId = (Long) attributes.get(ATTR_SESSION_ID);
-    var attempt = attributes.get(ATTR_STREAM_ATTEMPT);
-    if (sessionId == null || attempt == null) {
+    var callIdAttr = attributes.get(ATTR_STREAM_ATTEMPT);
+    if (sessionId == null || callIdAttr == null) {
       return false;
     }
-    var active = ReviewSessionContext.isActiveAttempt(sessionId, ((Number) attempt).intValue());
+    var callId = ((Number) callIdAttr).longValue();
+    var active = ReviewSessionContext.isActiveCall(sessionId, callId);
     if (!active) {
       log.debug(
-          "Dropping stale stream callback for session {} attempt {} — usage not persisted",
+          "Dropping stale stream callback for session {} call {} — usage not persisted",
           sessionId,
-          attempt);
+          callId);
     }
     return active;
   }

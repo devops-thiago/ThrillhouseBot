@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -35,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -42,6 +44,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -135,9 +138,10 @@ class FindingPipelineTest {
     var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
     var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
     when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "b.java"));
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
-            new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null))
+            new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(
             new ReviewResponse(List.of(finding("b.java", "B")), List.of(batchTwoStatus), null));
 
@@ -157,6 +161,36 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
     assertEquals(List.of(batchTwoStatus), result.previousFindingsStatus());
+  }
+
+  @Test
+  void multiCallPropagatesBatchFailureAsIllegalStateException() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var failure = new AiReviewException("batch blew up", 1, null);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(failure);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
+    var thrown =
+        assertThrows(
+            IllegalStateException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver));
+
+    assertEquals("Parallel batch review failed", thrown.getMessage());
+    assertSame(failure, thrown.getCause());
+    verify(aiReviewService, never()).summarize(any(), any());
+  }
+
+  @Test
+  void unwrapParallelFailureUsesCompletionExceptionWhenCauseMissing() {
+    var missingCause = new CompletionException((Throwable) null);
+    var wrapped = FindingPipeline.unwrapParallelFailure(missingCause);
+    assertEquals("Parallel batch review failed", wrapped.getMessage());
+    assertSame(missingCause, wrapped.getCause());
   }
 
   @Test
@@ -205,7 +239,7 @@ class FindingPipelineTest {
     when(followUpAnalyzer.previousFindingFilesById(any()))
         .thenReturn(Map.of(1, "b.java", 2, "a.java"));
 
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
@@ -213,7 +247,8 @@ class FindingPipelineTest {
                     new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks done"),
                     new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here"),
                     new ReviewResponse.PreviousFindingStatus(3, "resolved", "no map entry")),
-                null))
+                null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
@@ -268,12 +303,13 @@ class FindingPipelineTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
             new ReviewResponse(
                 List.of(),
                 List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks fixed")),
-                null))
+                null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
     when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -393,8 +429,9 @@ class FindingPipelineTest {
                 + tokenCounter.estimateTokens(criticalJson)
                 + 1);
 
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(high, medium, nullRisk), List.of(), null))
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(high, medium, nullRisk), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(critical), List.of(), null));
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))
