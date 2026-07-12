@@ -120,6 +120,29 @@ class DescriptionGapFilterTest {
         List.of("Description claims tests were added, but no test files changed"), filtered);
   }
 
+  @Test
+  void keepsGapWhenQualifiedPathDiffersFromIgnoredFileWithSameBasename() {
+    var all =
+        List.of(file("module-a/pom.xml", "modified", 1, 1), file("src/A.java", "modified", 5, 2));
+    var reviewable = List.of(file("src/A.java", "modified", 5, 2));
+    var gaps = List.of("module-b/pom.xml is not in the diff");
+
+    var filtered = DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, all, reviewable);
+
+    assertEquals(gaps, filtered);
+  }
+
+  @Test
+  void dropsGapWhenQualifiedPathMatchesIgnoredFile() {
+    var all = List.of(file("module-a/pom.xml", "modified", 1, 1));
+    var reviewable = List.<GitHubPullRequestClient.FileDiff>of();
+    var gaps = List.of("module-a/pom.xml is not in the diff");
+
+    var filtered = DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, all, reviewable);
+
+    assertTrue(filtered.isEmpty());
+  }
+
   private static GitHubPullRequestClient.FileDiff file(
       String name, String status, int additions, int deletions) {
     return new GitHubPullRequestClient.FileDiff(

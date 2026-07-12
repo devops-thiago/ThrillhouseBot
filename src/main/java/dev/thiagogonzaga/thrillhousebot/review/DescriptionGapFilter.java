@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -62,7 +63,7 @@ final class DescriptionGapFilter {
     }
     var lower = gap.toLowerCase(Locale.ROOT);
     for (String path : ignoredPaths) {
-      if (absenceTargetsFile(lower, path)) {
+      if (absenceTargetsFile(lower, path, ignoredPaths)) {
         return true;
       }
     }
@@ -72,10 +73,15 @@ final class DescriptionGapFilter {
   /**
    * True when the gap's absence claim is about {@code path} specifically — not merely when the path
    * is mentioned elsewhere in the same sentence (e.g. "pom.xml changed, but README is not in the
-   * diff").
+   * diff"), and not when a qualified path with the same basename refers to a different file (e.g.
+   * "module-b/pom.xml is not in the diff" while only {@code module-a/pom.xml} changed).
    */
-  private static boolean absenceTargetsFile(String lower, String path) {
-    for (String name : fileNames(path)) {
+  private static boolean absenceTargetsFile(String lower, String path, Set<String> ignoredPaths) {
+    var base = basename(path).toLowerCase(Locale.ROOT);
+    for (String name : fileNames(path, ignoredPaths)) {
+      if (name.equals(base) && gapMentionsDifferentQualifiedPath(lower, path, base)) {
+        continue;
+      }
       String q = Pattern.quote(name);
       if (Pattern.compile(
               "(?:does|do)\\s+not\\s+include\\s+(?:any\\s+)?(?:the\\s+)?(?:\\S+\\s+)*?" + q)
@@ -102,10 +108,39 @@ final class DescriptionGapFilter {
     return false;
   }
 
-  private static List<String> fileNames(String path) {
+  /**
+   * True when the gap cites a qualified path ending in {@code basename} that is not {@code path}
+   * (case-insensitive), e.g. {@code module-b/pom.xml} while the ignored change is {@code
+   * module-a/pom.xml}.
+   */
+  private static boolean gapMentionsDifferentQualifiedPath(
+      String lower, String path, String basename) {
+    var pattern = Pattern.compile("(?:[\\w.-]+/)+" + Pattern.quote(basename));
+    var matcher = pattern.matcher(lower);
+    var ignored = path.toLowerCase(Locale.ROOT);
+    while (matcher.find()) {
+      if (!matcher.group().equals(ignored)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static List<String> fileNames(String path, Set<String> ignoredPaths) {
     var file = path.toLowerCase(Locale.ROOT);
     var base = basename(path).toLowerCase(Locale.ROOT);
-    return file.equals(base) ? List.of(file) : List.of(file, base);
+    var names = new ArrayList<String>();
+    names.add(file);
+    if (!file.equals(base) && basenameCount(ignoredPaths, base) == 1) {
+      names.add(base);
+    } else if (file.equals(base) && basenameCount(ignoredPaths, base) == 1) {
+      // root-level ignored file — basename is the same as the full path, already added
+    }
+    return names;
+  }
+
+  private static long basenameCount(Set<String> ignoredPaths, String basename) {
+    return ignoredPaths.stream().filter(p -> basename(p).equalsIgnoreCase(basename)).count();
   }
 
   private static String basename(String path) {
