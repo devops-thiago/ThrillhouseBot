@@ -348,13 +348,13 @@ class ReviewContextLoaderTest {
       var ctx = loader.load("auth", request(), session, "owner/repo");
 
       assertEquals("", ctx.diff());
+      assertEquals("", ctx.baseComparison());
       assertEquals(0, ctx.omittedFiles());
       assertEquals(3, ctx.reviewableFiles().size());
-      assertTrue(ctx.baseComparison().contains("### a.java"));
-      assertTrue(ctx.baseComparison().contains("### b.java"));
-      assertFalse(ctx.baseComparison().contains("files omitted"));
-      // Line-capped mega-diff path must not run when budgeting is on.
+      // Line-capped mega-diff and uncapped base comparison must not run when budgeting is on —
+      // both would only inflate shared prompt overhead for multi-call batches.
       verify(prClient).getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1));
+      verify(prClient, never()).compareCommits(any(), any(), any(), any(), any(), any());
     }
 
     @Test

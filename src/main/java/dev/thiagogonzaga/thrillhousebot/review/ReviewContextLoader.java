@@ -142,9 +142,14 @@ public class ReviewContextLoader {
         tokenBudgeted
             ? new ReviewDiffFormatter.FormattedDiff("", 0)
             : diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
+    // Token-budgeted multi-call drops base comparison from every batch; loading the full uncapped
+    // comparison only bloated shared overhead (and starved the diff budget). Legacy line-capped
+    // path keeps it for single-call reviews.
     var baseComparisonResult =
-        buildBaseComparisonWithStats(
-            auth, req.owner(), req.repo(), req.baseSha(), req.commitSha(), !tokenBudgeted);
+        tokenBudgeted
+            ? new ReviewDiffFormatter.FormattedDiff("", 0)
+            : buildBaseComparisonWithStats(
+                auth, req.owner(), req.repo(), req.baseSha(), req.commitSha(), true);
     var omittedFiles = diffResult.omittedFiles();
     var lineResolver =
         new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewableFiles));

@@ -323,9 +323,13 @@ Notes:
   model's real window. To use a large-context model beyond 128k, raise both.
   Startup logs a warning whenever the cap lowers your configured budget.
 - **Quote keys with `.` or `/`** (`thrillhousebot.ai.models."gpt-5.5".…`), the
-  same rule as the pricing map. Map keys don't survive env-var name mangling,
-  so set these in an external `application.properties` or as `-D` system
-  properties rather than environment variables.
+  same rule as the pricing map. Override via env with the quoted-key form
+  (`THRILLHOUSEBOT_AI_MODELS__DEEPSEEK_V4_PRO__MAX_INPUT_TOKENS=1000000`).
+  `application.properties` ships empty stubs for known models so SmallRye can
+  disambiguate hyphenated keys — [Quarkus env mapping](https://quarkus.io/guides/config-reference#environment-variables).
+  For a model without a stub, add an empty
+  `thrillhousebot.ai.models."<model>".max-input-tokens=` line (external
+  `application.properties` or `-D`) alongside the env var.
 - **`top_k` is not available** on the OpenAI-compatible wire; it becomes
   relevant only with native provider integrations.
 - **Generation-parameter validation** happens at boot: temperature must be in
