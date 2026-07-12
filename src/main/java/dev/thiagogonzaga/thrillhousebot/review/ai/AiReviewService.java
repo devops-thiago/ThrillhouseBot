@@ -117,37 +117,33 @@ public class AiReviewService {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
-    try {
-      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-        if (attempt > 1) {
-          String reason =
-              lastFailure != null && lastFailure.getMessage() != null
-                  ? lastFailure.getMessage()
-                  : "Unknown error";
-          broadcaster.broadcast(
-              SessionEventBroadcaster.SessionEvent.retry(session, attempt, maxAttempts, reason));
-          sleep(backoffDelay(attempt));
-        }
-
-        try {
-          return streamOnce(session, streamFactory, attempt, broadcastTokens);
-        } catch (RuntimeException e) {
-          lastFailure = e;
-          Log.warnf(
-              e, "AI review attempt %d/%d failed for session %d", attempt, maxAttempts, session.id);
-          broadcaster.broadcast(
-              SessionEventBroadcaster.SessionEvent.streamFailed(
-                  session, attempt, maxAttempts, sanitize(e)));
-        }
+    // No blanket session invalidation after retries: each streamOnce clears its own callId.
+    // Parallel map-reduce batches share the session and must not wipe each other's active calls.
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        String reason =
+            lastFailure != null && lastFailure.getMessage() != null
+                ? lastFailure.getMessage()
+                : "Unknown error";
+        broadcaster.broadcast(
+            SessionEventBroadcaster.SessionEvent.retry(session, attempt, maxAttempts, reason));
+        sleep(backoffDelay(attempt));
       }
 
-      throw new AiReviewException(
-          "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
-    } finally {
-      // Drop any call still registered for this serial retry loop (normally each streamOnce
-      // already invalidated its own callId; this clears the session if a bind leaked).
-      ReviewSessionContext.invalidate(session.id);
+      try {
+        return streamOnce(session, streamFactory, attempt, broadcastTokens);
+      } catch (RuntimeException e) {
+        lastFailure = e;
+        Log.warnf(
+            e, "AI review attempt %d/%d failed for session %d", attempt, maxAttempts, session.id);
+        broadcaster.broadcast(
+            SessionEventBroadcaster.SessionEvent.streamFailed(
+                session, attempt, maxAttempts, sanitize(e)));
+      }
     }
+
+    throw new AiReviewException(
+        "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
   }
 
   /**
@@ -225,9 +221,7 @@ public class AiReviewService {
       // Invalidate this call only — parallel map-reduce batches share the session id and must
       // keep their own in-flight callIds active. Safe on success: langchain4j notifies
       // ChatModelListener.onResponse before completing the handler that resolves the future.
-      if (callId != null) {
-        ReviewSessionContext.invalidate(session.id, callId);
-      }
+      ReviewSessionContext.invalidate(session.id, callId);
       ReviewSessionContext.clear();
     }
   }

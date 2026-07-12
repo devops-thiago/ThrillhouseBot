@@ -205,11 +205,7 @@ public class FindingPipeline {
               .sorted(Comparator.comparingInt(BatchOutcome::index))
               .toList();
     } catch (CompletionException e) {
-      var cause = e.getCause() != null ? e.getCause() : e;
-      if (cause instanceof RuntimeException re) {
-        throw re;
-      }
-      throw new IllegalStateException("Parallel batch review failed", cause);
+      throw unwrapParallelFailure(e);
     }
 
     var allFindings = new ArrayList<ReviewResponse.Finding>();
@@ -242,6 +238,16 @@ public class FindingPipeline {
             refined.findings(), refined.previousFindingsStatus(), summaryResponse.summary());
     persistAiResponse(session, merged);
     return merged;
+  }
+
+  /**
+   * Unwraps a failed parallel batch future as {@link IllegalStateException} (preserving the cause).
+   * SpotBugs flags rethrowing a bare {@link RuntimeException}; callers still see {@link
+   * AiReviewException} via {@link Throwable#getCause()}.
+   */
+  static IllegalStateException unwrapParallelFailure(CompletionException e) {
+    var cause = e.getCause() != null ? e.getCause() : e;
+    return new IllegalStateException("Parallel batch review failed", cause);
   }
 
   /**

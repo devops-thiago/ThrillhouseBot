@@ -59,7 +59,11 @@ public class ReviewSession extends PanacheEntity {
    * thrillhousebot.ai.pricing} entry — distinguishes "pricing not configured" from a genuine $0 so
    * the dashboard can flag under-reported spend. Cleared by {@link SessionCostBackfill} once
    * pricing is added and the cost is recomputed.
+   *
+   * <p>{@code default false} is required so schema-update can add this NOT NULL column to a
+   * populated Postgres table (without it, existing rows are null and the ALTER fails).
    */
+  @Column(nullable = false, columnDefinition = "boolean not null default false")
   boolean pricingMissing;
 
   long durationMs;

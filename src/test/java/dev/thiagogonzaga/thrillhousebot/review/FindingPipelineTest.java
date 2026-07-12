@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -35,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -42,6 +44,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -158,6 +161,36 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
     assertEquals(List.of(batchTwoStatus), result.previousFindingsStatus());
+  }
+
+  @Test
+  void multiCallPropagatesBatchFailureAsIllegalStateException() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var failure = new AiReviewException("batch blew up", 1, null);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(failure);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+
+    var thrown =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                pipeline.run(
+                    session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of())));
+
+    assertEquals("Parallel batch review failed", thrown.getMessage());
+    assertSame(failure, thrown.getCause());
+    verify(aiReviewService, never()).summarize(any(), any());
+  }
+
+  @Test
+  void unwrapParallelFailureUsesCompletionExceptionWhenCauseMissing() {
+    var missingCause = new CompletionException((Throwable) null);
+    var wrapped = FindingPipeline.unwrapParallelFailure(missingCause);
+    assertEquals("Parallel batch review failed", wrapped.getMessage());
+    assertSame(missingCause, wrapped.getCause());
   }
 
   @Test
