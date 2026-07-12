@@ -75,6 +75,7 @@ class SessionCostBackfillTest extends ReviewSessionTestSupport {
 
     ReviewSession loaded = ReviewSession.findById(id);
     assertEquals(0.0, loaded.getCost(), 1e-9);
+    assertTrue(loaded.isPricingMissing());
   }
 
   @Test

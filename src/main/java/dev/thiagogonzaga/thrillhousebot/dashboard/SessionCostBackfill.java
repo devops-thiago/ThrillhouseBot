@@ -75,6 +75,10 @@ public class SessionCostBackfill {
     for (ReviewSession session : candidates) {
       var modelPricing = pricing.get(session.getModel());
       if (modelPricing == null) {
+        if (!session.isPricingMissing()) {
+          session.setPricingMissing(true);
+          updated++;
+        }
         continue;
       }
       var cost =

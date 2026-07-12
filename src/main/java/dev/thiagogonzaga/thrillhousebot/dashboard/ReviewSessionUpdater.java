@@ -70,7 +70,7 @@ public class ReviewSessionUpdater {
     }
     session.setStatus(ReviewSession.STATUS_FAILED);
     session.setErrorMessage(errorMessage);
-    session.setDurationMs(durationMs);
+    session.setDurationMs(session.getDurationMs() + durationMs);
     session.persist();
   }
 }
