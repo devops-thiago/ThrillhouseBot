@@ -248,7 +248,7 @@ will change per provider:
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, base comparison, budgeting-disabled review); token-budgeted review calls ignore it; `0` disables the cap | `5000` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, budgeting-disabled review). Token-budgeted reviews ignore it (planner owns coverage by tokens); `0` disables the cap | `5000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
 | `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |

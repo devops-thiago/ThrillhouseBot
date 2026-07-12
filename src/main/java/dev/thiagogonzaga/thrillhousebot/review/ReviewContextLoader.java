@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
@@ -36,6 +37,10 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * existing labels, and project stack — and computes the first-visible / has-context signals.
  * Extracted from {@code ReviewOrchestrator} as the read side of the pipeline; every fetch fails
  * soft exactly as before, except the PR-files fetch whose failure must reach the caller.
+ *
+ * <p>When token budgeting is on ({@code max-input-tokens > 0}), the legacy line-capped mega-diff is
+ * not built: {@link DiffBudgetPlanner} owns what the model sees. The base comparison is still
+ * rendered, but without the line cap, so overhead accounting uses the full comparison text.
  */
 @ApplicationScoped
 public class ReviewContextLoader {
@@ -52,6 +57,7 @@ public class ReviewContextLoader {
   private final FollowUpAnalyzer followUpAnalyzer;
   private final ReviewSessionPersistence sessionPersistence;
   private final BotIdentity botIdentity;
+  private final ActiveModelSettings activeModel;
 
   @Inject
   public ReviewContextLoader(
@@ -64,7 +70,8 @@ public class ReviewContextLoader {
       PrLabeler labeler,
       FollowUpAnalyzer followUpAnalyzer,
       ReviewSessionPersistence sessionPersistence,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      ActiveModelSettings activeModel) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
@@ -75,6 +82,7 @@ public class ReviewContextLoader {
     this.followUpAnalyzer = followUpAnalyzer;
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
+    this.activeModel = activeModel;
   }
 
   /**
@@ -119,15 +127,24 @@ public class ReviewContextLoader {
    * comparison, prior reviews, persisted prior AI responses, the first-visible / has-context
    * signals, inline comments and previous-findings context (only when prior responses exist),
    * repository instructions, existing labels, and project stack.
+   *
+   * <p>With token budgeting enabled, the line-capped mega-diff is skipped ({@code diff} is empty
+   * and line-path {@code omittedFiles} is 0); {@link DiffBudgetPlanner} is authoritative for what
+   * the model sees. The base comparison is still loaded, without the line cap.
    */
   ReviewContext load(
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     var prTotals = fetchPrTotals(auth, req.owner(), req.repo(), req.prNumber());
     var reviewableFiles = diffFormatter.reviewableFiles(files);
-    var diffResult = diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
+    var tokenBudgeted = activeModel.maxInputTokens() > 0;
+    var diffResult =
+        tokenBudgeted
+            ? new ReviewDiffFormatter.FormattedDiff("", 0)
+            : diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
     var baseComparisonResult =
-        buildBaseComparisonWithStats(auth, req.owner(), req.repo(), req.baseSha(), req.commitSha());
+        buildBaseComparisonWithStats(
+            auth, req.owner(), req.repo(), req.baseSha(), req.commitSha(), !tokenBudgeted);
     var omittedFiles = diffResult.omittedFiles();
     var lineResolver =
         new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewableFiles));
@@ -250,13 +267,22 @@ public class ReviewContextLoader {
 
   ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
       String auth, String owner, String repo, String base, String head) {
+    return buildBaseComparisonWithStats(auth, owner, repo, base, head, true);
+  }
+
+  /**
+   * @param applyLineBudget when false (token-budgeted reviews), include every patched file; the
+   *     planner counts the text in shared overhead instead of dropping files here by line count
+   */
+  ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
+      String auth, String owner, String repo, String base, String head, boolean applyLineBudget) {
     if (base == null || head == null || base.length() < 7 || head.length() < 7) {
       return new ReviewDiffFormatter.FormattedDiff(
           "(regression comparison unavailable — refs too short)", 0);
     }
     try {
       var comparison = prClient.compareCommits(auth, ACCEPT, owner, repo, base, head);
-      return diffFormatter.buildBaseComparisonWithStats(comparison, base, head);
+      return diffFormatter.buildBaseComparisonWithStats(comparison, base, head, applyLineBudget);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch base comparison, continuing without regression context", e);
       return new ReviewDiffFormatter.FormattedDiff("(regression comparison unavailable)", 0);

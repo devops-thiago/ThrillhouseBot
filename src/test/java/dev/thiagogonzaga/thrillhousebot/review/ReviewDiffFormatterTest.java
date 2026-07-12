@@ -187,6 +187,30 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
+    void baseComparisonWithoutLineBudgetIncludesEveryPatchedFile() {
+      var formatter = new ReviewDiffFormatter(List.of(), 6);
+      var comparison =
+          new GitHubPullRequestClient.CompareResponse(
+              2,
+              List.of(
+                  file("a.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5"),
+                  file("b.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5"),
+                  file("c.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5")));
+
+      var capped = formatter.buildBaseComparisonWithStats(comparison, "basesha", "headsha", true);
+      var uncapped =
+          formatter.buildBaseComparisonWithStats(comparison, "basesha", "headsha", false);
+
+      assertTrue(capped.truncated());
+      assertFalse(uncapped.truncated());
+      assertEquals(0, uncapped.omittedFiles());
+      assertTrue(uncapped.text().contains("### a.java"));
+      assertTrue(uncapped.text().contains("### b.java"));
+      assertTrue(uncapped.text().contains("### c.java"));
+      assertFalse(uncapped.text().contains("files omitted"));
+    }
+
+    @Test
     void shouldSkipFooterWhenNoLineBudgetRemains() {
       var formatter = new ReviewDiffFormatter(List.of(), 2);
       var output = new StringBuilder("line-one\nline-two\n");

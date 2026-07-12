@@ -199,7 +199,8 @@ class ReviewOrchestratorTest {
             labeler,
             followUpAnalyzer,
             sessionPersistence,
-            BOT_ID),
+            BOT_ID,
+            new ActiveModelSettings(config, "m")),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         new DiffBudgetPlanner(
             diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
