@@ -493,6 +493,24 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldClearRateLimitAndDispatchReadyForReviewEvenWhenThrottled() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
+    when(autoReviewRateLimiter.isThrottled("org", "svc", 57)).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("ready_for_review", 57, "org/svc", "sha57", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(autoReviewRateLimiter).clearForPr("org", "svc", 57);
+    verify(autoReviewRateLimiter, never()).isThrottled("org", "svc", 57);
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldPassParsedDraftAndLabelsToTriggerFilter() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
 

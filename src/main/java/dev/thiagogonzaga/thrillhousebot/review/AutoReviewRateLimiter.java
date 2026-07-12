@@ -74,6 +74,15 @@ public class AutoReviewRateLimiter {
   }
 
   /**
+   * Clears any throttle window for this PR so the next automatic review can run immediately. Used
+   * when a draft is marked ready ({@code ready_for_review}) — that transition should always trigger
+   * a review even if a recent {@code synchronize} fell inside the interval.
+   */
+  public void clearForPr(String owner, String repo, int prNumber) {
+    deadlines.remove(key(owner, repo, prNumber));
+  }
+
+  /**
    * Records that an automatic review of this PR just completed, starting a fresh throttle window.
    * Callers must not record manual reviews — an explicit {@code /review} should not delay the next
    * automatic review. No-op when throttling is disabled.
