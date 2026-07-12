@@ -58,14 +58,12 @@ final class ReviewSessionContext {
 
   /** Marks one stream invocation finished so late callbacks for it are ignored. */
   static void invalidate(long sessionId, long callId) {
-    var calls = ACTIVE_CALLS.get(sessionId);
-    if (calls == null) {
-      return;
-    }
-    calls.remove(callId);
-    if (calls.isEmpty()) {
-      ACTIVE_CALLS.remove(sessionId, calls);
-    }
+    ACTIVE_CALLS.computeIfPresent(
+        sessionId,
+        (id, calls) -> {
+          calls.remove(callId);
+          return calls.isEmpty() ? null : calls;
+        });
   }
 
   /** Test-only: clears the thread binding and every in-flight registration. */

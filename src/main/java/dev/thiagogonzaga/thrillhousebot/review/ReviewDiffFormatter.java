@@ -270,9 +270,9 @@ public class ReviewDiffFormatter {
 
   /**
    * Line-budgeted render for single-call diffs. Token-budgeted review calls never use this path for
-   * the main PR diff (the planner sections and clips per batch). Callers that pass {@code maxLines
-   * <= 0} get an unbounded render — used for the review-path base comparison when token budgeting
-   * is on, and for an explicit {@code max-diff-lines=0}.
+   * the main PR diff (the planner sections and clips per batch) or for base comparison (context
+   * load skips it). Callers that pass {@code maxLines <= 0} get an unbounded render — used for
+   * budgeting-disabled reviews with {@code max-diff-lines=0} and for on-demand commands.
    */
   private FormattedDiff formatWithLineBudget(
       String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {

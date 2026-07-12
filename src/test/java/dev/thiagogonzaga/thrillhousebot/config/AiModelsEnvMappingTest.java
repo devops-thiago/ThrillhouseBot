@@ -31,18 +31,18 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the Quarkus/SmallRye-documented way to bind {@code THRILLHOUSEBOT_AI_MODELS__*} onto
- * hyphenated map keys: an empty dotted property in a lower-ordinal source disambiguates the env
- * name, then {@link EnvConfigSource} supplies the value.
+ * Pins the Quarkus/SmallRye-documented way to bind per-model env vars onto hyphenated map keys: an
+ * empty dotted property in a lower-ordinal source disambiguates the env name, then {@link
+ * EnvConfigSource} supplies the value. Hyphen-only keys use the standard underscore env form; keys
+ * with {@code .} or {@code /} use the quoted-key {@code __} form.
  *
  * @see <a href="https://quarkus.io/guides/config-reference#environment-variables">Quarkus env
  *     vars</a>
  */
 class AiModelsEnvMappingTest {
 
-  private static final String SEED =
-      "thrillhousebot.ai.models.\"deepseek-v4-pro\".max-input-tokens";
-  private static final String ENV = "THRILLHOUSEBOT_AI_MODELS__DEEPSEEK_V4_PRO__MAX_INPUT_TOKENS";
+  private static final String SEED = "thrillhousebot.ai.models.deepseek-v4-pro.max-input-tokens";
+  private static final String ENV = "THRILLHOUSEBOT_AI_MODELS_DEEPSEEK_V4_PRO_MAX_INPUT_TOKENS";
 
   @ConfigMapping(prefix = "thrillhousebot.ai")
   interface AiModelsProbe {
@@ -55,7 +55,7 @@ class AiModelsEnvMappingTest {
   }
 
   @Test
-  void quotedKeyEnvVarOverridesEmptySeedStub() {
+  void hyphenatedKeyEnvVarOverridesEmptySeedStub() {
     var config = config(Map.of(SEED, ""), Map.of(ENV, "1000000"));
 
     var settings = config.getConfigMapping(AiModelsProbe.class).models().get("deepseek-v4-pro");

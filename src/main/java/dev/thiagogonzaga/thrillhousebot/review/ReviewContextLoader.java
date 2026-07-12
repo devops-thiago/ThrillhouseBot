@@ -38,9 +38,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * Extracted from {@code ReviewOrchestrator} as the read side of the pipeline; every fetch fails
  * soft exactly as before, except the PR-files fetch whose failure must reach the caller.
  *
- * <p>When token budgeting is on ({@code max-input-tokens > 0}), the legacy line-capped mega-diff is
- * not built: {@link DiffBudgetPlanner} owns what the model sees. The base comparison is still
- * rendered, but without the line cap, so overhead accounting uses the full comparison text.
+ * <p>When token budgeting is on ({@code max-input-tokens > 0}), the legacy line-capped mega-diff
+ * and base comparison are not loaded: {@link DiffBudgetPlanner} owns what the model sees and shared
+ * prompt overhead excludes the uncapped base comparison that multi-call batches drop anyway.
  */
 @ApplicationScoped
 public class ReviewContextLoader {
@@ -128,9 +128,9 @@ public class ReviewContextLoader {
    * signals, inline comments and previous-findings context (only when prior responses exist),
    * repository instructions, existing labels, and project stack.
    *
-   * <p>With token budgeting enabled, the line-capped mega-diff is skipped ({@code diff} is empty
-   * and line-path {@code omittedFiles} is 0); {@link DiffBudgetPlanner} is authoritative for what
-   * the model sees. The base comparison is still loaded, without the line cap.
+   * <p>With token budgeting enabled, the line-capped mega-diff and base comparison are skipped
+   * ({@code diff} and {@code baseComparison} are empty; line-path {@code omittedFiles} is 0);
+   * {@link DiffBudgetPlanner} is authoritative for what the model sees.
    */
   ReviewContext load(
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {

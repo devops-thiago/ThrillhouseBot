@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +53,36 @@ class ReviewSessionContextTest {
     ReviewSessionContext.invalidate(7L, first);
     assertFalse(ReviewSessionContext.isActiveCall(7L, first));
     assertTrue(ReviewSessionContext.isActiveCall(7L, second));
+  }
+
+  @Test
+  void invalidateDoesNotDropConcurrentlyBoundCall() throws Exception {
+    var bindStarted = new CountDownLatch(1);
+    var bindDone = new CountDownLatch(1);
+    var newCallId = new AtomicLong();
+
+    ReviewSessionContext.bind(10L, 1);
+    var stale = ReviewSessionContext.currentCallId();
+    ReviewSessionContext.clear();
+
+    var binder =
+        new Thread(
+            () -> {
+              bindStarted.countDown();
+              ReviewSessionContext.bind(10L, 2);
+              newCallId.set(ReviewSessionContext.currentCallId());
+              ReviewSessionContext.clear();
+              bindDone.countDown();
+            });
+    binder.start();
+    bindStarted.await();
+
+    ReviewSessionContext.invalidate(10L, stale);
+    bindDone.await();
+
+    assertTrue(ReviewSessionContext.isActiveCall(10L, newCallId.get()));
+    ReviewSessionContext.invalidate(10L, newCallId.get());
+    assertFalse(ReviewSessionContext.isActiveCall(10L, newCallId.get()));
   }
 
   @Test
