@@ -56,7 +56,6 @@ public class ReviewSessionUpdater {
     session.setInputTokens(session.getInputTokens() + inputTokens);
     session.setOutputTokens(session.getOutputTokens() + outputTokens);
     session.setCost(session.getCost() + cost);
-    // Sticky: any call without pricing keeps the session flagged until backfill clears it.
     session.setPricingMissing(session.isPricingMissing() || pricingMissing);
     session.setDurationMs(session.getDurationMs() + durationMs);
     session.persist();

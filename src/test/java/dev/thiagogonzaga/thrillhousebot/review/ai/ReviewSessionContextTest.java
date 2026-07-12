@@ -57,8 +57,7 @@ class ReviewSessionContextTest {
 
   @Test
   void invalidateDoesNotDropConcurrentlyBoundCall() throws Exception {
-    var bindStarted = new CountDownLatch(1);
-    var bindDone = new CountDownLatch(1);
+    var workerBound = new CountDownLatch(1);
     var newCallId = new AtomicLong();
 
     ReviewSessionContext.bind(10L, 1);
@@ -68,17 +67,16 @@ class ReviewSessionContextTest {
     var binder =
         new Thread(
             () -> {
-              bindStarted.countDown();
               ReviewSessionContext.bind(10L, 2);
               newCallId.set(ReviewSessionContext.currentCallId());
               ReviewSessionContext.clear();
-              bindDone.countDown();
+              workerBound.countDown();
             });
     binder.start();
-    bindStarted.await();
+    workerBound.await();
 
     ReviewSessionContext.invalidate(10L, stale);
-    bindDone.await();
+    binder.join();
 
     assertTrue(ReviewSessionContext.isActiveCall(10L, newCallId.get()));
     ReviewSessionContext.invalidate(10L, newCallId.get());

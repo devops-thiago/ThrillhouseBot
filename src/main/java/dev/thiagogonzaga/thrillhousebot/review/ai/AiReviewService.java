@@ -117,8 +117,6 @@ public class AiReviewService {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
-    // No blanket session invalidation after retries: each streamOnce clears its own callId.
-    // Parallel map-reduce batches share the session and must not wipe each other's active calls.
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       if (attempt > 1) {
         broadcaster.broadcast(
@@ -178,8 +176,6 @@ public class AiReviewService {
     var lastFlushNanos = new AtomicLong(System.nanoTime());
     var cancelled = new AtomicBoolean(false);
 
-    // Blocking batch calls still accumulate the buffer (so the final parse has the full text) but
-    // skip the per-token dashboard broadcast: the flush is a no-op when not streaming tokens.
     Runnable flushStream =
         broadcastTokens
             ? () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos)

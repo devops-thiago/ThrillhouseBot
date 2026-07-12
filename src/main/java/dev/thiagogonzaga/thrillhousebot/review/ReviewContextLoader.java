@@ -142,9 +142,6 @@ public class ReviewContextLoader {
         tokenBudgeted
             ? new ReviewDiffFormatter.FormattedDiff("", 0)
             : diffFormatter.buildDiffStringWithStats(files, reviewableFiles);
-    // Token-budgeted multi-call drops base comparison from every batch; loading the full uncapped
-    // comparison only bloated shared overhead (and starved the diff budget). Legacy line-capped
-    // path keeps it for single-call reviews.
     var baseComparisonResult =
         tokenBudgeted
             ? new ReviewDiffFormatter.FormattedDiff("", 0)

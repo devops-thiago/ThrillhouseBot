@@ -141,7 +141,6 @@ public final class ReviewDispatcher {
     logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
     try {
       var surfaced = orchestrator.review(batch.request());
-      // recordCompletion at post time, not dispatch; manual reviews are out of scope.
       if (surfaced && !batch.request().isManualTrigger()) {
         autoReviewRateLimiter.recordCompletion(
             batch.request().owner(), batch.request().repo(), batch.request().prNumber());
