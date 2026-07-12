@@ -105,6 +105,17 @@ class AutoReviewRateLimiterTest {
   }
 
   @Test
+  void clearForPrRemovesThrottleImmediately() {
+    var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, new MutableClock(0));
+
+    limiter.recordCompletion("owner", "repo", 1);
+    assertTrue(limiter.isThrottled("owner", "repo", 1));
+
+    limiter.clearForPr("owner", "repo", 1);
+    assertFalse(limiter.isThrottled("owner", "repo", 1));
+  }
+
+  @Test
   void newCompletionRestartsTheWindow() {
     var clock = new MutableClock(0);
     var limiter = new AutoReviewRateLimiter(INTERVAL_MS, BIG_THRESHOLD, clock);
