@@ -63,7 +63,7 @@ public class ReviewSessionUpdater {
 
   @Transactional(TxType.REQUIRES_NEW)
   public void recordFailure(long sessionId, String errorMessage, long durationMs) {
-    var session = repository.findById(sessionId);
+    var session = repository.findById(sessionId, LockModeType.PESSIMISTIC_WRITE);
     if (session == null) {
       return;
     }

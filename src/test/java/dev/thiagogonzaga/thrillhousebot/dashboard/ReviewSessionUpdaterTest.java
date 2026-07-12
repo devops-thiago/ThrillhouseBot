@@ -113,6 +113,20 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void shouldAccumulateDurationWhenFailurePrecedesFurtherUsage() throws Exception {
+    var session = persistSession();
+
+    updater.recordModelUsage(session.id, "deepseek-chat", 500, 100, 0.05, false, 1000);
+    updater.recordFailure(session.id, "batch 2 failed", 600);
+    updater.recordModelUsage(session.id, "deepseek-chat", 300, 50, 0.03, false, 400);
+
+    ReviewSession loaded = ReviewSession.findById(session.id);
+    assertEquals(ReviewSession.STATUS_FAILED, loaded.getStatus());
+    assertEquals(2000, loaded.getDurationMs());
+    assertEquals(800, loaded.getInputTokens());
+  }
+
+  @Test
   void shouldIgnoreMissingSessionId() {
     assertDoesNotThrow(() -> updater.recordModelUsage(999_999L, "model", 1, 1, 0.0, false, 1));
     assertDoesNotThrow(() -> updater.recordFailure(999_999L, "gone", 1));
