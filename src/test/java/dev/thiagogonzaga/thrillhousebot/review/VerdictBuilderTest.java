@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -163,5 +164,61 @@ class VerdictBuilderTest {
 
     assertEquals(2, result.omittedFiles());
     assertTrue(result.truncated());
+  }
+
+  @Test
+  void buildFiltersFalseDescriptionGapAboutIgnoredPomXml() {
+    var summary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "Finalize release",
+            List.of(
+                "The PR description states the pom.xml is bumped to 0.4.0, but the provided diff"
+                    + " does not include any pom.xml changes."));
+    var response = new ReviewResponse(List.of(), List.of(), summary);
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(
+                new FileDiff("pom.xml", "modified", 1, 1, 2, null),
+                new FileDiff("src/A.java", "modified", 5, 2, 7, "")),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            List.of(),
+            "",
+            List.of(new FileDiff("src/A.java", "modified", 5, 2, 7, "")),
+            new DiffLineResolver(Map.of()),
+            null);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);
+    var summaryCaptor = ArgumentCaptor.forClass(ReviewResponse.Summary.class);
+
+    builder.build(ctx, response, CI_CLEAR, plan);
+
+    verify(summaryGenerator)
+        .generate(anyInt(), anyInt(), anyInt(), any(), summaryCaptor.capture(), any());
+    assertTrue(summaryCaptor.getValue().descriptionGaps().isEmpty());
+  }
+
+  @Test
+  void buildLeavesResponseUnchangedWhenSummaryIsNull() {
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    verify(summaryGenerator).generate(anyInt(), anyInt(), anyInt(), any(), eq(null), any());
   }
 }

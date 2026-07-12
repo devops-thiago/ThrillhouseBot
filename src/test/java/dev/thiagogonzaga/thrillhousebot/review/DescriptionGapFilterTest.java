@@ -59,6 +59,67 @@ class DescriptionGapFilterTest {
     assertEquals(gaps, filtered);
   }
 
+  @Test
+  void keepsGapWhenAbsenceClaimTargetsReviewableFileDespiteIgnoredMention() {
+    var all = List.of(file("pom.xml", "modified", 1, 1), file("README.md", "modified", 2, 0));
+    var reviewable = List.of(file("README.md", "modified", 2, 0));
+    var gaps = List.of("pom.xml is changed, but README is not in the diff");
+
+    var filtered = DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, all, reviewable);
+
+    assertEquals(gaps, filtered);
+  }
+
+  @Test
+  void dropsGapWhenIgnoredFileIsClaimedMissingByName() {
+    var all = List.of(file("frontend/package-lock.json", "modified", 10, 2));
+    var reviewable = List.<GitHubPullRequestClient.FileDiff>of();
+    var gaps = List.of("package-lock.json is not in the diff");
+
+    var filtered = DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, all, reviewable);
+
+    assertTrue(filtered.isEmpty());
+  }
+
+  @Test
+  void returnsEmptyListForNullGaps() {
+    assertTrue(
+        DescriptionGapFilter.dropIgnoredFilePresenceGaps(
+                null, List.of(file("pom.xml", "modified", 1, 1)), List.of())
+            .isEmpty());
+  }
+
+  @Test
+  void returnsGapsUnchangedWhenNoIgnoredFiles() {
+    var all = List.of(file("src/A.java", "modified", 1, 0));
+    var gaps = List.of("Description claims tests were added, but no test files changed");
+
+    assertEquals(gaps, DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, all, all));
+  }
+
+  @Test
+  void returnsGapsUnchangedWhenAllFilesListEmpty() {
+    var gaps = List.of("no changes");
+
+    assertEquals(
+        gaps, DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, List.of(), List.of()));
+  }
+
+  @Test
+  void dropsOnlyTheIgnoredFileGapAndKeepsOthers() {
+    var all = List.of(file("pom.xml", "modified", 1, 1), file("src/A.java", "modified", 5, 2));
+    var reviewable = List.of(file("src/A.java", "modified", 5, 2));
+    var gaps =
+        List.of(
+            "The diff does not include any pom.xml changes.",
+            "Description claims tests were added, but no test files changed");
+
+    var filtered = DescriptionGapFilter.dropIgnoredFilePresenceGaps(gaps, all, reviewable);
+
+    assertEquals(
+        List.of("Description claims tests were added, but no test files changed"), filtered);
+  }
+
   private static GitHubPullRequestClient.FileDiff file(
       String name, String status, int additions, int deletions) {
     return new GitHubPullRequestClient.FileDiff(

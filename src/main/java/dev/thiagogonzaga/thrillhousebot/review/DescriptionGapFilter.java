@@ -30,10 +30,6 @@ import java.util.stream.Collectors;
  */
 final class DescriptionGapFilter {
 
-  private static final Pattern ABSENCE_CLAIM =
-      Pattern.compile(
-          "(?i)(not\\s+(?:include|present|in)|does\\s+not\\s+include|missing\\s+from|no\\s+\\S+\\s+changes|not\\s+shown|patch\\s+omitted|not\\s+in\\s+the\\s+(?:diff|change))");
-
   private DescriptionGapFilter() {}
 
   static List<String> dropIgnoredFilePresenceGaps(
@@ -61,20 +57,55 @@ final class DescriptionGapFilter {
   }
 
   private static boolean isIgnoredFilePresenceGap(String gap, Set<String> ignoredPaths) {
-    if (gap == null || gap.isBlank() || !ABSENCE_CLAIM.matcher(gap).find()) {
+    if (gap == null || gap.isBlank()) {
       return false;
     }
     var lower = gap.toLowerCase(Locale.ROOT);
     for (String path : ignoredPaths) {
-      if (lower.contains(path.toLowerCase(Locale.ROOT))) {
-        return true;
-      }
-      var base = basename(path);
-      if (!base.isBlank() && lower.contains(base.toLowerCase(Locale.ROOT))) {
+      if (absenceTargetsFile(lower, path)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * True when the gap's absence claim is about {@code path} specifically — not merely when the path
+   * is mentioned elsewhere in the same sentence (e.g. "pom.xml changed, but README is not in the
+   * diff").
+   */
+  private static boolean absenceTargetsFile(String lower, String path) {
+    for (String name : fileNames(path)) {
+      String q = Pattern.quote(name);
+      if (Pattern.compile(
+              "(?:does|do)\\s+not\\s+include\\s+(?:any\\s+)?(?:the\\s+)?(?:\\S+\\s+)*?" + q)
+          .matcher(lower)
+          .find()) {
+        return true;
+      }
+      if (Pattern.compile("no\\s+" + q + "\\s+changes").matcher(lower).find()) {
+        return true;
+      }
+      if (Pattern.compile(
+              "\\b" + q + "\\b[^,]{0,40}\\b(?:is\\s+)?not\\s+(?:included|present|in|shown)\\b")
+          .matcher(lower)
+          .find()) {
+        return true;
+      }
+      if (Pattern.compile("\\b" + q + "\\b[^,]{0,30}\\bmissing\\b").matcher(lower).find()) {
+        return true;
+      }
+      if (Pattern.compile("\\b" + q + "\\b[^.]{0,30}patch\\s+omitted").matcher(lower).find()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static List<String> fileNames(String path) {
+    var file = path.toLowerCase(Locale.ROOT);
+    var base = basename(path).toLowerCase(Locale.ROOT);
+    return file.equals(base) ? List.of(file) : List.of(file, base);
   }
 
   private static String basename(String path) {
