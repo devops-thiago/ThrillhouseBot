@@ -186,9 +186,8 @@ public class FindingPipeline {
           outcomesByIndex[i] = futures.get(i).join();
         } catch (CompletionException e) {
           failedIndices.add(i);
-          var cause = e.getCause() != null ? e.getCause() : e;
           Log.warnf(
-              cause,
+              e,
               "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
               i + 1,
               batches.size());
