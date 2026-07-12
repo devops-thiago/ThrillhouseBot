@@ -173,12 +173,12 @@ class FindingPipelineTest {
     when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
 
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
     var thrown =
         assertThrows(
             IllegalStateException.class,
-            () ->
-                pipeline.run(
-                    session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of())));
+            () -> pipeline.run(session, template, ctx, plan, resolver));
 
     assertEquals("Parallel batch review failed", thrown.getMessage());
     assertSame(failure, thrown.getCause());

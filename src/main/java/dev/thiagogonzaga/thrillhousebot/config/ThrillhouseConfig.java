@@ -263,7 +263,7 @@ public interface ThrillhouseConfig {
      * manual {@code /review} always bypasses and never shifts the window. Zero (or negative)
      * disables throttling. Tracked in-memory per replica.
      */
-    @WithDefault("1h")
+    @WithDefault("0")
     @WithName("auto-review-min-interval")
     Duration autoReviewMinInterval();
 
