@@ -42,6 +42,38 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void shouldAccumulateModelUsageAcrossMultipleCalls() throws Exception {
+    var session = persistSession();
+
+    updater.recordModelUsage(session.id, "deepseek-chat", 1000, 200, 0.10, false, 2000);
+    updater.recordModelUsage(session.id, "deepseek-chat", 800, 150, 0.08, false, 1800);
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 50, 0.01, false, 400);
+
+    ReviewSession loaded = ReviewSession.findById(session.id);
+    assertEquals("deepseek-chat", loaded.getModel());
+    assertEquals(1900, loaded.getInputTokens());
+    assertEquals(400, loaded.getOutputTokens());
+    assertEquals(0.19, loaded.getCost(), 0.001);
+    assertFalse(loaded.isPricingMissing());
+    assertEquals(4200, loaded.getDurationMs());
+  }
+
+  @Test
+  void shouldKeepPricingMissingFlagWhenAnyCallLacksPricing() throws Exception {
+    var session = persistSession();
+
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 50, 0.05, false, 500);
+    updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true, 1500);
+    updater.recordModelUsage(session.id, "deepseek-chat", 50, 20, 0.02, false, 300);
+
+    ReviewSession loaded = ReviewSession.findById(session.id);
+    assertTrue(loaded.isPricingMissing());
+    assertEquals(270, loaded.getInputTokens());
+    assertEquals(150, loaded.getOutputTokens());
+    assertEquals(0.07, loaded.getCost(), 0.001);
+  }
+
+  @Test
   void shouldFlagMissingPricingOnTheSession() throws Exception {
     var session = persistSession();
 
