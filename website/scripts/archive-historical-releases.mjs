@@ -63,10 +63,6 @@ const PAGE_META = {
     title: "How it compares",
     description: "Where ThrillhouseBot sits next to other AI code-review tools.",
   },
-  "review-eval": {
-    title: "Review-quality evaluation",
-    description: "Probe and score review quality against collected failure cases.",
-  },
   contributing: {
     title: "Contributing",
     description: "Development setup and the CI bar for contributions.",
@@ -81,7 +77,6 @@ const SIDEBAR_ORDER = [
   { label: "AI providers", slug: "providers" },
   { label: "Architecture", slug: "architecture" },
   { label: "How it compares", slug: "comparison" },
-  { label: "Review-quality evaluation", slug: "review-eval" },
   { label: "Contributing", slug: "contributing" },
 ];
 
@@ -298,10 +293,9 @@ function buildPages(tag, slug) {
 
   const architecture = gitShow(tag, "docs/ARCHITECTURE.md");
   const comparison = gitShow(tag, "docs/COMPARISON.md");
-  const reviewEval = gitShow(tag, "docs/REVIEW_EVAL.md");
   const contributing = gitShow(tag, "CONTRIBUTING.md");
 
-  const present = new Set(["index", "getting-started", "providers", "architecture", "comparison", "review-eval", "contributing"]);
+  const present = new Set(["index", "getting-started", "providers", "architecture", "comparison", "contributing"]);
 
   // Home
   const nextLinks = [
@@ -396,12 +390,6 @@ See [Architecture](/ThrillhouseBot/${slug}/architecture/) and
     writePage(tag, slug, "comparison", stripDocsMarkers(stripH1(comparison)));
   } else {
     present.delete("comparison");
-  }
-
-  if (reviewEval) {
-    writePage(tag, slug, "review-eval", stripDocsMarkers(stripH1(reviewEval)));
-  } else {
-    present.delete("review-eval");
   }
 
   if (contributing) {

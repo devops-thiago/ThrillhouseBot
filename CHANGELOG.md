@@ -203,7 +203,6 @@ This release makes the bot interactive and controllable from the PR — conversa
   - Findings a maintainer answered on a prior round do not return on follow-up review
   - The verifier receives prior findings and rejects re-raises, cross-scope misattributions, and out-of-diff artifact claims above medium severity
   - Review prompts require verbatim quoting, both sides of consistency comparisons, convention-respecting suggestions, and one finding per defect
-  - Review-quality probe (`docs/REVIEW_EVAL.md`) for scoring deploys against collected failure cases
 
 ### Fixed
 
