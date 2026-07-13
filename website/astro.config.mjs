@@ -61,7 +61,6 @@ export default defineConfig({
         { label: "AI providers", slug: "providers" },
         { label: "Architecture", slug: "architecture" },
         { label: "How it compares", slug: "comparison" },
-        { label: "Review-quality evaluation", slug: "review-eval" },
         { label: "Contributing", slug: "contributing" },
       ],
       plugins: [...versioningPlugins, starlightLinksValidator()],
