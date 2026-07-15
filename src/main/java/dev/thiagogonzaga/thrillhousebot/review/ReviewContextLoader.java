@@ -240,20 +240,19 @@ public class ReviewContextLoader {
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */
   static <T> Supplier<T> memoize(Supplier<T> delegate) {
     return new Supplier<>() {
-      private volatile T value;
-      private volatile boolean initialized;
+      private final Object lock = new Object();
+      private boolean initialized;
+      private T value;
 
       @Override
       public T get() {
-        if (!initialized) {
-          synchronized (this) {
-            if (!initialized) {
-              value = delegate.get();
-              initialized = true;
-            }
+        synchronized (lock) {
+          if (!initialized) {
+            value = delegate.get();
+            initialized = true;
           }
+          return value;
         }
-        return value;
       }
     };
   }

@@ -713,6 +713,7 @@ class FollowUpAnalyzerTest {
   void previousFindingFilesByIdIsEmptyForMissingOrBadInput() {
     assertTrue(analyzer.previousFindingFilesById((String) null).isEmpty());
     assertTrue(analyzer.previousFindingFilesById("not json").isEmpty());
+    assertTrue(analyzer.previousFindingFilesById((List<ReviewResponse.Finding>) null).isEmpty());
   }
 
   @Test
@@ -723,6 +724,68 @@ class FollowUpAnalyzerTest {
     assertTrue(analyzer.unresolvedFindings(PREVIOUS_JSON, List.of()).isEmpty());
     assertTrue(analyzer.unresolvedFindings((String) null, unresolvedStatus).isEmpty());
     assertTrue(analyzer.unresolvedFindings("not json", unresolvedStatus).isEmpty());
+    assertTrue(
+        analyzer
+            .unresolvedFindings((List<ReviewResponse.Finding>) null, unresolvedStatus)
+            .isEmpty());
+    assertTrue(analyzer.unresolvedFindings(List.of(), unresolvedStatus).isEmpty());
+  }
+
+  @Test
+  void parsePreviousResponsesHandlesNullEmptyAndValidJson() {
+    assertTrue(analyzer.parsePreviousResponses(null).isEmpty());
+    assertTrue(analyzer.parsePreviousResponses(List.of()).isEmpty());
+    var parsed = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON));
+    assertEquals(1, parsed.size());
+    assertEquals(2, parsed.get(0).findings().size());
+  }
+
+  @Test
+  void preParsedApisReuseFindingsWithoutReReadingJson() {
+    var previous = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)).get(0).findings();
+    var unresolvedStatus = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "x"));
+
+    assertEquals(1, analyzer.unresolvedFindings(previous, unresolvedStatus).size());
+    assertEquals("src/A.java", analyzer.previousFindingFilesById(previous).get(1));
+    assertTrue(
+        analyzer
+            .matchFindingThreads((List<ReviewResponse.Finding>) null, List.of(), BOT_ID)
+            .isEmpty());
+    assertTrue(analyzer.matchFindingThreads(List.of(), List.of(), BOT_ID).isEmpty());
+
+    var ctx =
+        analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), List.of(), BOT_ID);
+    assertTrue(ctx.contains("src/A.java"));
+    assertTrue(ctx.contains("src/B.java"));
+
+    // Null previous findings falls back to the prior-review body path (empty here).
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(
+            (List<ReviewResponse.Finding>) null, List.of(), List.of(), List.of(), BOT_ID));
+
+    // Older rounds with no maintainer reply contribute nothing to the answered-earlier section.
+    var older =
+        analyzer.parsePreviousResponses(
+            List.of(
+                "{\"findings\":[{\"risk\":\"low\",\"file\":\"src/Old.java\",\"line\":1,"
+                    + "\"title\":\"Old\",\"description\":\"d\",\"suggestion_old\":\"o\","
+                    + "\"suggestion_new\":\"n\"}],\"previous_findings_status\":[],\"summary\":null}"));
+    var withOlder =
+        analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), older, BOT_ID);
+    assertTrue(withOlder.contains("src/A.java"));
+    assertFalse(withOlder.contains("Answered in earlier rounds"));
+
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatusesFromParsed(
+                null, List.of(), List.of(), new DiffLineResolver(Map.of()), BOT_ID)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatusesFromParsed(
+                List.of(), List.of(), List.of(), new DiffLineResolver(Map.of()), BOT_ID)
+            .isEmpty());
   }
 
   /** One-line patch whose only right-side line is {@code line}, for backstop presence tests. */

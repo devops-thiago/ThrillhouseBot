@@ -531,6 +531,9 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
     var threads = new HashMap<Integer, Long>();
+    if (previous == null || previous.isEmpty()) {
+      return threads;
+    }
     for (var i = 0; i < previous.size(); i++) {
       Long rootId = rootCommentId(previous.get(i), i + 1, inlineComments, botIdentity);
       if (rootId != null) {
