@@ -170,7 +170,8 @@ class FindingFeedbackCaptureServiceTest {
     // non-finding bot root must be ignored. Empty previous-AI JSON is irrelevant — we scan
     // comments directly so reactions on older rounds are still polled.
     var comments =
-        List.of(
+        java.util.Arrays.asList(
+            null, // null entries must not abort the scan
             new GitHubReviewClient.PullRequestComment(
                 10L,
                 null,
@@ -189,6 +190,12 @@ class FindingFeedbackCaptureServiceTest {
                 "B.java",
                 "summary without marker",
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")),
+            new GitHubReviewClient.PullRequestComment(
+                25L,
+                null,
+                "B2.java",
+                "marker but null user\n" + SuggestionFormatter.findingMarker(2),
+                null),
             new GitHubReviewClient.PullRequestComment(
                 30L,
                 null,
@@ -215,7 +222,28 @@ class FindingFeedbackCaptureServiceTest {
     verify(reactionClient, never())
         .listReviewCommentReactions(any(), any(), any(), any(), eq(20L), anyString(), anyInt());
     verify(reactionClient, never())
+        .listReviewCommentReactions(any(), any(), any(), any(), eq(25L), anyString(), anyInt());
+    verify(reactionClient, never())
         .listReviewCommentReactions(any(), any(), any(), any(), eq(40L), anyString(), anyInt());
+  }
+
+  @Test
+  void captureOnPriorFindingsSwallowsIterationFailures() {
+    var exploding =
+        new java.util.AbstractList<GitHubReviewClient.PullRequestComment>() {
+          @Override
+          public int size() {
+            return 1;
+          }
+
+          @Override
+          public GitHubReviewClient.PullRequestComment get(int index) {
+            throw new RuntimeException("boom");
+          }
+        };
+    assertDoesNotThrow(
+        () -> capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, exploding));
+    verifyNoInteractions(reactionClient, feedbackService);
   }
 
   @Test
