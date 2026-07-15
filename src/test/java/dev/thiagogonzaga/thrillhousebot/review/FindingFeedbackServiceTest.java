@@ -141,7 +141,33 @@ class FindingFeedbackServiceTest {
     assertEquals(0, service.summarize(null).totalEvents());
     assertEquals(0, service.summarize(" ").totalEvents());
     assertTrue(service.listRecent(null, 10).isEmpty());
+    assertTrue(service.listRecent(" ", 10).isEmpty());
     assertTrue(service.listRecent("owner/repo", 0).isEmpty());
+    assertTrue(service.listRecent("owner/repo", -1).isEmpty());
+  }
+
+  @Test
+  void recordAcceptsNullReactionIdAndRejectsNullReactor() {
+    assertTrue(
+        service.record(
+            "owner/repo",
+            1,
+            50L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REPLY_HEURISTIC,
+            "carol",
+            null));
+    assertFalse(
+        service.record(
+            "owner/repo",
+            1,
+            51L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            null,
+            77L));
   }
 
   @Test

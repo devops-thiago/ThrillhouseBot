@@ -161,6 +161,7 @@ class FindingFeedbackCaptureServiceTest {
     capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, null, List.of());
     capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, " ", List.of());
     capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{}", null);
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{}", List.of());
     verifyNoInteractions(followUpAnalyzer, reactionClient, feedbackService);
   }
 
