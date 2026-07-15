@@ -262,6 +262,71 @@ class FrameworkFalsePositiveFilterTest {
   }
 
   @Test
+  void dropsClaimWhenTitleIsNullAndDescriptionMatches() {
+    var f =
+        finding(
+            "src/main/java/dev/example/PrSummaryGenerator.java",
+            null,
+            "The class is missing a no-arg constructor required by CDI.");
+
+    var result = filter.filter(response(f), INJECTED_CTOR_DIFF);
+
+    assertEquals(0, result.findings().size());
+  }
+
+  @Test
+  void keepsClaimWhenConstructorIsBeyondTheAnnotationLookahead() {
+    var diff =
+        """
+        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +8 -0)
+        ```diff
+        @@ -10,2 +10,10 @@
+         public class PrSummaryGenerator {
+        +  @Inject
+        +  @A
+        +  @B
+        +  @C
+        +  @D
+        +  @E
+        +  public PrSummaryGenerator(AiReviewService aiReviewService) {
+        +  }
+         }
+        ```
+        """;
+    var response = response(noArgClaim("Missing no-arg constructor"));
+
+    assertSame(response, filter.filter(response, diff));
+  }
+
+  @Test
+  void keepsClaimWhenAnnotationIsTheLastKeptLine() {
+    var diff =
+        """
+        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +1 -0)
+        ```diff
+        @@ -10,2 +10,3 @@
+         public class PrSummaryGenerator {
+        +  @Inject
+        ```
+        """;
+    var response = response(noArgClaim("Missing no-arg constructor"));
+
+    assertSame(response, filter.filter(response, diff));
+  }
+
+  @Test
+  void keepsClaimOnExtensionOnlyFileName() {
+    var response =
+        response(
+            finding(
+                "src/.java",
+                "Missing no-arg constructor",
+                "The class needs a default constructor."));
+
+    assertSame(response, filter.filter(response, INJECTED_CTOR_DIFF));
+  }
+
+  @Test
   void keepsClaimWhenFindingHasNoFile() {
     var response =
         response(
