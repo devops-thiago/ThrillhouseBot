@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -48,7 +49,15 @@ class VerdictBuilderTest {
           summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
 
   {
-    lenient().when(followUpAnalyzer.unresolvedFindings(any(), any())).thenReturn(List.of());
+    lenient()
+        .when(
+            followUpAnalyzer.unresolvedFindings(
+                org.mockito.ArgumentMatchers
+                    .<java.util.List<
+                            dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                        any(),
+                any()))
+        .thenReturn(List.of());
     lenient()
         .when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
         .thenReturn("");
@@ -63,6 +72,7 @@ class VerdictBuilderTest {
         lineCapOmitted,
         List.of(),
         List.of(),
+        List.of(),
         true,
         false,
         null,
@@ -72,7 +82,7 @@ class VerdictBuilderTest {
         List.of(),
         "",
         List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
-        new DiffLineResolver(Map.of()),
+        () -> new DiffLineResolver(Map.of()),
         null);
   }
 
@@ -163,5 +173,57 @@ class VerdictBuilderTest {
 
     assertEquals(2, result.omittedFiles());
     assertTrue(result.truncated());
+  }
+
+  @Test
+  void mergePreviousStatusesReusesModelListWhenBackstopIsEmpty() {
+    var model = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "done"));
+    assertSame(model, VerdictBuilder.mergePreviousStatuses(model, List.of()));
+    assertSame(model, VerdictBuilder.mergePreviousStatuses(model, null));
+  }
+
+  @Test
+  void mergePreviousStatusesAppendsBackstopWithoutMutatingModelList() {
+    var model = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "done"));
+    var backstop = List.of(new ReviewResult.PreviousFindingStatus(2, "unresolved", "held"));
+
+    var merged = VerdictBuilder.mergePreviousStatuses(model, backstop);
+
+    assertEquals(2, merged.size());
+    assertEquals(1, model.size());
+    assertEquals("unresolved", merged.get(1).status());
+  }
+
+  @Test
+  void noContextPathDoesNotTouchLineResolverSupplier() {
+    var touched = new boolean[] {false};
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            List.of(),
+            "",
+            List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
+            () -> {
+              touched[0] = true;
+              return new DiffLineResolver(Map.of());
+            },
+            null);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertFalse(touched[0]);
   }
 }

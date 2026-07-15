@@ -131,7 +131,7 @@ public class FindingPipeline {
               aiResponse.previousFindingsStatus(),
               budgetedBatch,
               plan,
-              followUpAnalyzer.previousFindingFilesById(ctx.previousAiResponseJson()));
+              followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList()));
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
     return refine(
@@ -166,7 +166,7 @@ public class FindingPipeline {
     var batches = plan.batches();
     // The id space of previous_findings_status entries maps 1-based onto the prior response's
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
-    var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousAiResponseJson());
+    var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList());
 
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();

@@ -586,7 +586,7 @@ public class ReviewPublisher {
   void resolveAddressedThreads(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
-      String previousAiResponseJson,
+      List<ReviewResponse.Finding> previousFindings,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse.PreviousFindingStatus> statuses) {
     try {
@@ -602,7 +602,7 @@ public class ReviewPublisher {
         return;
       }
       var rootByFinding =
-          followUpAnalyzer.matchFindingThreads(previousAiResponseJson, inlineComments, botIdentity);
+          followUpAnalyzer.matchFindingThreads(previousFindings, inlineComments, botIdentity);
       var threads =
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;

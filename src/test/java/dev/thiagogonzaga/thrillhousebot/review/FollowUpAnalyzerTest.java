@@ -711,7 +711,7 @@ class FollowUpAnalyzerTest {
 
   @Test
   void previousFindingFilesByIdIsEmptyForMissingOrBadInput() {
-    assertTrue(analyzer.previousFindingFilesById(null).isEmpty());
+    assertTrue(analyzer.previousFindingFilesById((String) null).isEmpty());
     assertTrue(analyzer.previousFindingFilesById("not json").isEmpty());
   }
 
@@ -721,7 +721,7 @@ class FollowUpAnalyzerTest {
 
     assertTrue(analyzer.unresolvedFindings(PREVIOUS_JSON, null).isEmpty());
     assertTrue(analyzer.unresolvedFindings(PREVIOUS_JSON, List.of()).isEmpty());
-    assertTrue(analyzer.unresolvedFindings(null, unresolvedStatus).isEmpty());
+    assertTrue(analyzer.unresolvedFindings((String) null, unresolvedStatus).isEmpty());
     assertTrue(analyzer.unresolvedFindings("not json", unresolvedStatus).isEmpty());
   }
 

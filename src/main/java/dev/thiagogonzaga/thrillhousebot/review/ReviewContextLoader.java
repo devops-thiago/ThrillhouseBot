@@ -25,10 +25,12 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -101,6 +103,7 @@ public class ReviewContextLoader {
       int omittedFiles,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<String> priorAiResponseJsons,
+      List<ReviewResponse> priorAiResponses,
       boolean isFirstVisibleReview,
       boolean hasContext,
       String previousAiResponseJson,
@@ -110,15 +113,32 @@ public class ReviewContextLoader {
       List<GitHubLabelClient.Label> repoLabels,
       String projectStack,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
-      DiffLineResolver lineResolver,
+      Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
       priorAiResponseJsons = List.copyOf(priorAiResponseJsons);
+      priorAiResponses = List.copyOf(priorAiResponses);
       inlineComments = List.copyOf(inlineComments);
       repoLabels = List.copyOf(repoLabels);
       reviewableFiles = List.copyOf(reviewableFiles);
+    }
+
+    /**
+     * Memoized {@link DiffLineResolver} for this review — one construction shared by the finding
+     * pipeline, approve backstop, and {@code postReview}.
+     */
+    public DiffLineResolver lineResolver() {
+      return lineResolverSupplier.get();
+    }
+
+    /**
+     * Findings from the newest prior AI response (empty when this is a first review or the prior
+     * JSON was missing/unparseable). Parsed once in {@link #load}.
+     */
+    public List<ReviewResponse.Finding> previousFindingsList() {
+      return priorAiResponses.isEmpty() ? List.of() : priorAiResponses.get(0).findings();
     }
   }
 
@@ -148,8 +168,12 @@ public class ReviewContextLoader {
             : buildBaseComparisonWithStats(
                 auth, req.owner(), req.repo(), req.baseSha(), req.commitSha(), true);
     var omittedFiles = diffResult.omittedFiles();
-    var lineResolver =
-        new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewableFiles));
+    // One DiffLineResolver per review, shared by the finding pipeline / backstop / postReview.
+    // Memoized so a no-context path that never touches it (e.g. VerdictBuilder when hasContext is
+    // false) does not pay for a full patch parse.
+    var patchesByFile = diffFormatter.patchesByReviewableFiles(reviewableFiles);
+    Supplier<DiffLineResolver> lineResolverSupplier =
+        memoize(() -> new DiffLineResolver(patchesByFile));
 
     var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
     // isFirstVisibleReview keys off the summary comment directly, not reviews alone: a first
@@ -161,11 +185,15 @@ public class ReviewContextLoader {
                 .noneMatch(r -> r.user() != null && botIdentity.matches(r.user().login()))
             && !botSummaryCommentExists(auth, req.owner(), req.repo(), req.prNumber());
     var hasContext = !priorAiResponseJsons.isEmpty();
+    // Deserialize each prior response once for the whole review — context formatting, unresolved
+    // gate, approve backstop, and later thread matching all reuse these objects.
+    List<ReviewResponse> priorAiResponses =
+        followUpAnalyzer.parsePreviousResponses(priorAiResponseJsons);
     String previousAiResponseJson =
         priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(0);
-    List<String> olderAiResponseJsons =
-        priorAiResponseJsons.size() > 1
-            ? priorAiResponseJsons.subList(1, priorAiResponseJsons.size())
+    List<ReviewResponse> olderAiResponses =
+        priorAiResponses.size() > 1
+            ? priorAiResponses.subList(1, priorAiResponses.size())
             : List.of();
     List<GitHubReviewClient.PullRequestComment> inlineComments =
         hasContext
@@ -174,10 +202,10 @@ public class ReviewContextLoader {
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
-                previousAiResponseJson,
+                priorAiResponses.isEmpty() ? List.of() : priorAiResponses.get(0).findings(),
                 priorReviews,
                 inlineComments,
-                olderAiResponseJsons,
+                olderAiResponses,
                 botIdentity)
             : "";
 
@@ -195,6 +223,7 @@ public class ReviewContextLoader {
         omittedFiles,
         priorReviews,
         priorAiResponseJsons,
+        priorAiResponses,
         isFirstVisibleReview,
         hasContext,
         previousAiResponseJson,
@@ -204,8 +233,29 @@ public class ReviewContextLoader {
         repoLabels,
         projectStack,
         reviewableFiles,
-        lineResolver,
+        lineResolverSupplier,
         prTotals);
+  }
+
+  /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */
+  static <T> Supplier<T> memoize(Supplier<T> delegate) {
+    return new Supplier<>() {
+      private volatile T value;
+      private volatile boolean initialized;
+
+      @Override
+      public T get() {
+        if (!initialized) {
+          synchronized (this) {
+            if (!initialized) {
+              value = delegate.get();
+              initialized = true;
+            }
+          }
+        }
+        return value;
+      }
+    };
   }
 
   /**

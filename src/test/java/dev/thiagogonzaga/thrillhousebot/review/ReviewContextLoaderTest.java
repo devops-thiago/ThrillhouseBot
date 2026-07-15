@@ -59,6 +59,7 @@ class ReviewContextLoaderTest {
     MockitoAnnotations.openMocks(this);
     // Default: budgeting off so existing formatter-driven assertions keep the line-capped path.
     when(activeModel.maxInputTokens()).thenReturn(0);
+    lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
     loader =
         new ReviewContextLoader(
             prClient,
@@ -669,6 +670,130 @@ class ReviewContextLoaderTest {
                   "owner", "repo", 1, "sha", "title", "", "base", "main", 123L, false));
 
       assertEquals("", stack);
+    }
+  }
+
+  /**
+   * #135 — one memoized {@link DiffLineResolver} per review; prior AI responses deserialized once
+   * at load time.
+   */
+  @Nested
+  class DedupeHotPathLoad {
+
+    private static ReviewOrchestrator.ReviewRequest request() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner",
+          "repo",
+          1,
+          "headsha1",
+          "Title",
+          "body",
+          "basesha1",
+          "main",
+          99L,
+          true,
+          "main",
+          false);
+    }
+
+    private void stubLoad(List<GitHubPullRequestClient.FileDiff> files, List<String> priorJsons) {
+      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(files);
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "body",
+                  new GitHubPullRequestClient.Ref("headsha1"),
+                  new GitHubPullRequestClient.Ref("basesha1"),
+                  1,
+                  1,
+                  0));
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(commentClient.listComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(sessionPersistence.findAllPriorAiResponseJsons(any(), eq(1), anyLong()))
+          .thenReturn(priorJsons);
+      when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+          .thenReturn(new InstructionsResolver.ResolvedInstructions("", ""));
+      when(labeler.fetchExistingLabels(any(), any(), any())).thenReturn(List.of());
+      when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
+    }
+
+    @Test
+    void lineResolverIsBuiltOnceAndSharedAcrossAccesses() {
+      stubLoad(
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of());
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+      DiffLineResolver.CONSTRUCTION_COUNT.set(0);
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+      assertEquals(0, DiffLineResolver.CONSTRUCTION_COUNT.get());
+
+      var first = ctx.lineResolver();
+      var second = ctx.lineResolver();
+
+      assertSame(first, second);
+      assertEquals(1, DiffLineResolver.CONSTRUCTION_COUNT.get());
+    }
+
+    @Test
+    void lineResolverIsNotBuiltWhenNeverAccessed() {
+      stubLoad(
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of());
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+      DiffLineResolver.CONSTRUCTION_COUNT.set(0);
+
+      loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(0, DiffLineResolver.CONSTRUCTION_COUNT.get());
+    }
+
+    @Test
+    void priorAiResponsesAreParsedOnceAtLoad() {
+      var priorJson =
+          """
+          {"findings":[{"risk":"medium","confidence":"high","file":"a.java","line":1,\
+          "title":"T","description":"d","suggestion_old":"o","suggestion_new":"n"}],\
+          "previous_findings_status":[],"summary":null}
+          """;
+      var parsed =
+          List.of(
+              new dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse(
+                  List.of(
+                      new dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding(
+                          "medium", "high", "a.java", 1, "T", "d", "o", "n")),
+                  List.of(),
+                  null));
+      when(followUpAnalyzer.parsePreviousResponses(List.of(priorJson))).thenReturn(parsed);
+      when(followUpAnalyzer.buildPreviousFindingsContext(
+              anyList(), any(), any(), any(), any(BotIdentity.class)))
+          .thenReturn("ctx");
+      stubLoad(
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of(priorJson));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(parsed, ctx.priorAiResponses());
+      assertEquals(1, ctx.previousFindingsList().size());
+      assertEquals("a.java", ctx.previousFindingsList().get(0).file());
+      verify(followUpAnalyzer, times(1)).parsePreviousResponses(List.of(priorJson));
     }
   }
 }

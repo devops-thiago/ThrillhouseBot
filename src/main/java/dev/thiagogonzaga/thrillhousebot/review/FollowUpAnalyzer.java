@@ -100,8 +100,26 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<String> olderAiResponseJsons,
       BotIdentity botIdentity) {
-    var structured = formatStructuredFindings(previousAiResponseJson, inlineComments, botIdentity);
-    var answered = formatAnsweredEarlier(olderAiResponseJsons, inlineComments, botIdentity);
+    return buildPreviousFindingsContext(
+        parsePreviousFindings(previousAiResponseJson),
+        priorReviews,
+        inlineComments,
+        parsePreviousResponses(olderAiResponseJsons),
+        botIdentity);
+  }
+
+  /**
+   * Same as the JSON overload, but consumes findings already deserialized for this review so the
+   * prior-response JSON is not re-parsed.
+   */
+  public String buildPreviousFindingsContext(
+      List<ReviewResponse.Finding> previousFindings,
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<ReviewResponse> olderAiResponses,
+      BotIdentity botIdentity) {
+    var structured = formatStructuredFindings(previousFindings, inlineComments, botIdentity);
+    var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
     if (!structured.isEmpty()) {
       return structured + answered;
     }
@@ -115,16 +133,16 @@ public class FollowUpAnalyzer {
    * previous_findings_status.
    */
   private String formatAnsweredEarlier(
-      List<String> olderAiResponseJsons,
+      List<ReviewResponse> olderAiResponses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    if (olderAiResponseJsons == null || olderAiResponseJsons.isEmpty()) {
+    if (olderAiResponses == null || olderAiResponses.isEmpty()) {
       return "";
     }
     var sb = new StringBuilder();
     var seen = new HashSet<String>();
-    for (String json : olderAiResponseJsons) {
-      for (var finding : parsePreviousFindings(json)) {
+    for (var response : olderAiResponses) {
+      for (var finding : response.findings()) {
         appendAnsweredEntry(sb, seen, finding, inlineComments, botIdentity);
       }
     }
@@ -171,11 +189,10 @@ public class FollowUpAnalyzer {
    * ids the model references in previous_findings_status.
    */
   private String formatStructuredFindings(
-      String aiResponseJson,
+      List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    var previous = parsePreviousFindings(aiResponseJson);
-    if (previous.isEmpty()) {
+    if (previous == null || previous.isEmpty()) {
       return "";
     }
     // The prompt template provides the lead-in sentence; emit only the numbered findings
@@ -504,7 +521,15 @@ public class FollowUpAnalyzer {
       String previousAiResponseJson,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    var previous = parsePreviousFindings(previousAiResponseJson);
+    return matchFindingThreads(
+        parsePreviousFindings(previousAiResponseJson), inlineComments, botIdentity);
+  }
+
+  /** Same as the JSON overload, using findings already deserialized for this review. */
+  public Map<Integer, Long> matchFindingThreads(
+      List<ReviewResponse.Finding> previous,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
     var threads = new HashMap<Integer, Long>();
     for (var i = 0; i < previous.size(); i++) {
       Long rootId = rootCommentId(previous.get(i), i + 1, inlineComments, botIdentity);
@@ -521,11 +546,16 @@ public class FollowUpAnalyzer {
    */
   public List<Finding> unresolvedFindings(
       String previousAiResponseJson, List<ReviewResponse.PreviousFindingStatus> statuses) {
+    return unresolvedFindings(parsePreviousFindings(previousAiResponseJson), statuses);
+  }
+
+  /** Same as the JSON overload, using findings already deserialized for this review. */
+  public List<Finding> unresolvedFindings(
+      List<ReviewResponse.Finding> previous, List<ReviewResponse.PreviousFindingStatus> statuses) {
     if (statuses == null || statuses.isEmpty()) {
       return List.of();
     }
-    var previous = parsePreviousFindings(previousAiResponseJson);
-    if (previous.isEmpty()) {
+    if (previous == null || previous.isEmpty()) {
       return List.of();
     }
     var unresolvedIds = new HashSet<Integer>();
@@ -600,10 +630,28 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity) {
-    if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty() || lineResolver == null) {
+    return unreportedUnresolvedStatusesFromParsed(
+        parsePreviousResponses(priorAiResponseJsons),
+        currentStatuses,
+        inlineComments,
+        lineResolver,
+        botIdentity);
+  }
+
+  /**
+   * Same as the JSON overload, using prior responses already deserialized for this review so each
+   * persisted round is not re-parsed.
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity) {
+    if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
-    var chrono = toChronological(priorAiResponseJsons);
+    var chrono = toChronological(priorAiResponses);
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
     return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity);
@@ -614,10 +662,10 @@ public class FollowUpAnalyzer {
    * {@code previous_findings_status} (which reports on the round immediately before it) can close
    * the findings it addressed.
    */
-  private List<ReviewResponse> toChronological(List<String> priorAiResponseJsons) {
-    var chrono = new ArrayList<ReviewResponse>();
-    for (var i = priorAiResponseJsons.size() - 1; i >= 0; i--) {
-      chrono.add(parseResponse(priorAiResponseJsons.get(i)));
+  private static List<ReviewResponse> toChronological(List<ReviewResponse> priorAiResponses) {
+    var chrono = new ArrayList<ReviewResponse>(priorAiResponses.size());
+    for (var i = priorAiResponses.size() - 1; i >= 0; i--) {
+      chrono.add(priorAiResponses.get(i));
     }
     return chrono;
   }
@@ -824,8 +872,15 @@ public class FollowUpAnalyzer {
    * finding's file.
    */
   public Map<Integer, String> previousFindingFilesById(String previousAiResponseJson) {
-    var previous = parsePreviousFindings(previousAiResponseJson);
+    return previousFindingFilesById(parsePreviousFindings(previousAiResponseJson));
+  }
+
+  /** Same as the JSON overload, using findings already deserialized for this review. */
+  public Map<Integer, String> previousFindingFilesById(List<ReviewResponse.Finding> previous) {
     var filesById = new HashMap<Integer, String>();
+    if (previous == null) {
+      return filesById;
+    }
     for (var i = 0; i < previous.size(); i++) {
       filesById.put(i + 1, previous.get(i).file());
     }
@@ -837,11 +892,26 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Deserializes every prior round's persisted AI response (newest first), once per review. Missing
+   * or unparseable entries become empty responses so callers can share one list without re-parsing.
+   */
+  public List<ReviewResponse> parsePreviousResponses(List<String> priorAiResponseJsons) {
+    if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty()) {
+      return List.of();
+    }
+    var parsed = new ArrayList<ReviewResponse>(priorAiResponseJsons.size());
+    for (var json : priorAiResponseJsons) {
+      parsed.add(parseResponse(json));
+    }
+    return List.copyOf(parsed);
+  }
+
+  /**
    * Full persisted previous response, with empty (never null) findings and statuses on a missing or
    * unparseable input — the backstop replay needs both lists, and the compact constructor of {@link
    * ReviewResponse} guarantees non-null copies.
    */
-  private ReviewResponse parseResponse(String aiResponseJson) {
+  ReviewResponse parseResponse(String aiResponseJson) {
     if (aiResponseJson == null || aiResponseJson.isBlank()) {
       return EMPTY_RESPONSE;
     }
