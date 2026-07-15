@@ -41,13 +41,18 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 public class FrameworkFalsePositiveFilter {
 
-  /** A "missing no-arg / default / zero-arg constructor" style claim, in title or description. */
-  private static final Pattern NO_ARG_CONSTRUCTOR_CLAIM =
-      Pattern.compile(
-          "\\b(?:no|zero)[\\s-]?arg(?:ument)?s?\\b[^.]{0,60}\\bconstructor\\b"
-              + "|\\bdefault\\s+(?:public\\s+)?constructor\\b"
-              + "|\\bconstructor\\b[^.]{0,60}\\b(?:no|zero)[\\s-]?arg(?:ument)?s?\\b",
-          Pattern.CASE_INSENSITIVE);
+  /** A "default constructor" claim; the no-arg/zero-arg variants pair the two tokens below. */
+  private static final Pattern DEFAULT_CONSTRUCTOR_CLAIM =
+      Pattern.compile("\\bdefault\\s+(?:public\\s+)?constructor\\b", Pattern.CASE_INSENSITIVE);
+
+  private static final Pattern NO_ARG_TOKEN =
+      Pattern.compile("\\b(?:no|zero)[\\s-]?arg(?:ument)?s?\\b", Pattern.CASE_INSENSITIVE);
+
+  private static final Pattern CONSTRUCTOR_TOKEN =
+      Pattern.compile("\\bconstructor\\b", Pattern.CASE_INSENSITIVE);
+
+  /** How far apart (in characters) the no-arg and constructor tokens may sit and still pair up. */
+  private static final int TOKEN_PROXIMITY = 60;
 
   /** An injection annotation, bare or fully qualified, possibly inlined with the declaration. */
   private static final Pattern INJECT_ANNOTATION =
@@ -102,7 +107,29 @@ public class FrameworkFalsePositiveFilter {
   }
 
   private static boolean matchesClaim(String text) {
-    return text != null && NO_ARG_CONSTRUCTOR_CLAIM.matcher(text).find();
+    if (text == null) {
+      return false;
+    }
+    return DEFAULT_CONSTRUCTOR_CLAIM.matcher(text).find()
+        || tokensAppearNearby(text, NO_ARG_TOKEN, CONSTRUCTOR_TOKEN);
+  }
+
+  /** Whether both tokens occur in {@code text} within {@link #TOKEN_PROXIMITY} characters. */
+  private static boolean tokensAppearNearby(String text, Pattern first, Pattern second) {
+    var firstMatcher = first.matcher(text);
+    while (firstMatcher.find()) {
+      var secondMatcher = second.matcher(text);
+      while (secondMatcher.find()) {
+        int gap =
+            Math.max(
+                secondMatcher.start() - firstMatcher.end(),
+                firstMatcher.start() - secondMatcher.end());
+        if (gap <= TOKEN_PROXIMITY) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -121,20 +148,31 @@ public class FrameworkFalsePositiveFilter {
     }
     Pattern constructorDecl = Pattern.compile("(?<![\\w.])" + Pattern.quote(className) + "\\s*\\(");
     for (int i = 0; i < keptLines.size(); i++) {
-      if (!INJECT_ANNOTATION.matcher(keptLines.get(i)).find()) {
-        continue;
-      }
-      if (declaresConstructor(keptLines.get(i), className, constructorDecl)) {
+      if (INJECT_ANNOTATION.matcher(keptLines.get(i)).find()
+          && constructorAtOrBelow(keptLines, i, className, constructorDecl)) {
         return true;
       }
-      for (int j = i + 1; j < keptLines.size() && j <= i + ANNOTATION_LOOKAHEAD; j++) {
-        String candidate = keptLines.get(j);
-        if (declaresConstructor(candidate, className, constructorDecl)) {
-          return true;
-        }
-        if (!candidate.startsWith("@")) {
-          break;
-        }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the annotation line at {@code annotationIndex} — or one of the next few lines, with
+   * only further annotation lines allowed in between — declares a constructor of {@code className}.
+   */
+  private static boolean constructorAtOrBelow(
+      List<String> keptLines, int annotationIndex, String className, Pattern constructorDecl) {
+    if (declaresConstructor(keptLines.get(annotationIndex), className, constructorDecl)) {
+      return true;
+    }
+    int last = Math.min(keptLines.size() - 1, annotationIndex + ANNOTATION_LOOKAHEAD);
+    for (int j = annotationIndex + 1; j <= last; j++) {
+      String candidate = keptLines.get(j);
+      if (declaresConstructor(candidate, className, constructorDecl)) {
+        return true;
+      }
+      if (!candidate.startsWith("@")) {
+        return false;
       }
     }
     return false;

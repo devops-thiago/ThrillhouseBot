@@ -17,11 +17,15 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -145,48 +149,97 @@ class FrameworkFalsePositiveFilterTest {
     assertEquals(0, result.findings().size());
   }
 
-  @Test
-  void keepsClaimWhenDiffShowsNoInjectedConstructor() {
-    var response = response(noArgClaim("Missing no-arg constructor"));
-
-    assertSame(response, filter.filter(response, NO_INJECT_DIFF));
+  /** Diffs that do not prove an injection-annotated constructor, so the claim must survive. */
+  static Stream<Arguments> nonRefutingDiffs() {
+    return Stream.of(
+        arguments("no @Inject constructor in the diff", NO_INJECT_DIFF),
+        arguments(
+            "@Inject on a field, not a constructor",
+            """
+            ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +2 -0)
+            ```diff
+            @@ -10,2 +10,4 @@
+             public class PrSummaryGenerator {
+            +  @Inject
+            +  AiReviewService aiReviewService;
+             }
+            ```
+            """),
+        arguments(
+            "the @Inject constructor was deleted by this PR",
+            """
+            ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +0 -3)
+            ```diff
+            @@ -10,5 +10,2 @@
+             public class PrSummaryGenerator {
+            -  @Inject
+            -  public PrSummaryGenerator(AiReviewService aiReviewService) {
+            -  }
+             }
+            ```
+            """),
+        arguments(
+            "constructor invocation, not a declaration",
+            """
+            ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +2 -0)
+            ```diff
+            @@ -10,2 +10,4 @@
+             public class PrSummaryGenerator {
+            +  @Inject
+            +  void setUp() { var x = new PrSummaryGenerator(null); }
+             }
+            ```
+            """),
+        arguments(
+            "constructor beyond the annotation lookahead",
+            """
+            ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +8 -0)
+            ```diff
+            @@ -10,2 +10,10 @@
+             public class PrSummaryGenerator {
+            +  @Inject
+            +  @A
+            +  @B
+            +  @C
+            +  @D
+            +  @E
+            +  public PrSummaryGenerator(AiReviewService aiReviewService) {
+            +  }
+             }
+            ```
+            """),
+        arguments(
+            "annotation is the last kept line",
+            """
+            ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +1 -0)
+            ```diff
+            @@ -10,2 +10,3 @@
+             public class PrSummaryGenerator {
+            +  @Inject
+            ```
+            """));
   }
 
-  @Test
-  void keepsClaimWhenInjectIsOnFieldNotConstructor() {
-    var diff =
-        """
-        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +2 -0)
-        ```diff
-        @@ -10,2 +10,4 @@
-         public class PrSummaryGenerator {
-        +  @Inject
-        +  AiReviewService aiReviewService;
-         }
-        ```
-        """;
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("nonRefutingDiffs")
+  void keepsClaimWhenDiffDoesNotProveInjectedConstructor(String label, String diff) {
     var response = response(noArgClaim("Missing no-arg constructor"));
 
     assertSame(response, filter.filter(response, diff));
   }
 
   @Test
-  void keepsClaimWhenInjectedConstructorWasDeleted() {
-    var diff =
-        """
-        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +0 -3)
-        ```diff
-        @@ -10,5 +10,2 @@
-         public class PrSummaryGenerator {
-        -  @Inject
-        -  public PrSummaryGenerator(AiReviewService aiReviewService) {
-        -  }
-         }
-        ```
-        """;
-    var response = response(noArgClaim("Missing no-arg constructor"));
+  void keepsFindingWhoseNoArgAndConstructorMentionsAreUnrelated() {
+    var f =
+        finding(
+            "src/main/java/dev/example/PrSummaryGenerator.java",
+            "Constructor stores mutable list",
+            "The constructor copies its input defensively before storing it in the internal cache"
+                + " field, which keeps later mutations of the caller's collection from leaking in."
+                + " Elsewhere, the CLI parser accepts no args, a separate concern entirely.");
+    var response = response(f);
 
-    assertSame(response, filter.filter(response, diff));
+    assertSame(response, filter.filter(response, INJECTED_CTOR_DIFF));
   }
 
   @Test
@@ -199,24 +252,6 @@ class FrameworkFalsePositiveFilterTest {
                 "OtherClass needs a default constructor."));
 
     assertSame(response, filter.filter(response, INJECTED_CTOR_DIFF));
-  }
-
-  @Test
-  void doesNotMistakeConstructorInvocationForDeclaration() {
-    var diff =
-        """
-        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +2 -0)
-        ```diff
-        @@ -10,2 +10,4 @@
-         public class PrSummaryGenerator {
-        +  @Inject
-        +  void setUp() { var x = new PrSummaryGenerator(null); }
-         }
-        ```
-        """;
-    var response = response(noArgClaim("Missing no-arg constructor"));
-
-    assertSame(response, filter.filter(response, diff));
   }
 
   @Test
@@ -272,46 +307,6 @@ class FrameworkFalsePositiveFilterTest {
     var result = filter.filter(response(f), INJECTED_CTOR_DIFF);
 
     assertEquals(0, result.findings().size());
-  }
-
-  @Test
-  void keepsClaimWhenConstructorIsBeyondTheAnnotationLookahead() {
-    var diff =
-        """
-        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +8 -0)
-        ```diff
-        @@ -10,2 +10,10 @@
-         public class PrSummaryGenerator {
-        +  @Inject
-        +  @A
-        +  @B
-        +  @C
-        +  @D
-        +  @E
-        +  public PrSummaryGenerator(AiReviewService aiReviewService) {
-        +  }
-         }
-        ```
-        """;
-    var response = response(noArgClaim("Missing no-arg constructor"));
-
-    assertSame(response, filter.filter(response, diff));
-  }
-
-  @Test
-  void keepsClaimWhenAnnotationIsTheLastKeptLine() {
-    var diff =
-        """
-        ### src/main/java/dev/example/PrSummaryGenerator.java (modified, +1 -0)
-        ```diff
-        @@ -10,2 +10,3 @@
-         public class PrSummaryGenerator {
-        +  @Inject
-        ```
-        """;
-    var response = response(noArgClaim("Missing no-arg constructor"));
-
-    assertSame(response, filter.filter(response, diff));
   }
 
   @Test
