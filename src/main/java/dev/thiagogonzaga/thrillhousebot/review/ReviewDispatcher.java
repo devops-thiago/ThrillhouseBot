@@ -37,6 +37,7 @@ public final class ReviewDispatcher {
   private final ExecutorService reviewExecutor;
   private final ReviewOrchestrator orchestrator;
   private final AutoReviewRateLimiter autoReviewRateLimiter;
+  private final ReviewSkipEmitter skipEmitter;
 
   private final ConcurrentHashMap<PrKey, PerPrState> states = new ConcurrentHashMap<>();
 
@@ -44,10 +45,12 @@ public final class ReviewDispatcher {
   public ReviewDispatcher(
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewOrchestrator orchestrator,
-      AutoReviewRateLimiter autoReviewRateLimiter) {
+      AutoReviewRateLimiter autoReviewRateLimiter,
+      ReviewSkipEmitter skipEmitter) {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
     this.autoReviewRateLimiter = autoReviewRateLimiter;
+    this.skipEmitter = skipEmitter;
   }
 
   /**
@@ -120,12 +123,12 @@ public final class ReviewDispatcher {
       var req = batch.request();
       if (!req.isManualTrigger()
           && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
-        log.info(
-            "Skipping automatic review for {}/{} #{} — within the auto-review "
-                + "rate window (manual /review bypasses)",
+        skipEmitter.recordSkip(
+            ReviewSkipReason.RATE_LIMITED,
             req.owner(),
             req.repo(),
-            req.prNumber());
+            req.prNumber(),
+            "within the auto-review rate window after dispatch (manual /review bypasses)");
       } else {
         reviewBatch(batch);
       }

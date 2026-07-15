@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Structured skip transparency for automatic reviews** (#341): every path that skips an automatic review (draft, base-branch and label gates, `/pause`, rate window, duplicate webhook delivery, rejected dispatch) now emits a structured reason code — a `Automatic review skipped [reason=...]` log line, a `thrillhouse.review.skips` OTLP counter tagged with `reason` and `repository`, and per-reason counts on the dashboard summary endpoint (`skippedReviewsByReason`). README gains a "PR opened but no review posted" troubleshooting checklist
+
 ## [0.4.0] — 2026-07-12
 
 Token-budgeted reviews for large PRs, per-model AI settings, a published docs site, and a few operator-facing controls (command ack reactions, an opt-in auto-review interval, missing-pricing visibility on the dashboard).

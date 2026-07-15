@@ -22,11 +22,14 @@ import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.io.IOException;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +39,10 @@ import org.slf4j.LoggerFactory;
 public class WebhookController {
 
   private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
+
+  /** pull_request actions that trigger an automatic review. */
+  private static final Set<String> AUTO_REVIEW_ACTIONS =
+      Set.of("opened", "reopened", "synchronize", "ready_for_review");
 
   private final ThrillhouseConfig config;
   private final WebhookVerifier verifier;
@@ -49,6 +56,7 @@ public class WebhookController {
   private final CommentCommandService commentCommandService;
   private final PrPauseService prPauseService;
   private final AckReactionService ackReactionService;
+  private final ReviewSkipEmitter skipEmitter;
   private final ObjectMapper mapper;
 
   @Inject
@@ -65,6 +73,7 @@ public class WebhookController {
       CommentCommandService commentCommandService,
       PrPauseService prPauseService,
       AckReactionService ackReactionService,
+      ReviewSkipEmitter skipEmitter,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
@@ -78,6 +87,7 @@ public class WebhookController {
     this.commentCommandService = commentCommandService;
     this.prPauseService = prPauseService;
     this.ackReactionService = ackReactionService;
+    this.skipEmitter = skipEmitter;
     this.mapper = mapper;
   }
 
@@ -110,6 +120,7 @@ public class WebhookController {
     // GitHub redeliveries (manual or automatic retry) reuse the same delivery id.
     if (deduplicator.isDuplicate(deliveryId)) {
       log.info("Ignoring redelivered {} event (delivery: {})", eventType, deliveryId);
+      recordDuplicateAutoReviewSkip(eventType, payload, deliveryId);
       return Response.ok("{\"status\":\"ignored\"}").build();
     }
 
@@ -117,6 +128,30 @@ public class WebhookController {
 
     // GitHub expects a 200 within 10 seconds.
     return Response.ok("{\"status\":\"ok\"}").build();
+  }
+
+  /**
+   * Records a structured skip when a redelivered webhook would have produced an automatic review.
+   * Redeliveries of non-review events (comments, pings, …) are ignored silently as before.
+   */
+  private void recordDuplicateAutoReviewSkip(
+      String eventType, WebhookPayload payload, String deliveryId) {
+    if (!"pull_request".equals(eventType)
+        || payload.action() == null
+        || !AUTO_REVIEW_ACTIONS.contains(payload.action())) {
+      return;
+    }
+    var pr = payload.pullRequest();
+    var repo = payload.repository();
+    if (pr == null || repo == null || repo.owner() == null) {
+      return;
+    }
+    skipEmitter.recordSkip(
+        ReviewSkipReason.DUPLICATE_DELIVERY,
+        repo.owner().login(),
+        repo.name(),
+        pr.number(),
+        "redelivered webhook (delivery: " + deliveryId + ")");
   }
 
   private void routeEvent(String eventType, WebhookPayload payload, String deliveryId) {
@@ -175,17 +210,23 @@ public class WebhookController {
         }
 
         if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
-          log.info("Skipping review for paused PR #{} in {}", pr.number(), repo.fullName());
+          skipEmitter.recordSkip(
+              ReviewSkipReason.PAUSED,
+              repo.owner().login(),
+              repo.name(),
+              pr.number(),
+              "PR is paused via /pause");
           yield true;
         }
 
         var skipReason = triggerFilter.skipReason(pr);
         if (skipReason.isPresent()) {
-          log.info(
-              "Skipping review for PR #{} in {}: {}",
+          skipEmitter.recordSkip(
+              skipReason.get().reason(),
+              repo.owner().login(),
+              repo.name(),
               pr.number(),
-              repo.fullName(),
-              skipReason.get());
+              skipReason.get().detail());
           yield true;
         }
 
@@ -193,29 +234,41 @@ public class WebhookController {
           autoReviewRateLimiter.clearForPr(repo.owner().login(), repo.name(), pr.number());
         } else if (autoReviewRateLimiter.isThrottled(
             repo.owner().login(), repo.name(), pr.number())) {
-          log.info(
-              "Skipping automatic review for PR #{} in {} — last automatic review completed "
-                  + "less than {} ago (manual /review bypasses)",
+          skipEmitter.recordSkip(
+              ReviewSkipReason.RATE_LIMITED,
+              repo.owner().login(),
+              repo.name(),
               pr.number(),
-              repo.fullName(),
-              config.review().autoReviewMinInterval());
+              "last automatic review completed less than "
+                  + config.review().autoReviewMinInterval()
+                  + " ago (manual /review bypasses)");
           yield true;
         }
 
         log.info("Dispatching review for PR #{} in {}", pr.number(), repo.fullName());
-        yield reviewDispatcher.dispatch(
-            new ReviewOrchestrator.ReviewRequest(
-                repo.owner().login(),
-                repo.name(),
-                pr.number(),
-                pr.head().sha(),
-                pr.title(),
-                pr.body() != null ? pr.body() : "",
-                pr.base().sha(),
-                repo.defaultBranch(),
-                payload.installation().id(),
-                false,
-                pr.base().ref()));
+        boolean queued =
+            reviewDispatcher.dispatch(
+                new ReviewOrchestrator.ReviewRequest(
+                    repo.owner().login(),
+                    repo.name(),
+                    pr.number(),
+                    pr.head().sha(),
+                    pr.title(),
+                    pr.body() != null ? pr.body() : "",
+                    pr.base().sha(),
+                    repo.defaultBranch(),
+                    payload.installation().id(),
+                    false,
+                    pr.base().ref()));
+        if (!queued) {
+          skipEmitter.recordSkip(
+              ReviewSkipReason.DISPATCH_REJECTED,
+              repo.owner().login(),
+              repo.name(),
+              pr.number(),
+              "review executor rejected the task; a webhook redelivery can retry");
+        }
+        yield queued;
       }
       default -> {
         log.debug("Ignoring pull_request action: {}", action);

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import io.quarkus.panache.common.Sort;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -95,12 +96,16 @@ public class DashboardResource {
 
   private final DashboardSessionValidator sessionValidator;
   private final ReviewSessionRepository reviewSessionRepository;
+  private final ReviewSkipEmitter reviewSkipEmitter;
 
   @Inject
   public DashboardResource(
-      DashboardSessionValidator sessionValidator, ReviewSessionRepository reviewSessionRepository) {
+      DashboardSessionValidator sessionValidator,
+      ReviewSessionRepository reviewSessionRepository,
+      ReviewSkipEmitter reviewSkipEmitter) {
     this.sessionValidator = sessionValidator;
     this.reviewSessionRepository = reviewSessionRepository;
+    this.reviewSkipEmitter = reviewSkipEmitter;
   }
 
   boolean isValidSession(String sessionToken) {
@@ -315,6 +320,8 @@ public class DashboardResource {
                 totalCost,
                 "topModel",
                 topModel,
+                "skippedReviewsByReason",
+                reviewSkipEmitter.countsByReason(),
                 KEY_SINCE,
                 since.toString()))
         .build();

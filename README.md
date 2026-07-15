@@ -411,11 +411,42 @@ All telemetry is exported via OTLP:
 | `gen_ai.client.token.usage` | Histogram: input/output tokens |
 | `gen_ai.client.operation.duration` | Histogram: latency in seconds |
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |
+| `thrillhouse.review.skips` | Counter: automatic reviews skipped, tagged with `reason` and `repository` |
 
 Spans and metrics are tagged with `gen_ai.provider.name`, derived from `AI_BASE_URL`
 (e.g. `deepseek`, `openai`, `groq`, `openrouter`). Loopback and unrecognized endpoints
 report `unknown`; set `AI_PROVIDER` to label them (e.g. a local `ollama` or `vllm` server,
 a proxy, or a self-hosted gateway).
+
+## Troubleshooting
+
+### PR opened but no review posted
+
+When a `pull_request` webhook arrives but no review appears, the bot logs a structured
+skip event (`Automatic review skipped [reason=...]`), increments the
+`thrillhouse.review.skips` counter, and reports per-reason counts in the dashboard
+summary (`GET /api/dashboard/summary`, field `skippedReviewsByReason`). Check, in order:
+
+1. **Is the App installed on the repository?** No webhook delivery at all means the
+   GitHub App isn't installed (or the webhook URL/secret is wrong). Check the App's
+   **Advanced → Recent Deliveries** page on GitHub.
+2. **Is the PR a draft?** (`reason=DRAFT`) — with `WEBHOOK_TRIGGERS_SKIP_DRAFTS=true`,
+   drafts are skipped until marked ready for review.
+3. **Is the PR paused?** (`reason=PAUSED`) — someone commented `/pause`; comment
+   `/resume` to re-enable reviews.
+4. **Label gates** (`reason=MISSING_REQUIRED_LABEL` / `EXCLUDED_LABEL`) — check
+   `WEBHOOK_TRIGGERS_REQUIRED_LABELS` and `WEBHOOK_TRIGGERS_EXCLUDED_LABELS`.
+5. **Base branch filters** (`reason=BASE_BRANCH_NOT_ALLOWED` / `IGNORED_BASE_BRANCH`) —
+   check `WEBHOOK_TRIGGERS_BASE_BRANCHES` and `WEBHOOK_TRIGGERS_IGNORED_BASE_BRANCHES`.
+6. **Rate window** (`reason=RATE_LIMITED`) — an automatic review already completed
+   within `AUTO_REVIEW_MIN_INTERVAL`; a manual `/review` bypasses the window.
+7. **Redelivery** (`reason=DUPLICATE_DELIVERY`) — GitHub redelivered a webhook the bot
+   already processed; this is normal and safe.
+8. **Executor saturated** (`reason=DISPATCH_REJECTED`) — the review executor rejected
+   the task (overload or shutdown); redeliver the webhook from GitHub to retry.
+
+A manual `/review` comment from a user with write access bypasses the draft, label,
+base-branch, and rate-window gates (but not `/pause`).
 
 ## Responsible use and security
 

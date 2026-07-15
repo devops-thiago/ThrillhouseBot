@@ -26,6 +26,7 @@ import io.quarkus.test.common.http.TestHTTPEndpoint;
 import io.quarkus.test.junit.QuarkusTest;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -305,6 +306,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .body("failedReviews", equalTo(0))
         .body("totalCost", is(0.0f))
         .body("topModel", equalTo("N/A"))
+        .body("skippedReviewsByReason", instanceOf(Map.class))
         .body("since", instanceOf(String.class));
   }
 

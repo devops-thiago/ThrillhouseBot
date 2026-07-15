@@ -27,6 +27,8 @@ import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
@@ -71,6 +73,8 @@ class WebhookControllerTest {
 
   @Mock private AckReactionService ackReactionService;
 
+  @Mock private ReviewSkipEmitter skipEmitter;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
@@ -99,6 +103,7 @@ class WebhookControllerTest {
             commentCommandService,
             prPauseService,
             ackReactionService,
+            skipEmitter,
             mapper);
   }
 
@@ -440,7 +445,9 @@ class WebhookControllerTest {
   @Test
   void shouldSkipReviewWhenTriggerFilterRejects() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerFilter.skipReason(any())).thenReturn(Optional.of("PR is a draft"));
+    when(triggerFilter.skipReason(any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
 
     var body =
         buildPullRequestPayload("opened", 21, "owner/repo", "sha21", "main")
@@ -475,6 +482,133 @@ class WebhookControllerTest {
     // decision, not a rejected dispatch), so a redelivery is ignored too.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
     verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void shouldEmitStructuredSkipEventWhenDraftFilterRejects() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerFilter.skipReason(any()))
+        .thenReturn(
+            Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
+
+    var body =
+        buildPullRequestPayload("opened", 21, "owner/repo", "sha21", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(skipEmitter)
+        .recordSkip(eq(ReviewSkipReason.DRAFT), eq("owner"), eq("repo"), eq(21), anyString());
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldEmitStructuredSkipEventWhenPrPaused() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(prPauseService.isPaused("owner", "myrepo", 99)).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("synchronize", 99, "owner/myrepo", "headsha123", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(skipEmitter)
+        .recordSkip(eq(ReviewSkipReason.PAUSED), eq("owner"), eq("myrepo"), eq(99), anyString());
+  }
+
+  @Test
+  void shouldEmitStructuredSkipEventWhenRateLimited() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewConfig.autoReviewMinInterval()).thenReturn(Duration.ofHours(1));
+    when(autoReviewRateLimiter.isThrottled("owner", "repo", 55)).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("synchronize", 55, "owner/repo", "fresh-sha", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), eq("owner"), eq("repo"), eq(55), anyString());
+  }
+
+  @Test
+  void shouldEmitStructuredSkipEventOnDuplicateDelivery() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("opened", 7, "owner/repo", "sha7", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.DUPLICATE_DELIVERY), eq("owner"), eq("repo"), eq(7), anyString());
+  }
+
+  @Test
+  void shouldNotEmitDuplicateSkipEventForNonReviewRedelivery() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("closed", 7, "owner/repo", "sha7", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
+  void shouldNotEmitDuplicateSkipEventWhenRedeliveryLacksRepository() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        "{\"action\":\"opened\",\"pull_request\":{\"number\":7}}".getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    assertEquals(200, response.getStatus());
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
+  void shouldEmitStructuredSkipEventWhenDispatchRejected() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(false);
+
+    var body =
+        buildPullRequestPayload("opened", 8, "owner/repo", "sha8", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "delivery-rejected", body);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.DISPATCH_REJECTED), eq("owner"), eq("repo"), eq(8), anyString());
+    // A rejected dispatch rolls back the dedup slot so a redelivery can retry.
+    verify(deduplicator).forget("delivery-rejected");
+  }
+
+  @Test
+  void shouldNotEmitSkipEventWhenReviewDispatches() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("opened", 8, "owner/repo", "sha8", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verifyNoInteractions(skipEmitter);
   }
 
   @Test
