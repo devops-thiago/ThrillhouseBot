@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
@@ -222,6 +223,56 @@ class VerdictBuilderTest {
     var summary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(summary.contains("Note: the CI status could not be read"), summary);
     assertFalse(summary.contains("holding approval"), summary);
+  }
+
+  @Test
+  void warnModeNotesUnreadableAlongsideOffendingChecks() {
+    var both =
+        new CiStatusEvaluator.CiEvaluation(
+            List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure")), true);
+    var result =
+        builderWith(CiGatingMode.WARN)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, both, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("Note:"), summary);
+    assertTrue(summary.contains("still pending or failing"), summary);
+    assertTrue(summary.contains("could not be read"), summary);
+    assertFalse(summary.contains("holding approval"), summary);
+  }
+
+  @Test
+  void configConstructorParsesCiGatingMode() {
+    var config = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+    var review = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.ciGating()).thenReturn("warn");
+
+    var fromConfig =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            config);
+    var result =
+        fromConfig.build(
+            contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+  }
+
+  @Test
+  void nullModeFallsBackToStrict() {
+    var result =
+        new VerdictBuilder(
+                summaryGenerator,
+                followUpAnalyzer,
+                BotIdentity.from(List.of("thrillhousebot[bot]")),
+                (CiGatingMode) null)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
   }
 
   @Test

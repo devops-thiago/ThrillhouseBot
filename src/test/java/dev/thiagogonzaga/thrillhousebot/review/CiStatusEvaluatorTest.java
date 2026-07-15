@@ -709,5 +709,39 @@ class CiStatusEvaluatorTest {
       assertEquals("build", result.offendingChecks().get(0).name());
       assertFalse(result.unreadable());
     }
+
+    @Test
+    void configConstructorParsesCiGatingMode() {
+      var config = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+      var review =
+          mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+      when(config.review()).thenReturn(review);
+      when(review.ciGating()).thenReturn("off");
+
+      var fromConfig = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), config);
+      var result = fromConfig.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertTrue(result.offendingChecks().isEmpty());
+      verify(checkRunClient, never()).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nullModeFallsBackToStrictAndStillEvaluates() {
+      var fallback =
+          new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), (CiGatingMode) null);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  1,
+                  List.of(
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                          1L, "build", "completed", "failure", null))));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 0, List.of()));
+
+      var result = fallback.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertEquals(1, result.offendingChecks().size());
+    }
   }
 }
