@@ -211,44 +211,57 @@ public class FindingFeedbackCaptureService {
       long commentId,
       Integer findingIndex,
       String content) {
-    List<GitHubReactionClient.Reaction> reactions;
-    try {
-      reactions =
-          reactionClient.listReviewCommentReactions(
-              auth, ACCEPT, owner, repo, commentId, content, 100);
-    } catch (RuntimeException e) {
-      log.debug(
-          "Failed to list {} reactions on review comment {} in {}/{} (continuing)",
-          content,
-          commentId,
-          owner,
-          repo,
-          e);
-      return;
-    }
-    if (reactions == null) {
-      return;
-    }
     String signal =
         CONTENT_PLUS_ONE.equals(content)
             ? FindingFeedback.SIGNAL_USEFUL
             : FindingFeedback.SIGNAL_NOT_USEFUL;
-    for (var reaction : reactions) {
-      if (reaction == null || reaction.user() == null || reaction.user().login() == null) {
-        continue;
+    for (int page = 1; page <= GitHubReactionClient.MAX_REACTION_PAGES; page++) {
+      List<GitHubReactionClient.Reaction> reactions;
+      try {
+        reactions =
+            reactionClient.listReviewCommentReactions(
+                auth,
+                ACCEPT,
+                owner,
+                repo,
+                commentId,
+                content,
+                GitHubReactionClient.REACTIONS_PER_PAGE,
+                page);
+      } catch (RuntimeException e) {
+        log.debug(
+            "Failed to list {} reactions on review comment {} in {}/{} page {} (continuing)",
+            content,
+            commentId,
+            owner,
+            repo,
+            page,
+            e);
+        return;
       }
-      if (botIdentity.matches(reaction.user().login())) {
-        continue;
+      if (reactions == null || reactions.isEmpty()) {
+        return;
       }
-      feedbackService.record(
-          repoKey,
-          prNumber,
-          commentId,
-          findingIndex,
-          signal,
-          FindingFeedback.SOURCE_REACTION,
-          reaction.user().login(),
-          reaction.id());
+      for (var reaction : reactions) {
+        if (reaction == null || reaction.user() == null || reaction.user().login() == null) {
+          continue;
+        }
+        if (botIdentity.matches(reaction.user().login())) {
+          continue;
+        }
+        feedbackService.record(
+            repoKey,
+            prNumber,
+            commentId,
+            findingIndex,
+            signal,
+            FindingFeedback.SOURCE_REACTION,
+            reaction.user().login(),
+            reaction.id());
+      }
+      if (reactions.size() < GitHubReactionClient.REACTIONS_PER_PAGE) {
+        return;
+      }
     }
   }
 

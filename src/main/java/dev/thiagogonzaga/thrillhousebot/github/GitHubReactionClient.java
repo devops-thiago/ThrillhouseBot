@@ -57,6 +57,10 @@ public interface GitHubReactionClient {
       @PathParam("commentId") long commentId,
       CreateReactionRequest request);
 
+  // GitHub serves up to 100 reactions per page.
+  int REACTIONS_PER_PAGE = 100;
+  int MAX_REACTION_PAGES = 10;
+
   @GET
   @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}/reactions")
   @Produces(MediaType.APPLICATION_JSON)
@@ -67,7 +71,8 @@ public interface GitHubReactionClient {
       @PathParam("repo") String repo,
       @PathParam("commentId") long commentId,
       @QueryParam("content") String content,
-      @QueryParam("per_page") int perPage);
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
 
   @GET
   @Path("/repos/{owner}/{repo}/issues/comments/{commentId}/reactions")
@@ -79,7 +84,8 @@ public interface GitHubReactionClient {
       @PathParam("repo") String repo,
       @PathParam("commentId") long commentId,
       @QueryParam("content") String content,
-      @QueryParam("per_page") int perPage);
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
 
   /** One of GitHub's fixed reaction contents, e.g. {@code eyes}. */
   record CreateReactionRequest(String content) {}

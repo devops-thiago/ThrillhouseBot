@@ -53,7 +53,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureReactionsRecordsPlusAndMinusOneFromNonBotUsers() {
     when(reactionClient.listReviewCommentReactions(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100)))
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubReactionClient.Reaction(
@@ -64,7 +64,7 @@ class FindingFeedbackCaptureServiceTest {
                     new GitHubReactionClient.Reaction.User("thrillhousebot[bot]", 2),
                     "t")));
     when(reactionClient.listReviewCommentReactions(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("-1"), eq(100)))
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("-1"), eq(100), eq(1)))
         .thenReturn(
             List.of(
                 new GitHubReactionClient.Reaction(
@@ -117,7 +117,7 @@ class FindingFeedbackCaptureServiceTest {
                 "**HIGH — Bug**\n" + SuggestionFormatter.findingMarker(1),
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
     when(reactionClient.listReviewCommentReactions(
-            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+            any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
     capture.captureOnReviewReply(
@@ -164,7 +164,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureOnPriorFindingsScansAllBotFindingRootsAcrossRounds() {
     when(reactionClient.listReviewCommentReactions(
-            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+            any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
     // Round-1 finding (id 10) plus a later-round finding (id 30); a human reply and a
     // non-finding bot root must be ignored. Empty previous-AI JSON is irrelevant — we scan
@@ -213,18 +213,36 @@ class FindingFeedbackCaptureServiceTest {
 
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
-            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(10L), anyString(), eq(100));
+            eq("Bearer t"),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(10L),
+            anyString(),
+            eq(100),
+            anyInt());
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
-            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(30L), anyString(), eq(100));
+            eq("Bearer t"),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(30L),
+            anyString(),
+            eq(100),
+            anyInt());
     verify(reactionClient, never())
-        .listReviewCommentReactions(any(), any(), any(), any(), eq(11L), anyString(), anyInt());
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), eq(11L), anyString(), anyInt(), anyInt());
     verify(reactionClient, never())
-        .listReviewCommentReactions(any(), any(), any(), any(), eq(20L), anyString(), anyInt());
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), eq(20L), anyString(), anyInt(), anyInt());
     verify(reactionClient, never())
-        .listReviewCommentReactions(any(), any(), any(), any(), eq(25L), anyString(), anyInt());
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), eq(25L), anyString(), anyInt(), anyInt());
     verify(reactionClient, never())
-        .listReviewCommentReactions(any(), any(), any(), any(), eq(40L), anyString(), anyInt());
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), eq(40L), anyString(), anyInt(), anyInt());
   }
 
   @Test
@@ -249,7 +267,14 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void listReactionsFailureIsSwallowed() {
     when(reactionClient.listReviewCommentReactions(
-            anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyInt()))
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyLong(),
+            anyString(),
+            anyInt(),
+            anyInt()))
         .thenThrow(new RuntimeException("api down"));
     capture.captureReactions(
         "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
@@ -269,7 +294,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void captureReactionsSkipsNullOrIncompleteReactions() {
     when(reactionClient.listReviewCommentReactions(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100)))
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
         .thenReturn(
             java.util.Arrays.asList(
                 null,
@@ -279,7 +304,7 @@ class FindingFeedbackCaptureServiceTest {
                 new GitHubReactionClient.Reaction(
                     3L, "+1", new GitHubReactionClient.Reaction.User("bob", 3), "t")));
     when(reactionClient.listReviewCommentReactions(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("-1"), eq(100)))
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("-1"), eq(100), eq(1)))
         .thenReturn(List.of());
 
     capture.captureReactions(
@@ -314,25 +339,39 @@ class FindingFeedbackCaptureServiceTest {
               new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
     }
     when(reactionClient.listReviewCommentReactions(
-            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+            any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
     capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
 
     verify(reactionClient, times(max * 2))
         .listReviewCommentReactions(
-            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), anyLong(), anyString(), eq(100));
+            eq("Bearer t"),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            anyLong(),
+            anyString(),
+            eq(100),
+            anyInt());
     long skippedLow = 1000L + max + 1;
     long skippedHigh = 1000L + max + 2;
     verify(reactionClient, never())
         .listReviewCommentReactions(
-            any(), any(), any(), any(), eq(skippedLow), anyString(), anyInt());
+            any(), any(), any(), any(), eq(skippedLow), anyString(), anyInt(), anyInt());
     verify(reactionClient, never())
         .listReviewCommentReactions(
-            any(), any(), any(), any(), eq(skippedHigh), anyString(), anyInt());
+            any(), any(), any(), any(), eq(skippedHigh), anyString(), anyInt(), anyInt());
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
-            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(1001L), anyString(), eq(100));
+            eq("Bearer t"),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(1001L),
+            anyString(),
+            eq(100),
+            anyInt());
   }
 
   @Test
@@ -347,7 +386,7 @@ class FindingFeedbackCaptureServiceTest {
                 "x\n" + SuggestionFormatter.findingMarker(1),
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
     when(reactionClient.listReviewCommentReactions(
-            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+            any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
     capture.scheduleCaptureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "thanks");
@@ -393,7 +432,14 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void nullReactionsListIsIgnored() {
     when(reactionClient.listReviewCommentReactions(
-            anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyInt()))
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyLong(),
+            anyString(),
+            anyInt(),
+            anyInt()))
         .thenReturn(null);
     capture.captureReactions(
         "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
@@ -413,13 +459,61 @@ class FindingFeedbackCaptureServiceTest {
                 body,
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
     when(reactionClient.listReviewCommentReactions(
-            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+            any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
     capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
 
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
-            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(50L), anyString(), eq(100));
+            eq("Bearer t"),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(50L),
+            anyString(),
+            eq(100),
+            anyInt());
+  }
+
+  @Test
+  void listAndRecordWalksReactionPages() {
+    var page1 =
+        java.util.stream.IntStream.rangeClosed(1, 100)
+            .mapToObj(
+                i ->
+                    new GitHubReactionClient.Reaction(
+                        (long) i, "+1", new GitHubReactionClient.Reaction.User("user" + i, i), "t"))
+            .toList();
+    var page2 =
+        List.of(
+            new GitHubReactionClient.Reaction(
+                101L, "+1", new GitHubReactionClient.Reaction.User("last", 101), "t"));
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
+        .thenReturn(page1);
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(2)))
+        .thenReturn(page2);
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("-1"), eq(100), eq(1)))
+        .thenReturn(List.of());
+
+    capture.captureReactions(
+        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+
+    verify(feedbackService, times(101))
+        .record(
+            eq("owner/repo"),
+            eq(7),
+            eq(99L),
+            eq(1),
+            eq(FindingFeedback.SIGNAL_USEFUL),
+            eq(FindingFeedback.SOURCE_REACTION),
+            anyString(),
+            any());
+    verify(reactionClient)
+        .listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(2));
   }
 }
