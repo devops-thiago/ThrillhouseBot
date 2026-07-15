@@ -154,13 +154,14 @@ public class VerdictBuilder {
           + truncationSuffix;
     }
     boolean approvedDespiteCi = result.reviewState() == ReviewState.APPROVE;
-    var unreadableSuffix =
-        result.ciUnreadable()
-            ? (approvedDespiteCi
-                ? " Note: the CI status for some checks could not be read."
-                : " The CI status for some checks could not be read — holding approval until it can"
-                    + " be confirmed.")
-            : "";
+    String unreadableSuffix = "";
+    if (result.ciUnreadable()) {
+      unreadableSuffix =
+          approvedDespiteCi
+              ? " Note: the CI status for some checks could not be read."
+              : " The CI status for some checks could not be read — holding approval until it can"
+                  + " be confirmed.";
+    }
     if (!result.offendingCiChecks().isEmpty()) {
       var checkLabel = result.requiredContextsKnown() ? "required CI check(s)" : "CI check(s)";
       if (approvedDespiteCi) {
