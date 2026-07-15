@@ -70,6 +70,10 @@ public final class FindingVerifierPrompts {
               present and lacks it) — that finding is demonstrable and stands.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
+            - The finding claims a class is missing a required no-arg/default constructor for
+              dependency injection while the diff shows a constructor annotated @Inject (CDI /
+              Quarkus / Jakarta) or @Autowired (Spring) on that class — constructor injection is
+              the documented idiom and needs no no-arg constructor; the diff refutes the claim.
             - The diff already guards against the condition the finding claims is unhandled —
               not only an adjacent literal check (an existing null check on the flagged line) but
               an upstream guard earlier in the same method, including one on a value derived from
