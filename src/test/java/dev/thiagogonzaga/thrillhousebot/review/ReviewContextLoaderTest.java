@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -768,15 +769,27 @@ class ReviewContextLoaderTest {
           "title":"T","description":"d","suggestion_old":"o","suggestion_new":"n"}],\
           "previous_findings_status":[],"summary":null}
           """;
+      var olderJson =
+          """
+          {"findings":[{"risk":"low","confidence":"high","file":"b.java","line":2,\
+          "title":"U","description":"d","suggestion_old":"o","suggestion_new":"n"}],\
+          "previous_findings_status":[],"summary":null}
+          """;
       var parsed =
           List.of(
-              new dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse(
+              new ReviewResponse(
                   List.of(
-                      new dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding(
+                      new ReviewResponse.Finding(
                           "medium", "high", "a.java", 1, "T", "d", "o", "n")),
                   List.of(),
+                  null),
+              new ReviewResponse(
+                  List.of(
+                      new ReviewResponse.Finding("low", "high", "b.java", 2, "U", "d", "o", "n")),
+                  List.of(),
                   null));
-      when(followUpAnalyzer.parsePreviousResponses(List.of(priorJson))).thenReturn(parsed);
+      when(followUpAnalyzer.parsePreviousResponses(List.of(priorJson, olderJson)))
+          .thenReturn(parsed);
       when(followUpAnalyzer.buildPreviousFindingsContext(
               anyList(), any(), any(), any(), any(BotIdentity.class)))
           .thenReturn("ctx");
@@ -784,7 +797,7 @@ class ReviewContextLoaderTest {
           List.of(
               new GitHubPullRequestClient.FileDiff(
                   "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
-          List.of(priorJson));
+          List.of(priorJson, olderJson));
       var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
@@ -793,7 +806,14 @@ class ReviewContextLoaderTest {
       assertEquals(parsed, ctx.priorAiResponses());
       assertEquals(1, ctx.previousFindingsList().size());
       assertEquals("a.java", ctx.previousFindingsList().get(0).file());
-      verify(followUpAnalyzer, times(1)).parsePreviousResponses(List.of(priorJson));
+      verify(followUpAnalyzer, times(1)).parsePreviousResponses(List.of(priorJson, olderJson));
+      verify(followUpAnalyzer)
+          .buildPreviousFindingsContext(
+              eq(parsed.get(0).findings()),
+              any(),
+              any(),
+              eq(parsed.subList(1, parsed.size())),
+              any(BotIdentity.class));
     }
   }
 }

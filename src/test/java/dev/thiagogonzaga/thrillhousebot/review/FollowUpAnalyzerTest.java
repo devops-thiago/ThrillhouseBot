@@ -775,6 +775,10 @@ class FollowUpAnalyzerTest {
         analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), older, BOT_ID);
     assertTrue(withOlder.contains("src/A.java"));
     assertFalse(withOlder.contains("Answered in earlier rounds"));
+    assertTrue(
+        analyzer
+            .buildPreviousFindingsContext(previous, List.of(), List.of(), null, BOT_ID)
+            .contains("src/A.java"));
 
     assertTrue(
         analyzer
