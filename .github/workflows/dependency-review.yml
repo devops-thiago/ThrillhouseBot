@@ -1,8 +1,11 @@
 name: "Dependency Review"
 
+# Static half of the dual-gate merge policy (see CONTRIBUTING.md):
+# blocks PRs that introduce high/critical advisories or disallowed licenses.
+# Complements ThrillhouseBot's LLM review — does not replace it.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, develop, "release/**"]
 
 permissions:
   contents: read
@@ -18,6 +21,9 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
+          # High+ blocks merge (required check). Medium/low still appear in the
+          # PR summary for triage; non-applicable holds use osv-scanner.toml /
+          # .trivyignore with a documented reason (CONTRIBUTING dual-gate).
           fail-on-severity: high
           # Permissive/weak-copyleft licenses common in the Java and npm dependency
           # trees; replaces the deprecated deny-licenses option (see
