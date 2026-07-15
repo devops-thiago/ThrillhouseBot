@@ -22,8 +22,10 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           # High+ blocks merge (required check). Medium/low still appear in the
-          # PR summary for triage; non-applicable holds use osv-scanner.toml /
-          # .trivyignore with a documented reason (CONTRIBUTING dual-gate).
+          # PR summary for triage. Non-applicable advisories for *this* action
+          # need allow-ghsas (inline) or config-file →
+          # .github/dependency-review-config.yml — not osv-scanner.toml /
+          # .trivyignore (those are for Scorecard/OSV and Trivy; see CONTRIBUTING).
           fail-on-severity: high
           # Permissive/weak-copyleft licenses common in the Java and npm dependency
           # trees; replaces the deprecated deny-licenses option (see

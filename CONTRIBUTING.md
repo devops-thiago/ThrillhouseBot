@@ -67,7 +67,7 @@ Maintainers triage; do not "average" the signals away.
 
 | Static | ThrillhouseBot | What to do |
 |--------|----------------|------------|
-| Red | Green / quiet | **Fix or formally suppress the static finding.** LLM silence is not evidence the CVE is safe. Prefer a real version bump; if the advisory does not apply to this codebase, document the hold (e.g. `osv-scanner.toml` / `.trivyignore` with a full reason — see the Jackson GHSA pattern in [#308](https://github.com/devops-thiago/ThrillhouseBot/pull/308)). |
+| Red | Green / quiet | **Fix or formally suppress the static finding.** LLM silence is not evidence the CVE is safe. Prefer a real version bump; if the advisory does not apply to this codebase, document the hold with the file the failing tool actually reads — Dependency Review: `allow-ghsas` or `.github/dependency-review-config.yml`; Trivy: `.trivyignore`; OpenSSF Scorecard / osv-scanner: `osv-scanner.toml` (Jackson GHSA pattern in [#308](https://github.com/devops-thiago/ThrillhouseBot/pull/308)). |
 | Green | Red / open threads | **Address or refute the bot findings** in the PR discussion before merge. Static green does not clear logic/copy/incomplete-fix issues. |
 | Red | Red | Clear the **static** gate first (often blocks merge already), then resolve bot threads. |
 | Same area, conflicting severity | — | Prefer the **static** tool for dependency/CVE/license facts; prefer the **bot** for intent, call-site context, and "did the PR actually finish the fix?" Prefer neither blindly — leave a short maintainer note on the PR. |
