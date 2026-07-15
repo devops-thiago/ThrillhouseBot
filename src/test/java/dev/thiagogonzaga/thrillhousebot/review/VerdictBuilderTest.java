@@ -71,6 +71,7 @@ class VerdictBuilderTest {
         new InstructionsResolver.ResolvedInstructions("", ""),
         List.of(),
         "",
+        "",
         List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
         new DiffLineResolver(Map.of()),
         null);

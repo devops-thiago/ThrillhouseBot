@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Bug-fix efficacy check**: when a PR declares itself a bug fix (the PR-template "Bug fix" checkbox or a `Fixes/Closes/Resolves #N` reference), the review prompt now extracts the concrete failure trigger from the PR description and the linked issues' text (fetched best-effort, up to 3 issues) and verifies the change actually alters behavior on that trigger's path — a locally-correct fix that the stated trigger never reaches is reported as a finding instead of passing silently, and when the deciding code is outside the diff the verdict is held at low confidence as a verification request rather than approved
+
 ## [0.4.0] — 2026-07-12
 
 Token-budgeted reviews for large PRs, per-model AI settings, a published docs site, and a few operator-facing controls (command ack reactions, an opt-in auto-review interval, missing-pricing visibility on the dashboard).

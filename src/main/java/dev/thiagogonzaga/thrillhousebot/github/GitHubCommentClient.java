@@ -75,7 +75,20 @@ public interface GitHubCommentClient {
     return all;
   }
 
+  @GET
+  @Path("/repos/{owner}/{repo}/issues/{issueNumber}")
+  @Produces(MediaType.APPLICATION_JSON)
+  IssueDetails getIssue(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("issueNumber") int issueNumber);
+
   record CreateCommentRequest(String body) {}
+
+  /** Title and body of a linked issue, fetched to ground the bug-fix efficacy check. */
+  record IssueDetails(int number, String title, String body) {}
 
   record CommentResponse(long id, @JsonProperty("html_url") String htmlUrl) {}
 

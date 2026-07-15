@@ -88,6 +88,16 @@ public final class FindingVerifierPrompts {
               unchanged — at any severity; restating it with a higher severity is still a
               repeat.
 
+            A bug-fix efficacy finding — one claiming the PR's fix does not change behavior for
+            the failure trigger it claims to fix — is judged on the trigger's path, not on the
+            changed lines' local correctness: never reject it merely because every changed line
+            is locally valid, since "locally valid but never executed under the trigger" is
+            exactly what it alleges. Confirm it when the provided material shows no changed line
+            executes under the stated trigger; reject it only when the material shows a changed
+            line that does. When the deciding code is outside the diff, such a finding phrased as
+            a verification request naming what to check is legitimately confidence "low" or
+            "medium" — downgrade it at most; do not reject it as unverifiable.
+
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the
             manifest text in the diff — a field that fails schema validation, an over-broad RBAC
