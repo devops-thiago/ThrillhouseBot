@@ -170,6 +170,14 @@ public class StartupConfigValidator {
               .maxOutputTokens()
               .filter(v -> v < 1)
               .ifPresent(v -> problems.add(prefix + "max-output-tokens must be >= 1: " + v));
+          settings
+              .frequencyPenalty()
+              .filter(v -> v < -2.0 || v > 2.0)
+              .ifPresent(v -> problems.add(prefix + "frequency-penalty must be in [-2, 2]: " + v));
+          settings
+              .presencePenalty()
+              .filter(v -> v < -2.0 || v > 2.0)
+              .ifPresent(v -> problems.add(prefix + "presence-penalty must be in [-2, 2]: " + v));
         });
   }
 
@@ -281,16 +289,23 @@ public class StartupConfigValidator {
       var temperature = orProviderDefault(activeModel.temperature());
       var topP = orProviderDefault(activeModel.topP());
       var maxOutputTokens = orProviderDefault(activeModel.maxOutputTokens());
+      var frequencyPenalty = orProviderDefault(activeModel.frequencyPenalty());
+      var presencePenalty = orProviderDefault(activeModel.presencePenalty());
+      var seed = activeModel.seed().map(String::valueOf).orElse("none");
       log.info(
           "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
-              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={}",
+              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={},"
+              + " frequency-penalty={}, presence-penalty={}, seed={}",
           activeModel.modelName(),
           activeModel.maxInputTokens(),
           activeModel.outputBufferTokens(),
           activeModel.tokenSafetyMargin(),
           temperature,
           topP,
-          maxOutputTokens);
+          maxOutputTokens,
+          frequencyPenalty,
+          presencePenalty,
+          seed);
     }
   }
 
