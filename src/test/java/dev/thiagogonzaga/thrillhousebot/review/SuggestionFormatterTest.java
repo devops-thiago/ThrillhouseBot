@@ -79,6 +79,15 @@ class SuggestionFormatterTest {
   }
 
   @Test
+  void shouldParseFindingMarkerFromCommentBody() {
+    assertEquals(
+        3,
+        SuggestionFormatter.parseFindingMarker("x\n<!-- thrillhousebot:finding=3 -->").getAsInt());
+    assertTrue(SuggestionFormatter.parseFindingMarker("no marker").isEmpty());
+    assertTrue(SuggestionFormatter.parseFindingMarker(null).isEmpty());
+  }
+
+  @Test
   void shouldOmitFindingMarkerWithoutId() {
     var finding = new Finding(RiskLevel.HIGH, "Main.java", 10, "Bug", "Fix it", null, null);
 

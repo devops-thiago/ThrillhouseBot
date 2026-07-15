@@ -204,11 +204,11 @@ sequenceDiagram
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
-| `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, and runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`) | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
-| `review/` | Orchestrates a review: plans the token budget, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, writes the summary comment, optionally labels the PR, and answers maintainer replies/mentions in PR threads | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher` |
+| `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
+| `review/` | Orchestrates a review: plans the token budget, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher` |
 | `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant` |
-| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `InstructionsResolver` |
-| `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), and review session persistence | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository` |
+| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver` |
+| `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
 | `config/` | Wiring: the outbound HTTP client, the review thread pool, typed config, active-model settings (caps, generation params), fail-fast startup validation, and the shared bot-identity used to recognize the bot's own activity | `HttpClientProducer`, `ReviewExecutorProducer`, `ThrillhouseConfig`, `ActiveModelSettings`, `StartupConfigValidator`, `BotIdentity` |
 | `frontend/` | The Next.js dashboard, built to a static export and served by Quarkus | — |
 
@@ -235,7 +235,9 @@ parallel pass completes.
 Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
 `thrillhousebot.review.ai-timeout-seconds`. Cost and token metrics come from
 OpenTelemetry. OAuth login sessions are opaque IDs in cookies with tokens kept
-server-side; review history persists in the database. See
+server-side; review history persists in the database. Maintainer finding
+feedback (reactions and reply heuristics) is documented in
+[FEEDBACK.md](./FEEDBACK.md). See
 [SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md)
 for the reporting process.
 

@@ -60,6 +60,8 @@ public class ReviewOrchestrator {
 
   private final FindingPipeline findingPipeline;
 
+  private final FindingFeedbackCaptureService findingFeedbackCapture;
+
   private final ExecutorService reviewExecutor;
 
   /**
@@ -174,6 +176,7 @@ public class ReviewOrchestrator {
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
+      FindingFeedbackCaptureService findingFeedbackCapture,
       @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
     this.authClient = authClient;
@@ -187,6 +190,7 @@ public class ReviewOrchestrator {
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
+    this.findingFeedbackCapture = findingFeedbackCapture;
     this.reviewExecutor = reviewExecutor;
   }
 
@@ -296,6 +300,17 @@ public class ReviewOrchestrator {
                   previousAiResponseJson,
                   inlineComments,
                   aiResponse.previousFindingsStatus()));
+      runPostResultStep(
+          doneReq,
+          "capture finding feedback",
+          () ->
+              findingFeedbackCapture.captureOnPriorFindings(
+                  auth,
+                  doneReq.owner(),
+                  doneReq.repo(),
+                  doneReq.prNumber(),
+                  previousAiResponseJson,
+                  inlineComments));
       runPostResultStep(
           doneReq,
           "apply labels",

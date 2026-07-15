@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Finding feedback capture for the learnings pipeline**: records maintainer 👍/👎 reactions (and conservative "not useful" reply heuristics) on bot finding comments into a `finding_feedback` table, with per-repo aggregates on `GET /api/dashboard/feedback` and a documented data model/retention policy (`docs/FEEDBACK.md`). GitHub Apps have no `reaction` webhook, so reactions are polled via the Reactions API on review-thread replies and follow-up reviews. Precursor to cross-review learnings (#38); does not yet feed prompts (#324)
+
 ## [0.4.0] — 2026-07-12
 
 Token-budgeted reviews for large PRs, per-model AI settings, a published docs site, and a few operator-facing controls (command ack reactions, an opt-in auto-review interval, missing-pricing visibility on the dashboard).

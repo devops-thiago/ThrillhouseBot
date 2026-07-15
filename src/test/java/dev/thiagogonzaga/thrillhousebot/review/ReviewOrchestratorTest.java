@@ -207,6 +207,7 @@ class ReviewOrchestratorTest {
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
+        mock(FindingFeedbackCaptureService.class),
         reviewExecutor);
   }
 
