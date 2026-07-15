@@ -39,25 +39,27 @@ class FindingFeedbackServiceTest {
   @Test
   void recordPersistsReactionAndIsIdempotentByReactionId() {
     assertTrue(
-        service.record(
-            "owner/repo",
-            7,
-            100L,
-            1,
-            FindingFeedback.SIGNAL_NOT_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "octocat",
-            55L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                7,
+                100L,
+                1,
+                FindingFeedback.SIGNAL_NOT_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "octocat",
+                55L)));
     assertFalse(
-        service.record(
-            "owner/repo",
-            7,
-            100L,
-            1,
-            FindingFeedback.SIGNAL_NOT_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "octocat",
-            55L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                7,
+                100L,
+                1,
+                FindingFeedback.SIGNAL_NOT_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "octocat",
+                55L)));
 
     assertEquals(1, FindingFeedback.count());
     var summary = service.summarize("owner/repo");
@@ -69,25 +71,27 @@ class FindingFeedbackServiceTest {
   @Test
   void recordNormalizesLoginAndIgnoresDuplicateCompositeKey() {
     assertTrue(
-        service.record(
-            "owner/repo",
-            3,
-            200L,
-            2,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "OctoCat",
-            1L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                3,
+                200L,
+                2,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "OctoCat",
+                1L)));
     assertFalse(
-        service.record(
-            "owner/repo",
-            3,
-            200L,
-            2,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "octocat",
-            99L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                3,
+                200L,
+                2,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "octocat",
+                99L)));
 
     assertEquals(1, FindingFeedback.count());
     FindingFeedback saved = FindingFeedback.<FindingFeedback>listAll().get(0);
@@ -101,33 +105,36 @@ class FindingFeedbackServiceTest {
 
   @Test
   void summarizeAllOrdersByTotalEvents() {
-    service.record(
-        "a/one",
-        1,
-        1L,
-        1,
-        FindingFeedback.SIGNAL_USEFUL,
-        FindingFeedback.SOURCE_REACTION,
-        "u1",
-        10L);
-    service.record(
-        "b/two",
-        1,
-        2L,
-        1,
-        FindingFeedback.SIGNAL_USEFUL,
-        FindingFeedback.SOURCE_REACTION,
-        "u1",
-        11L);
-    service.record(
-        "b/two",
-        1,
-        2L,
-        1,
-        FindingFeedback.SIGNAL_NOT_USEFUL,
-        FindingFeedback.SOURCE_REACTION,
-        "u2",
-        12L);
+    service.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "a/one",
+            1,
+            1L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "u1",
+            10L));
+    service.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "b/two",
+            1,
+            2L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "u1",
+            11L));
+    service.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "b/two",
+            1,
+            2L,
+            1,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "u2",
+            12L));
 
     var all = service.summarizeAll();
     assertEquals(2, all.size());
@@ -149,53 +156,72 @@ class FindingFeedbackServiceTest {
   @Test
   void recordAcceptsNullReactionIdAndRejectsNullReactor() {
     assertTrue(
-        service.record(
-            "owner/repo",
-            1,
-            50L,
-            1,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REPLY_HEURISTIC,
-            "carol",
-            null));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                1,
+                50L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REPLY_HEURISTIC,
+                "carol",
+                null)));
     assertFalse(
-        service.record(
-            "owner/repo",
-            1,
-            51L,
-            1,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            null,
-            77L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                1,
+                51L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                null,
+                77L)));
   }
 
   @Test
   void recordRejectsBlankInputs() {
+    assertFalse(service.recordFeedback(null));
     assertFalse(
-        service.record(
-            "", 1, 1L, 1, FindingFeedback.SIGNAL_USEFUL, FindingFeedback.SOURCE_REACTION, "u", 1L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "",
+                1,
+                1L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "u",
+                1L)));
     assertFalse(
-        service.record(
-            "o/r",
-            1,
-            1L,
-            1,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            " ",
-            1L));
-    assertFalse(service.record("o/r", 1, 1L, 1, null, FindingFeedback.SOURCE_REACTION, "u", 1L));
-    assertFalse(service.record("o/r", 1, 1L, 1, FindingFeedback.SIGNAL_USEFUL, null, "u", 1L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "o/r",
+                1,
+                1L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                " ",
+                1L)));
     assertFalse(
-        service.record(
-            null,
-            1,
-            1L,
-            1,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "u",
-            1L));
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "o/r", 1, 1L, 1, null, FindingFeedback.SOURCE_REACTION, "u", 1L)));
+    assertFalse(
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "o/r", 1, 1L, 1, FindingFeedback.SIGNAL_USEFUL, null, "u", 1L)));
+    assertFalse(
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                null,
+                1,
+                1L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "u",
+                1L)));
   }
 }

@@ -63,7 +63,7 @@ public class SuggestionFormatter {
     }
     try {
       return OptionalInt.of(Integer.parseInt(matcher.group(1)));
-    } catch (NumberFormatException e) {
+    } catch (NumberFormatException _) {
       return OptionalInt.empty();
     }
   }

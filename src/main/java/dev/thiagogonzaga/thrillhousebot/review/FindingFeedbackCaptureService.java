@@ -54,12 +54,17 @@ public class FindingFeedbackCaptureService {
 
   /**
    * Reply bodies that count as an explicit "not useful" signal when a human replies on a finding
-   * thread. Kept conservative to avoid false training data for #38.
+   * thread. Kept conservative to avoid false training data for #38. Split into simple patterns so
+   * each stays under Sonar's regex-complexity budget.
    */
-  private static final Pattern NOT_USEFUL_REPLY =
-      Pattern.compile(
-          "(?is).*\\b(not\\s+useful|false\\s+positive|not\\s+a\\s+(real\\s+)?(bug|issue)|noise)\\b.*"
-              + "|.*👎.*|.*:-1:.*");
+  private static final List<Pattern> NOT_USEFUL_REPLY_PATTERNS =
+      List.of(
+          Pattern.compile("(?is)\\bnot\\s+useful\\b"),
+          Pattern.compile("(?is)\\bfalse\\s+positive\\b"),
+          Pattern.compile("(?is)\\bnot\\s+a\\s+(?:real\\s+)?(?:bug|issue)\\b"),
+          Pattern.compile("(?is)\\bnoise\\b"),
+          Pattern.compile("👎"),
+          Pattern.compile(":-1:"));
 
   private final FindingFeedbackService feedbackService;
   private final BotIdentity botIdentity;
@@ -196,73 +201,91 @@ public class FindingFeedbackCaptureService {
     if (findingIndex.isEmpty()) {
       return;
     }
-    var repoKey = owner + "/" + repo;
-    Integer index = findingIndex.getAsInt();
-    listAndRecord(auth, owner, repo, repoKey, prNumber, commentId, index, CONTENT_PLUS_ONE);
-    listAndRecord(auth, owner, repo, repoKey, prNumber, commentId, index, CONTENT_MINUS_ONE);
+    var ctx =
+        new ReactionPollContext(
+            auth, owner, repo, owner + "/" + repo, prNumber, commentId, findingIndex.getAsInt());
+    listAndRecord(ctx, CONTENT_PLUS_ONE);
+    listAndRecord(ctx, CONTENT_MINUS_ONE);
   }
 
-  private void listAndRecord(
+  private record ReactionPollContext(
       String auth,
       String owner,
       String repo,
       String repoKey,
       int prNumber,
       long commentId,
-      Integer findingIndex,
-      String content) {
+      Integer findingIndex) {}
+
+  private void listAndRecord(ReactionPollContext ctx, String content) {
     String signal =
         CONTENT_PLUS_ONE.equals(content)
             ? FindingFeedback.SIGNAL_USEFUL
             : FindingFeedback.SIGNAL_NOT_USEFUL;
     for (int page = 1; page <= GitHubReactionClient.MAX_REACTION_PAGES; page++) {
-      List<GitHubReactionClient.Reaction> reactions;
-      try {
-        reactions =
-            reactionClient.listReviewCommentReactions(
-                auth,
-                ACCEPT,
-                owner,
-                repo,
-                commentId,
-                content,
-                GitHubReactionClient.REACTIONS_PER_PAGE,
-                page);
-      } catch (RuntimeException e) {
-        log.debug(
-            "Failed to list {} reactions on review comment {} in {}/{} page {} (continuing)",
-            content,
-            commentId,
-            owner,
-            repo,
-            page,
-            e);
-        return;
-      }
+      List<GitHubReactionClient.Reaction> reactions = fetchReactionPage(ctx, content, page);
       if (reactions == null || reactions.isEmpty()) {
         return;
       }
-      for (var reaction : reactions) {
-        if (reaction == null || reaction.user() == null || reaction.user().login() == null) {
-          continue;
-        }
-        if (botIdentity.matches(reaction.user().login())) {
-          continue;
-        }
-        feedbackService.record(
-            repoKey,
-            prNumber,
-            commentId,
-            findingIndex,
-            signal,
-            FindingFeedback.SOURCE_REACTION,
-            reaction.user().login(),
-            reaction.id());
-      }
+      persistEligibleReactions(ctx, signal, reactions);
       if (reactions.size() < GitHubReactionClient.REACTIONS_PER_PAGE) {
         return;
       }
     }
+  }
+
+  private List<GitHubReactionClient.Reaction> fetchReactionPage(
+      ReactionPollContext ctx, String content, int page) {
+    try {
+      return reactionClient.listReviewCommentReactions(
+          ctx.auth(),
+          ACCEPT,
+          ctx.owner(),
+          ctx.repo(),
+          ctx.commentId(),
+          content,
+          GitHubReactionClient.REACTIONS_PER_PAGE,
+          page);
+    } catch (RuntimeException e) {
+      log.debug(
+          "Failed to list {} reactions on review comment {} in {}/{} page {} (continuing)",
+          content,
+          ctx.commentId(),
+          ctx.owner(),
+          ctx.repo(),
+          page,
+          e);
+      return null;
+    }
+  }
+
+  private void persistEligibleReactions(
+      ReactionPollContext ctx, String signal, List<GitHubReactionClient.Reaction> reactions) {
+    for (var reaction : reactions) {
+      String login = humanReactorLogin(reaction);
+      if (login == null) {
+        continue;
+      }
+      feedbackService.recordFeedback(
+          new FindingFeedbackService.FeedbackInput(
+              ctx.repoKey(),
+              ctx.prNumber(),
+              ctx.commentId(),
+              ctx.findingIndex(),
+              signal,
+              FindingFeedback.SOURCE_REACTION,
+              login,
+              reaction.id()));
+    }
+  }
+
+  /** Non-bot reactor login, or {@code null} when the reaction should be ignored. */
+  private String humanReactorLogin(GitHubReactionClient.Reaction reaction) {
+    if (reaction == null || reaction.user() == null || reaction.user().login() == null) {
+      return null;
+    }
+    String login = reaction.user().login();
+    return botIdentity.matches(login) ? null : login;
   }
 
   void captureReplyHeuristic(
@@ -278,17 +301,22 @@ public class FindingFeedbackCaptureService {
         || botIdentity.matches(replyAuthorLogin)
         || replyBody == null
         || replyBody.isBlank()
-        || !NOT_USEFUL_REPLY.matcher(replyBody).matches()) {
+        || !isNotUsefulReply(replyBody)) {
       return;
     }
-    feedbackService.record(
-        owner + "/" + repo,
-        prNumber,
-        rootCommentId,
-        findingIndex,
-        FindingFeedback.SIGNAL_NOT_USEFUL,
-        FindingFeedback.SOURCE_REPLY_HEURISTIC,
-        replyAuthorLogin,
-        null);
+    feedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            owner + "/" + repo,
+            prNumber,
+            rootCommentId,
+            findingIndex,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REPLY_HEURISTIC,
+            replyAuthorLogin,
+            null));
+  }
+
+  private static boolean isNotUsefulReply(String body) {
+    return NOT_USEFUL_REPLY_PATTERNS.stream().anyMatch(p -> p.matcher(body).find());
   }
 }

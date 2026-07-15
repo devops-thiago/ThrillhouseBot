@@ -47,9 +47,8 @@ public class FindingFeedbackService {
   public record FeedbackPreferenceSummary(
       String repository, long usefulCount, long notUsefulCount, long totalEvents) {}
 
-  /** Records one feedback event; returns {@code true} when a new row was inserted. */
-  @Transactional
-  public boolean record(
+  /** Input for {@link #recordFeedback(FeedbackInput)}. */
+  public record FeedbackInput(
       String repositoryKey,
       int prNumber,
       long githubCommentId,
@@ -57,38 +56,43 @@ public class FindingFeedbackService {
       String signal,
       String source,
       String reactorLogin,
-      Long githubReactionId) {
-    if (repositoryKey == null
-        || repositoryKey.isBlank()
-        || signal == null
-        || source == null
-        || reactorLogin == null
-        || reactorLogin.isBlank()) {
+      Long githubReactionId) {}
+
+  /** Records one feedback event; returns {@code true} when a new row was inserted. */
+  @Transactional
+  public boolean recordFeedback(FeedbackInput input) {
+    if (input == null
+        || input.repositoryKey() == null
+        || input.repositoryKey().isBlank()
+        || input.signal() == null
+        || input.source() == null
+        || input.reactorLogin() == null
+        || input.reactorLogin().isBlank()) {
       return false;
     }
-    var login = reactorLogin.strip().toLowerCase(Locale.ROOT);
-    if (githubReactionId != null
-        && repository.count("githubReactionId = ?1", githubReactionId) > 0) {
+    var login = input.reactorLogin().strip().toLowerCase(Locale.ROOT);
+    if (input.githubReactionId() != null
+        && repository.count("githubReactionId = ?1", input.githubReactionId()) > 0) {
       return false;
     }
     if (repository.count(
             "githubCommentId = ?1 and reactorLogin = ?2 and signal = ?3 and source = ?4",
-            githubCommentId,
+            input.githubCommentId(),
             login,
-            signal,
-            source)
+            input.signal(),
+            input.source())
         > 0) {
       return false;
     }
     var row = new FindingFeedback();
-    row.repository = repositoryKey.strip();
-    row.prNumber = prNumber;
-    row.githubCommentId = githubCommentId;
-    row.findingIndex = findingIndex;
-    row.signal = signal;
-    row.source = source;
+    row.repository = input.repositoryKey().strip();
+    row.prNumber = input.prNumber();
+    row.githubCommentId = input.githubCommentId();
+    row.findingIndex = input.findingIndex();
+    row.signal = input.signal();
+    row.source = input.source();
     row.reactorLogin = login;
-    row.githubReactionId = githubReactionId;
+    row.githubReactionId = input.githubReactionId();
     row.createdAt = Instant.now();
     repository.persist(row);
     return true;

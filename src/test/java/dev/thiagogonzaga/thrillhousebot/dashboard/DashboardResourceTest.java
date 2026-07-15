@@ -102,25 +102,27 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   }
 
   @Test
-  void shouldReturnFeedbackAggregates() throws Exception {
-    findingFeedbackService.record(
-        "owner/repo",
-        1,
-        10L,
-        1,
-        FindingFeedback.SIGNAL_USEFUL,
-        FindingFeedback.SOURCE_REACTION,
-        "octocat",
-        101L);
-    findingFeedbackService.record(
-        "owner/repo",
-        1,
-        10L,
-        1,
-        FindingFeedback.SIGNAL_NOT_USEFUL,
-        FindingFeedback.SOURCE_REACTION,
-        "alice",
-        102L);
+  void shouldReturnFeedbackAggregates() {
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "owner/repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "octocat",
+            101L));
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "owner/repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "alice",
+            102L));
 
     given()
         .cookie(COOKIE_NAME, VALID_TOKEN)

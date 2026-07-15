@@ -74,27 +74,31 @@ class FindingFeedbackCaptureServiceTest {
     capture.captureReactions("Bearer t", "owner", "repo", 7, 99L, body);
 
     verify(feedbackService)
-        .record(
-            "owner/repo",
-            7,
-            99L,
-            2,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "octocat",
-            1L);
+        .recordFeedback(
+            eq(
+                new FindingFeedbackService.FeedbackInput(
+                    "owner/repo",
+                    7,
+                    99L,
+                    2,
+                    FindingFeedback.SIGNAL_USEFUL,
+                    FindingFeedback.SOURCE_REACTION,
+                    "octocat",
+                    1L)));
     verify(feedbackService)
-        .record(
-            "owner/repo",
-            7,
-            99L,
-            2,
-            FindingFeedback.SIGNAL_NOT_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "alice",
-            3L);
+        .recordFeedback(
+            eq(
+                new FindingFeedbackService.FeedbackInput(
+                    "owner/repo",
+                    7,
+                    99L,
+                    2,
+                    FindingFeedback.SIGNAL_NOT_USEFUL,
+                    FindingFeedback.SOURCE_REACTION,
+                    "alice",
+                    3L)));
     verify(feedbackService, never())
-        .record(any(), anyInt(), anyLong(), any(), any(), any(), eq("thrillhousebot[bot]"), any());
+        .recordFeedback(argThat(in -> "thrillhousebot[bot]".equals(in.reactorLogin())));
   }
 
   @Test
@@ -124,15 +128,17 @@ class FindingFeedbackCaptureServiceTest {
         9L, "owner", "repo", 7, 99L, "octocat", "this is a false positive");
 
     verify(feedbackService)
-        .record(
-            "owner/repo",
-            7,
-            99L,
-            1,
-            FindingFeedback.SIGNAL_NOT_USEFUL,
-            FindingFeedback.SOURCE_REPLY_HEURISTIC,
-            "octocat",
-            null);
+        .recordFeedback(
+            eq(
+                new FindingFeedbackService.FeedbackInput(
+                    "owner/repo",
+                    7,
+                    99L,
+                    1,
+                    FindingFeedback.SIGNAL_NOT_USEFUL,
+                    FindingFeedback.SOURCE_REPLY_HEURISTIC,
+                    "octocat",
+                    null)));
   }
 
   @Test
@@ -278,8 +284,7 @@ class FindingFeedbackCaptureServiceTest {
         .thenThrow(new RuntimeException("api down"));
     capture.captureReactions(
         "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
-    verify(feedbackService, never())
-        .record(any(), anyInt(), anyLong(), any(), any(), any(), any(), any());
+    verify(feedbackService, never()).recordFeedback(any());
   }
 
   @Test
@@ -311,15 +316,17 @@ class FindingFeedbackCaptureServiceTest {
         "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
 
     verify(feedbackService)
-        .record(
-            "owner/repo",
-            7,
-            99L,
-            1,
-            FindingFeedback.SIGNAL_USEFUL,
-            FindingFeedback.SOURCE_REACTION,
-            "bob",
-            3L);
+        .recordFeedback(
+            eq(
+                new FindingFeedbackService.FeedbackInput(
+                    "owner/repo",
+                    7,
+                    99L,
+                    1,
+                    FindingFeedback.SIGNAL_USEFUL,
+                    FindingFeedback.SOURCE_REACTION,
+                    "bob",
+                    3L)));
   }
 
   @Test
@@ -397,7 +404,7 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void shutdownStopsExecutor() {
-    capture.shutdown();
+    assertDoesNotThrow(capture::shutdown);
   }
 
   @Test
@@ -421,11 +428,9 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
-  void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() throws Exception {
+  void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() {
     when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth fail"));
     capture.scheduleCaptureOnReviewReply(1L, "o", "r", 1, 9L, "u", "not useful");
-    // Give the virtual thread a moment; failure must not escape.
-    Thread.sleep(200);
     verify(authClient, timeout(2000)).getAuthHeader(1L);
   }
 
@@ -443,8 +448,7 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(null);
     capture.captureReactions(
         "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
-    verify(feedbackService, never())
-        .record(any(), anyInt(), anyLong(), any(), any(), any(), any(), any());
+    verify(feedbackService, never()).recordFeedback(any());
   }
 
   @Test
@@ -502,16 +506,7 @@ class FindingFeedbackCaptureServiceTest {
     capture.captureReactions(
         "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
 
-    verify(feedbackService, times(101))
-        .record(
-            eq("owner/repo"),
-            eq(7),
-            eq(99L),
-            eq(1),
-            eq(FindingFeedback.SIGNAL_USEFUL),
-            eq(FindingFeedback.SOURCE_REACTION),
-            anyString(),
-            any());
+    verify(feedbackService, times(101)).recordFeedback(any());
     verify(reactionClient)
         .listReviewCommentReactions(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(2));
