@@ -305,12 +305,7 @@ public class ReviewOrchestrator {
           "capture finding feedback",
           () ->
               findingFeedbackCapture.captureOnPriorFindings(
-                  auth,
-                  doneReq.owner(),
-                  doneReq.repo(),
-                  doneReq.prNumber(),
-                  previousAiResponseJson,
-                  inlineComments));
+                  auth, doneReq.owner(), doneReq.repo(), doneReq.prNumber(), inlineComments));
       runPostResultStep(
           doneReq,
           "apply labels",

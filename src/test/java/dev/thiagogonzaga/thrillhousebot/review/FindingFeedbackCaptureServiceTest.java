@@ -32,7 +32,6 @@ import org.mockito.MockitoAnnotations;
 class FindingFeedbackCaptureServiceTest {
 
   @Mock private FindingFeedbackService feedbackService;
-  @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private GitHubAuthClient authClient;
   @Mock private GitHubReactionClient reactionClient;
   @Mock private GitHubReviewClient reviewClient;
@@ -45,7 +44,6 @@ class FindingFeedbackCaptureServiceTest {
     capture =
         new FindingFeedbackCaptureService(
             feedbackService,
-            followUpAnalyzer,
             BotIdentity.of("thrillhousebot[bot]"),
             authClient,
             reactionClient,
@@ -158,27 +156,66 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnPriorFindingsNoopsOnEmptyInput() {
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, null, List.of());
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, " ", List.of());
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{}", null);
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{}", List.of());
-    verifyNoInteractions(followUpAnalyzer, reactionClient, feedbackService);
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, null);
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, List.of());
+    verifyNoInteractions(reactionClient, feedbackService);
   }
 
   @Test
-  void captureOnPriorFindingsSwallowsAnalyzerFailures() {
-    when(followUpAnalyzer.matchFindingThreads(anyString(), any(), any()))
-        .thenThrow(new RuntimeException("boom"));
-    capture.captureOnPriorFindings(
-        "Bearer t",
-        "owner",
-        "repo",
-        3,
-        "{}",
+  void captureOnPriorFindingsScansAllBotFindingRootsAcrossRounds() {
+    when(reactionClient.listReviewCommentReactions(
+            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+        .thenReturn(List.of());
+    // Round-1 finding (id 10) plus a later-round finding (id 30); a human reply and a
+    // non-finding bot root must be ignored. Empty previous-AI JSON is irrelevant — we scan
+    // comments directly so reactions on older rounds are still polled.
+    var comments =
         List.of(
             new GitHubReviewClient.PullRequestComment(
-                1L, null, "A.java", "x", new GitHubReviewClient.ReviewResponse.User("bot"))));
-    verifyNoInteractions(reactionClient, feedbackService);
+                10L,
+                null,
+                "A.java",
+                "old\n" + SuggestionFormatter.findingMarker(1),
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")),
+            new GitHubReviewClient.PullRequestComment(
+                11L,
+                10L,
+                "A.java",
+                "human reply",
+                new GitHubReviewClient.ReviewResponse.User("octocat")),
+            new GitHubReviewClient.PullRequestComment(
+                20L,
+                null,
+                "B.java",
+                "summary without marker",
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")),
+            new GitHubReviewClient.PullRequestComment(
+                30L,
+                null,
+                "C.java",
+                "new\n" + SuggestionFormatter.findingMarker(1),
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")),
+            new GitHubReviewClient.PullRequestComment(
+                40L,
+                null,
+                "D.java",
+                "human\n" + SuggestionFormatter.findingMarker(9),
+                new GitHubReviewClient.ReviewResponse.User("alice")));
+
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
+
+    verify(reactionClient, times(2))
+        .listReviewCommentReactions(
+            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(10L), anyString(), eq(100));
+    verify(reactionClient, times(2))
+        .listReviewCommentReactions(
+            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(30L), anyString(), eq(100));
+    verify(reactionClient, never())
+        .listReviewCommentReactions(any(), any(), any(), any(), eq(11L), anyString(), anyInt());
+    verify(reactionClient, never())
+        .listReviewCommentReactions(any(), any(), any(), any(), eq(20L), anyString(), anyInt());
+    verify(reactionClient, never())
+        .listReviewCommentReactions(any(), any(), any(), any(), eq(40L), anyString(), anyInt());
   }
 
   @Test
@@ -233,13 +270,13 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
-  void captureOnPriorFindingsStopsAtMaxFindings() {
+  void captureOnPriorFindingsStopsAtMaxFindingsInDeterministicIdOrder() {
     var comments = new java.util.ArrayList<GitHubReviewClient.PullRequestComment>();
-    var roots = new java.util.LinkedHashMap<Integer, Long>();
     int max = FindingFeedbackCaptureService.MAX_FINDINGS_PER_CAPTURE;
-    for (int i = 1; i <= max + 2; i++) {
+    // Insert higher ids first so insertion order would prefer them; we must still poll the
+    // lowest comment ids and skip the highest.
+    for (int i = max + 2; i >= 1; i--) {
       long id = 1000L + i;
-      roots.put(i, id);
       comments.add(
           new GitHubReviewClient.PullRequestComment(
               id,
@@ -248,17 +285,26 @@ class FindingFeedbackCaptureServiceTest {
               "x\n" + SuggestionFormatter.findingMarker(i),
               new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
     }
-    when(followUpAnalyzer.matchFindingThreads(anyString(), eq(comments), any())).thenReturn(roots);
     when(reactionClient.listReviewCommentReactions(
             any(), any(), any(), any(), anyLong(), any(), anyInt()))
         .thenReturn(List.of());
 
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{\"findings\":[]}", comments);
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
 
-    // +1 and -1 per finding, capped at MAX
     verify(reactionClient, times(max * 2))
         .listReviewCommentReactions(
             eq("Bearer t"), anyString(), eq("owner"), eq("repo"), anyLong(), anyString(), eq(100));
+    long skippedLow = 1000L + max + 1;
+    long skippedHigh = 1000L + max + 2;
+    verify(reactionClient, never())
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), eq(skippedLow), anyString(), anyInt());
+    verify(reactionClient, never())
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), eq(skippedHigh), anyString(), anyInt());
+    verify(reactionClient, times(2))
+        .listReviewCommentReactions(
+            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), eq(1001L), anyString(), eq(100));
   }
 
   @Test
@@ -328,7 +374,7 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
-  void captureOnPriorFindingsUsesMatchedThreads() {
+  void captureOnPriorFindingsPollsMarkedBotRoots() {
     var body = "x\n" + SuggestionFormatter.findingMarker(1);
     var comments =
         List.of(
@@ -338,13 +384,11 @@ class FindingFeedbackCaptureServiceTest {
                 "A.java",
                 body,
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
-    when(followUpAnalyzer.matchFindingThreads(anyString(), eq(comments), any()))
-        .thenReturn(java.util.Map.of(1, 50L));
     when(reactionClient.listReviewCommentReactions(
             any(), any(), any(), any(), anyLong(), any(), anyInt()))
         .thenReturn(List.of());
 
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{\"findings\":[]}", comments);
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
 
     verify(reactionClient, times(2))
         .listReviewCommentReactions(

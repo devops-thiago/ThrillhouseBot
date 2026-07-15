@@ -16,7 +16,9 @@ GitHub Apps do not receive a `reaction` webhook event. The bot therefore lists
 
 1. A human **replies** on an inline review thread (`pull_request_review_comment`
    with `in_reply_to_id`), or
-2. A **follow-up review** already loaded prior finding threads.
+2. A **follow-up review** already loaded inline comments — every bot finding-root
+   comment across prior rounds is scanned (capped, ordered by comment id), not
+   only findings from the immediately previous AI response.
 
 Capture is best-effort and never fails the webhook `200` or the review.
 

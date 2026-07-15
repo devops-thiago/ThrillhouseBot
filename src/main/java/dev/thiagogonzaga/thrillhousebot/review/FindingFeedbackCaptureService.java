@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
@@ -36,8 +37,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>GitHub Apps do not receive a {@code reaction} webhook event, so reactions are polled via the
  * Reactions REST API when (1) a human replies on a review thread or (2) a follow-up review already
- * has prior finding threads loaded. Best-effort: failures are logged and never fail the webhook ACK
- * or the review.
+ * has inline comments loaded. Best-effort: failures are logged and never fail the webhook ACK or
+ * the review.
  */
 @ApplicationScoped
 public class FindingFeedbackCaptureService {
@@ -61,7 +62,6 @@ public class FindingFeedbackCaptureService {
               + "|.*👎.*|.*:-1:.*");
 
   private final FindingFeedbackService feedbackService;
-  private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
   private final GitHubAuthClient authClient;
   private final GitHubReactionClient reactionClient;
@@ -73,13 +73,11 @@ public class FindingFeedbackCaptureService {
   @Inject
   public FindingFeedbackCaptureService(
       FindingFeedbackService feedbackService,
-      FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity,
       GitHubAuthClient authClient,
       @RestClient GitHubReactionClient reactionClient,
       @RestClient GitHubReviewClient reviewClient) {
     this.feedbackService = feedbackService;
-    this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
     this.authClient = authClient;
     this.reactionClient = reactionClient;
@@ -122,39 +120,31 @@ public class FindingFeedbackCaptureService {
   }
 
   /**
-   * Polls reactions on prior finding threads during a follow-up review. Uses the already-loaded
-   * auth header and inline comments — no extra comment list fetch.
+   * Polls reactions on bot finding-root comments already present in the loaded inline comment list
+   * (every prior round on the PR, not only the immediately previous AI response). Candidates are
+   * ordered by comment id ascending so the {@link #MAX_FINDINGS_PER_CAPTURE} cap is deterministic.
+   * Uses the already-loaded auth header and comments — no extra comment list fetch.
    */
   public void captureOnPriorFindings(
       String auth,
       String owner,
       String repo,
       int prNumber,
-      String previousAiResponseJson,
       List<GitHubReviewClient.PullRequestComment> inlineComments) {
-    if (previousAiResponseJson == null
-        || previousAiResponseJson.isBlank()
-        || inlineComments == null
-        || inlineComments.isEmpty()) {
+    if (inlineComments == null || inlineComments.isEmpty()) {
       return;
     }
     try {
-      var roots =
-          followUpAnalyzer.matchFindingThreads(previousAiResponseJson, inlineComments, botIdentity);
-      int scanned = 0;
-      for (var entry : roots.entrySet()) {
-        if (scanned >= MAX_FINDINGS_PER_CAPTURE) {
-          break;
-        }
-        long commentId = entry.getValue();
-        String body =
-            inlineComments.stream()
-                .filter(c -> c.id() == commentId)
-                .map(GitHubReviewClient.PullRequestComment::body)
-                .findFirst()
-                .orElse(null);
-        captureReactions(auth, owner, repo, prNumber, commentId, body);
-        scanned++;
+      var candidates =
+          inlineComments.stream()
+              .filter(c -> c != null && c.inReplyToId() == null)
+              .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
+              .filter(c -> SuggestionFormatter.parseFindingMarker(c.body()).isPresent())
+              .sorted(Comparator.comparingLong(GitHubReviewClient.PullRequestComment::id))
+              .limit(MAX_FINDINGS_PER_CAPTURE)
+              .toList();
+      for (var comment : candidates) {
+        captureReactions(auth, owner, repo, prNumber, comment.id(), comment.body());
       }
     } catch (RuntimeException e) {
       log.warn(
