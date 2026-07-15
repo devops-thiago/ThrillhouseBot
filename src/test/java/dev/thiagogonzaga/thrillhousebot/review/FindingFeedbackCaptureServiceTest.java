@@ -516,4 +516,59 @@ class FindingFeedbackCaptureServiceTest {
         .listReviewCommentReactions(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(2));
   }
+
+  @Test
+  void listAndRecordStopsAtMaxReactionPages() {
+    var fullPage =
+        java.util.stream.IntStream.rangeClosed(1, GitHubReactionClient.REACTIONS_PER_PAGE)
+            .mapToObj(
+                i ->
+                    new GitHubReactionClient.Reaction(
+                        (long) i, "+1", new GitHubReactionClient.Reaction.User("u" + i, i), "t"))
+            .toList();
+    when(reactionClient.listReviewCommentReactions(
+            anyString(),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(99L),
+            eq("+1"),
+            eq(GitHubReactionClient.REACTIONS_PER_PAGE),
+            anyInt()))
+        .thenReturn(fullPage);
+    when(reactionClient.listReviewCommentReactions(
+            anyString(),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(99L),
+            eq("-1"),
+            anyInt(),
+            anyInt()))
+        .thenReturn(List.of());
+
+    capture.captureReactions(
+        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+
+    verify(reactionClient, times(GitHubReactionClient.MAX_REACTION_PAGES))
+        .listReviewCommentReactions(
+            anyString(),
+            anyString(),
+            eq("owner"),
+            eq("repo"),
+            eq(99L),
+            eq("+1"),
+            eq(GitHubReactionClient.REACTIONS_PER_PAGE),
+            anyInt());
+    verify(reactionClient, never())
+        .listReviewCommentReactions(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyLong(),
+            eq("+1"),
+            anyInt(),
+            eq(GitHubReactionClient.MAX_REACTION_PAGES + 1));
+  }
 }
