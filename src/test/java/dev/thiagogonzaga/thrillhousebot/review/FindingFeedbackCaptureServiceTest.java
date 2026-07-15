@@ -75,28 +75,26 @@ class FindingFeedbackCaptureServiceTest {
 
     verify(feedbackService)
         .recordFeedback(
-            eq(
-                new FindingFeedbackService.FeedbackInput(
-                    "owner/repo",
-                    7,
-                    99L,
-                    2,
-                    FindingFeedback.SIGNAL_USEFUL,
-                    FindingFeedback.SOURCE_REACTION,
-                    "octocat",
-                    1L)));
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                7,
+                99L,
+                2,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "octocat",
+                1L));
     verify(feedbackService)
         .recordFeedback(
-            eq(
-                new FindingFeedbackService.FeedbackInput(
-                    "owner/repo",
-                    7,
-                    99L,
-                    2,
-                    FindingFeedback.SIGNAL_NOT_USEFUL,
-                    FindingFeedback.SOURCE_REACTION,
-                    "alice",
-                    3L)));
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                7,
+                99L,
+                2,
+                FindingFeedback.SIGNAL_NOT_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "alice",
+                3L));
     verify(feedbackService, never())
         .recordFeedback(argThat(in -> "thrillhousebot[bot]".equals(in.reactorLogin())));
   }
@@ -129,16 +127,15 @@ class FindingFeedbackCaptureServiceTest {
 
     verify(feedbackService)
         .recordFeedback(
-            eq(
-                new FindingFeedbackService.FeedbackInput(
-                    "owner/repo",
-                    7,
-                    99L,
-                    1,
-                    FindingFeedback.SIGNAL_NOT_USEFUL,
-                    FindingFeedback.SOURCE_REPLY_HEURISTIC,
-                    "octocat",
-                    null)));
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                7,
+                99L,
+                1,
+                FindingFeedback.SIGNAL_NOT_USEFUL,
+                FindingFeedback.SOURCE_REPLY_HEURISTIC,
+                "octocat",
+                null));
   }
 
   @Test
@@ -317,16 +314,15 @@ class FindingFeedbackCaptureServiceTest {
 
     verify(feedbackService)
         .recordFeedback(
-            eq(
-                new FindingFeedbackService.FeedbackInput(
-                    "owner/repo",
-                    7,
-                    99L,
-                    1,
-                    FindingFeedback.SIGNAL_USEFUL,
-                    FindingFeedback.SOURCE_REACTION,
-                    "bob",
-                    3L)));
+            new FindingFeedbackService.FeedbackInput(
+                "owner/repo",
+                7,
+                99L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "bob",
+                3L));
   }
 
   @Test

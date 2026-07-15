@@ -224,7 +224,7 @@ public class FindingFeedbackCaptureService {
             : FindingFeedback.SIGNAL_NOT_USEFUL;
     for (int page = 1; page <= GitHubReactionClient.MAX_REACTION_PAGES; page++) {
       List<GitHubReactionClient.Reaction> reactions = fetchReactionPage(ctx, content, page);
-      if (reactions == null || reactions.isEmpty()) {
+      if (reactions.isEmpty()) {
         return;
       }
       persistEligibleReactions(ctx, signal, reactions);
@@ -237,15 +237,17 @@ public class FindingFeedbackCaptureService {
   private List<GitHubReactionClient.Reaction> fetchReactionPage(
       ReactionPollContext ctx, String content, int page) {
     try {
-      return reactionClient.listReviewCommentReactions(
-          ctx.auth(),
-          ACCEPT,
-          ctx.owner(),
-          ctx.repo(),
-          ctx.commentId(),
-          content,
-          GitHubReactionClient.REACTIONS_PER_PAGE,
-          page);
+      var reactions =
+          reactionClient.listReviewCommentReactions(
+              ctx.auth(),
+              ACCEPT,
+              ctx.owner(),
+              ctx.repo(),
+              ctx.commentId(),
+              content,
+              GitHubReactionClient.REACTIONS_PER_PAGE,
+              page);
+      return reactions == null ? List.of() : reactions;
     } catch (RuntimeException e) {
       log.debug(
           "Failed to list {} reactions on review comment {} in {}/{} page {} (continuing)",
@@ -255,7 +257,7 @@ public class FindingFeedbackCaptureService {
           ctx.repo(),
           page,
           e);
-      return null;
+      return List.of();
     }
   }
 
