@@ -49,7 +49,7 @@ public class BugFixContextResolver {
 
   /** A checked PR-template checkbox whose label contains "bug fix" (emoji between them is fine). */
   private static final Pattern BUG_FIX_CHECKBOX =
-      Pattern.compile("(?im)^\\s*[-*]\\s*\\[[xX]\\][^\\r\\n]*bug\\s*fix");
+      Pattern.compile("(?im)^\\s*[-*]\\s*\\[x\\][^\\r\\n]*bug\\s*fix");
 
   private final GitHubCommentClient commentClient;
 
