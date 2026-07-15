@@ -321,11 +321,12 @@ class FrameworkFalsePositiveFilterTest {
     assertSame(response, filter.filter(response, INJECTED_CTOR_DIFF));
   }
 
-  @Test
-  void keepsClaimWhenFindingHasNoFile() {
+  @ParameterizedTest
+  @NullAndEmptySource
+  void keepsClaimWhenFindingHasNoFile(String file) {
     var response =
         response(
-            finding(null, "Missing no-arg constructor", "The class needs a default constructor."));
+            finding(file, "Missing no-arg constructor", "The class needs a default constructor."));
 
     assertSame(response, filter.filter(response, INJECTED_CTOR_DIFF));
   }
