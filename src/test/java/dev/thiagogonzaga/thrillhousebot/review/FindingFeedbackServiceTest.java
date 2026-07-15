@@ -137,6 +137,14 @@ class FindingFeedbackServiceTest {
   }
 
   @Test
+  void summarizeAndListRecentHandleBlankKeys() {
+    assertEquals(0, service.summarize(null).totalEvents());
+    assertEquals(0, service.summarize(" ").totalEvents());
+    assertTrue(service.listRecent(null, 10).isEmpty());
+    assertTrue(service.listRecent("owner/repo", 0).isEmpty());
+  }
+
+  @Test
   void recordRejectsBlankInputs() {
     assertFalse(
         service.record(

@@ -237,7 +237,8 @@ Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
 OpenTelemetry. OAuth login sessions are opaque IDs in cookies with tokens kept
 server-side; review history persists in the database. Maintainer finding
 feedback (reactions and reply heuristics) is documented in
-[FEEDBACK.md](./FEEDBACK.md). See
+[Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
+(source: [docs/FEEDBACK.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/FEEDBACK.md)). See
 [SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md)
 for the reporting process.
 

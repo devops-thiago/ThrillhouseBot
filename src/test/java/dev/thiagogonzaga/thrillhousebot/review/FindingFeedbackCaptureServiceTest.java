@@ -157,6 +157,77 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
+  void captureOnPriorFindingsNoopsOnEmptyInput() {
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, null, List.of());
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, " ", List.of());
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{}", null);
+    verifyNoInteractions(followUpAnalyzer, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnPriorFindingsSwallowsAnalyzerFailures() {
+    when(followUpAnalyzer.matchFindingThreads(anyString(), any(), any()))
+        .thenThrow(new RuntimeException("boom"));
+    capture.captureOnPriorFindings(
+        "Bearer t",
+        "owner",
+        "repo",
+        3,
+        "{}",
+        List.of(
+            new GitHubReviewClient.PullRequestComment(
+                1L, null, "A.java", "x", new GitHubReviewClient.ReviewResponse.User("bot"))));
+    verifyNoInteractions(reactionClient, feedbackService);
+  }
+
+  @Test
+  void listReactionsFailureIsSwallowed() {
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyInt()))
+        .thenThrow(new RuntimeException("api down"));
+    capture.captureReactions(
+        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+    verify(feedbackService, never())
+        .record(any(), anyInt(), anyLong(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void fetchCommentBodyFailureSkipsCapture() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
+        .thenThrow(new RuntimeException("gone"));
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+    verifyNoInteractions(reactionClient, feedbackService);
+  }
+
+  @Test
+  void replyHeuristicIgnoresBotAuthorAndNonMatchingBodies() {
+    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "thrillhousebot[bot]", "not useful");
+    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", "looks fine to me");
+    verifyNoInteractions(feedbackService);
+  }
+
+  @Test
+  void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() throws Exception {
+    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth fail"));
+    capture.scheduleCaptureOnReviewReply(1L, "o", "r", 1, 9L, "u", "not useful");
+    // Give the virtual thread a moment; failure must not escape.
+    Thread.sleep(200);
+    verify(authClient, timeout(2000)).getAuthHeader(1L);
+  }
+
+  @Test
+  void nullReactionsListIsIgnored() {
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyInt()))
+        .thenReturn(null);
+    capture.captureReactions(
+        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+    verify(feedbackService, never())
+        .record(any(), anyInt(), anyLong(), any(), any(), any(), any(), any());
+  }
+
+  @Test
   void captureOnPriorFindingsUsesMatchedThreads() {
     var body = "x\n" + SuggestionFormatter.findingMarker(1);
     var comments =
