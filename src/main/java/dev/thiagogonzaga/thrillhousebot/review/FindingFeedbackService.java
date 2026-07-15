@@ -17,26 +17,21 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.persistence.PersistenceException;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Persists and aggregates {@link FindingFeedback} rows. Short DB transactions only — never spans a
  * GitHub API call. Idempotent inserts: duplicate reaction ids or the same (comment, reactor,
- * signal, source) are ignored.
+ * signal, source) are ignored via pre-insert existence checks.
  *
  * <p>{@link #summarize(String)} is the seam a future learnings {@code ContextProvider} (#38) will
  * read; it does not feed prompts yet.
  */
 @ApplicationScoped
 public class FindingFeedbackService {
-
-  private static final Logger log = LoggerFactory.getLogger(FindingFeedbackService.class);
 
   private final FindingFeedbackRepository repository;
 
@@ -95,20 +90,8 @@ public class FindingFeedbackService {
     row.reactorLogin = login;
     row.githubReactionId = githubReactionId;
     row.createdAt = Instant.now();
-    try {
-      repository.persist(row);
-      return true;
-    } catch (PersistenceException e) {
-      // Race with a concurrent insert on the unique constraints — treat as already recorded.
-      log.debug(
-          "Ignoring duplicate finding feedback on comment {} from @{} ({}/{})",
-          githubCommentId,
-          login,
-          signal,
-          source,
-          e);
-      return false;
-    }
+    repository.persist(row);
+    return true;
   }
 
   /**

@@ -142,6 +142,15 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .then()
         .statusCode(200)
         .body("repositories", not(empty()));
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "   ")
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories", not(empty()));
   }
 
   @Test

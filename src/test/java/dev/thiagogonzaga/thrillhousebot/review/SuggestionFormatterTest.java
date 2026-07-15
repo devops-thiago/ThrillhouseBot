@@ -85,6 +85,8 @@ class SuggestionFormatterTest {
         SuggestionFormatter.parseFindingMarker("x\n<!-- thrillhousebot:finding=3 -->").getAsInt());
     assertTrue(SuggestionFormatter.parseFindingMarker("no marker").isEmpty());
     assertTrue(SuggestionFormatter.parseFindingMarker(null).isEmpty());
+    assertTrue(SuggestionFormatter.parseFindingMarker("").isEmpty());
+    assertTrue(SuggestionFormatter.parseFindingMarker("   ").isEmpty());
     assertTrue(
         SuggestionFormatter.parseFindingMarker(
                 "<!-- thrillhousebot:finding=99999999999999999999 -->")

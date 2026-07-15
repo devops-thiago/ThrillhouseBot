@@ -201,9 +201,108 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
+  void captureReactionsSkipsNullOrIncompleteReactions() {
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100)))
+        .thenReturn(
+            java.util.Arrays.asList(
+                null,
+                new GitHubReactionClient.Reaction(1L, "+1", null, "t"),
+                new GitHubReactionClient.Reaction(
+                    2L, "+1", new GitHubReactionClient.Reaction.User(null, 2), "t"),
+                new GitHubReactionClient.Reaction(
+                    3L, "+1", new GitHubReactionClient.Reaction.User("bob", 3), "t")));
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("-1"), eq(100)))
+        .thenReturn(List.of());
+
+    capture.captureReactions(
+        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+
+    verify(feedbackService)
+        .record(
+            "owner/repo",
+            7,
+            99L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "bob",
+            3L);
+  }
+
+  @Test
+  void captureOnPriorFindingsStopsAtMaxFindings() {
+    var comments = new java.util.ArrayList<GitHubReviewClient.PullRequestComment>();
+    var roots = new java.util.LinkedHashMap<Integer, Long>();
+    int max = FindingFeedbackCaptureService.MAX_FINDINGS_PER_CAPTURE;
+    for (int i = 1; i <= max + 2; i++) {
+      long id = 1000L + i;
+      roots.put(i, id);
+      comments.add(
+          new GitHubReviewClient.PullRequestComment(
+              id,
+              null,
+              "A.java",
+              "x\n" + SuggestionFormatter.findingMarker(i),
+              new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+    }
+    when(followUpAnalyzer.matchFindingThreads(anyString(), eq(comments), any())).thenReturn(roots);
+    when(reactionClient.listReviewCommentReactions(
+            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+        .thenReturn(List.of());
+
+    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, "{\"findings\":[]}", comments);
+
+    // +1 and -1 per finding, capped at MAX
+    verify(reactionClient, times(max * 2))
+        .listReviewCommentReactions(
+            eq("Bearer t"), anyString(), eq("owner"), eq("repo"), anyLong(), anyString(), eq(100));
+  }
+
+  @Test
+  void scheduleCaptureOnReviewReplyRunsSuccessfully() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(reviewClient.getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L)))
+        .thenReturn(
+            new GitHubReviewClient.PullRequestComment(
+                99L,
+                null,
+                "Main.java",
+                "x\n" + SuggestionFormatter.findingMarker(1),
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+    when(reactionClient.listReviewCommentReactions(
+            any(), any(), any(), any(), anyLong(), any(), anyInt()))
+        .thenReturn(List.of());
+
+    capture.scheduleCaptureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "thanks");
+    verify(authClient, timeout(2000)).getAuthHeader(9L);
+    verify(reviewClient, timeout(2000))
+        .getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L));
+  }
+
+  @Test
+  void shutdownStopsExecutor() {
+    capture.shutdown();
+  }
+
+  @Test
+  void fetchCommentBodyNullCommentSkipsCapture() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
+        .thenReturn(null);
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+    verifyNoInteractions(reactionClient, feedbackService);
+  }
+
+  @Test
   void replyHeuristicIgnoresBotAuthorAndNonMatchingBodies() {
     capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "thrillhousebot[bot]", "not useful");
     capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", "looks fine to me");
+    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, null, "not useful");
+    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, " ", "not useful");
+    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", null);
+    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", "");
     verifyNoInteractions(feedbackService);
   }
 

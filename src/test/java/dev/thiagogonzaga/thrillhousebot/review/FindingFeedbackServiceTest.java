@@ -159,5 +159,17 @@ class FindingFeedbackServiceTest {
             FindingFeedback.SOURCE_REACTION,
             " ",
             1L));
+    assertFalse(service.record("o/r", 1, 1L, 1, null, FindingFeedback.SOURCE_REACTION, "u", 1L));
+    assertFalse(service.record("o/r", 1, 1L, 1, FindingFeedback.SIGNAL_USEFUL, null, "u", 1L));
+    assertFalse(
+        service.record(
+            null,
+            1,
+            1L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "u",
+            1L));
   }
 }

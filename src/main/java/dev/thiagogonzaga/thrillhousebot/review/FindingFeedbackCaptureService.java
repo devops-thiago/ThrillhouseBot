@@ -47,7 +47,9 @@ public class FindingFeedbackCaptureService {
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String CONTENT_PLUS_ONE = "+1";
   private static final String CONTENT_MINUS_ONE = "-1";
-  private static final int MAX_FINDINGS_PER_CAPTURE = 40;
+
+  /** Cap on finding threads polled during a follow-up review (package-visible for tests). */
+  static final int MAX_FINDINGS_PER_CAPTURE = 40;
 
   /**
    * Reply bodies that count as an explicit "not useful" signal when a human replies on a finding
