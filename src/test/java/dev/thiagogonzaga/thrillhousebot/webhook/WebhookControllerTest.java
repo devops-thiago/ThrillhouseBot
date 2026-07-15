@@ -565,6 +565,60 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldNotEmitDuplicateSkipEventForNonPullRequestRedelivery() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body = "{\"action\":\"created\"}".getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, "redelivered-id", body);
+
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
+  void shouldNotEmitDuplicateSkipEventWhenRedeliveryHasNoAction() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body = "{}".getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
+  void shouldNotEmitDuplicateSkipEventWhenRedeliveryLacksPullRequest() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        ("{\"action\":\"opened\",\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+                + "\"owner\":{\"login\":\"owner\",\"id\":1}}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
+  void shouldNotEmitDuplicateSkipEventWhenRedeliveryLacksRepositoryOwner() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        ("{\"action\":\"opened\",\"pull_request\":{\"number\":7},"
+                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\"}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    verifyNoInteractions(skipEmitter);
+  }
+
+  @Test
   void shouldNotEmitDuplicateSkipEventWhenRedeliveryLacksRepository() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
