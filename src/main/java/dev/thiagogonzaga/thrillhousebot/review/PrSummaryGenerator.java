@@ -244,12 +244,21 @@ public class PrSummaryGenerator {
     }
     if (result.ciUnreadable()) {
       sb.append("### ⚠️ CI Status Unavailable\n");
-      sb.append(
-          """
-          The CI status could not be read from GitHub, so approval is held until it can be \
-          confirmed.
+      if (result.reviewState() == ReviewState.APPROVE) {
+        sb.append(
+            """
+            The CI status could not be read from GitHub. Approval was still posted because CI \
+            gating is not strict — verify CI separately if needed.
 
-          """);
+            """);
+      } else {
+        sb.append(
+            """
+            The CI status could not be read from GitHub, so approval is held until it can be \
+            confirmed.
+
+            """);
+      }
     }
   }
 

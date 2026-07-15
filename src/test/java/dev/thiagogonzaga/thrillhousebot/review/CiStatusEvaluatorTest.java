@@ -660,4 +660,54 @@ class CiStatusEvaluatorTest {
       assertTrue(evaluator.resolveRequiredContexts("auth", "owner", "repo", "main").isEmpty());
     }
   }
+
+  @Nested
+  class CiGatingModes {
+
+    @Test
+    void offModeSkipsCiFetchAndReturnsClearEvaluation() {
+      var off = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), CiGatingMode.OFF);
+
+      var result = off.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertTrue(result.offendingChecks().isEmpty());
+      assertFalse(result.unreadable());
+      assertTrue(result.requiredContextsKnown());
+      verify(checkRunClient, never()).getAllCheckRuns(any(), any(), any(), any(), any());
+      verify(checkRunClient, never()).getAllCombinedStatus(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void offModeSkipsRequiredContextLookup() {
+      var off = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), CiGatingMode.OFF);
+
+      assertEquals(
+          List.of(), off.resolveRequiredContexts("auth", "owner", "repo", "main").orElseThrow());
+      verify(checkRunClient, never())
+          .getBranchRules(anyString(), anyString(), anyString(), anyString(), anyString());
+      verify(checkRunClient, never())
+          .getRequiredStatusChecks(anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void warnModeStillEvaluatesOffendingChecks() {
+      var warn =
+          new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), CiGatingMode.WARN);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CheckRunsResponse(
+                  1,
+                  List.of(
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                          1L, "build", "completed", "failure", null))));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CombinedStatus("failure", 0, List.of()));
+
+      var result = warn.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertEquals(1, result.offendingChecks().size());
+      assertEquals("build", result.offendingChecks().get(0).name());
+      assertFalse(result.unreadable());
+    }
+  }
 }

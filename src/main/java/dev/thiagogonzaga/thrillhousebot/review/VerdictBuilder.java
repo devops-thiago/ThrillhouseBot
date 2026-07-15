@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -28,7 +29,8 @@ import java.util.Set;
  * Builds the {@link ReviewResult} verdict from the model response and the review's gating inputs,
  * and derives the check-run conclusion/title/summary. The decision core: a review approves only
  * when there are no outstanding new findings AND no unresolved previous findings (backstop), no
- * offending CI checks, and the diff was not truncated.
+ * offending CI checks (when CI gating is {@link CiGatingMode#STRICT}), and the diff was not
+ * truncated.
  */
 @ApplicationScoped
 public class VerdictBuilder {
@@ -36,15 +38,38 @@ public class VerdictBuilder {
   private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
+  private final CiGatingMode ciGating;
 
   @Inject
   public VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      ThrillhouseConfig config) {
+    this(
+        summaryGenerator,
+        followUpAnalyzer,
+        botIdentity,
+        CiGatingMode.parse(config.review().ciGating()));
+  }
+
+  /** Visible for tests; defaults to fail-closed {@link CiGatingMode#STRICT}. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity) {
+    this(summaryGenerator, followUpAnalyzer, botIdentity, CiGatingMode.STRICT);
+  }
+
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      CiGatingMode ciGating) {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
+    this.ciGating = ciGating == null ? CiGatingMode.STRICT : ciGating;
   }
 
   /**
@@ -128,13 +153,23 @@ public class VerdictBuilder {
               result.lowCount())
           + truncationSuffix;
     }
+    boolean approvedDespiteCi = result.reviewState() == ReviewState.APPROVE;
     var unreadableSuffix =
         result.ciUnreadable()
-            ? " The CI status for some checks could not be read — holding approval until it can be"
-                + " confirmed."
+            ? (approvedDespiteCi
+                ? " Note: the CI status for some checks could not be read."
+                : " The CI status for some checks could not be read — holding approval until it can"
+                    + " be confirmed.")
             : "";
     if (!result.offendingCiChecks().isEmpty()) {
       var checkLabel = result.requiredContextsKnown() ? "required CI check(s)" : "CI check(s)";
+      if (approvedDespiteCi) {
+        return String.format(
+                "No new issues found. Note: %d %s are still pending or failing.",
+                result.offendingCiChecks().size(), checkLabel)
+            + unreadableSuffix
+            + truncationSuffix;
+      }
       return String.format(
               "No new issues found, but %d %s are still pending or failing.",
               result.offendingCiChecks().size(), checkLabel)
@@ -142,6 +177,9 @@ public class VerdictBuilder {
           + truncationSuffix;
     }
     if (result.ciUnreadable()) {
+      if (approvedDespiteCi) {
+        return "No new issues found. Note: the CI status could not be read." + truncationSuffix;
+      }
       return "No new issues found, but the CI status could not be read — holding approval until it"
           + " can be confirmed."
           + truncationSuffix;
@@ -250,7 +288,9 @@ public class VerdictBuilder {
       state = ReviewState.COMMENT;
     }
 
-    if (state == ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
+    if (state == ReviewState.APPROVE
+        && ciGating.holdsApproval()
+        && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
       state = ReviewState.COMMENT;
     }
 

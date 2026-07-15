@@ -164,4 +164,86 @@ class VerdictBuilderTest {
     assertEquals(2, result.omittedFiles());
     assertTrue(result.truncated());
   }
+
+  private static final CiStatusEvaluator.CiEvaluation CI_OFFENDING =
+      new CiStatusEvaluator.CiEvaluation(
+          List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure")), false);
+
+  private static final CiStatusEvaluator.CiEvaluation CI_UNREADABLE =
+      new CiStatusEvaluator.CiEvaluation(List.of(), true);
+
+  private static final DiffBudgetPlanner.BudgetPlan FULL_COVERAGE =
+      new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+
+  private VerdictBuilder builderWith(CiGatingMode mode) {
+    return new VerdictBuilder(
+        summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")), mode);
+  }
+
+  @Test
+  void strictModeHoldsApproveWhenRequiredCiFails() {
+    var result =
+        builderWith(CiGatingMode.STRICT)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(result.ciHoldsApproval());
+    assertFalse(result.offendingCiChecks().isEmpty());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("still pending or failing"), summary);
+    assertFalse(summary.contains("Note:"), summary);
+  }
+
+  @Test
+  void warnModeAllowsApproveButNotesOffendingCi() {
+    var result =
+        builderWith(CiGatingMode.WARN)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.ciHoldsApproval());
+    assertFalse(result.offendingCiChecks().isEmpty());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("Note:"), summary);
+    assertTrue(summary.contains("still pending or failing"), summary);
+    assertTrue(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+    assertEquals("success", VerdictBuilder.conclusionForResult(result));
+  }
+
+  @Test
+  void warnModeAllowsApproveButNotesUnreadableCi() {
+    var result =
+        builderWith(CiGatingMode.WARN)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_UNREADABLE, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.ciHoldsApproval());
+    assertTrue(result.ciUnreadable());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("Note: the CI status could not be read"), summary);
+    assertFalse(summary.contains("holding approval"), summary);
+  }
+
+  @Test
+  void offModeIgnoresOffendingCiForApprove() {
+    // OFF still receives an evaluation when tests inject one; production skips the fetch. The
+    // verdict must not hold APPROVE on CI in this mode.
+    var result =
+        builderWith(CiGatingMode.OFF)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.ciHoldsApproval());
+  }
+
+  @Test
+  void strictModeHoldsApproveWhenCiIsUnreadable() {
+    var result =
+        builderWith(CiGatingMode.STRICT)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_UNREADABLE, FULL_COVERAGE);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(result.ciHoldsApproval());
+    assertTrue(VerdictBuilder.checkSummaryForResult(result).contains("holding approval"));
+  }
 }
