@@ -199,14 +199,12 @@ public class ReviewContextLoader {
         hasContext
             ? fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber())
             : List.of();
+    List<ReviewResponse.Finding> latestFindings =
+        priorAiResponses.isEmpty() ? List.of() : priorAiResponses.get(0).findings();
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
-                priorAiResponses.isEmpty() ? List.of() : priorAiResponses.get(0).findings(),
-                priorReviews,
-                inlineComments,
-                olderAiResponses,
-                botIdentity)
+                latestFindings, priorReviews, inlineComments, olderAiResponses, botIdentity)
             : "";
 
     var instructions =

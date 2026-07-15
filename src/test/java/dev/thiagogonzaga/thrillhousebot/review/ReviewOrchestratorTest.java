@@ -2104,7 +2104,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of("{\"round\":2}", "{\"round\":1}"));
         var round2 = new ReviewResponse(List.of(), List.of(), null);
         var round1 = new ReviewResponse(List.of(), List.of(), null);
-        when(followUpAnalyzer.parsePreviousResponses(eq(List.of("{\"round\":2}", "{\"round\":1}"))))
+        when(followUpAnalyzer.parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}")))
             .thenReturn(List.of(round2, round1));
         when(followUpAnalyzer.toStatuses(any())).thenReturn(List.of());
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
@@ -2132,8 +2132,7 @@ class ReviewOrchestratorTest {
 
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        verify(followUpAnalyzer)
-            .parsePreviousResponses(eq(List.of("{\"round\":2}", "{\"round\":1}")));
+        verify(followUpAnalyzer).parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}"));
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
                 eq(List.of()), any(), any(), eq(List.of(round1)), eq(BOT_ID));
