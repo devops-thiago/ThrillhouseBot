@@ -309,6 +309,8 @@ class StartupConfigValidatorTest {
     lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(0));
     lenient().when(settings.temperature()).thenReturn(Optional.of(3.0));
     lenient().when(settings.topP()).thenReturn(Optional.of(1.5));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.5));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.5));
     var ex = assertFailsValidation(new ConfigBuilder().model("some-other-model", settings).build());
     var message = ex.getMessage();
     assertTrue(
@@ -316,6 +318,8 @@ class StartupConfigValidatorTest {
         message);
     assertTrue(message.contains("temperature must be in [0, 2]"), message);
     assertTrue(message.contains("top-p must be in (0, 1]"), message);
+    assertTrue(message.contains("frequency-penalty must be in [-2, 2]"), message);
+    assertTrue(message.contains("presence-penalty must be in [-2, 2]"), message);
   }
 
   @Test
