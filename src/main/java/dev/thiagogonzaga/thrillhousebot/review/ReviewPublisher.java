@@ -76,7 +76,10 @@ public class ReviewPublisher {
    * Posts the PR summary comment, but only on the first user-visible review (and only when there is
    * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
    * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
-   * regenerate a summary that was deleted from the PR even though a review already ran.
+   * regenerate a summary that was deleted from the PR even though a review already ran, or a prior
+   * finding was superseded this round ({@link ReviewResult#hasSupersededPrevious}): its targeted
+   * code left the diff, so the earlier summary may describe code that no longer exists and the
+   * regenerated one is posted to replace it.
    *
    * @return {@code true} when the summary comment was actually created; {@code false} when this
    *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses the
@@ -90,7 +93,8 @@ public class ReviewPublisher {
       int prNumber,
       ReviewResult result,
       boolean forceSummary) {
-    if ((result.isFirstReview() || forceSummary) && !result.summaryMarkdown().isBlank()) {
+    if ((result.isFirstReview() || forceSummary || result.hasSupersededPrevious())
+        && !result.summaryMarkdown().isBlank()) {
       commentClient.createComment(
           auth,
           ACCEPT,

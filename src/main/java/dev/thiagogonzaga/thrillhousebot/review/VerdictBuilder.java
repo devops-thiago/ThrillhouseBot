@@ -78,20 +78,26 @@ public class VerdictBuilder {
             ctx.reviewableFiles().stream()
                 .filter(f -> !omittedNames.contains(f.filename()))
                 .toList());
+    // A model-reported "unresolved" whose targeted code left the diff (force-push) becomes
+    // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
+    var effectiveStatuses =
+        followUpAnalyzer.supersedeVanished(
+            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus(), ctx.lineResolver());
+    var effectiveResponse =
+        new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
-        followUpAnalyzer.unresolvedFindings(
-            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus());
+        followUpAnalyzer.unresolvedFindings(ctx.previousAiResponseJson(), effectiveStatuses);
     var backstopUnresolved =
         ctx.hasContext()
             ? followUpAnalyzer.unreportedUnresolvedStatuses(
                 ctx.priorAiResponseJsons(),
-                aiResponse.previousFindingsStatus(),
+                effectiveStatuses,
                 ctx.inlineComments(),
                 ctx.lineResolver(),
                 botIdentity)
             : List.<ReviewResult.PreviousFindingStatus>of();
     return buildResult(
-        aiResponse,
+        effectiveResponse,
         ctx.isFirstVisibleReview(),
         diffStats,
         changedFiles,
