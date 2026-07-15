@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -36,15 +37,33 @@ public class VerdictBuilder {
   private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
+  private final BlockingStrictness blockingStrictness;
 
   @Inject
   public VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      ThrillhouseConfig config) {
+    this(
+        summaryGenerator,
+        followUpAnalyzer,
+        botIdentity,
+        BlockingStrictness.fromString(config.review().blockingStrictness())
+            .orElse(BlockingStrictness.BALANCED));
+  }
+
+  /** Visible for tests: pins the blocking mode without booting the CDI container. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      BlockingStrictness blockingStrictness) {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
+    this.blockingStrictness =
+        blockingStrictness == null ? BlockingStrictness.BALANCED : blockingStrictness;
   }
 
   /**
@@ -239,7 +258,7 @@ public class VerdictBuilder {
 
     var outstanding = new ArrayList<Finding>(tally.findings());
     outstanding.addAll(unresolvedPrevious);
-    ReviewState state = ReviewState.fromFindings(outstanding);
+    ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // Backstop statuses reach the gate but never `outstanding`, keeping the hold downgrade-only
     // (APPROVE → COMMENT, never REQUEST_CHANGES).
     var previousStatuses =

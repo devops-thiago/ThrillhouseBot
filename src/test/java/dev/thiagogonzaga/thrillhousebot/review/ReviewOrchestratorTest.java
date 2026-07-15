@@ -129,7 +129,8 @@ class ReviewOrchestratorTest {
             labeler,
             config,
             BOT_ID);
-    verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID);
+    verdictBuilder =
+        new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
@@ -288,7 +289,9 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedCleanSummaryBodyDoesNotCelebrateEndToEnd() {
-      var realVerdict = new VerdictBuilder(new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID);
+      var realVerdict =
+          new VerdictBuilder(
+              new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
 
       var result =

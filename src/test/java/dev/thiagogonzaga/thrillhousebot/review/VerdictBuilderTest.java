@@ -45,7 +45,10 @@ class VerdictBuilderTest {
 
   private final VerdictBuilder builder =
       new VerdictBuilder(
-          summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
+          summaryGenerator,
+          followUpAnalyzer,
+          BotIdentity.from(List.of("thrillhousebot[bot]")),
+          BlockingStrictness.BALANCED);
 
   {
     lenient().when(followUpAnalyzer.unresolvedFindings(any(), any())).thenReturn(List.of());

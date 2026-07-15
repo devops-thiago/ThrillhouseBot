@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -87,6 +88,7 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateBlockingStrictness(problems, config.review());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
     validateReasoningEffort(problems, config.ai().reasoning());
@@ -101,6 +103,22 @@ public class StartupConfigValidator {
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
+  }
+
+  /**
+   * Rejects an unrecognized {@code REVIEW_BLOCKING_STRICTNESS} at boot — the same fail-fast pattern
+   * as {@link #validateReasoningEffort} — so a typo never silently falls back to balanced.
+   */
+  private static void validateBlockingStrictness(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    var raw = review.blockingStrictness();
+    if (BlockingStrictness.fromString(raw).isEmpty()) {
+      problems.add(
+          "REVIEW_BLOCKING_STRICTNESS must be one of "
+              + String.join(", ", BlockingStrictness.ALLOWED)
+              + " (thrillhousebot.review.blocking-strictness): "
+              + raw);
+    }
   }
 
   /**
