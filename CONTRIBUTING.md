@@ -67,6 +67,37 @@ LangChain4j's OpenAI-compatible client, so a new provider is configuration: poin
 [README provider table](https://github.com/devops-thiago/ThrillhouseBot#provider-support) lists the ones that are known
 to work.
 
+## Prompt eval corpus
+
+Changes to the review or verifier prompts (`PrReviewPrompts`, `FindingVerifierPrompts`)
+should be checked against the labeled regression corpus in
+`src/test/resources/evalcorpus/` before they ship. Each case directory pins a real
+dogfood outcome — a `case.json` spec plus `diff.txt` in the exact format the review
+pipeline sends to the model:
+
+- **verifier** cases feed a candidate finding through the second-pass audit and assert
+  the expected verdict (`confirmed` / `downgraded` / `rejected`);
+- **generator** cases run the first-pass review prompt over a diff and assert that a
+  finding matching the case's keywords is (`must-find`) or is not (`must-not-find`)
+  raised on the target file.
+
+The corpus schema is validated by `EvalCorpusTest` in every build. The live suite is
+opt-in — it calls the configured AI provider:
+
+```bash
+QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=<key> ./mvnw test -Peval -Dtest=PromptEvalTest
+```
+
+Point `AI_BASE_URL` / `AI_MODEL` at the provider you want to evaluate (defaults apply
+otherwise). Each case is sampled `-Deval.samples` times (default 3) and judged by
+majority; `-Deval.tolerated` (default 0) allows a known-unfixed label — one tracked by
+an open prompt-hardening issue — to fail without blocking unrelated prompt work.
+
+To add a case, create a new directory under `evalcorpus/` with `case.json` and
+`diff.txt` (see an existing case for the shape). Source new cases from resolved PR
+review threads: a refuted false positive becomes `expectedVerdicts: ["rejected"]`, a
+confirmed true positive `["confirmed"]`, and note the provenance in `why`.
+
 ## Reporting security issues
 
 Please **do not** open a public issue — see

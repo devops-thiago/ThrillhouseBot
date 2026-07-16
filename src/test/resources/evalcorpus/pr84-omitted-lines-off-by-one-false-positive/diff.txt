@@ -1,0 +1,70 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewDiffFormatter.java (modified, +19 -1)
+```diff
+@@ -303,17 +303,35 @@ public class ReviewDiffFormatter {
+       return "(patch truncated)\n";
+     }
+ 
+-    var sb = new StringBuilder();
+     var contentLines = maxLines - 1;
++    if (isInsideCodeFence(lines, contentLines)) {
++      contentLines = Math.max(0, maxLines - 2);
++    }
++
++    var closesFence = isInsideCodeFence(lines, contentLines);
++    var sb = new StringBuilder();
+     for (var i = 0; i < contentLines; i++) {
+       sb.append(lines[i]).append('\n');
+     }
++    if (closesFence) {
++      sb.append("```\n");
++    }
+     sb.append("(patch truncated — ")
+         .append(lines.length - contentLines)
+         .append(" lines omitted)\n");
+     return sb.toString();
+   }
+ 
++  private static boolean isInsideCodeFence(String[] lines, int lineCount) {
++    var insideFence = false;
++    for (var i = 0; i < lineCount; i++) {
++      if (lines[i].trim().startsWith("```")) {
++        insideFence = !insideFence;
++      }
++    }
++    return insideFence;
++  }
++
+   static int lineCount(String text) {
+     if (text == null || text.isEmpty()) {
+       return 0;
+```
+
+### src/test/java/dev/thiagogonzaga/thrillhousebot/review/ReviewDiffFormatterTest.java (modified, +19 -0)
+```diff
+@@ -185,6 +185,25 @@ class ReviewDiffFormatterTest {
+       assertEquals("(patch truncated)\n", ReviewDiffFormatter.truncateSection("a\nb\nc\n", 1));
+     }
+ 
++    @Test
++    void shouldCloseDiffFenceWhenTruncatingInsidePatch() {
++      var section = "### a.java\n```diff\n@@\n+one\n+two\n```\n\n";
++
++      var result = ReviewDiffFormatter.truncateSection(section, 5);
++
++      assertEquals("### a.java\n```diff\n@@\n```\n(patch truncated — 5 lines omitted)\n", result);
++    }
++
++    @Test
++    void shouldKeepTruncatedFenceWithinLineBudget() {
++      var section = "```diff\n+one\n+two\n```\n";
++
++      var result = ReviewDiffFormatter.truncateSection(section, 2);
++
++      assertEquals("(patch truncated — 5 lines omitted)\n", result);
++      assertEquals(1, ReviewDiffFormatter.lineCount(result));
++    }
++
+     @Test
+     void shouldCountLinesForNullEmptyAndNewlineOnlyText() {
+       assertEquals(0, ReviewDiffFormatter.lineCount(null));
+```

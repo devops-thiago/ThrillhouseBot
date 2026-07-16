@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 101,
+  "why": "Refuted in PR #101 review thread and documented in issues #106/#107: the description cites `dashboardConfig.accountOwner().orElse(null)` which exists nowhere in the codebase, and the only caller (outside the diff) guarantees a non-null owner. A parameter-nullability claim whose caller is not in the provided material is unverifiable and must not be posted.",
+  "expectedVerdicts": ["rejected"],
+  "finding": {
+    "risk": "medium",
+    "confidence": "low",
+    "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/dashboard/DashboardAccessChecker.java",
+    "line": 222,
+    "title": "Potential NullPointerException when accountOwner is null in installedRepos()",
+    "description": "The new cache-hit condition calls accountOwner.equalsIgnoreCase(snapshot.owner()) without a prior null check. accountOwner is obtained from dashboardConfig.accountOwner().orElse(null) in evaluateAccess(), so it can be null. If null is passed to installedRepos(), a NullPointerException will be thrown, crashing the dashboard access check. The previous code did not call any method on accountOwner, so this is a regression introduced by the owner-aware cache. The caller's contract is not visible in the diff; verify whether accountOwner is guaranteed non-null and, if not, add an explicit null guard (e.g., Objects.requireNonNull or an early return for null).",
+    "suggestion_old": "  private RepoSnapshot installedRepos(String accountOwner) {\n    var snapshot = cachedSnapshot.get();",
+    "suggestion_new": "  private RepoSnapshot installedRepos(String accountOwner) {\n    Objects.requireNonNull(accountOwner, \"accountOwner must not be null\");\n    var snapshot = cachedSnapshot.get();"
+  }
+}
