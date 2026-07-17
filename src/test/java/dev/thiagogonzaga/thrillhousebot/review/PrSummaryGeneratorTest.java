@@ -122,6 +122,35 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldPluralizeDoubleCheckSummaryWhenMultipleLowConfidenceFindings() {
+    var findings =
+        List.of(
+            new Finding(RiskLevel.MEDIUM, Confidence.LOW, "a.java", 1, "One", "d", null, null),
+            new Finding(RiskLevel.LOW, Confidence.LOW, "b.java", 2, "Two", "d", null, null));
+    var result =
+        new ReviewResult(
+            findings,
+            0,
+            0,
+            1,
+            1,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(2, 1, 0, List.of(), null, result);
+
+    assertTrue(summary.contains("2 lower-confidence findings"));
+    assertFalse(summary.contains("### Key Findings"));
+    assertTrue(summary.contains("One"));
+    assertTrue(summary.contains("Two"));
+  }
+
+  @Test
   void shouldRenderPrPurposeAndDescriptionGaps() {
     var aiSummary =
         new ReviewResponse.Summary(
