@@ -48,7 +48,9 @@ public final class FindingVerifierPrompts {
               reformatting, or a documented shorthand of the same call) — a fix that changes
               nothing disproves the finding.
             - A test in the same diff exercises the allegedly broken code path and the finding
-              does not explain why that test would still pass.
+              does not explain why that test would still pass. Do not apply this rejection when
+              the test's mocks or stubs contradict the real collaborator's contract visible in
+              the provided material — that test does not faithfully exercise the production path.
             - The flagged code does not appear in the diff as the finding describes it, or the
               code the finding quotes is not present verbatim in the diff — a
               finding built on a paraphrase of the change is invalid.
@@ -101,6 +103,18 @@ public final class FindingVerifierPrompts {
             line that does. When the deciding code is outside the diff, such a finding phrased as
             a verification request naming what to check is legitimately confidence "low" or
             "medium" — downgrade it at most; do not reject it as unverifiable.
+
+            A mock-fidelity finding — one claiming a test stub/mock contradicts the real
+            collaborator's behavior — is judged on whether the provided material shows both the
+            stub and the contradicting real-method contract: never reject it merely because the
+            test is green or the production change is locally valid, since an unfaithful mock
+            making a broken path look proven is exactly what it alleges. Confirm it when the
+            material shows the stub is impossible given the real method (throws what the real
+            method swallows, returns what the contract disallows); reject it when the real
+            method's visible contract matches the stub, or when the finding invents a real-method
+            body not present in the provided material. Confidence "low" or "medium" with the mock
+            line and contradicting real-method line named is the expected shape — downgrade
+            inflated severity at most; do not reject as unverifiable when both sides are shown.
 
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the

@@ -48,6 +48,21 @@ class ReviewPromptAssemblerTest {
   }
 
   @Test
+  void shouldOmitMockFidelitySectionWhenNoRelatedTests() {
+    assertEquals("", ReviewPromptAssembler.mockFidelitySection(""));
+    assertEquals("", ReviewPromptAssembler.mockFidelitySection("  "));
+    assertEquals("", ReviewPromptAssembler.mockFidelitySection(null));
+  }
+
+  @Test
+  void shouldEmitMockFidelityGuidanceWhenRelatedTestsPresent() {
+    assertEquals(
+        PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+        ReviewPromptAssembler.mockFidelitySection(
+            "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"));
+  }
+
+  @Test
   void shouldOmitBugFixSectionWhenPrIsNotABugFix() {
     assertEquals("", ReviewPromptAssembler.bugFixEfficacySection("Adds a new feature", "ctx"));
   }

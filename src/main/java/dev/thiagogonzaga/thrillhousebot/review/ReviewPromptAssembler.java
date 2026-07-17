@@ -58,12 +58,15 @@ public class ReviewPromptAssembler {
     // The diagram request's presence is what gates the model's walkthrough_diagram field.
     String diagramGuidance =
         config.review().diagram().enabled() ? PrReviewPrompts.DIAGRAM_REQUEST : "";
+    String relatedTests = diffFormatter.buildRelatedTests(ctx.reviewableFiles());
     String trailingGuidance =
         combineSections(
             combineSections(
                 combineSections(
-                    labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
-                    diagramGuidance),
+                    combineSections(
+                        labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
+                        diagramGuidance),
+                    mockFidelitySection(relatedTests)),
                 bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext())),
             PromptSections.instructionsSection(ctx.instructions(), INSTRUCTIONS_GUIDANCE));
     return new AiReviewService.PromptInputs(
@@ -71,9 +74,21 @@ public class ReviewPromptAssembler {
         PromptTemplateEscaper.escape(PromptSections.prContext(req.prTitle(), req.prDescription())),
         PromptTemplateEscaper.escape(ctx.baseComparison()),
         escapedStack,
-        PromptTemplateEscaper.escape(diffFormatter.buildRelatedTests(ctx.reviewableFiles())),
+        PromptTemplateEscaper.escape(relatedTests),
         PromptTemplateEscaper.escape(ctx.previousFindings()),
         trailingGuidance);
+  }
+
+  /**
+   * Mock-fidelity guidance — empty when the PR changes no test files. Complements the always-on
+   * MOCK FIDELITY review dimension when related-tests context is present and could otherwise
+   * reinforce an unfaithful stub (issue #111).
+   */
+  static String mockFidelitySection(String relatedTests) {
+    if (relatedTests == null || relatedTests.isBlank()) {
+      return "";
+    }
+    return PrReviewPrompts.MOCK_FIDELITY_REQUEST;
   }
 
   /**

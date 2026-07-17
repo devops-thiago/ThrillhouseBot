@@ -1067,8 +1067,36 @@ class ReviewOrchestratorTest {
       assertFalse(captureRepoInstructions().contains("Control-Flow Diagram Request"));
     }
 
+    @Test
+    void shouldInjectMockFidelityCheckWhenPrChangesTests() {
+      assertTrue(
+          captureRepoInstructions(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
+                      "modified",
+                      1,
+                      0,
+                      1,
+                      "@@\n+doThrow(new RuntimeException(\"executor saturated\"))"
+                          + ".when(reviewDispatcher).dispatch(any());\n"))
+              .contains("Mock Fidelity Check"));
+    }
+
+    @Test
+    void shouldNotInjectMockFidelityCheckWhenPrHasNoTests() {
+      assertFalse(
+          captureRepoInstructions(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/main/java/Foo.java", "modified", 1, 0, 1, "@@\n+class Foo {}\n"))
+              .contains("Mock Fidelity Check"));
+    }
+
     /** Runs review() far enough to capture the prompt and returns its repoInstructions slot. */
     private String captureRepoInstructions() {
+      return captureRepoInstructions(new GitHubPullRequestClient.FileDiff[0]);
+    }
+
+    private String captureRepoInstructions(GitHubPullRequestClient.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -1087,7 +1115,7 @@ class ReviewOrchestratorTest {
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
+            .thenReturn(List.of(files));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
