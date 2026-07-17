@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
@@ -163,6 +164,14 @@ class PromptEvalTest {
    */
   private String generatorOutcome(EvalCase evalCase) throws Exception {
     var raw = new CompletableFuture<String>();
+    // Mirror production trailing guidance for mock-fidelity cases: when the fixture diff
+    // changes tests, inject MOCK_FIDELITY_REQUEST so the live eval exercises the same block
+    // ReviewPromptAssembler adds on the review path (SYSTEM dimension 8 is always present).
+    var relatedTests =
+        evalCase.diff().contains("Test.java")
+            ? "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"
+            : "";
+    var repoInstructions = relatedTests.isBlank() ? "" : PrReviewPrompts.MOCK_FIDELITY_REQUEST;
     prReviewer
         .reviewStream(
             PromptTemplateEscaper.fence(evalCase.diff()),
@@ -171,9 +180,9 @@ class PromptEvalTest {
                     orEmpty(evalCase.spec().prTitle()), orEmpty(evalCase.spec().prDescription()))),
             "",
             "",
+            PromptTemplateEscaper.escape(relatedTests),
             "",
-            "",
-            "")
+            repoInstructions)
         .onPartialResponse(token -> {})
         .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
         .onError(raw::completeExceptionally)

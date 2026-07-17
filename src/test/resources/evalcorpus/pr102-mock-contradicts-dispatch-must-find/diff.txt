@@ -1,0 +1,59 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewDispatcher.java (modified, +18 -2)
+```diff
+@@ -78,8 +78,24 @@ public class ReviewDispatcher {
+       if (result.startWorker()) {
+         try {
+           reviewExecutor.execute(() -> runSerialized(key, state));
+-        } catch (RejectedExecutionException e) {
+-          throw e;
++        } catch (RejectedExecutionException e) {
++          log.warn(
++              "Failed to queue review for {}/{} #{} — executor rejected task",
++              req.owner(),
++              req.repo(),
++              req.prNumber(),
++              e);
++          retire(key, state);
++          return false;
+         }
+       }
+       return true;
+     }
+   }
+```
+
+### src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java (modified, +22 -0)
+```diff
+@@ -640,6 +640,28 @@ class WebhookControllerTest {
++  @Test
++  void shouldForgetDeliveryIdWhenDispatchFails() {
++    when(signatureVerifier.verify(any(), any(), any())).thenReturn(true);
++    doThrow(new RuntimeException("executor saturated"))
++        .when(reviewDispatcher)
++        .dispatch(any(ReviewOrchestrator.ReviewRequest.class));
++
++    given()
++        .header("X-Hub-Signature-256", "sha256=ok")
++        .header("X-GitHub-Delivery", "delivery-saturated")
++        .header("X-GitHub-Event", "pull_request")
++        .body(openedPayload())
++        .when()
++        .post("/webhook")
++        .then()
++        .statusCode(200);
++
++    verify(deduplicator).forget("delivery-saturated");
++  }
+```
+
+### src/main/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookController.java (modified, +4 -0)
+```diff
+@@ -185,6 +185,10 @@ public class WebhookController {
+     try {
+       routeEvent(event, deliveryId);
+     } catch (RuntimeException e) {
++      deduplicator.forget(deliveryId);
+       log.error("Failed to route webhook event", e);
+     }
+   }
+```
