@@ -79,9 +79,10 @@ public class ReviewPublisher {
    * regenerate a summary that was deleted from the PR even though a review already ran.
    *
    * @return {@code true} when the summary comment was actually created; {@code false} when this
-   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses the
-   *     no-issues review on a summary-only re-run only when this returned {@code true} — a failed
-   *     or skipped summary must leave the review as the run's visible outcome.
+   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses a
+   *     redundant no-issues review (summary-only re-run, or a first review held back solely by
+   *     pending/failed CI) only when this returned {@code true} — a failed or skipped summary must
+   *     leave the review as the run's visible outcome.
    */
   boolean publishSummary(
       String auth,
@@ -155,10 +156,10 @@ public class ReviewPublisher {
   /**
    * Parameter object for {@link #postReview(PostReviewRequest)}.
    *
-   * @param summaryReposted {@code true} only on a summary-only re-run ({@code /summary}) whose
-   *     regenerated summary comment was actually posted — the caller must AND the request's {@code
-   *     forceSummary} with {@code publishSummary}'s outcome, so a failed summary post never
-   *     suppresses the review too and leave the run with no visible outcome at all.
+   * @param summaryPosted {@code true} only when this run's PR summary comment was actually created
+   *     ({@code publishSummary} returned {@code true}) — never assumed from {@code isFirstReview}
+   *     or {@code forceSummary} alone, so a failed or skipped summary post can never suppress the
+   *     review too and leave the run with no visible outcome at all.
    */
   record PostReviewRequest(
       String auth,
@@ -168,12 +169,11 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver,
-      boolean summaryReposted) {}
+      boolean summaryPosted) {}
 
   /**
-   * Back-compat convenience for the automatic {@code pull_request} / {@code /review} paths and
-   * tests, which are never a summary-only re-run. Defaults {@code summaryReposted} to {@code
-   * false}.
+   * Back-compat convenience for tests and callers with no summary outcome to report. Defaults
+   * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire.
    */
   void postReview(
       String auth,
@@ -198,7 +198,7 @@ public class ReviewPublisher {
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first
       // review, unresolved previous, and truncation still post.
-      if (post.summaryReposted()
+      if (post.summaryPosted()
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && !result.truncated()) {
@@ -208,7 +208,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
         return;
       }
-      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
+      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result, post.summaryPosted());
       return;
     }
 
@@ -318,10 +318,20 @@ public class ReviewPublisher {
   }
 
   /**
-   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why.
+   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why. A
+   * first-review COMMENT held back solely by CI is skipped only when the PR summary comment
+   * actually posted — its Required CI Checks table already carries the same pending/failed list, so
+   * a second surface with identical copy is pure noise (#334). When the summary post failed or was
+   * skipped, the COMMENT review is the round's only visible signal and always posts.
    */
   private void postNoIssuesReview(
-      String auth, String owner, String repo, int prNumber, String commitSha, ReviewResult result) {
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String commitSha,
+      ReviewResult result,
+      boolean summaryPosted) {
     if (result.reviewState() == ReviewState.APPROVE) {
       var req =
           new GitHubReviewClient.CreateReviewRequest(
@@ -332,7 +342,8 @@ public class ReviewPublisher {
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
-    if (result.reviewState() == ReviewState.COMMENT
+    if (summaryPosted
+        && result.reviewState() == ReviewState.COMMENT
         && result.isFirstReview()
         && result.unresolvedPreviousCount() == 0
         && !result.truncated()) {
