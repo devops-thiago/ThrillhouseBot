@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -53,14 +54,29 @@ public class CiStatusEvaluator {
   // Slug tokens of the configured "<slug>[bot]" logins, used for check/app matching.
   private final Set<String> botTokens;
 
+  private final CiGatingMode ciGating;
+
   @Inject
   public CiStatusEvaluator(
-      @RestClient GitHubCheckRunClient checkRunClient, BotIdentity botIdentity) {
+      @RestClient GitHubCheckRunClient checkRunClient,
+      BotIdentity botIdentity,
+      ThrillhouseConfig config) {
+    this(checkRunClient, botIdentity, CiGatingMode.parse(config.review().ciGating()));
+  }
+
+  /** Visible for tests; defaults to fail-closed {@link CiGatingMode#STRICT}. */
+  CiStatusEvaluator(GitHubCheckRunClient checkRunClient, BotIdentity botIdentity) {
+    this(checkRunClient, botIdentity, CiGatingMode.STRICT);
+  }
+
+  CiStatusEvaluator(
+      GitHubCheckRunClient checkRunClient, BotIdentity botIdentity, CiGatingMode ciGating) {
     this.checkRunClient = checkRunClient;
     this.botTokens =
         botIdentity.logins().stream()
             .map(CiStatusEvaluator::loginToken)
             .collect(Collectors.toUnmodifiableSet());
+    this.ciGating = ciGating == null ? CiGatingMode.STRICT : ciGating;
   }
 
   /**
@@ -75,10 +91,14 @@ public class CiStatusEvaluator {
    * two GitHub mechanisms, unioned: repository/organization <em>rulesets</em> (modern; needs only
    * read access) and <em>classic branch protection</em> (legacy; needs admin). Returns an empty
    * {@link Optional} — which the caller maps to {@code null}, gating on every check — only when
-   * neither mechanism governs the branch or both lookups fail.
+   * neither mechanism governs the branch or both lookups fail. When CI gating is {@link
+   * CiGatingMode#OFF}, returns a present empty list without calling GitHub.
    */
   Optional<List<String>> resolveRequiredContexts(
       String auth, String owner, String repo, String baseBranch) {
+    if (!ciGating.evaluatesCi()) {
+      return Optional.of(List.of());
+    }
     if (baseBranch == null || baseBranch.isBlank()) {
       return Optional.empty();
     }
@@ -175,10 +195,13 @@ public class CiStatusEvaluator {
    * or (when required) missing entirely — plus whether either CI source could not be read. Passing
    * checks are deliberately excluded so the caller can gate APPROVE on a non-empty result; a
    * successful required check is recorded in {@code seen} so it is not later mistaken for a missing
-   * one.
+   * one. When CI gating is {@link CiGatingMode#OFF}, returns a clear evaluation without fetching.
    */
   CiEvaluation evaluateCiChecks(
       String auth, String owner, String repo, String commitSha, List<String> requiredContexts) {
+    if (!ciGating.evaluatesCi()) {
+      return new CiEvaluation(List.of(), false, true);
+    }
     var offending = new ArrayList<ReviewResult.CiCheck>();
     // Required contexts that reported in any state, so the missing-check pass does not re-flag a
     // green check as pending.

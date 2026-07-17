@@ -227,33 +227,52 @@ public class PrSummaryGenerator {
   }
 
   private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
-    if (!result.offendingCiChecks().isEmpty()) {
-      if (result.requiredContextsKnown()) {
-        sb.append("### ⚠️ Required CI Checks Status\n");
-        sb.append("Some required checks are still pending or have failed:\n\n");
-      } else {
-        sb.append("### ⚠️ CI Checks Status\n");
-        sb.append("Some checks are still pending or have failed:\n\n");
-      }
-      sb.append("| Check | Type | Status | Detail |\n");
-      sb.append("|-------|------|--------|--------|\n");
-      for (var check : result.offendingCiChecks()) {
-        String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
-        String detail = check.conclusion() != null ? check.conclusion() : "-";
-        sb.append("| **")
-            .append(escapeTableCell(check.name()))
-            .append("** | ")
-            .append(escapeTableCell(check.type()))
-            .append(" | ")
-            .append(statusEmoji)
-            .append(" | ")
-            .append(escapeTableCell(detail))
-            .append(" |\n");
-      }
-      sb.append("\n");
+    appendOffendingCiChecks(sb, result);
+    appendUnreadableCiStatus(sb, result);
+  }
+
+  private static void appendOffendingCiChecks(StringBuilder sb, ReviewResult result) {
+    if (result.offendingCiChecks().isEmpty()) {
+      return;
     }
-    if (result.ciUnreadable()) {
-      sb.append("### ⚠️ CI Status Unavailable\n");
+    if (result.requiredContextsKnown()) {
+      sb.append("### ⚠️ Required CI Checks Status\n");
+      sb.append("Some required checks are still pending or have failed:\n\n");
+    } else {
+      sb.append("### ⚠️ CI Checks Status\n");
+      sb.append("Some checks are still pending or have failed:\n\n");
+    }
+    sb.append("| Check | Type | Status | Detail |\n");
+    sb.append("|-------|------|--------|--------|\n");
+    for (var check : result.offendingCiChecks()) {
+      String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
+      String detail = check.conclusion() != null ? check.conclusion() : "-";
+      sb.append("| **")
+          .append(escapeTableCell(check.name()))
+          .append("** | ")
+          .append(escapeTableCell(check.type()))
+          .append(" | ")
+          .append(statusEmoji)
+          .append(" | ")
+          .append(escapeTableCell(detail))
+          .append(" |\n");
+    }
+    sb.append("\n");
+  }
+
+  private static void appendUnreadableCiStatus(StringBuilder sb, ReviewResult result) {
+    if (!result.ciUnreadable()) {
+      return;
+    }
+    sb.append("### ⚠️ CI Status Unavailable\n");
+    if (result.reviewState() == ReviewState.APPROVE) {
+      sb.append(
+          """
+          The CI status could not be read from GitHub. Approval was still posted because CI \
+          gating is not strict — verify CI separately if needed.
+
+          """);
+    } else {
       sb.append(
           """
           The CI status could not be read from GitHub, so approval is held until it can be \

@@ -159,7 +159,10 @@ public record ReviewResult(
 
   /** True when CI holds approval back: a required check is offending, or CI could not be read. */
   public boolean ciHoldsApproval() {
-    return !offendingCiChecks.isEmpty() || ciUnreadable;
+    // Reflects the verdict after mode-aware gating: APPROVE means CI did not hold (strict), or the
+    // operator chose warn/off. Callers that only need "are there CI issues to surface" should check
+    // offendingCiChecks / ciUnreadable instead.
+    return reviewState != ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable);
   }
 
   /** True when the line budget dropped whole files, so this review covers only part of the diff. */

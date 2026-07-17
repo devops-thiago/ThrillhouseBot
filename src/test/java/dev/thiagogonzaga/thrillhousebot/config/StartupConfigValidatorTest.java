@@ -71,6 +71,7 @@ class StartupConfigValidatorTest {
     private int outputBufferTokens = 8192;
     private int maxAiCalls = 6;
     private double tokenSafetyMargin = 0.9;
+    private String ciGating = "strict";
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
     private String blockingStrictness = "balanced";
@@ -128,6 +129,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder ciGating(String v) {
+      this.ciGating = v;
+      return this;
+    }
+
     ConfigBuilder reasoningEnabled(boolean v) {
       this.reasoningEnabled = v;
       return this;
@@ -171,6 +177,7 @@ class StartupConfigValidatorTest {
       lenient().when(review.outputBufferTokens()).thenReturn(outputBufferTokens);
       lenient().when(review.maxAiCalls()).thenReturn(maxAiCalls);
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
+      lenient().when(review.ciGating()).thenReturn(ciGating);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
       return new StartupConfigValidator(
@@ -461,12 +468,27 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenCiGatingIsInvalid() {
+    var ex = assertFailsValidation(new ConfigBuilder().ciGating("loose").build());
+    assertTrue(
+        ex.getMessage().contains("REVIEW_CI_GATING must be one of strict, warn, off"),
+        ex.getMessage());
+  }
+
+  @Test
   void failsFastWhenBlockingStrictnessIsInvalid() {
     var ex = assertFailsValidation(new ConfigBuilder().blockingStrictness("aggressive").build());
     assertTrue(
         ex.getMessage()
             .contains("REVIEW_BLOCKING_STRICTNESS must be one of lenient, balanced, strict"),
         ex.getMessage());
+  }
+
+  @Test
+  void acceptsEveryCiGatingModeCaseInsensitivelyWithWhitespace() {
+    for (var mode : new String[] {"strict", "WARN", " Off "}) {
+      new ConfigBuilder().ciGating(mode).build().validate();
+    }
   }
 
   @Test

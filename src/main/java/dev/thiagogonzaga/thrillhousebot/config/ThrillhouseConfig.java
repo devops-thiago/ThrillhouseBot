@@ -277,6 +277,24 @@ public interface ThrillhouseConfig {
     @WithName("auto-review-min-interval")
     Duration autoReviewMinInterval();
 
+    /**
+     * How strictly CI status factors into the APPROVE decision: {@code strict} (default) holds
+     * approval while required CI is pending, failing, or unreadable; {@code warn} still evaluates
+     * CI and notes uncertainty in the summary/check but allows APPROVE; {@code off} skips CI
+     * entirely (findings-only gate). Validated at boot by {@link StartupConfigValidator}.
+     */
+    @WithDefault("strict")
+    @WithName("ci-gating")
+    String ciGating();
+
+    /** Values accepted by {@link #ciGating()}, matching {@code CiGatingMode}. */
+    List<String> ALLOWED_CI_GATING = List.of("strict", "warn", "off");
+
+    /** A {@link #ciGating()} value normalized to the lowercase wire form. */
+    static String normalizeCiGating(String raw) {
+      return raw.strip().toLowerCase(java.util.Locale.ROOT);
+    }
+
     LabelsConfig labels();
 
     DiagramConfig diagram();

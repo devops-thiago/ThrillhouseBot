@@ -262,11 +262,145 @@ class VerdictBuilderTest {
     assertTrue(result.truncated());
   }
 
+  private static final CiStatusEvaluator.CiEvaluation CI_OFFENDING =
+      new CiStatusEvaluator.CiEvaluation(
+          List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure")), false);
+
+  private static final CiStatusEvaluator.CiEvaluation CI_UNREADABLE =
+      new CiStatusEvaluator.CiEvaluation(List.of(), true);
+
+  private static final DiffBudgetPlanner.BudgetPlan FULL_COVERAGE =
+      new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+
+  private VerdictBuilder builderWith(CiGatingMode mode) {
+    return new VerdictBuilder(
+        summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")), mode);
+  }
+
+  @Test
+  void strictModeHoldsApproveWhenRequiredCiFails() {
+    var result =
+        builderWith(CiGatingMode.STRICT)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(result.ciHoldsApproval());
+    assertFalse(result.offendingCiChecks().isEmpty());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("still pending or failing"), summary);
+    assertFalse(summary.contains("Note:"), summary);
+  }
+
+  @Test
+  void warnModeAllowsApproveButNotesOffendingCi() {
+    var result =
+        builderWith(CiGatingMode.WARN)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.ciHoldsApproval());
+    assertFalse(result.offendingCiChecks().isEmpty());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("Note:"), summary);
+    assertTrue(summary.contains("still pending or failing"), summary);
+    assertTrue(VerdictBuilder.checkTitleForResult(result).contains("✅"));
+    assertEquals("success", VerdictBuilder.conclusionForResult(result));
+  }
+
+  @Test
+  void warnModeAllowsApproveButNotesUnreadableCi() {
+    var result =
+        builderWith(CiGatingMode.WARN)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_UNREADABLE, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.ciHoldsApproval());
+    assertTrue(result.ciUnreadable());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("Note: the CI status could not be read"), summary);
+    assertFalse(summary.contains("holding approval"), summary);
+  }
+
+  @Test
+  void warnModeNotesUnreadableAlongsideOffendingChecks() {
+    var both =
+        new CiStatusEvaluator.CiEvaluation(
+            List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure")), true);
+    var result =
+        builderWith(CiGatingMode.WARN)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, both, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    var summary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(summary.contains("Note:"), summary);
+    assertTrue(summary.contains("still pending or failing"), summary);
+    assertTrue(summary.contains("could not be read"), summary);
+    assertFalse(summary.contains("holding approval"), summary);
+  }
+
+  @Test
+  void configConstructorParsesCiGatingMode() {
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.ciGating()).thenReturn("warn");
+    when(review.blockingStrictness()).thenReturn("balanced");
+
+    var fromConfig =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            config);
+    var result =
+        fromConfig.build(
+            contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+  }
+
+  @Test
+  void nullModeFallsBackToStrict() {
+    var result =
+        new VerdictBuilder(
+                summaryGenerator,
+                followUpAnalyzer,
+                BotIdentity.from(List.of("thrillhousebot[bot]")),
+                (CiGatingMode) null)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+  }
+
+  @Test
+  void offModeIgnoresOffendingCiForApprove() {
+    // OFF still receives an evaluation when tests inject one; production skips the fetch. The
+    // verdict must not hold APPROVE on CI in this mode.
+    var result =
+        builderWith(CiGatingMode.OFF)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(result.ciHoldsApproval());
+  }
+
+  @Test
+  void strictModeHoldsApproveWhenCiIsUnreadable() {
+    var result =
+        builderWith(CiGatingMode.STRICT)
+            .build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_UNREADABLE, FULL_COVERAGE);
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(result.ciHoldsApproval());
+    assertTrue(VerdictBuilder.checkSummaryForResult(result).contains("holding approval"));
+  }
+
   @Test
   void configConstructorHonorsStrictBlockingMode() {
     var config = mock(ThrillhouseConfig.class);
     var review = mock(ThrillhouseConfig.ReviewConfig.class);
     when(config.review()).thenReturn(review);
+    when(review.ciGating()).thenReturn("strict");
     when(review.blockingStrictness()).thenReturn("strict");
 
     var strictBuilder =
@@ -294,6 +428,7 @@ class VerdictBuilderTest {
     var config = mock(ThrillhouseConfig.class);
     var review = mock(ThrillhouseConfig.ReviewConfig.class);
     when(config.review()).thenReturn(review);
+    when(review.ciGating()).thenReturn("strict");
     when(review.blockingStrictness()).thenReturn("aggressive");
 
     var fallbackBuilder =
@@ -314,6 +449,27 @@ class VerdictBuilderTest {
             new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
 
     assertEquals(ReviewState.COMMENT, result.reviewState());
+  }
+
+  @Test
+  void threeArgConstructorDefaultsToStrictCiAndBalancedBlocking() {
+    var defaults =
+        new VerdictBuilder(
+            summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
+
+    var held =
+        defaults.build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+    assertEquals(ReviewState.COMMENT, held.reviewState());
+
+    var hedged =
+        new ReviewResponse.Finding("critical", "low", "a.java", 1, "title", "desc", null, null);
+    var nonBlocking =
+        defaults.build(
+            contextWithLineCapOmissions(0),
+            new ReviewResponse(List.of(hedged), List.of(), null),
+            CI_CLEAR,
+            FULL_COVERAGE);
+    assertEquals(ReviewState.COMMENT, nonBlocking.reviewState());
   }
 
   @Test

@@ -704,6 +704,32 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void approvedDespiteUnreadableCiNotesSoftGatingInSummary() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0,
+            true);
+
+    var summary = generator.generate(1, 5, 0, List.of(), null, result);
+
+    assertTrue(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
+    assertTrue(summary.contains("CI Status Unavailable"), summary);
+    assertTrue(summary.contains("gating is not strict"), summary);
+    assertFalse(summary.contains("approval is held"), summary);
+  }
+
+  @Test
   void unreadableCiWithTruncationReportsBothWithoutClaimingNotGreen() {
     var result =
         new ReviewResult(

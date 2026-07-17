@@ -88,6 +88,7 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateCiGating(problems, config.review());
     validateBlockingStrictness(problems, config.review());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
@@ -99,6 +100,7 @@ public class StartupConfigValidator {
 
     logDashboardStatus();
     logReasoningStatus();
+    logCiGatingStatus();
     logActiveModelStatus();
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
@@ -282,6 +284,35 @@ public class StartupConfigValidator {
               + " (thrillhousebot.ai.reasoning.effort): "
               + reasoning.effort());
     }
+  }
+
+  /**
+   * Rejects an unrecognized {@code REVIEW_CI_GATING} value at boot so a typo never silently falls
+   * through to the fail-closed default.
+   */
+  private static void validateCiGating(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    var allowed = ThrillhouseConfig.ReviewConfig.ALLOWED_CI_GATING;
+    if (!allowed.contains(ThrillhouseConfig.ReviewConfig.normalizeCiGating(review.ciGating()))) {
+      problems.add(
+          "REVIEW_CI_GATING must be one of "
+              + String.join(", ", allowed)
+              + " (thrillhousebot.review.ci-gating): "
+              + review.ciGating());
+    }
+  }
+
+  private void logCiGatingStatus() {
+    var normalized = ThrillhouseConfig.ReviewConfig.normalizeCiGating(config.review().ciGating());
+    if ("strict".equals(normalized)) {
+      return;
+    }
+    log.info(
+        "CI gating mode={} — APPROVE will {}.",
+        normalized,
+        "warn".equals(normalized)
+            ? "be allowed while CI is noted as uncertain in the summary/check"
+            : "ignore CI status (findings-only gate)");
   }
 
   /**
