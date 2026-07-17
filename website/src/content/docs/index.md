@@ -29,6 +29,8 @@ local Ollama model, so no code has to leave your network.
   OpenAI-compatible endpoint of your choice.
 - **[Architecture](/ThrillhouseBot/architecture/)** — how a review flows
   through the system.
+- **[Finding feedback](/ThrillhouseBot/feedback/)** — maintainer 👍/👎 capture
+  for the learnings pipeline.
 - **[How it compares](/ThrillhouseBot/comparison/)** — an honest look at where
   ThrillhouseBot sits next to other AI code-review tools.
 - **[Contributing](/ThrillhouseBot/contributing/)** — development setup and the

@@ -1,0 +1,10 @@
+{
+  "kind": "generator",
+  "sourcePr": 100,
+  "why": "Confirmed true positive from the PR #100 review: isDiffStructureLine misses the '\\ No newline at end of file' indicator, so it is indexed as quotable content. The review prompt should keep surfacing this class of bug.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/FindingQuoteValidator.java",
+  "keywords": ["No newline", "no newline"],
+  "prTitle": "fix(review): drop suggestions and cap confidence for ambiguous quotes",
+  "prDescription": "Extends FindingQuoteValidator with line-aware ambiguity detection: a suggestion_old quote that appears in multiple diff locations is only kept when the finding's line uniquely selects one."
+}

@@ -56,6 +56,7 @@ class FindingPipelineTest {
 
   @Mock private AiReviewService aiReviewService;
   @Mock private FindingQuoteValidator quoteValidator;
+  @Mock private FrameworkFalsePositiveFilter frameworkFilter;
   @Mock private FindingDeduplicator deduplicator;
   @Mock private FindingVerificationService findingVerificationService;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
@@ -70,6 +71,7 @@ class FindingPipelineTest {
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,
@@ -78,6 +80,7 @@ class FindingPipelineTest {
             budgetPlanner,
             new TokenCounter());
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+    when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
     when(findingVerificationService.verify(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
@@ -562,6 +565,7 @@ class FindingPipelineTest {
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,

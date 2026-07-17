@@ -23,8 +23,10 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -45,7 +47,10 @@ class VerdictBuilderTest {
 
   private final VerdictBuilder builder =
       new VerdictBuilder(
-          summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
+          summaryGenerator,
+          followUpAnalyzer,
+          BotIdentity.from(List.of("thrillhousebot[bot]")),
+          BlockingStrictness.BALANCED);
 
   {
     lenient().when(followUpAnalyzer.unresolvedFindings(any(), any())).thenReturn(List.of());
@@ -155,6 +160,93 @@ class VerdictBuilderTest {
     assertEquals(ReviewResult.TruncationDetail.EMPTY, stats.truncation());
   }
 
+  /** The previous round's persisted response: one finding anchored in src/Gone.java. */
+  private static final String PRIOR_JSON =
+      """
+      {"findings": [{"risk": "high", "file": "src/Gone.java", "line": 10,
+        "title": "Unsafe regex", "description": "d", "suggestion_old": "quote(label)"}]}
+      """;
+
+  /** A follow-up context whose current diff contains only {@code file}. */
+  private static ReviewContextLoader.ReviewContext followUpContext(String file) {
+    return new ReviewContextLoader.ReviewContext(
+        List.of(),
+        "diff",
+        "",
+        0,
+        List.of(),
+        List.of(PRIOR_JSON),
+        false,
+        true,
+        PRIOR_JSON,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        List.of(),
+        "",
+        List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
+        new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
+        null);
+  }
+
+  private static final ReviewResponse UNRESOLVED_PRIOR_RESPONSE =
+      new ReviewResponse(
+          List.of(),
+          List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+          null);
+
+  @Test
+  void unresolvedPriorFindingWhoseCodeLeftTheDiffIsSupersededAndDoesNotHoldApprove() {
+    var realBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
+            BotIdentity.from(List.of("thrillhousebot[bot]")));
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+
+    var result =
+        realBuilder.build(
+            followUpContext("src/Other.java"), UNRESOLVED_PRIOR_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertTrue(result.hasSupersededPrevious());
+    assertEquals(0, result.unresolvedPreviousCount());
+  }
+
+  @Test
+  void unresolvedPriorFindingStillInTheDiffKeepsHoldingApprove() {
+    var realBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
+            BotIdentity.from(List.of("thrillhousebot[bot]")));
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(PRIOR_JSON),
+            false,
+            true,
+            PRIOR_JSON,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            List.of(),
+            "",
+            List.of(new FileDiff("src/Gone.java", "modified", 1, 0, 1, "")),
+            new DiffLineResolver(Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
+            null);
+
+    var result = realBuilder.build(ctx, UNRESOLVED_PRIOR_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    assertFalse(result.hasSupersededPrevious());
+  }
+
   @Test
   void disabledBudgetingDisclosesTheLegacyLineCapCount() {
     var ctx = contextWithLineCapOmissions(2);
@@ -164,5 +256,81 @@ class VerdictBuilderTest {
 
     assertEquals(2, result.omittedFiles());
     assertTrue(result.truncated());
+  }
+
+  @Test
+  void configConstructorHonorsStrictBlockingMode() {
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.blockingStrictness()).thenReturn("strict");
+
+    var strictBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            config);
+    var hedged =
+        new ReviewResponse.Finding("critical", "low", "a.java", 1, "title", "desc", null, null);
+    var response = new ReviewResponse(List.of(hedged), List.of(), null);
+
+    var result =
+        strictBuilder.build(
+            contextWithLineCapOmissions(0),
+            response,
+            CI_CLEAR,
+            new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
+
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+  }
+
+  @Test
+  void configConstructorFallsBackToBalancedOnUnrecognizedMode() {
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.blockingStrictness()).thenReturn("aggressive");
+
+    var fallbackBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            config);
+    var hedged =
+        new ReviewResponse.Finding("critical", "medium", "a.java", 1, "title", "desc", null, null);
+    var response = new ReviewResponse(List.of(hedged), List.of(), null);
+
+    var result =
+        fallbackBuilder.build(
+            contextWithLineCapOmissions(0),
+            response,
+            CI_CLEAR,
+            new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+  }
+
+  @Test
+  void nullStrictnessInTestConstructorFallsBackToBalanced() {
+    var nullModeBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            (BlockingStrictness) null);
+    var hedged =
+        new ReviewResponse.Finding("critical", "low", "a.java", 1, "title", "desc", null, null);
+    var response = new ReviewResponse(List.of(hedged), List.of(), null);
+
+    var result =
+        nullModeBuilder.build(
+            contextWithLineCapOmissions(0),
+            response,
+            CI_CLEAR,
+            new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
   }
 }

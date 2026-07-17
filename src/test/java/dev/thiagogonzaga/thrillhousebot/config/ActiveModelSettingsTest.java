@@ -56,6 +56,9 @@ class ActiveModelSettingsTest {
     lenient().when(settings.temperature()).thenReturn(Optional.empty());
     lenient().when(settings.topP()).thenReturn(Optional.empty());
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.empty());
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.seed()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -68,6 +71,9 @@ class ActiveModelSettingsTest {
     assertTrue(active.temperature().isEmpty());
     assertTrue(active.topP().isEmpty());
     assertTrue(active.maxOutputTokens().isEmpty());
+    assertTrue(active.frequencyPenalty().isEmpty());
+    assertTrue(active.presencePenalty().isEmpty());
+    assertTrue(active.seed().isEmpty());
     assertFalse(active.budgetClampedByModelCap());
   }
 
@@ -107,12 +113,18 @@ class ActiveModelSettingsTest {
     lenient().when(settings.temperature()).thenReturn(Optional.of(0.1));
     lenient().when(settings.topP()).thenReturn(Optional.of(0.9));
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(2_000));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(0.5));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(-0.5));
+    lenient().when(settings.seed()).thenReturn(Optional.of(42));
     models.put(MODEL, settings);
     assertEquals(2_048, active.outputBufferTokens());
     assertEquals(0.8, active.tokenSafetyMargin());
     assertEquals(Optional.of(0.1), active.temperature());
     assertEquals(Optional.of(0.9), active.topP());
     assertEquals(Optional.of(2_000), active.maxOutputTokens());
+    assertEquals(Optional.of(0.5), active.frequencyPenalty());
+    assertEquals(Optional.of(-0.5), active.presencePenalty());
+    assertEquals(Optional.of(42), active.seed());
   }
 
   @Test

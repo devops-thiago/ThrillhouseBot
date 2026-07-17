@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
+import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
@@ -49,6 +50,7 @@ public class WebhookController {
   private final CommentCommandService commentCommandService;
   private final PrPauseService prPauseService;
   private final AckReactionService ackReactionService;
+  private final FindingFeedbackCaptureService findingFeedbackCapture;
   private final ObjectMapper mapper;
 
   @Inject
@@ -65,6 +67,7 @@ public class WebhookController {
       CommentCommandService commentCommandService,
       PrPauseService prPauseService,
       AckReactionService ackReactionService,
+      FindingFeedbackCaptureService findingFeedbackCapture,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
@@ -78,6 +81,7 @@ public class WebhookController {
     this.commentCommandService = commentCommandService;
     this.prPauseService = prPauseService;
     this.ackReactionService = ackReactionService;
+    this.findingFeedbackCapture = findingFeedbackCapture;
     this.mapper = mapper;
   }
 
@@ -347,9 +351,6 @@ public class WebhookController {
       log.debug("Ignoring pull_request_review_comment action: {}", payload.action());
       return true;
     }
-    if (!config.review().conversationalRepliesEnabled()) {
-      return true;
-    }
 
     var comment = payload.comment();
     if (comment == null || comment.user() == null) {
@@ -368,6 +369,27 @@ public class WebhookController {
       return true;
     }
 
+    // GitHub thread roots carry no in_reply_to_id; a reply targets its thread's root.
+    boolean isReply = comment.inReplyToId() != null;
+    Long rootCommentId = isReply ? comment.inReplyToId() : comment.id();
+
+    // Finding feedback (#324): poll 👍/👎 on the finding root when a human replies. Independent of
+    // conversational replies — reactions are not delivered as a webhook event for GitHub Apps.
+    if (isReply) {
+      findingFeedbackCapture.scheduleCaptureOnReviewReply(
+          payload.installation().id(),
+          repo.owner().login(),
+          repo.name(),
+          pr.number(),
+          rootCommentId,
+          comment.user().login(),
+          comment.body());
+    }
+
+    if (!config.review().conversationalRepliesEnabled()) {
+      return true;
+    }
+
     if (!triggerDetector.containsBotMention(comment.body())) {
       log.debug("Ignoring review comment that does not mention the bot");
       return true;
@@ -381,9 +403,6 @@ public class WebhookController {
       return true;
     }
 
-    // GitHub thread roots carry no in_reply_to_id; a reply targets its thread's root.
-    boolean isReply = comment.inReplyToId() != null;
-    Long rootCommentId = isReply ? comment.inReplyToId() : comment.id();
     log.info(
         "Conversational review-thread reply from @{} on PR #{}",
         comment.user().login(),

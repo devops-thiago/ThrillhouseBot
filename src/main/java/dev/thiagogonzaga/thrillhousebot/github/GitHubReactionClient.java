@@ -15,14 +15,20 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import java.util.List;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 /**
  * GitHub <a href="https://docs.github.com/en/rest/reactions/reactions">reactions API</a> for PR
- * conversation comments and inline review comments. Reactions ride on the existing {@code issues:
- * write} / {@code pull_requests: write} app permissions — no manifest change.
+ * conversation comments and inline review comments. Create and list ride on the existing {@code
+ * issues: write} / {@code pull_requests: write} app permissions — no manifest change. GitHub Apps
+ * do not receive a {@code reaction} webhook event, so listing is how finding feedback (#324) is
+ * captured.
  */
 @RegisterRestClient(configKey = "github-api")
 public interface GitHubReactionClient {
@@ -51,6 +57,46 @@ public interface GitHubReactionClient {
       @PathParam("commentId") long commentId,
       CreateReactionRequest request);
 
+  // GitHub serves up to 100 reactions per page.
+  int REACTIONS_PER_PAGE = 100;
+  int MAX_REACTION_PAGES = 10;
+
+  @GET
+  @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}/reactions")
+  @Produces(MediaType.APPLICATION_JSON)
+  List<Reaction> listReviewCommentReactions(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("commentId") long commentId,
+      @QueryParam("content") String content,
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
+
+  @GET
+  @Path("/repos/{owner}/{repo}/issues/comments/{commentId}/reactions")
+  @Produces(MediaType.APPLICATION_JSON)
+  List<Reaction> listIssueCommentReactions(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("commentId") long commentId,
+      @QueryParam("content") String content,
+      @QueryParam("per_page") int perPage,
+      @QueryParam("page") int page);
+
   /** One of GitHub's fixed reaction contents, e.g. {@code eyes}. */
   record CreateReactionRequest(String content) {}
+
+  @RegisterForReflection
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  record Reaction(
+      long id, String content, User user, @JsonProperty("created_at") String createdAt) {
+
+    @RegisterForReflection
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record User(String login, long id) {}
+  }
 }

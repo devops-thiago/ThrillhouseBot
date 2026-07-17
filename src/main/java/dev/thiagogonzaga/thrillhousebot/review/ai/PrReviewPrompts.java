@@ -108,6 +108,10 @@ public final class PrReviewPrompts {
               description must name exactly what to verify.
             - When the project stack section lists a framework, prefer its documented idioms over
               generic assumptions; never flag idiomatic usage as broken without proof in the diff.
+            - Dependency-injection frameworks do not require a no-arg constructor on a bean whose
+              constructor is annotated for injection: in CDI (Quarkus/Jakarta) an @Inject
+              constructor makes the class a valid bean, and Spring behaves the same with
+              @Autowired. Never report a "missing no-arg/default constructor" on such a class.
             - If you are uncertain whether an issue is real at all, omit it rather than guess.
 
             Self-check before emitting each finding — drop the finding if any check fails:

@@ -1,0 +1,50 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/dashboard/DashboardAccessChecker.java (modified, +14 -5)
+```diff
+@@ -74,13 +74,14 @@ public class DashboardAccessChecker {
+   private record OwnerCache(String owner, Instant cachedAt) {}
+ 
+   private final AtomicReference<RepoSnapshot> cachedSnapshot =
+-      new AtomicReference<>(new RepoSnapshot(List.of(), null, Instant.EPOCH));
++      new AtomicReference<>(new RepoSnapshot(null, List.of(), null, Instant.EPOCH));
+   private final AtomicReference<OwnerCache> ownerCache =
+       new AtomicReference<>(new OwnerCache(null, Instant.EPOCH));
+ 
+   static record AccessCacheEntry(boolean allowed, Instant cachedAt) {}
+ 
+-  private record RepoSnapshot(List<RepoRef> repos, String installationAuth, Instant cachedAt) {}
++  private record RepoSnapshot(
++      String owner, List<RepoRef> repos, String installationAuth, Instant cachedAt) {}
+ 
+   private record RepoRef(String owner, String name) {}
+ 
+@@ -220,7 +221,8 @@ public class DashboardAccessChecker {
+   private RepoSnapshot installedRepos(String accountOwner) {
+     var snapshot = cachedSnapshot.get();
+     if (snapshot.cachedAt().isAfter(clock.get().minus(REPO_CACHE_TTL))
+-        && snapshot.installationAuth() != null) {
++        && snapshot.installationAuth() != null
++        && accountOwner.equalsIgnoreCase(snapshot.owner())) {
+       return snapshot;
+     }
+ 
+@@ -235,10 +237,17 @@ public class DashboardAccessChecker {
+       }
+     } catch (RuntimeException e) {
+       log.warn("Failed to list installed repositories for {}: {}", accountOwner, e.getMessage());
+-      return cachedSnapshot.get();
++      // Fail closed on owner mismatch: the cached snapshot may belong to a previous owner, so
++      // returning it here would re-introduce the cross-owner reuse this cache is keyed to prevent.
++      // Only fall back to it when it was resolved for the same owner (graceful degradation during a
++      // transient GitHub outage); otherwise deny by returning an empty snapshot for this owner.
++      var previous = cachedSnapshot.get();
++      return accountOwner.equalsIgnoreCase(previous.owner())
++          ? previous
++          : new RepoSnapshot(accountOwner, List.of(), null, Instant.EPOCH);
+     }
+ 
+-    var updated = new RepoSnapshot(List.copyOf(repos), installationAuth, clock.get());
++    var updated = new RepoSnapshot(accountOwner, List.copyOf(repos), installationAuth, clock.get());
+     cachedSnapshot.set(updated);
+     log.info("Loaded {} installed repos for dashboard access control", repos.size());
+     return updated;
+```
