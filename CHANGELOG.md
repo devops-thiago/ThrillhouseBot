@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **False parameter-nullability / precondition findings when the caller is outside the diff**: a finding could assert a method parameter may be null (or violates a precondition) and post at MEDIUM even when the only callers that supply the argument were unchanged and absent from the reviewed material — so nullability was assumed rather than demonstrated (a MEDIUM false positive on `DashboardAccessChecker.installedRepos` in PR #101 claimed `accountOwner` could be null while the unshown `checkAccess`/`evaluateAccess` callers already guarantee non-null). The reviewer now caps such claims to low confidence unless the calling code is present and shown to pass a violating value, and the verifier rejects them when the caller is not in the material — with the PR #101 case embedded as an inline regression example (#107)
+
 ## [0.4.0] — 2026-07-12
 
 Token-budgeted reviews for large PRs, per-model AI settings, a published docs site, and a few operator-facing controls (command ack reactions, an opt-in auto-review interval, missing-pricing visibility on the dashboard).

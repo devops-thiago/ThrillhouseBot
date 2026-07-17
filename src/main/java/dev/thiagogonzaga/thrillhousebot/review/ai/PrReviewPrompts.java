@@ -134,6 +134,15 @@ public final class PrReviewPrompts {
               enclosing method's entry to the crash line. If an earlier statement makes that line
               unreachable for that input — an early return/continue/throw, or a guard on a value
               derived from the flagged one — the line cannot crash and the finding is invalid.
+            - A claim that a method parameter may be null / violates a precondition (e.g. an NPE
+              on a parameter dereference, or a missing null/requireNonNull guard on a parameter)
+              is at most confidence "low" unless the calling code is present in the provided
+              material and shown to pass such a value. Inventing a null (or other violating)
+              argument at the method boundary when the caller is outside the diff does not
+              establish the path — the caller's contract may already guarantee the precondition.
+              When the caller is not visible, omit the finding or phrase it as a low-confidence
+              verification request naming the unshown caller; never assert the null path as
+              demonstrated.
             - A claim that a declarative/config change fails at apply, validation, or CI time
               (schema validation, template render, YAML/HCL parse) is defended differently from a
               runtime crash: name the offending field, expression, or value in the diff and the
