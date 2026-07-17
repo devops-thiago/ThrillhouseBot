@@ -83,6 +83,7 @@ class ReviewOrchestratorTest {
   @Mock private FindingVerificationService findingVerificationService;
 
   private final FindingQuoteValidator quoteValidator = new FindingQuoteValidator();
+  private final FrameworkFalsePositiveFilter frameworkFilter = new FrameworkFalsePositiveFilter();
 
   private final FindingDeduplicator deduplicator = new FindingDeduplicator();
 
@@ -135,6 +136,7 @@ class ReviewOrchestratorTest {
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,
@@ -3650,6 +3652,7 @@ class ReviewOrchestratorTest {
           new FindingPipeline(
               aiReviewService,
               quoteValidator,
+              frameworkFilter,
               deduplicator,
               findingVerificationService,
               followUpAnalyzer,
