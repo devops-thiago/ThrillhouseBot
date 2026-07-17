@@ -20,12 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the config/IaC severity-recalibration guidance so a future prompt edit cannot silently
- * revert it and re-introduce the suppression. The reviewer was high-precision but suppressed
- * declarative/config/IaC findings (RBAC, container hardening, schema-invalid manifests) because the
- * SECURITY dimension named only application-code threats and severity was anchored on "will fail at
- * runtime". These assertions are intentionally coarse — they check the recalibration intent
- * survives, not exact wording; an intentional rewording should update the matching anchor.
+ * Pins review/verifier prompt guidance so a future edit cannot silently revert it. Covers the
+ * config/IaC severity recalibration (the reviewer was high-precision but suppressed
+ * declarative/config findings because SECURITY named only application-code threats and severity was
+ * anchored on "will fail at runtime") and the in-diff-test exercise gate (a green test must
+ * demonstrably hit the claimed path before it can invalidate a finding — issue #116). These
+ * assertions are intentionally coarse — they check intent survives, not exact wording; an
+ * intentional rewording should update the matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
  * tracked separately; this is the cheap deterministic guard.
@@ -99,6 +100,53 @@ class PrReviewPromptsContentTest {
         sys,
         "both places verbatim from the provided material",
         "the guard's body must stay attached to its header, not dangle as a fragment");
+  }
+
+  @Test
+  void generatorPromptRequiresPassingTestToExerciseClaimedPathBeforeInvalidating() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "asserts on the path's output",
+        "a green in-diff test may invalidate a finding only when it asserts on the claimed path");
+    assertContains(
+        sys,
+        "unmocked so a default return bypasses it",
+        "an unmocked collaborator that returns a path-skipping default must not count as exercise");
+    assertContains(
+        sys,
+        "may not exercise this path",
+        "when exercise cannot be shown, lower confidence instead of discarding the finding");
+  }
+
+  @Test
+  void generatorUserPromptDoesNotTreatEveryInDiffTestAsDisproof() {
+    String user = PrReviewPrompts.USER;
+    assertContains(
+        user,
+        "when they actually exercise the claimed path",
+        "related-tests guidance must require path exercise, not treat every green test as proof");
+    assertContains(
+        user,
+        "not such evidence",
+        "a green test that misses the path must not be treated as disproof of the finding");
+  }
+
+  @Test
+  void verifierPromptDoesNotHardRejectOnUnexercisingGreenTest() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "demonstrably exercises the allegedly broken code path",
+        "verifier hard-reject must require demonstrable path exercise, not mere test presence");
+    assertContains(
+        sys,
+        "do not reject on this ground",
+        "when exercise cannot be shown, verifier must downgrade rather than reject");
+    assertContains(
+        sys,
+        "may not exercise this path",
+        "verifier downgrade reason must name that the test may not exercise the path");
   }
 
   @Test

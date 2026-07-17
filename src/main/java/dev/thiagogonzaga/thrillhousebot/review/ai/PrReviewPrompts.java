@@ -116,7 +116,14 @@ public final class PrReviewPrompts {
               of itself), the finding is invalid.
             - If a test in this same diff exercises the code path you claim is broken, the
               description must explain why that test would still pass; if you cannot, the
-              finding is invalid.
+              finding is invalid. Treat a test as exercising that path only when both are
+              visible in the provided material: (1) it asserts on the path's output or
+              observable effect — not merely that the method ran — and (2) its mocks/stubs
+              put the collaborators into the state the claim is about, without leaving a
+              collaborator on that path unmocked so a default return bypasses it. When a
+              test exists in the diff but you cannot show both, do not discard the finding:
+              lower confidence and say in the description that a test exists but
+              may not exercise this path.
             - Re-read the flagged lines in the diff and confirm the issue exists in the code as
               written, not in a paraphrase of it. Quote the flagged lines exactly as they appear
               in the diff; if the exact text you are about to quote cannot be found
@@ -250,9 +257,12 @@ public final class PrReviewPrompts {
 
             {{#if relatedTests}}
             ## Tests changed in this PR
-            These test files are part of the same diff; they exercise the changed code and are
-            evidence of intended behavior. A claim that changed code is broken must explain why
-            these tests would still pass.
+            These test files are part of the same diff and are evidence of intended behavior
+            when they actually exercise the claimed path. A claim that changed code is broken
+            must explain why an in-diff test that demonstrably exercises that path would still
+            pass; a green test that does not assert on the path's output, or that leaves a
+            collaborator on the path unmocked so a default bypasses it, is not such evidence —
+            lower confidence and note that rather than treating the test as disproof.
             {{relatedTests}}
             {{/if}}
 

@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Changed
+
+- **Passing in-diff tests must exercise the claimed path before suppressing a finding** (#116): the review and verifier prompts no longer treat a green test in the same diff as automatic disproof. A test may invalidate (generator) or reject (verifier) a finding only when it demonstrably exercises the claimed path — asserting on the path's output and stubbing collaborators into the relevant state, not leaving them unmocked so a default bypasses it. When that exercise cannot be shown from the provided material, confidence is lowered with an explanation instead of dropping the finding (dogfood: PR #99 approve-path test green because `getPullRequest` was unmocked)
+
 ## [0.4.0] — 2026-07-12
 
 Token-budgeted reviews for large PRs, per-model AI settings, a published docs site, and a few operator-facing controls (command ack reactions, an opt-in auto-review interval, missing-pricing visibility on the dashboard).
