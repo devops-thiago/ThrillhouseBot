@@ -76,7 +76,12 @@ public class ReviewPublisher {
    * Posts the PR summary comment, but only on the first user-visible review (and only when there is
    * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
    * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
-   * regenerate a summary that was deleted from the PR even though a review already ran.
+   * regenerate a summary that was deleted from the PR even though a review already ran, or a prior
+   * finding was superseded this round ({@link ReviewResult#hasSupersededPrevious}): its targeted
+   * code left the diff, so the earlier summary may describe code that no longer exists. In the
+   * superseded case the bot's existing summary comment is edited in place with the regenerated
+   * markdown — never posted alongside the stale one — falling back to a new comment only when no
+   * prior summary comment exists (e.g. it was deleted).
    *
    * @return {@code true} when the summary comment was actually created; {@code false} when this
    *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses a
@@ -91,7 +96,10 @@ public class ReviewPublisher {
       int prNumber,
       ReviewResult result,
       boolean forceSummary) {
-    if ((result.isFirstReview() || forceSummary) && !result.summaryMarkdown().isBlank()) {
+    if (result.summaryMarkdown().isBlank()) {
+      return false;
+    }
+    if (result.isFirstReview() || forceSummary) {
       commentClient.createComment(
           auth,
           ACCEPT,
@@ -101,7 +109,35 @@ public class ReviewPublisher {
           new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
       return true;
     }
+    if (result.hasSupersededPrevious()) {
+      refreshSummaryComment(auth, owner, repo, prNumber, result.summaryMarkdown());
+      return true;
+    }
     return false;
+  }
+
+  /**
+   * Replaces the stale summary with the regenerated one after a finding was superseded: edits the
+   * bot's newest existing summary comment in place, so the PR never shows the outdated summary
+   * (describing removed code) next to the fresh one. Creates a new comment only when no summary
+   * comment is found (e.g. a maintainer deleted it).
+   */
+  private void refreshSummaryComment(
+      String auth, String owner, String repo, int prNumber, String summaryMarkdown) {
+    var existing =
+        commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
+            .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
+            .filter(
+                c ->
+                    c.body() != null
+                        && c.body().stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING))
+            .reduce((first, second) -> second);
+    var request = new GitHubCommentClient.CreateCommentRequest(summaryMarkdown);
+    if (existing.isPresent()) {
+      commentClient.updateComment(auth, ACCEPT, owner, repo, existing.get().id(), request);
+    } else {
+      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+    }
   }
 
   /**

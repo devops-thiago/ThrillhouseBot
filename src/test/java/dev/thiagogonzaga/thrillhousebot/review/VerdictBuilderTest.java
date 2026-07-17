@@ -159,6 +159,93 @@ class VerdictBuilderTest {
     assertEquals(ReviewResult.TruncationDetail.EMPTY, stats.truncation());
   }
 
+  /** The previous round's persisted response: one finding anchored in src/Gone.java. */
+  private static final String PRIOR_JSON =
+      """
+      {"findings": [{"risk": "high", "file": "src/Gone.java", "line": 10,
+        "title": "Unsafe regex", "description": "d", "suggestion_old": "quote(label)"}]}
+      """;
+
+  /** A follow-up context whose current diff contains only {@code file}. */
+  private static ReviewContextLoader.ReviewContext followUpContext(String file) {
+    return new ReviewContextLoader.ReviewContext(
+        List.of(),
+        "diff",
+        "",
+        0,
+        List.of(),
+        List.of(PRIOR_JSON),
+        false,
+        true,
+        PRIOR_JSON,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        List.of(),
+        "",
+        List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
+        new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
+        null);
+  }
+
+  private static final ReviewResponse UNRESOLVED_PRIOR_RESPONSE =
+      new ReviewResponse(
+          List.of(),
+          List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+          null);
+
+  @Test
+  void unresolvedPriorFindingWhoseCodeLeftTheDiffIsSupersededAndDoesNotHoldApprove() {
+    var realBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
+            BotIdentity.from(List.of("thrillhousebot[bot]")));
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+
+    var result =
+        realBuilder.build(
+            followUpContext("src/Other.java"), UNRESOLVED_PRIOR_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertTrue(result.hasSupersededPrevious());
+    assertEquals(0, result.unresolvedPreviousCount());
+  }
+
+  @Test
+  void unresolvedPriorFindingStillInTheDiffKeepsHoldingApprove() {
+    var realBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
+            BotIdentity.from(List.of("thrillhousebot[bot]")));
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(PRIOR_JSON),
+            false,
+            true,
+            PRIOR_JSON,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            List.of(),
+            "",
+            List.of(new FileDiff("src/Gone.java", "modified", 1, 0, 1, "")),
+            new DiffLineResolver(Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
+            null);
+
+    var result = realBuilder.build(ctx, UNRESOLVED_PRIOR_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    assertFalse(result.hasSupersededPrevious());
+  }
+
   @Test
   void disabledBudgetingDisclosesTheLegacyLineCapCount() {
     var ctx = contextWithLineCapOmissions(2);
