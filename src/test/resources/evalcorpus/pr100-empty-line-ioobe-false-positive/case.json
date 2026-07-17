@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 100,
+  "why": "Refuted in PR #100 review thread: appendBodyLine returns at the normalized.isEmpty() guard before raw.charAt(0) is reached, so an empty trailing split token never crashes. A runtime-crash claim the diff refutes must be rejected.",
+  "expectedVerdicts": ["rejected"],
+  "finding": {
+    "risk": "medium",
+    "confidence": "low",
+    "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/FindingQuoteValidator.java",
+    "line": 153,
+    "title": "Empty line in diff input causes IndexOutOfBoundsException",
+    "description": "When the diff string ends with a newline (which is typical), `split(\"\\n\", -1)` produces an empty trailing token. In the loop, that empty string reaches `appendBodyLine` where `raw.charAt(0)` throws `StringIndexOutOfBoundsException` because the string is empty. This bug existed before but persists in the refactored code and can crash the validator.",
+    "suggestion_old": "    for (String raw : PromptTemplateEscaper.neutralizeMarkers(diff).split(\"\\n\", -1)) {\n      if (raw.startsWith(\"### \")) {",
+    "suggestion_new": "    for (String raw : PromptTemplateEscaper.neutralizeMarkers(diff).split(\"\\n\", -1)) {\n      if (raw.isEmpty()) {\n        continue;\n      }\n      if (raw.startsWith(\"### \")) {"
+  }
+}

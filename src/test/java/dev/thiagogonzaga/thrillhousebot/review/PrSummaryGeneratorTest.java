@@ -253,6 +253,40 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldShowSupersededRowOnlyWhenAFindingWasSuperseded() {
+    var statuses =
+        List.of(
+            new ReviewResult.PreviousFindingStatus(1, "resolved", "Fixed"),
+            new ReviewResult.PreviousFindingStatus(2, "Superseded", "Code left the diff"));
+
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, false, "", statuses, List.of(), 0);
+
+    var summary = generator.generate(1, 0, 0, List.of(), null, result);
+
+    assertTrue(summary.contains("🗂️ Superseded (targeted code left the diff) | 1"), summary);
+
+    var withoutSuperseded =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            false,
+            "",
+            List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "Fixed")),
+            List.of(),
+            0);
+
+    assertFalse(
+        generator.generate(1, 0, 0, List.of(), null, withoutSuperseded).contains("Superseded"));
+  }
+
+  @Test
   void shouldCountPreviousFindingsStatusCaseInsensitively() {
     var statuses =
         List.of(

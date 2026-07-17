@@ -44,6 +44,17 @@ public class FollowUpAnalyzer {
   private static final String STATUS_JUSTIFIED = "justified";
 
   /**
+   * Synthetic status for a prior finding whose flagged code is no longer in the current diff — the
+   * model never emits it; {@link #supersedeVanished} rewrites a stale {@code unresolved} to it so
+   * the finding stops holding APPROVE while its outcome stays visible in the summary counts.
+   */
+  static final String STATUS_SUPERSEDED = "superseded";
+
+  private static final String SUPERSEDED_NOTE =
+      "The code this finding targeted is no longer in this revision's diff (removed by a"
+          + " force-push or a later commit) — superseded.";
+
+  /**
    * The only statuses the prompt contract defines for {@code previous_findings_status} ("resolved"
    * | "unresolved" | "justified"). A value outside this set does not count as the model accounting
    * for a finding — see {@link #isRecognizedStatus}.
@@ -577,6 +588,66 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Rewrites a model-reported {@code unresolved} status to {@link #STATUS_SUPERSEDED} when the
+   * prior finding's flagged code is no longer in the current diff (its file left the diff or the
+   * anchored hunk vanished, typically after a force-push). The model reports on the <em>prior</em>
+   * round's findings and can hold one open even though the code it targeted no longer exists;
+   * presence is judged deterministically via {@link DiffLineResolver#isFindingPresent} on the
+   * finding's persisted {@code suggestion_old} anchor — the same predicate the approve backstop
+   * uses — so a vanished finding no longer blocks APPROVE.
+   *
+   * <p>A finding without a file cannot be placed in the diff at all, so its status is left
+   * untouched — clearing is the dangerous direction, and "cannot verify" must not read as "gone".
+   * Statuses other than {@code unresolved}, or with an id outside the prior round, also pass
+   * through unchanged.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> supersedeVanished(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver) {
+    if (statuses == null || statuses.isEmpty() || lineResolver == null) {
+      return statuses == null ? List.of() : statuses;
+    }
+    var previous = parsePreviousFindings(previousAiResponseJson);
+    if (previous.isEmpty()) {
+      return statuses;
+    }
+    var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      if (hasVanished(status, previous, lineResolver)) {
+        Log.infof(
+            "Superseding unresolved previous finding #%d — its targeted code is no longer in the"
+                + " current diff",
+            status.id());
+        rewritten.add(
+            new ReviewResponse.PreviousFindingStatus(
+                status.id(), STATUS_SUPERSEDED, SUPERSEDED_NOTE));
+      } else {
+        rewritten.add(status);
+      }
+    }
+    return rewritten;
+  }
+
+  private static boolean hasVanished(
+      ReviewResponse.PreviousFindingStatus status,
+      List<ReviewResponse.Finding> previous,
+      DiffLineResolver lineResolver) {
+    if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
+      return false;
+    }
+    var id = status.id();
+    if (id < 1 || id > previous.size()) {
+      return false;
+    }
+    var finding = previous.get(id - 1);
+    if (finding.file() == null) {
+      return false;
+    }
+    return !lineResolver.isFindingPresent(finding.file(), finding.suggestionOld());
+  }
+
+  /**
    * Deterministic approve backstop. The bot's own prior findings the model silently dropped — still
    * present in the current diff, carrying no maintainer reply, and not closed by any round —
    * surfaced as synthetic {@code "unresolved"} statuses. Merging these into the result's
@@ -948,11 +1019,12 @@ public class FollowUpAnalyzer {
 
   /**
    * Converts AI response's previous_findings_status into ReviewResult statuses, keeping only the
-   * recognized values (resolved / justified / unresolved). An unrecognized status is meaningless
-   * noise that no count or gate acts on, and for a still-open finding the backstop already emits a
-   * synthetic {@code "unresolved"} for that id — passing the raw value through too would leave two
-   * entries with the same id in the result. Dropping it keeps {@code previousStatuses} one-per-id
-   * and matches the backstop's recognized-status contract.
+   * recognized values (resolved / justified / unresolved) plus the synthetic {@link
+   * #STATUS_SUPERSEDED} that {@link #supersedeVanished} rewrites in. An unrecognized status is
+   * meaningless noise that no count or gate acts on, and for a still-open finding the backstop
+   * already emits a synthetic {@code "unresolved"} for that id — passing the raw value through too
+   * would leave two entries with the same id in the result. Dropping it keeps {@code
+   * previousStatuses} one-per-id and matches the backstop's recognized-status contract.
    */
   public List<ReviewResult.PreviousFindingStatus> toStatuses(
       List<ReviewResponse.PreviousFindingStatus> aiStatuses) {
@@ -960,7 +1032,7 @@ public class FollowUpAnalyzer {
 
     var result = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var s : aiStatuses) {
-      if (isRecognizedStatus(s.status())) {
+      if (isRecognizedStatus(s.status()) || STATUS_SUPERSEDED.equalsIgnoreCase(s.status())) {
         result.add(new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()));
       }
     }

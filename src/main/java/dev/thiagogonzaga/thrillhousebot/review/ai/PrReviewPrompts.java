@@ -108,6 +108,10 @@ public final class PrReviewPrompts {
               description must name exactly what to verify.
             - When the project stack section lists a framework, prefer its documented idioms over
               generic assumptions; never flag idiomatic usage as broken without proof in the diff.
+            - Dependency-injection frameworks do not require a no-arg constructor on a bean whose
+              constructor is annotated for injection: in CDI (Quarkus/Jakarta) an @Inject
+              constructor makes the class a valid bean, and Spring behaves the same with
+              @Autowired. Never report a "missing no-arg/default constructor" on such a class.
             - If you are uncertain whether an issue is real at all, omit it rather than guess.
 
             Self-check before emitting each finding — drop the finding if any check fails:
@@ -387,6 +391,50 @@ public final class PrReviewPrompts {
             - Emit ONLY the raw Mermaid source: no ``` fences, no prose, no Markdown around it.
             - For trivial changes (small local edits, dependency bumps, doc-only changes), leave
               walkthrough_diagram as an empty string."""
+          .stripIndent();
+
+  /**
+   * Trailing-guidance block for PRs that declare themselves bug fixes (PR-template "Bug fix"
+   * checkbox or a Fixes/Closes #N reference). Injected into the prompt's {@code repoInstructions}
+   * slot by the assembler, followed by the linked issues' text when it could be fetched. Makes the
+   * model verify the fix actually changes behavior for the failure trigger it claims to fix — a
+   * diff-locally-correct change whose trigger never reaches any changed line is a finding, not an
+   * approval (issue #110).
+   *
+   * <p>Terminated with {@link String#stripIndent()} so the value is not a compile-time constant: it
+   * is referenced from a method body (the assembler), and a plain inline literal this large would
+   * be copied verbatim into that class file (SpotBugs HSC_HUGE_SHARED_STRING_CONSTANT). The call is
+   * a no-op on the already-dedented text block — it exists only to defeat constant folding.
+   */
+  public static final String BUG_FIX_EFFICACY_REQUEST =
+      """
+            ## Bug-Fix Efficacy Check
+            This PR declares itself a bug fix. Local correctness of each changed line is not
+            enough: verify the change actually alters behavior for the failure it claims to fix.
+            - Extract the concrete failure trigger from the PR description and the linked issue
+              text below when present — the input, event, or state that produced the buggy
+              behavior (e.g. "executor saturated, then the delivery is manually redelivered").
+            - Trace that trigger through the changed code and decide whether the change alters
+              behavior on that path. You must be able to name the specific changed line that
+              executes under the trigger.
+            - When no changed line executes under the trigger — the fix adds handling to a catch
+              block the trigger never reaches, guards a branch the trigger does not take, or edits
+              a path the trigger bypasses — emit a finding titled "fix does not change behavior
+              for the stated trigger", anchored at the primary changed fix line and quoting it,
+              at risk "high". Leave suggestion_old/suggestion_new empty unless the correct fix is
+              obvious from the provided material; describing why the trigger misses the change is
+              the finding.
+            - When you cannot determine whether a changed line executes under the trigger because
+              the deciding code is outside the diff (a callee that may swallow the exception, a
+              caller that may never take the path), do not silently approve: emit the finding at
+              confidence "low" or "medium", phrased as a verification request that names the
+              exact unshown method or path to check (e.g. "verify dispatch() propagates
+              RejectedExecutionException to this catch block").
+            - A test in this diff does not prove efficacy when it mocks or fabricates the trigger
+              instead of reproducing it; when the only supporting test does so, say that in the
+              finding's description rather than treating the test as proof.
+            - When a changed line demonstrably executes under the trigger and changes the
+              outcome, the fix is effective — emit no efficacy finding."""
           .stripIndent();
 
   private PrReviewPrompts() {}

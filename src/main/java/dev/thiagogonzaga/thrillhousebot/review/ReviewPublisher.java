@@ -76,12 +76,18 @@ public class ReviewPublisher {
    * Posts the PR summary comment, but only on the first user-visible review (and only when there is
    * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
    * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
-   * regenerate a summary that was deleted from the PR even though a review already ran.
+   * regenerate a summary that was deleted from the PR even though a review already ran, or a prior
+   * finding was superseded this round ({@link ReviewResult#hasSupersededPrevious}): its targeted
+   * code left the diff, so the earlier summary may describe code that no longer exists. In the
+   * superseded case the bot's existing summary comment is edited in place with the regenerated
+   * markdown — never posted alongside the stale one — falling back to a new comment only when no
+   * prior summary comment exists (e.g. it was deleted).
    *
    * @return {@code true} when the summary comment was actually created; {@code false} when this
-   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses the
-   *     no-issues review on a summary-only re-run only when this returned {@code true} — a failed
-   *     or skipped summary must leave the review as the run's visible outcome.
+   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses a
+   *     redundant no-issues review (summary-only re-run, or a first review held back solely by
+   *     pending/failed CI) only when this returned {@code true} — a failed or skipped summary must
+   *     leave the review as the run's visible outcome.
    */
   boolean publishSummary(
       String auth,
@@ -90,7 +96,10 @@ public class ReviewPublisher {
       int prNumber,
       ReviewResult result,
       boolean forceSummary) {
-    if ((result.isFirstReview() || forceSummary) && !result.summaryMarkdown().isBlank()) {
+    if (result.summaryMarkdown().isBlank()) {
+      return false;
+    }
+    if (result.isFirstReview() || forceSummary) {
       commentClient.createComment(
           auth,
           ACCEPT,
@@ -100,7 +109,35 @@ public class ReviewPublisher {
           new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
       return true;
     }
+    if (result.hasSupersededPrevious()) {
+      refreshSummaryComment(auth, owner, repo, prNumber, result.summaryMarkdown());
+      return true;
+    }
     return false;
+  }
+
+  /**
+   * Replaces the stale summary with the regenerated one after a finding was superseded: edits the
+   * bot's newest existing summary comment in place, so the PR never shows the outdated summary
+   * (describing removed code) next to the fresh one. Creates a new comment only when no summary
+   * comment is found (e.g. a maintainer deleted it).
+   */
+  private void refreshSummaryComment(
+      String auth, String owner, String repo, int prNumber, String summaryMarkdown) {
+    var existing =
+        commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
+            .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
+            .filter(
+                c ->
+                    c.body() != null
+                        && c.body().stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING))
+            .reduce((first, second) -> second);
+    var request = new GitHubCommentClient.CreateCommentRequest(summaryMarkdown);
+    if (existing.isPresent()) {
+      commentClient.updateComment(auth, ACCEPT, owner, repo, existing.get().id(), request);
+    } else {
+      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+    }
   }
 
   /**
@@ -155,10 +192,10 @@ public class ReviewPublisher {
   /**
    * Parameter object for {@link #postReview(PostReviewRequest)}.
    *
-   * @param summaryReposted {@code true} only on a summary-only re-run ({@code /summary}) whose
-   *     regenerated summary comment was actually posted — the caller must AND the request's {@code
-   *     forceSummary} with {@code publishSummary}'s outcome, so a failed summary post never
-   *     suppresses the review too and leave the run with no visible outcome at all.
+   * @param summaryPosted {@code true} only when this run's PR summary comment was actually created
+   *     ({@code publishSummary} returned {@code true}) — never assumed from {@code isFirstReview}
+   *     or {@code forceSummary} alone, so a failed or skipped summary post can never suppress the
+   *     review too and leave the run with no visible outcome at all.
    */
   record PostReviewRequest(
       String auth,
@@ -168,12 +205,11 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver,
-      boolean summaryReposted) {}
+      boolean summaryPosted) {}
 
   /**
-   * Back-compat convenience for the automatic {@code pull_request} / {@code /review} paths and
-   * tests, which are never a summary-only re-run. Defaults {@code summaryReposted} to {@code
-   * false}.
+   * Back-compat convenience for tests and callers with no summary outcome to report. Defaults
+   * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire.
    */
   void postReview(
       String auth,
@@ -198,7 +234,7 @@ public class ReviewPublisher {
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first
       // review, unresolved previous, and truncation still post.
-      if (post.summaryReposted()
+      if (post.summaryPosted()
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && !result.truncated()) {
@@ -208,7 +244,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
         return;
       }
-      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
+      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result, post.summaryPosted());
       return;
     }
 
@@ -318,10 +354,20 @@ public class ReviewPublisher {
   }
 
   /**
-   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why.
+   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why. A
+   * first-review COMMENT held back solely by CI is skipped only when the PR summary comment
+   * actually posted — its Required CI Checks table already carries the same pending/failed list, so
+   * a second surface with identical copy is pure noise (#334). When the summary post failed or was
+   * skipped, the COMMENT review is the round's only visible signal and always posts.
    */
   private void postNoIssuesReview(
-      String auth, String owner, String repo, int prNumber, String commitSha, ReviewResult result) {
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String commitSha,
+      ReviewResult result,
+      boolean summaryPosted) {
     if (result.reviewState() == ReviewState.APPROVE) {
       var req =
           new GitHubReviewClient.CreateReviewRequest(
@@ -332,7 +378,8 @@ public class ReviewPublisher {
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
-    if (result.reviewState() == ReviewState.COMMENT
+    if (summaryPosted
+        && result.reviewState() == ReviewState.COMMENT
         && result.isFirstReview()
         && result.unresolvedPreviousCount() == 0
         && !result.truncated()) {

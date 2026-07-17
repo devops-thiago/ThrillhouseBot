@@ -71,6 +71,7 @@ class ReviewContextLoaderTest {
             diffFormatter,
             labeler,
             followUpAnalyzer,
+            new BugFixContextResolver(commentClient),
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel);

@@ -167,6 +167,15 @@ public record ReviewResult(
     return omittedFiles > 0;
   }
 
+  /**
+   * True when a prior finding was superseded this round — its targeted code left the diff (e.g. a
+   * force-push removed it), so the finding was auto-closed instead of holding APPROVE. Triggers a
+   * summary re-post on follow-up reviews, since the earlier summary may describe removed code.
+   */
+  public boolean hasSupersededPrevious() {
+    return previousStatuses.stream().anyMatch(s -> "superseded".equalsIgnoreCase(s.status()));
+  }
+
   /** How many previous findings the model (or the backstop) still reports as unresolved. */
   public long unresolvedPreviousCount() {
     return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
@@ -303,7 +312,7 @@ public record ReviewResult(
   @RegisterForReflection
   public record PreviousFindingStatus(
       int id,
-      String status, // resolved, unresolved, justified
+      String status, // resolved, unresolved, justified, superseded
       String note) {}
 
   @RegisterForReflection

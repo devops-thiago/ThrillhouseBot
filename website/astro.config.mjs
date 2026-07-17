@@ -60,6 +60,7 @@ export default defineConfig({
         { label: "Configuration", slug: "configuration" },
         { label: "AI providers", slug: "providers" },
         { label: "Architecture", slug: "architecture" },
+        { label: "Finding feedback", slug: "feedback" },
         { label: "How it compares", slug: "comparison" },
         { label: "Contributing", slug: "contributing" },
       ],

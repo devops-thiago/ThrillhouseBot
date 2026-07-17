@@ -84,6 +84,7 @@ class ReviewOrchestratorTest {
   @Mock private FindingVerificationService findingVerificationService;
 
   private final FindingQuoteValidator quoteValidator = new FindingQuoteValidator();
+  private final FrameworkFalsePositiveFilter frameworkFilter = new FrameworkFalsePositiveFilter();
 
   private final FindingDeduplicator deduplicator = new FindingDeduplicator();
 
@@ -130,11 +131,13 @@ class ReviewOrchestratorTest {
             labeler,
             config,
             BOT_ID);
-    verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID);
+    verdictBuilder =
+        new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,
@@ -216,6 +219,7 @@ class ReviewOrchestratorTest {
             diffFormatter,
             labeler,
             followUpAnalyzer,
+            new BugFixContextResolver(commentClient),
             sessionPersistence,
             BOT_ID,
             new ActiveModelSettings(config, "m")),
@@ -225,6 +229,7 @@ class ReviewOrchestratorTest {
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
+        mock(FindingFeedbackCaptureService.class),
         reviewExecutor);
   }
 
@@ -306,7 +311,9 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedCleanSummaryBodyDoesNotCelebrateEndToEnd() {
-      var realVerdict = new VerdictBuilder(new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID);
+      var realVerdict =
+          new VerdictBuilder(
+              new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
 
       var result =
@@ -3670,6 +3677,7 @@ class ReviewOrchestratorTest {
           new FindingPipeline(
               aiReviewService,
               quoteValidator,
+              frameworkFilter,
               deduplicator,
               findingVerificationService,
               followUpAnalyzer,
@@ -3953,10 +3961,110 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
               0);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldStillPostUnresolvedCommentOnFirstReviewWhenSummaryPosted() {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("remain unresolved"));
+    }
+
+    @Test
+    void postReviewShouldStillPostTruncatedCommentOnFirstReviewWhenSummaryPosted() {
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("partial review"));
+    }
+
+    @Test
+    void postReviewShouldStillPostRequestChangesWhenSummaryPosted() {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.REQUEST_CHANGES,
+              true,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("REQUEST_CHANGES", captor.getValue().event());
+    }
+
+    @Test
+    void postReviewShouldStillPostCiPendingCommentOnFirstReviewWhenSummaryDidNotPost() {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("**build**"));
     }
 
     @Test

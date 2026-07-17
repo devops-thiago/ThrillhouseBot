@@ -57,6 +57,7 @@ public class ReviewContextLoader {
   private final ReviewDiffFormatter diffFormatter;
   private final PrLabeler labeler;
   private final FollowUpAnalyzer followUpAnalyzer;
+  private final BugFixContextResolver bugFixContextResolver;
   private final ReviewSessionPersistence sessionPersistence;
   private final BotIdentity botIdentity;
   private final ActiveModelSettings activeModel;
@@ -71,6 +72,7 @@ public class ReviewContextLoader {
       ReviewDiffFormatter diffFormatter,
       PrLabeler labeler,
       FollowUpAnalyzer followUpAnalyzer,
+      BugFixContextResolver bugFixContextResolver,
       ReviewSessionPersistence sessionPersistence,
       BotIdentity botIdentity,
       ActiveModelSettings activeModel) {
@@ -82,6 +84,7 @@ public class ReviewContextLoader {
     this.diffFormatter = diffFormatter;
     this.labeler = labeler;
     this.followUpAnalyzer = followUpAnalyzer;
+    this.bugFixContextResolver = bugFixContextResolver;
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
     this.activeModel = activeModel;
@@ -112,6 +115,7 @@ public class ReviewContextLoader {
       InstructionsResolver.ResolvedInstructions instructions,
       List<GitHubLabelClient.Label> repoLabels,
       String projectStack,
+      String linkedIssuesContext,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals) {
@@ -213,6 +217,9 @@ public class ReviewContextLoader {
 
     var repoLabels = labeler.fetchExistingLabels(auth, req.owner(), req.repo());
     var projectStack = resolveProjectStack(req);
+    var linkedIssuesContext =
+        bugFixContextResolver.loadLinkedIssueContext(
+            auth, req.owner(), req.repo(), req.prDescription());
 
     return new ReviewContext(
         files,
@@ -230,6 +237,7 @@ public class ReviewContextLoader {
         instructions,
         repoLabels,
         projectStack,
+        linkedIssuesContext,
         reviewableFiles,
         lineResolverSupplier,
         prTotals);

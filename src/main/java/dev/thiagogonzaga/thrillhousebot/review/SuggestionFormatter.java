@@ -17,12 +17,17 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.Locale;
+import java.util.OptionalInt;
+import java.util.regex.Pattern;
 
 /** Formats suggestions as GitHub ```suggestion blocks for click-to-apply. */
 @ApplicationScoped
 public class SuggestionFormatter {
 
   private static final String CODE_FENCE_CLOSE = "\n```\n";
+
+  private static final Pattern FINDING_MARKER_PATTERN =
+      Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)\\s*-->");
 
   /**
    * Wraps suggestion_old and suggestion_new in a GitHub suggestion block.
@@ -42,6 +47,25 @@ public class SuggestionFormatter {
    */
   public static String findingMarker(int findingId) {
     return "<!-- thrillhousebot:finding=" + findingId + " -->";
+  }
+
+  /**
+   * Parses the 1-based finding index from a comment body that carries {@link #findingMarker(int)},
+   * or empty when the marker is absent.
+   */
+  public static OptionalInt parseFindingMarker(String body) {
+    if (body == null || body.isBlank()) {
+      return OptionalInt.empty();
+    }
+    var matcher = FINDING_MARKER_PATTERN.matcher(body);
+    if (!matcher.find()) {
+      return OptionalInt.empty();
+    }
+    try {
+      return OptionalInt.of(Integer.parseInt(matcher.group(1)));
+    } catch (NumberFormatException _) {
+      return OptionalInt.empty();
+    }
   }
 
   /**

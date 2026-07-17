@@ -60,6 +60,8 @@ public class ReviewOrchestrator {
 
   private final FindingPipeline findingPipeline;
 
+  private final FindingFeedbackCaptureService findingFeedbackCapture;
+
   private final ExecutorService reviewExecutor;
 
   /**
@@ -174,6 +176,7 @@ public class ReviewOrchestrator {
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
+      FindingFeedbackCaptureService findingFeedbackCapture,
       @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
     this.authClient = authClient;
@@ -187,6 +190,7 @@ public class ReviewOrchestrator {
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
+    this.findingFeedbackCapture = findingFeedbackCapture;
     this.reviewExecutor = reviewExecutor;
   }
 
@@ -255,7 +259,7 @@ public class ReviewOrchestrator {
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
-      // summaryReposted gates the summary-only skip: a failed summary post leaves review
+      // summaryPosted gates the redundant-review skips: a failed summary post leaves review
       // posting enabled.
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
@@ -266,7 +270,7 @@ public class ReviewOrchestrator {
               req.commitSha(),
               result,
               lineResolver,
-              req.forceSummary() && summaryPosted));
+              summaryPosted));
 
       resultSurfaced = true;
       final var doneReq = req;
@@ -296,6 +300,12 @@ public class ReviewOrchestrator {
                   previousFindings,
                   inlineComments,
                   aiResponse.previousFindingsStatus()));
+      runPostResultStep(
+          doneReq,
+          "capture finding feedback",
+          () ->
+              findingFeedbackCapture.captureOnPriorFindings(
+                  auth, doneReq.owner(), doneReq.repo(), doneReq.prNumber(), inlineComments));
       runPostResultStep(
           doneReq,
           "apply labels",

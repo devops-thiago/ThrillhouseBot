@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackService;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import io.quarkus.panache.common.Sort;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -95,12 +96,16 @@ public class DashboardResource {
 
   private final DashboardSessionValidator sessionValidator;
   private final ReviewSessionRepository reviewSessionRepository;
+  private final FindingFeedbackService findingFeedbackService;
 
   @Inject
   public DashboardResource(
-      DashboardSessionValidator sessionValidator, ReviewSessionRepository reviewSessionRepository) {
+      DashboardSessionValidator sessionValidator,
+      ReviewSessionRepository reviewSessionRepository,
+      FindingFeedbackService findingFeedbackService) {
     this.sessionValidator = sessionValidator;
     this.reviewSessionRepository = reviewSessionRepository;
+    this.findingFeedbackService = findingFeedbackService;
   }
 
   boolean isValidSession(String sessionToken) {
@@ -259,6 +264,57 @@ public class DashboardResource {
                 "byModel",
                 rows))
         .build();
+  }
+
+  /**
+   * Aggregated maintainer finding feedback (👍/👎 / reply heuristics) for the learnings pipeline
+   * precursor (#324). Optional {@code repository=owner/repo} filters to one repo; otherwise returns
+   * all repos ordered by event count.
+   */
+  @GET
+  @Path("/feedback")
+  public Response getFeedback(
+      @QueryParam("repository") String repository,
+      @CookieParam(COOKIE_SESSION) String sessionToken) {
+    if (!isValidSession(sessionToken)) {
+      return unauthorizedResponse();
+    }
+    if (repository != null && !repository.isBlank()) {
+      var summary = findingFeedbackService.summarize(repository.strip());
+      var recent = findingFeedbackService.listRecent(repository.strip(), 50);
+      return Response.ok(
+              Map.of(
+                  "repositories",
+                  List.of(
+                      Map.of(
+                          FIELD_REPOSITORY,
+                          summary.repository(),
+                          "usefulCount",
+                          summary.usefulCount(),
+                          "notUsefulCount",
+                          summary.notUsefulCount(),
+                          "totalEvents",
+                          summary.totalEvents())),
+                  "recent",
+                  recent))
+          .build();
+    }
+    var summaries = findingFeedbackService.summarizeAll();
+    var rows =
+        summaries.stream()
+            .map(
+                s ->
+                    Map.<String, Object>of(
+                        FIELD_REPOSITORY,
+                        s.repository(),
+                        "usefulCount",
+                        s.usefulCount(),
+                        "notUsefulCount",
+                        s.notUsefulCount(),
+                        "totalEvents",
+                        s.totalEvents()))
+            .toList();
+    return Response.ok(Map.of("repositories", rows)).build();
   }
 
   @GET

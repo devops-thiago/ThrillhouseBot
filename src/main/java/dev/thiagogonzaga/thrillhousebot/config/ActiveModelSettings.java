@@ -107,4 +107,19 @@ public class ActiveModelSettings {
   public Optional<Integer> maxOutputTokens() {
     return settings().flatMap(ModelSettings::maxOutputTokens);
   }
+
+  /** {@code frequency_penalty} for the active model; empty leaves the provider default. */
+  public Optional<Double> frequencyPenalty() {
+    return settings().flatMap(ModelSettings::frequencyPenalty);
+  }
+
+  /** {@code presence_penalty} for the active model; empty leaves the provider default. */
+  public Optional<Double> presencePenalty() {
+    return settings().flatMap(ModelSettings::presencePenalty);
+  }
+
+  /** Determinism {@code seed} for the active model; empty sends no seed. */
+  public Optional<Integer> seed() {
+    return settings().flatMap(ModelSettings::seed);
+  }
 }
