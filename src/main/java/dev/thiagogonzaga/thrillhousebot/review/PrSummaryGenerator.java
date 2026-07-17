@@ -123,6 +123,7 @@ public class PrSummaryGenerator {
 
     appendPreviousFindings(sb, result);
     appendFindingsOrCelebration(sb, result);
+    appendDoubleCheckFindings(sb, result);
     appendCiChecks(sb, result);
 
     sb.append("---\n");
@@ -168,19 +169,22 @@ public class PrSummaryGenerator {
 
   private static void appendFindingsOrCelebration(StringBuilder sb, ReviewResult result) {
     if (result.hasIssues()) {
-      sb.append("### Key Findings\n");
-      for (Finding f : result.keyFindings()) {
-        sb.append("- **")
-            .append(f.risk().name())
-            .append(":** ")
-            .append(f.title())
-            .append(" (`")
-            .append(f.file())
-            .append(":")
-            .append(f.line())
-            .append("`)\n");
+      var keyFindings = result.keyFindings();
+      if (!keyFindings.isEmpty()) {
+        sb.append("### Key Findings\n");
+        for (Finding f : keyFindings) {
+          sb.append("- **")
+              .append(f.risk().name())
+              .append(":** ")
+              .append(f.title())
+              .append(" (`")
+              .append(f.file())
+              .append(":")
+              .append(f.line())
+              .append("`)\n");
+        }
+        sb.append("\n");
       }
-      sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
       if (result.ciHoldsApproval()) {
         appendCiHold(sb, result);
@@ -191,6 +195,40 @@ public class PrSummaryGenerator {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       }
     }
+  }
+
+  /**
+   * Collapsed section for low-confidence medium/low findings that were withheld from inline
+   * threads. Keeps the signal visible and clearly non-blocking without opening a review thread that
+   * maintainers must triage and resolve.
+   */
+  private static void appendDoubleCheckFindings(StringBuilder sb, ReviewResult result) {
+    var findings = result.doubleCheckFindings();
+    if (findings.isEmpty()) {
+      return;
+    }
+    sb.append("### Things to double-check\n");
+    sb.append("<details>\n");
+    sb.append("<summary>")
+        .append(findings.size())
+        .append(" lower-confidence finding")
+        .append(findings.size() == 1 ? "" : "s")
+        .append("</summary>\n\n");
+    for (Finding f : findings) {
+      // By construction these findings are confidence LOW, so the disclaimer is always present.
+      sb.append("- **")
+          .append(f.risk().name())
+          .append(":** ")
+          .append(f.title())
+          .append(" (`")
+          .append(f.file())
+          .append(":")
+          .append(f.line())
+          .append("`) ")
+          .append(SuggestionFormatter.confidenceDisclaimer(Confidence.LOW))
+          .append("\n");
+    }
+    sb.append("\n</details>\n\n");
   }
 
   /**

@@ -122,6 +122,15 @@ class SuggestionFormatterTest {
   }
 
   @Test
+  void confidenceDisclaimerShouldBeEmptyForNullOrHighConfidence() {
+    assertEquals("", SuggestionFormatter.confidenceDisclaimer(null));
+    assertEquals("", SuggestionFormatter.confidenceDisclaimer(Confidence.HIGH));
+    assertEquals(
+        "_(low confidence — verify before acting)_",
+        SuggestionFormatter.confidenceDisclaimer(Confidence.LOW));
+  }
+
+  @Test
   void shouldFormatDocCommentWithSymbolAndSuggestionBlock() {
     var comment =
         formatter.formatDocComment(

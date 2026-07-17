@@ -103,6 +103,19 @@ public class SuggestionFormatter {
   }
 
   /**
+   * Italic disclaimer appended when confidence is below high, so readers know to verify before
+   * acting. Empty for {@link Confidence#HIGH}.
+   */
+  public static String confidenceDisclaimer(Confidence confidence) {
+    if (confidence == null || confidence == Confidence.HIGH) {
+      return "";
+    }
+    return "_("
+        + confidence.name().toLowerCase(Locale.ROOT)
+        + " confidence — verify before acting)_";
+  }
+
+  /**
    * Builds a full review comment body for a single finding. Includes the risk emoji, title,
    * description, and suggestion block (if applicable).
    */
@@ -125,10 +138,9 @@ public class SuggestionFormatter {
         .append(" — ")
         .append(finding.title())
         .append("**");
-    if (finding.confidence() != Confidence.HIGH) {
-      sb.append(" _(")
-          .append(finding.confidence().name().toLowerCase(Locale.ROOT))
-          .append(" confidence — verify before acting)_");
+    String disclaimer = confidenceDisclaimer(finding.confidence());
+    if (!disclaimer.isEmpty()) {
+      sb.append(' ').append(disclaimer);
     }
     sb.append("\n\n");
     sb.append(finding.description()).append("\n");
