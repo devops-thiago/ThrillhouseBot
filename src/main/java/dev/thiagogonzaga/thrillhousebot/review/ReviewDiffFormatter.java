@@ -191,6 +191,25 @@ public class ReviewDiffFormatter {
   }
 
   /**
+   * Reviewable files plus pure renames — for prompt context that should still see moved paths
+   * (related-tests list, summary walkthrough counts) without putting empty rename hunks in the
+   * model diff.
+   */
+  static List<GitHubPullRequestClient.FileDiff> withPureRenames(
+      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<GitHubPullRequestClient.FileDiff> allFiles) {
+    var renames = pureRenameFiles(allFiles);
+    if (renames.isEmpty()) {
+      return reviewable;
+    }
+    var merged =
+        new ArrayList<GitHubPullRequestClient.FileDiff>(reviewable.size() + renames.size());
+    merged.addAll(reviewable);
+    merged.addAll(renames);
+    return merged;
+  }
+
+  /**
    * The non-blank patch text of each reviewable file, keyed by filename — the map a {@link
    * DiffLineResolver} parses to map AI-reported line numbers back onto the diff. Ignored files are
    * dropped, so the resolver never anchors a comment to a file outside review scope.
