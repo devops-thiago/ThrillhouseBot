@@ -452,6 +452,27 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void threeArgConstructorDefaultsToStrictCiAndBalancedBlocking() {
+    var defaults =
+        new VerdictBuilder(
+            summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
+
+    var held =
+        defaults.build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_OFFENDING, FULL_COVERAGE);
+    assertEquals(ReviewState.COMMENT, held.reviewState());
+
+    var hedged =
+        new ReviewResponse.Finding("critical", "low", "a.java", 1, "title", "desc", null, null);
+    var nonBlocking =
+        defaults.build(
+            contextWithLineCapOmissions(0),
+            new ReviewResponse(List.of(hedged), List.of(), null),
+            CI_CLEAR,
+            FULL_COVERAGE);
+    assertEquals(ReviewState.COMMENT, nonBlocking.reviewState());
+  }
+
+  @Test
   void nullStrictnessInTestConstructorFallsBackToBalanced() {
     var nullModeBuilder =
         new VerdictBuilder(
