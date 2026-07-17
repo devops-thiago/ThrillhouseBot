@@ -2960,6 +2960,43 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldWarnWhenCommentCapSkipsEveryInlineEligibleFinding() {
+      when(reviewConfig.maxReviewComments()).thenReturn(0);
+      var finding =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.HIGH,
+              "src/Main.java",
+              10,
+              "Real smell",
+              "desc",
+              null,
+              null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient, never())
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("comment cap was reached")
+                          && req.body().contains("Real smell")
+                          && !req.body().contains("Things to double-check")));
+    }
+
+    @Test
     void shouldDiscloseConfidenceSkippedFindingsInReviewBodyWhenNonePostInline() {
       var finding =
           new Finding(

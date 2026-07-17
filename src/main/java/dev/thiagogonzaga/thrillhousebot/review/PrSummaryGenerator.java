@@ -205,6 +205,7 @@ public class PrSummaryGenerator {
         .append(findings.size() == 1 ? "" : "s")
         .append("</summary>\n\n");
     for (Finding f : findings) {
+      // By construction these findings are confidence LOW, so the disclaimer is always present.
       sb.append("- **")
           .append(f.risk().name())
           .append(":** ")
@@ -213,12 +214,9 @@ public class PrSummaryGenerator {
           .append(f.file())
           .append(":")
           .append(f.line())
-          .append("`)");
-      String disclaimer = SuggestionFormatter.confidenceDisclaimer(f.confidence());
-      if (!disclaimer.isEmpty()) {
-        sb.append(' ').append(disclaimer);
-      }
-      sb.append("\n");
+          .append("`) ")
+          .append(SuggestionFormatter.confidenceDisclaimer(Confidence.LOW))
+          .append("\n");
     }
     sb.append("\n</details>\n\n");
   }
