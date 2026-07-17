@@ -324,4 +324,20 @@ class DiffBudgetPlannerTest {
     when(reviewConfig.maxInputTokens()).thenReturn(0);
     assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());
   }
+
+  @Test
+  void mixedPrPackingPrefersRealDiffsAfterPureRenamesAreFilteredOut() {
+    // Mirrors the orchestrator path: reviewableFiles() drops pure renames before plan().
+    var pure = new FileDiff("moved/B.java", "renamed", 0, 0, 0, null, "moved/A.java");
+    var real = file("src/App.java", 8, patch(8));
+    var reviewable = formatter.reviewableFiles(List.of(pure, real));
+
+    assertEquals(List.of("src/App.java"), reviewable.stream().map(FileDiff::filename).toList());
+
+    when(reviewConfig.maxAiCalls()).thenReturn(3);
+    var plan = planner.plan(reviewable, sectionTokens(real) + 10, 2);
+
+    assertEquals(List.of("src/App.java"), coveredFilenames(plan));
+    assertTrue(plan.omittedFiles().isEmpty(), "pure rename must not appear as budget omission");
+  }
 }

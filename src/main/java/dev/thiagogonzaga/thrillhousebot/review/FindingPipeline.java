@@ -545,6 +545,12 @@ public class FindingPipeline {
   private static String changedFilesOverview(
       ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
     var sb = new StringBuilder();
+    // Pure-rename rollup first so clampOverview (keeps a prefix) never drops the disclosure on
+    // large multi-call reviews (#386).
+    var pureRenames = ReviewDiffFormatter.pureRenameFiles(ctx.files());
+    if (!pureRenames.isEmpty()) {
+      sb.append(ReviewDiffFormatter.formatPureRenameRollup(pureRenames));
+    }
     var omitted = Set.copyOf(plan.omittedFiles());
     var clipped = Set.copyOf(plan.clippedFiles());
     for (var file : ctx.reviewableFiles()) {

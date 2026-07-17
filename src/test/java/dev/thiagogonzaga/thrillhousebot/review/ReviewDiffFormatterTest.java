@@ -680,4 +680,81 @@ class ReviewDiffFormatterTest {
     assertTrue(ReviewDiffFormatter.isTestFile("data_test.csv"));
     assertTrue(ReviewDiffFormatter.isTestFile("native/FooTest.kt"));
   }
+
+  @Nested
+  class PureRenameExclusion {
+
+    @Test
+    void isPureRenameRequiresRenamedStatusZeroDiffAndBlankPatch() {
+      assertTrue(
+          ReviewDiffFormatter.isPureRename(
+              new GitHubPullRequestClient.FileDiff("b.java", "renamed", 0, 0, 0, null, "a.java")));
+      assertTrue(
+          ReviewDiffFormatter.isPureRename(
+              new GitHubPullRequestClient.FileDiff("b.java", "RENAMED", 0, 0, 0, "  ", "a.java")));
+      // Rename + content edit must stay reviewable.
+      assertFalse(
+          ReviewDiffFormatter.isPureRename(
+              new GitHubPullRequestClient.FileDiff(
+                  "b.java", "renamed", 1, 0, 1, "@@ -1 +1,2 @@\n+x", "a.java")));
+      assertFalse(
+          ReviewDiffFormatter.isPureRename(
+              new GitHubPullRequestClient.FileDiff("b.java", "modified", 0, 0, 0, null)));
+    }
+
+    @Test
+    void reviewableFilesSkipsPureRenamesButKeepsRenamePlusEdit() {
+      var formatter = new ReviewDiffFormatter(List.of(), 5000);
+      var pure =
+          new GitHubPullRequestClient.FileDiff(
+              "pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java");
+      var edited =
+          new GitHubPullRequestClient.FileDiff(
+              "pkg/D.java", "renamed", 2, 0, 2, "@@ -1 +1,3 @@\n+y\n+z", "pkg/C.java");
+      var modified = file("src/App.java", "modified", 1, 0, "@@ -1 +1,2 @@\n+ok");
+
+      var reviewable = formatter.reviewableFiles(List.of(pure, edited, modified));
+
+      assertEquals(2, reviewable.size());
+      assertEquals("pkg/D.java", reviewable.get(0).filename());
+      assertEquals("src/App.java", reviewable.get(1).filename());
+    }
+
+    @Test
+    void buildDiffStringDisclosesPureRenamesWithoutEmittingEmptySections() {
+      var formatter = new ReviewDiffFormatter(List.of(), 5000);
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "new/Name.java", "renamed", 0, 0, 0, null, "old/Name.java"),
+              file("src/App.java", "modified", 1, 0, "@@ -1 +1,2 @@\n+ok"));
+
+      var result = formatter.buildDiffStringWithStats(files);
+
+      assertEquals(0, result.omittedFiles(), "pure renames must not count as truncation");
+      assertTrue(
+          result
+              .text()
+              .contains("1 pure rename omitted from AI review (old/Name.java → new/Name.java)"));
+      assertFalse(result.text().contains("### new/Name.java"));
+      assertTrue(result.text().contains("### src/App.java"));
+    }
+
+    @Test
+    void pureRenameRollupCapsSampleAndReportsRemainder() {
+      var renames = new java.util.ArrayList<GitHubPullRequestClient.FileDiff>();
+      for (var i = 0; i < 7; i++) {
+        renames.add(
+            new GitHubPullRequestClient.FileDiff(
+                "n" + i + ".java", "renamed", 0, 0, 0, null, "o" + i + ".java"));
+      }
+
+      var rollup = ReviewDiffFormatter.formatPureRenameRollup(renames);
+
+      assertTrue(rollup.startsWith("7 pure renames omitted from AI review ("));
+      assertTrue(rollup.contains("and 2 more"));
+      assertTrue(rollup.contains("o0.java → n0.java"));
+      assertFalse(rollup.contains("o5.java"));
+    }
+  }
 }

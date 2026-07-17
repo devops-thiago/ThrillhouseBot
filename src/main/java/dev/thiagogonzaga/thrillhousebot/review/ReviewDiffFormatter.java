@@ -119,13 +119,94 @@ public class ReviewDiffFormatter {
     return false;
   }
 
-  /** Files that are included in AI review scope (non-ignored). */
+  /**
+   * Pure rename: GitHub reports {@code status=renamed} with no content hunks. These burn AI budget
+   * without anything to review — exclude them from model input (see #386). Rename+edit (non-empty
+   * patch and/or non-zero add/del) is still reviewable.
+   */
+  static boolean isPureRename(GitHubPullRequestClient.FileDiff file) {
+    if (file == null || file.status() == null) {
+      return false;
+    }
+    if (!"renamed".equalsIgnoreCase(file.status())) {
+      return false;
+    }
+    if (file.additions() + file.deletions() != 0) {
+      return false;
+    }
+    return file.patch() == null || file.patch().isBlank();
+  }
+
+  /** Pure renames in {@code files}, preserving order. */
+  static List<GitHubPullRequestClient.FileDiff> pureRenameFiles(
+      List<GitHubPullRequestClient.FileDiff> files) {
+    if (files == null || files.isEmpty()) {
+      return List.of();
+    }
+    return files.stream().filter(ReviewDiffFormatter::isPureRename).toList();
+  }
+
+  /**
+   * One-line disclosure for the summary / diff overview. Caps the path sample so bulk package moves
+   * do not dominate the prompt.
+   */
+  static String formatPureRenameRollup(List<GitHubPullRequestClient.FileDiff> pureRenames) {
+    if (pureRenames == null || pureRenames.isEmpty()) {
+      return "";
+    }
+    final int sampleCap = 5;
+    var samples = new ArrayList<String>(Math.min(sampleCap, pureRenames.size()));
+    for (var i = 0; i < pureRenames.size() && samples.size() < sampleCap; i++) {
+      var file = pureRenames.get(i);
+      var prev = file.previousFilename();
+      if (prev != null && !prev.isBlank()) {
+        samples.add(prev + " → " + file.filename());
+      } else {
+        samples.add(file.filename());
+      }
+    }
+    var sb = new StringBuilder();
+    sb.append(pureRenames.size())
+        .append(pureRenames.size() == 1 ? " pure rename" : " pure renames")
+        .append(" omitted from AI review (")
+        .append(String.join(", ", samples));
+    var more = pureRenames.size() - samples.size();
+    if (more > 0) {
+      sb.append(", and ").append(more).append(" more");
+    }
+    sb.append(")\n");
+    return sb.toString();
+  }
+
+  /** Files that are included in AI review scope (non-ignored, non–pure-rename). */
   List<GitHubPullRequestClient.FileDiff> reviewableFiles(
       List<GitHubPullRequestClient.FileDiff> files) {
     if (files == null || files.isEmpty()) {
       return List.of();
     }
-    return files.stream().filter(f -> !isIgnored(f.filename())).toList();
+    return files.stream()
+        .filter(f -> !isIgnored(f.filename()))
+        .filter(f -> !isPureRename(f))
+        .toList();
+  }
+
+  /**
+   * Reviewable files plus pure renames — for prompt context that should still see moved paths
+   * (related-tests list, summary walkthrough counts) without putting empty rename hunks in the
+   * model diff.
+   */
+  static List<GitHubPullRequestClient.FileDiff> withPureRenames(
+      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<GitHubPullRequestClient.FileDiff> allFiles) {
+    var renames = pureRenameFiles(allFiles);
+    if (renames.isEmpty()) {
+      return reviewable;
+    }
+    var merged =
+        new ArrayList<GitHubPullRequestClient.FileDiff>(reviewable.size() + renames.size());
+    merged.addAll(reviewable);
+    merged.addAll(renames);
+    return merged;
   }
 
   /**
@@ -181,10 +262,19 @@ public class ReviewDiffFormatter {
       totalDeletions += file.deletions();
     }
 
+    var pureRenames = pureRenameFiles(files);
     var header =
-        String.format(
-            "## Overview: %d files (+%d -%d)%n%n", files.size(), totalAdditions, totalDeletions);
-    return formatWithLineBudget(header, files, namesOf(reviewableFiles));
+        new StringBuilder(
+            String.format(
+                "## Overview: %d files (+%d -%d)%n%n",
+                files.size(), totalAdditions, totalDeletions));
+    if (!pureRenames.isEmpty()) {
+      header.append(formatPureRenameRollup(pureRenames)).append('\n');
+    }
+    // Pure renames are disclosed in the rollup only — do not emit empty ### headers into the
+    // model input (or count them toward the line-budget truncation / APPROVE hold).
+    var sectionFiles = files.stream().filter(f -> !isPureRename(f)).toList();
+    return formatWithLineBudget(header.toString(), sectionFiles, namesOf(reviewableFiles));
   }
 
   static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {

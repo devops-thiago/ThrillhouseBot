@@ -123,15 +123,16 @@ public class VerdictBuilder {
             ? plan.omittedFiles().size() + plan.clippedFiles().size()
             : ctx.omittedFiles();
     // GitHub PR-level totals when available; ignore-glob drops can undercount diff-derived stats.
+    // Pure renames are excluded from reviewableFiles for AI budget (#386) but still belong in the
+    // fallback file count / walkthrough when PR totals could not be fetched.
+    var overviewFiles = overviewFiles(ctx);
     var diffStats =
-        DiffStats.fromFiles(ctx.reviewableFiles(), omitted, truncation)
+        DiffStats.fromFiles(overviewFiles, omitted, truncation)
             .withAuthoritativeTotals(ctx.prTotals());
     var omittedNames = Set.copyOf(truncation.omittedFileNames());
     var changedFiles =
         toChangedFiles(
-            ctx.reviewableFiles().stream()
-                .filter(f -> !omittedNames.contains(f.filename()))
-                .toList());
+            overviewFiles.stream().filter(f -> !omittedNames.contains(f.filename())).toList());
     // A model-reported "unresolved" whose targeted code left the diff (force-push) becomes
     // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
     // Skip the DiffLineResolver when there are no statuses — first reviews and empty-status
@@ -294,6 +295,24 @@ public class VerdictBuilder {
       }
       return new DiffStats(files.size(), additions, deletions, omittedFiles, truncation);
     }
+  }
+
+  /**
+   * Reviewable files plus pure renames — the fallback set for Changes Overview counts when GitHub
+   * PR totals are unavailable. Pure renames are omitted from AI input but still part of the PR.
+   */
+  static List<GitHubPullRequestClient.FileDiff> overviewFiles(
+      ReviewContextLoader.ReviewContext ctx) {
+    var pureRenames = ReviewDiffFormatter.pureRenameFiles(ctx.files());
+    if (pureRenames.isEmpty()) {
+      return ctx.reviewableFiles();
+    }
+    var merged =
+        new ArrayList<GitHubPullRequestClient.FileDiff>(
+            ctx.reviewableFiles().size() + pureRenames.size());
+    merged.addAll(ctx.reviewableFiles());
+    merged.addAll(pureRenames);
+    return merged;
   }
 
   /**

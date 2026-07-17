@@ -58,7 +58,11 @@ public class ReviewPromptAssembler {
     // The diagram request's presence is what gates the model's walkthrough_diagram field.
     String diagramGuidance =
         config.review().diagram().enabled() ? PrReviewPrompts.DIAGRAM_REQUEST : "";
-    String relatedTests = diffFormatter.buildRelatedTests(ctx.reviewableFiles());
+    // Include pure-renamed test files so mock-fidelity / related-tests guidance still sees moves
+    // even though empty rename hunks are excluded from the reviewable diff (#386).
+    String relatedTests =
+        diffFormatter.buildRelatedTests(
+            ReviewDiffFormatter.withPureRenames(ctx.reviewableFiles(), ctx.files()));
     String trailingGuidance =
         combineSections(
             combineSections(
