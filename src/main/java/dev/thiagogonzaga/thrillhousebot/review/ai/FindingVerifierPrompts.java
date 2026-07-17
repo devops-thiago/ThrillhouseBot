@@ -79,6 +79,20 @@ public final class FindingVerifierPrompts {
               reject when the material does show that scope and the symbol is genuinely absent
               or misspelled there (e.g. the diff removes the definition, or the full block is
               present and lacks it) — that finding is demonstrable and stands.
+            - The finding asserts a method parameter may be null / violates a precondition
+              (NullPointerException on a parameter dereference, missing null check or
+              requireNonNull on a parameter, and the like) and the calling code that supplies
+              that parameter is NOT shown in the provided material. Nullability at a method
+              boundary is unestablished without the caller — inventing a null argument, or
+              noting that "the caller's contract is not visible in the diff", does not confirm
+              the path (for example, a finding that accountOwner.equalsIgnoreCase(...) NPEs in
+              installedRepos when the unchanged callers checkAccess/evaluateAccess — outside
+              the hunk — already guarantee a non-null owner and dereference it first). Reject
+              it. Do NOT reject when (a) the material shows a caller that can pass null or
+              another violating value, or (b) the changed signature itself declares a nullable
+              contract for that parameter — @Nullable / @CheckForNull, Optional, a documented
+              null-allowed Javadoc/Kotlin type, or similar — so a null-at-entry trace is
+              demonstrable from the signature without any caller hunk. Those findings stand.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
             - The finding claims a class is missing a required no-arg/default constructor for
@@ -137,7 +151,12 @@ public final class FindingVerifierPrompts {
             "medium". An "undefined / unset / missing symbol" claim is demonstrable only when
             the provided material includes the scope a definition would occupy; when that scope
             is outside the shown context the claim is unconfirmed (the definition may sit just
-            outside the hunk), so reject the finding (per above) rather than post it.
+            outside the hunk), so reject the finding (per above) rather than post it. A
+            parameter-nullability / precondition claim is demonstrable when the provided
+            material includes the calling code that supplies the parameter, or when the changed
+            signature itself declares a nullable contract for that parameter; when neither is
+            shown the nullability is unestablished, so reject the finding (per above) rather
+            than post it.
 
             Also audit each finding's suggested fix: when the underlying issue is real but
             suggestion_new is incorrect, incomplete, or would introduce a new defect, return

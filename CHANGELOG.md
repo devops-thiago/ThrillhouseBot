@@ -15,6 +15,10 @@ All notable changes to ThrillhouseBot.
 
 - **Passing in-diff tests must exercise the claimed path before suppressing a finding** (#116): the review and verifier prompts no longer treat a green test in the same diff as automatic disproof. A test may invalidate (generator) or reject (verifier) a finding only when it demonstrably exercises the claimed path — asserting on the path's output and stubbing collaborators into the relevant state, not leaving them unmocked so a default bypasses it (and not with stubs that contradict the real collaborator — see #111). When that exercise cannot be shown from the provided material, confidence is lowered with an explanation instead of dropping the finding (dogfood: PR #99 approve-path test green because `getPullRequest` was unmocked)
 
+### Fixed
+
+- **False parameter-nullability / precondition findings when the caller is outside the diff**: a finding could assert a method parameter may be null (or violates a precondition) and post at MEDIUM even when the only callers that supply the argument were unchanged and absent from the reviewed material — so nullability was assumed rather than demonstrated (a MEDIUM false positive on `DashboardAccessChecker.installedRepos` in PR #101 claimed `accountOwner` could be null while the unshown `checkAccess`/`evaluateAccess` callers already guarantee non-null). The reviewer now caps such claims to low confidence unless the calling code is present and shown to pass a violating value (or the changed signature itself declares a nullable contract such as `@Nullable` / `Optional`), and the verifier rejects them when neither the caller nor such a contract is in the material — with the PR #101 case embedded as an inline regression example (#107)
+
 ## [0.4.0] — 2026-07-12
 
 Token-budgeted reviews for large PRs, per-model AI settings, a published docs site, and a few operator-facing controls (command ack reactions, an opt-in auto-review interval, missing-pricing visibility on the dashboard).
