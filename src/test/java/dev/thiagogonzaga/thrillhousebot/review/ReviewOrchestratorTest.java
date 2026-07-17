@@ -201,6 +201,7 @@ class ReviewOrchestratorTest {
             diffFormatter,
             labeler,
             followUpAnalyzer,
+            new BugFixContextResolver(commentClient),
             sessionPersistence,
             BOT_ID,
             new ActiveModelSettings(config, "m")),
