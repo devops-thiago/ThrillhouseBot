@@ -28,12 +28,15 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class ChangelogEntryGeneratorTest {
 
   private static final String AUTH = "token gh-abc";
@@ -43,15 +46,12 @@ class ChangelogEntryGeneratorTest {
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private ChangelogAssistant changelogAssistant;
 
-  private ChangelogEntryGenerator generator;
+  @InjectMocks private ChangelogEntryGenerator generator;
 
   @BeforeEach
   void setUp() {
-    MockitoAnnotations.openMocks(this);
-    generator =
-        new ChangelogEntryGenerator(
-            prClient, diffFormatter, instructionsResolver, changelogAssistant);
-    when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+    lenient()
+        .when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(ResolvedInstructions.EMPTY);
   }
 

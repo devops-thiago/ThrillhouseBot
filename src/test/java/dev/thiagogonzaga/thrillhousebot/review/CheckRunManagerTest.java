@@ -20,29 +20,25 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCheckRunClient;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
  * Unit tests for {@link CheckRunManager} — the check-run create/update subsystem extracted from
  * {@code ReviewOrchestrator}, including the completion-only retry after a failed full update.
  */
+@ExtendWith(MockitoExtension.class)
 class CheckRunManagerTest {
 
   private static final String SESSION_URL = "https://bot.example/session/test-public-id";
 
   @Mock private GitHubCheckRunClient checkRunClient;
 
-  private CheckRunManager manager;
-
-  @BeforeEach
-  void setUp() {
-    MockitoAnnotations.openMocks(this);
-    manager = new CheckRunManager(checkRunClient);
-  }
+  @InjectMocks private CheckRunManager manager;
 
   @Test
   void shouldCreateCheckRunAsInProgress() {

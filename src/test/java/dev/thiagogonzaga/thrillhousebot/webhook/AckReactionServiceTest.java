@@ -28,10 +28,13 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class AckReactionServiceTest {
 
   @Mock private ThrillhouseConfig config;
@@ -42,15 +45,13 @@ class AckReactionServiceTest {
 
   @Mock private GitHubReactionClient reactionClient;
 
-  private AckReactionService service;
+  @InjectMocks private AckReactionService service;
 
   @BeforeEach
   void setUp() {
-    MockitoAnnotations.openMocks(this);
-    when(config.review()).thenReturn(reviewConfig);
-    when(reviewConfig.ackReactionTimeout()).thenReturn(Duration.ofSeconds(2));
-    when(authClient.getAuthHeader(42L)).thenReturn("token abc");
-    service = new AckReactionService(config, authClient, reactionClient);
+    lenient().when(config.review()).thenReturn(reviewConfig);
+    lenient().when(reviewConfig.ackReactionTimeout()).thenReturn(Duration.ofSeconds(2));
+    lenient().when(authClient.getAuthHeader(42L)).thenReturn("token abc");
   }
 
   @AfterEach

@@ -28,10 +28,13 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class PrDescriptionGeneratorTest {
 
   private static final String AUTH = "token gh-abc";
@@ -41,15 +44,12 @@ class PrDescriptionGeneratorTest {
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private PrDescribeAssistant describeAssistant;
 
-  private PrDescriptionGenerator generator;
+  @InjectMocks private PrDescriptionGenerator generator;
 
   @BeforeEach
   void setUp() {
-    MockitoAnnotations.openMocks(this);
-    generator =
-        new PrDescriptionGenerator(
-            prClient, diffFormatter, instructionsResolver, describeAssistant);
-    when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+    lenient()
+        .when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(ResolvedInstructions.EMPTY);
   }
 
