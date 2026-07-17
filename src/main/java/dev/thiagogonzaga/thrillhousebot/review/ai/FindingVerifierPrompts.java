@@ -70,6 +70,10 @@ public final class FindingVerifierPrompts {
               present and lacks it) — that finding is demonstrable and stands.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
+            - The finding claims a class is missing a required no-arg/default constructor for
+              dependency injection while the diff shows a constructor annotated @Inject (CDI /
+              Quarkus / Jakarta) or @Autowired (Spring) on that class — constructor injection is
+              the documented idiom and needs no no-arg constructor; the diff refutes the claim.
             - The diff already guards against the condition the finding claims is unhandled —
               not only an adjacent literal check (an existing null check on the flagged line) but
               an upstream guard earlier in the same method, including one on a value derived from
@@ -87,6 +91,16 @@ public final class FindingVerifierPrompts {
               (see the previous findings section when present) while the relevant lines are
               unchanged — at any severity; restating it with a higher severity is still a
               repeat.
+
+            A bug-fix efficacy finding — one claiming the PR's fix does not change behavior for
+            the failure trigger it claims to fix — is judged on the trigger's path, not on the
+            changed lines' local correctness: never reject it merely because every changed line
+            is locally valid, since "locally valid but never executed under the trigger" is
+            exactly what it alleges. Confirm it when the provided material shows no changed line
+            executes under the stated trigger; reject it only when the material shows a changed
+            line that does. When the deciding code is outside the diff, such a finding phrased as
+            a verification request naming what to check is legitimately confidence "low" or
+            "medium" — downgrade it at most; do not reject it as unverifiable.
 
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the

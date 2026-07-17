@@ -57,6 +57,18 @@ class ChatModelCustomizersTest {
     lenient().when(settings.maxInputTokens()).thenReturn(Optional.empty());
     lenient().when(settings.outputBufferTokens()).thenReturn(Optional.empty());
     lenient().when(settings.tokenSafetyMargin()).thenReturn(Optional.empty());
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.seed()).thenReturn(Optional.empty());
+    return settings;
+  }
+
+  private static ThrillhouseConfig.AiPricingConfig.ModelSettings settingsWithPenaltiesAndSeed(
+      double frequencyPenalty, double presencePenalty, int seed) {
+    var settings = settings(Optional.empty(), Optional.empty(), Optional.empty());
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(frequencyPenalty));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(presencePenalty));
+    lenient().when(settings.seed()).thenReturn(Optional.of(seed));
     return settings;
   }
 
@@ -140,6 +152,33 @@ class ChatModelCustomizersTest {
     verify(builder).temperature(0.2);
     verify(builder).topP(0.95);
     verify(builder).maxTokens(4096);
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void chatModelGetsPenaltiesAndSeed() {
+    var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var config = config(false, "low", Map.of(MODEL, settingsWithPenaltiesAndSeed(0.5, -0.5, 42)));
+
+    new ChatModelCustomizers.ChatModelCustomizer(config, activeModel(config)).customize(builder);
+
+    verify(builder).frequencyPenalty(0.5);
+    verify(builder).presencePenalty(-0.5);
+    verify(builder).seed(42);
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void streamingModelGetsPenaltiesAndSeed() {
+    var builder = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config = config(false, "low", Map.of(MODEL, settingsWithPenaltiesAndSeed(0.5, -0.5, 42)));
+
+    new ChatModelCustomizers.StreamingChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).frequencyPenalty(0.5);
+    verify(builder).presencePenalty(-0.5);
+    verify(builder).seed(42);
     verifyNoMoreInteractions(builder);
   }
 

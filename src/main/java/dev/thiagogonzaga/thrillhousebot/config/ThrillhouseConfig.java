@@ -205,6 +205,16 @@ public interface ThrillhouseConfig {
     boolean verifierEnabled();
 
     /**
+     * How severely a finding must score before the review escalates to {@code REQUEST_CHANGES}. One
+     * of {@code balanced} (default — CRITICAL/HIGH + HIGH confidence), {@code strict} (any
+     * CRITICAL/HIGH regardless of confidence), or {@code lenient} (CRITICAL + HIGH confidence
+     * only). Case-insensitive; validated at boot by {@link StartupConfigValidator}.
+     */
+    @WithDefault("balanced")
+    @WithName("blocking-strictness")
+    String blockingStrictness();
+
+    /**
      * Whether the bot answers maintainer replies to its review findings and {@code @thrillhousebot}
      * mentions in PR threads with a contextual AI reply. Each reply spends the operator's AI
      * budget, so this is the operator's kill switch; replies are additionally restricted to the
@@ -477,6 +487,29 @@ public interface ThrillhouseConfig {
        */
       @WithName("max-output-tokens")
       Optional<Integer> maxOutputTokens();
+
+      /**
+       * OpenAI-compatible {@code frequency_penalty} in {@code [-2, 2]} sent on every chat call —
+       * positive values discourage the model from repeating tokens proportionally to how often they
+       * already appeared. Absent keeps the provider default (typically 0).
+       */
+      @WithName("frequency-penalty")
+      Optional<Double> frequencyPenalty();
+
+      /**
+       * OpenAI-compatible {@code presence_penalty} in {@code [-2, 2]} sent on every chat call —
+       * positive values discourage the model from repeating any token that already appeared at all.
+       * Absent keeps the provider default (typically 0).
+       */
+      @WithName("presence-penalty")
+      Optional<Double> presencePenalty();
+
+      /**
+       * OpenAI-compatible {@code seed} sent on every chat call — a best-effort determinism hint for
+       * providers that support it (same seed + same parameters aims for the same sampling). Absent
+       * sends no seed.
+       */
+      Optional<Integer> seed();
     }
 
     interface ModelPricing {

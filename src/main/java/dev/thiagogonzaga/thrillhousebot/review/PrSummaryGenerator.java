@@ -148,12 +148,22 @@ public class PrSummaryGenerator {
         result.previousStatuses().stream()
             .filter(s -> "justified".equalsIgnoreCase(s.status()))
             .count();
+    var superseded =
+        result.previousStatuses().stream()
+            .filter(s -> "superseded".equalsIgnoreCase(s.status()))
+            .count();
     sb.append("### Previous Findings Status\n");
     sb.append("| Status | Count |\n");
     sb.append("|--------|-------|\n");
     sb.append("| ✅ Resolved | ").append(resolved).append(" |\n");
     sb.append("| ⚠️ Still present | ").append(unresolved).append(" |\n");
-    sb.append("| 💬 Justified | ").append(justified).append(" |\n\n");
+    sb.append("| 💬 Justified | ").append(justified).append(" |\n");
+    if (superseded > 0) {
+      sb.append("| 🗂️ Superseded (targeted code left the diff) | ")
+          .append(superseded)
+          .append(" |\n");
+    }
+    sb.append("\n");
   }
 
   private static void appendFindingsOrCelebration(StringBuilder sb, ReviewResult result) {

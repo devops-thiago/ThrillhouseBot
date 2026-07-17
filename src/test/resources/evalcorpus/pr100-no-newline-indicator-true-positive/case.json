@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 100,
+  "why": "Confirmed in PR #100 review thread and fixed by adding the '\\ ' prefix to isDiffStructureLine: the '\\ No newline at end of file' indicator was indexed as quotable content, enabling false quote matches.",
+  "expectedVerdicts": ["confirmed"],
+  "finding": {
+    "risk": "low",
+    "confidence": "low",
+    "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/FindingQuoteValidator.java",
+    "line": 246,
+    "title": "Unhandled \"\\ No newline\" diff indicator may pollute normalized lines",
+    "description": "The unified diff format can contain lines starting with \"\\ \" (backslash-space) to indicate a missing newline at the end of a file. These lines are not filtered out and will be treated as quotable code, which could lead to false quote matches or ambiguity false positives. Adding them to the structure line check would prevent this.",
+    "suggestion_old": "  private static boolean isDiffStructureLine(String raw) {\n    return raw.startsWith(\"+++\")\n        || raw.startsWith(\"---\")\n        || raw.startsWith(\"```\");\n  }",
+    "suggestion_new": "  private static boolean isDiffStructureLine(String raw) {\n    return raw.startsWith(\"+++\")\n        || raw.startsWith(\"---\")\n        || raw.startsWith(\"```\")\n        || raw.startsWith(\"\\\\ \");\n  }"
+  }
+}

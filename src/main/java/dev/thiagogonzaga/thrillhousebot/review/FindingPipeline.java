@@ -57,6 +57,7 @@ public class FindingPipeline {
 
   private final AiReviewService aiReviewService;
   private final FindingQuoteValidator quoteValidator;
+  private final FrameworkFalsePositiveFilter frameworkFilter;
   private final FindingDeduplicator deduplicator;
   private final FindingVerificationService findingVerificationService;
   private final FollowUpAnalyzer followUpAnalyzer;
@@ -69,6 +70,7 @@ public class FindingPipeline {
   public FindingPipeline(
       AiReviewService aiReviewService,
       FindingQuoteValidator quoteValidator,
+      FrameworkFalsePositiveFilter frameworkFilter,
       FindingDeduplicator deduplicator,
       FindingVerificationService findingVerificationService,
       FollowUpAnalyzer followUpAnalyzer,
@@ -78,6 +80,7 @@ public class FindingPipeline {
       TokenCounter tokenCounter) {
     this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
+    this.frameworkFilter = frameworkFilter;
     this.deduplicator = deduplicator;
     this.findingVerificationService = findingVerificationService;
     this.followUpAnalyzer = followUpAnalyzer;
@@ -255,6 +258,7 @@ public class FindingPipeline {
     var batchResponse =
         aiReviewService.reviewBatch(session, batchInputs, index + 1, batches.size());
     var validated = quoteValidator.validate(batchResponse, batch.text());
+    validated = frameworkFilter.filter(validated, batch.text());
     var verified =
         findingVerificationService.verify(
             validated,
@@ -580,6 +584,7 @@ public class FindingPipeline {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver) {
     aiResponse = quoteValidator.validate(aiResponse, diff);
+    aiResponse = frameworkFilter.filter(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
     aiResponse =
         findingVerificationService.verify(

@@ -39,6 +39,7 @@ public class VerdictBuilder {
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
   private final CiGatingMode ciGating;
+  private final BlockingStrictness blockingStrictness;
 
   @Inject
   public VerdictBuilder(
@@ -50,26 +51,54 @@ public class VerdictBuilder {
         summaryGenerator,
         followUpAnalyzer,
         botIdentity,
-        CiGatingMode.parse(config.review().ciGating()));
+        CiGatingMode.parse(config.review().ciGating()),
+        BlockingStrictness.fromString(config.review().blockingStrictness())
+            .orElse(BlockingStrictness.BALANCED));
   }
 
-  /** Visible for tests; defaults to fail-closed {@link CiGatingMode#STRICT}. */
+  /** Visible for tests; defaults to fail-closed CI gating and balanced blocking. */
   VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity) {
-    this(summaryGenerator, followUpAnalyzer, botIdentity, CiGatingMode.STRICT);
+    this(
+        summaryGenerator,
+        followUpAnalyzer,
+        botIdentity,
+        CiGatingMode.STRICT,
+        BlockingStrictness.BALANCED);
+  }
+
+  /** Visible for tests: pins CI gating; blocking stays {@link BlockingStrictness#BALANCED}. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      CiGatingMode ciGating) {
+    this(summaryGenerator, followUpAnalyzer, botIdentity, ciGating, BlockingStrictness.BALANCED);
+  }
+
+  /** Visible for tests: pins blocking mode; CI gating stays {@link CiGatingMode#STRICT}. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      BlockingStrictness blockingStrictness) {
+    this(summaryGenerator, followUpAnalyzer, botIdentity, CiGatingMode.STRICT, blockingStrictness);
   }
 
   VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity,
-      CiGatingMode ciGating) {
+      CiGatingMode ciGating,
+      BlockingStrictness blockingStrictness) {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
     this.ciGating = ciGating == null ? CiGatingMode.STRICT : ciGating;
+    this.blockingStrictness =
+        blockingStrictness == null ? BlockingStrictness.BALANCED : blockingStrictness;
   }
 
   /**
@@ -103,20 +132,26 @@ public class VerdictBuilder {
             ctx.reviewableFiles().stream()
                 .filter(f -> !omittedNames.contains(f.filename()))
                 .toList());
+    // A model-reported "unresolved" whose targeted code left the diff (force-push) becomes
+    // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
+    var effectiveStatuses =
+        followUpAnalyzer.supersedeVanished(
+            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus(), ctx.lineResolver());
+    var effectiveResponse =
+        new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
-        followUpAnalyzer.unresolvedFindings(
-            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus());
+        followUpAnalyzer.unresolvedFindings(ctx.previousAiResponseJson(), effectiveStatuses);
     var backstopUnresolved =
         ctx.hasContext()
             ? followUpAnalyzer.unreportedUnresolvedStatuses(
                 ctx.priorAiResponseJsons(),
-                aiResponse.previousFindingsStatus(),
+                effectiveStatuses,
                 ctx.inlineComments(),
                 ctx.lineResolver(),
                 botIdentity)
             : List.<ReviewResult.PreviousFindingStatus>of();
     return buildResult(
-        aiResponse,
+        effectiveResponse,
         ctx.isFirstVisibleReview(),
         diffStats,
         changedFiles,
@@ -278,7 +313,7 @@ public class VerdictBuilder {
 
     var outstanding = new ArrayList<Finding>(tally.findings());
     outstanding.addAll(unresolvedPrevious);
-    ReviewState state = ReviewState.fromFindings(outstanding);
+    ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // Backstop statuses reach the gate but never `outstanding`, keeping the hold downgrade-only
     // (APPROVE → COMMENT, never REQUEST_CHANGES).
     var previousStatuses =
