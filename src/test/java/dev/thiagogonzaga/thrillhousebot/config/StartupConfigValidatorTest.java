@@ -179,6 +179,9 @@ class StartupConfigValidatorTest {
     lenient().when(settings.temperature()).thenReturn(Optional.empty());
     lenient().when(settings.topP()).thenReturn(Optional.empty());
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.empty());
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.seed()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -306,6 +309,8 @@ class StartupConfigValidatorTest {
     lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(0));
     lenient().when(settings.temperature()).thenReturn(Optional.of(3.0));
     lenient().when(settings.topP()).thenReturn(Optional.of(1.5));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.5));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.5));
     var ex = assertFailsValidation(new ConfigBuilder().model("some-other-model", settings).build());
     var message = ex.getMessage();
     assertTrue(
@@ -313,6 +318,8 @@ class StartupConfigValidatorTest {
         message);
     assertTrue(message.contains("temperature must be in [0, 2]"), message);
     assertTrue(message.contains("top-p must be in (0, 1]"), message);
+    assertTrue(message.contains("frequency-penalty must be in [-2, 2]"), message);
+    assertTrue(message.contains("presence-penalty must be in [-2, 2]"), message);
   }
 
   @Test
@@ -323,6 +330,8 @@ class StartupConfigValidatorTest {
     lenient().when(settings.temperature()).thenReturn(Optional.of(-0.1));
     lenient().when(settings.topP()).thenReturn(Optional.of(0.0));
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(0));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(2.5));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(-2.5));
     var zeroMargin = emptyModelSettings();
     lenient().when(zeroMargin.tokenSafetyMargin()).thenReturn(Optional.of(0.0));
     var ex =
@@ -335,6 +344,8 @@ class StartupConfigValidatorTest {
     assertTrue(message.contains("temperature must be in [0, 2]"), message);
     assertTrue(message.contains("top-p must be in (0, 1]"), message);
     assertTrue(message.contains("max-output-tokens must be >= 1"), message);
+    assertTrue(message.contains("frequency-penalty must be in [-2, 2]"), message);
+    assertTrue(message.contains("presence-penalty must be in [-2, 2]"), message);
   }
 
   @Test
@@ -353,6 +364,9 @@ class StartupConfigValidatorTest {
     lenient().when(settings.temperature()).thenReturn(Optional.of(0.2));
     lenient().when(settings.topP()).thenReturn(Optional.of(0.95));
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_192));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.0));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.0));
+    lenient().when(settings.seed()).thenReturn(Optional.of(42));
     new ConfigBuilder().model("deepseek-chat", settings).build().validate();
   }
 

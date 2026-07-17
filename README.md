@@ -314,6 +314,9 @@ thrillhousebot.ai.models.deepseek-chat.token-safety-margin=0.9
 thrillhousebot.ai.models.deepseek-chat.temperature=0.2
 thrillhousebot.ai.models.deepseek-chat.top-p=0.95
 thrillhousebot.ai.models.deepseek-chat.max-output-tokens=8192
+thrillhousebot.ai.models.deepseek-chat.frequency-penalty=0.1
+thrillhousebot.ai.models.deepseek-chat.presence-penalty=0.1
+thrillhousebot.ai.models.deepseek-chat.seed=42
 ```
 
 Notes:
@@ -333,9 +336,18 @@ Notes:
   `application.properties` or `-D`) alongside the env var.
 - **`top_k` is not available** on the OpenAI-compatible wire; it becomes
   relevant only with native provider integrations.
+- **`max-output-tokens` vs `output-buffer-tokens`**: `max-output-tokens` is the
+  hard response-length cap sent to the provider; `output-buffer-tokens` only
+  reserves input-budget headroom for the map-reduce budgeter. Keep the buffer
+  at least as large as the output cap so a response the model is allowed to
+  produce always has reserved room — set both when capping output.
+- **`seed`** is a best-effort determinism hint (same seed + same parameters aims
+  for the same sampling) on providers that support it; unsupported providers
+  ignore it. For deterministic reviews, prefer a low `temperature` first.
 - **Generation-parameter validation** happens at boot: temperature must be in
-  `[0, 2]`, `top-p` in `(0, 1]`, token counts positive — a typo in any entry
-  (even an inactive model's) fails startup with a message naming the key.
+  `[0, 2]`, `top-p` in `(0, 1]`, penalties in `[-2, 2]`, token counts positive —
+  a typo in any entry (even an inactive model's) fails startup with a message
+  naming the key.
 <!-- docs:configuration:end -->
 
 ## Dashboard
