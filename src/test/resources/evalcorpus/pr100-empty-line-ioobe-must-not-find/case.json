@@ -1,0 +1,10 @@
+{
+  "kind": "generator",
+  "sourcePr": 100,
+  "why": "Refuted false positive from the PR #100 review: the empty-line IndexOutOfBounds claim is disproved by the normalized.isEmpty() guard visible in the same diff. The review prompt should not raise it.",
+  "expectation": "must-not-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/FindingQuoteValidator.java",
+  "keywords": ["IndexOutOfBounds", "charAt(0)"],
+  "prTitle": "fix(review): drop suggestions and cap confidence for ambiguous quotes",
+  "prDescription": "Extends FindingQuoteValidator with line-aware ambiguity detection: a suggestion_old quote that appears in multiple diff locations is only kept when the finding's line uniquely selects one."
+}

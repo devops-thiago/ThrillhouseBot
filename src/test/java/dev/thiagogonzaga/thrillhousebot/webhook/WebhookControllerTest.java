@@ -23,6 +23,7 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
+import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
@@ -75,6 +76,8 @@ class WebhookControllerTest {
 
   @Mock private ReviewSkipEmitter skipEmitter;
 
+  @Mock private FindingFeedbackCaptureService findingFeedbackCapture;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
@@ -104,6 +107,7 @@ class WebhookControllerTest {
             prPauseService,
             ackReactionService,
             skipEmitter,
+            findingFeedbackCapture,
             mapper);
   }
 
@@ -1173,6 +1177,10 @@ class WebhookControllerTest {
             "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
     assertEquals(200, response.getStatus());
 
+    verify(findingFeedbackCapture)
+        .scheduleCaptureOnReviewReply(
+            12345L, "owner", "repo", 42, 99L, "octocat", "@thrillhousebot why is this flagged?");
+
     verify(replyDispatcher)
         .dispatch(
             new MaintainerReplyService.ReplyTask(
@@ -1190,6 +1198,26 @@ class WebhookControllerTest {
                 1000L,
                 true,
                 "@@ -1 +1 @@"));
+  }
+
+  @Test
+  void shouldCaptureFindingFeedbackOnReviewReplyWithoutBotMention() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.containsBotMention("not useful")).thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "not useful", 99L, 1001L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "pull_request_review_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    verify(findingFeedbackCapture)
+        .scheduleCaptureOnReviewReply(12345L, "owner", "repo", 42, 99L, "octocat", "not useful");
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
   }
 
   @Test

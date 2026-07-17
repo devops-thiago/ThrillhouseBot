@@ -17,6 +17,13 @@ positives and recurring misses, not to lower the bar.
   (`.../pulls/{n}/comments`, `.../reviews`, `.../files`, `.../issues`, ...) and
   GraphQL connections return only the first page unless explicitly paginated.
 
+## Framework facts (do not re-derive or contradict these)
+
+- **CDI constructor injection is a valid bean.** In Quarkus/Jakarta CDI, a class
+  whose constructor is annotated `@Inject` is a well-formed bean; no no-arg or
+  default constructor is required. Do **not** raise "missing no-arg/default
+  constructor" findings on classes with an `@Inject` constructor.
+
 ## Review focus for this codebase
 
 - **Pagination / truncation.** When a change lists a GitHub collection, confirm it

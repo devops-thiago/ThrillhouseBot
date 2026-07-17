@@ -22,6 +22,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -72,6 +73,7 @@ class StartupConfigValidatorTest {
     private double tokenSafetyMargin = 0.9;
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
+    private String blockingStrictness = "balanced";
     private String modelName = "deepseek-chat";
     private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
         new HashMap<>();
@@ -136,6 +138,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder blockingStrictness(String v) {
+      this.blockingStrictness = v;
+      return this;
+    }
+
     ConfigBuilder model(String name, ThrillhouseConfig.AiPricingConfig.ModelSettings settings) {
       this.models.put(name, settings);
       return this;
@@ -164,6 +171,7 @@ class StartupConfigValidatorTest {
       lenient().when(review.outputBufferTokens()).thenReturn(outputBufferTokens);
       lenient().when(review.maxAiCalls()).thenReturn(maxAiCalls);
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
+      lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
       return new StartupConfigValidator(
           config, aiApiKey, new ActiveModelSettings(config, modelName));
@@ -179,6 +187,9 @@ class StartupConfigValidatorTest {
     lenient().when(settings.temperature()).thenReturn(Optional.empty());
     lenient().when(settings.topP()).thenReturn(Optional.empty());
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.empty());
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
+    lenient().when(settings.seed()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -306,6 +317,8 @@ class StartupConfigValidatorTest {
     lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(0));
     lenient().when(settings.temperature()).thenReturn(Optional.of(3.0));
     lenient().when(settings.topP()).thenReturn(Optional.of(1.5));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.5));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.5));
     var ex = assertFailsValidation(new ConfigBuilder().model("some-other-model", settings).build());
     var message = ex.getMessage();
     assertTrue(
@@ -313,6 +326,8 @@ class StartupConfigValidatorTest {
         message);
     assertTrue(message.contains("temperature must be in [0, 2]"), message);
     assertTrue(message.contains("top-p must be in (0, 1]"), message);
+    assertTrue(message.contains("frequency-penalty must be in [-2, 2]"), message);
+    assertTrue(message.contains("presence-penalty must be in [-2, 2]"), message);
   }
 
   @Test
@@ -323,6 +338,8 @@ class StartupConfigValidatorTest {
     lenient().when(settings.temperature()).thenReturn(Optional.of(-0.1));
     lenient().when(settings.topP()).thenReturn(Optional.of(0.0));
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(0));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(2.5));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(-2.5));
     var zeroMargin = emptyModelSettings();
     lenient().when(zeroMargin.tokenSafetyMargin()).thenReturn(Optional.of(0.0));
     var ex =
@@ -335,6 +352,8 @@ class StartupConfigValidatorTest {
     assertTrue(message.contains("temperature must be in [0, 2]"), message);
     assertTrue(message.contains("top-p must be in (0, 1]"), message);
     assertTrue(message.contains("max-output-tokens must be >= 1"), message);
+    assertTrue(message.contains("frequency-penalty must be in [-2, 2]"), message);
+    assertTrue(message.contains("presence-penalty must be in [-2, 2]"), message);
   }
 
   @Test
@@ -353,6 +372,9 @@ class StartupConfigValidatorTest {
     lenient().when(settings.temperature()).thenReturn(Optional.of(0.2));
     lenient().when(settings.topP()).thenReturn(Optional.of(0.95));
     lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_192));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.0));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.0));
+    lenient().when(settings.seed()).thenReturn(Optional.of(42));
     new ConfigBuilder().model("deepseek-chat", settings).build().validate();
   }
 
@@ -436,6 +458,22 @@ class StartupConfigValidatorTest {
     assertTrue(
         ex.getMessage().contains("AI_REASONING_EFFORT must be one of none, low, medium, high"),
         ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenBlockingStrictnessIsInvalid() {
+    var ex = assertFailsValidation(new ConfigBuilder().blockingStrictness("aggressive").build());
+    assertTrue(
+        ex.getMessage()
+            .contains("REVIEW_BLOCKING_STRICTNESS must be one of lenient, balanced, strict"),
+        ex.getMessage());
+  }
+
+  @Test
+  void acceptsEveryBlockingStrictnessCaseInsensitivelyWithWhitespace() {
+    for (var mode : List.of("balanced", " STRICT ", "Lenient")) {
+      new ConfigBuilder().blockingStrictness(mode).build().validate();
+    }
   }
 
   @Test

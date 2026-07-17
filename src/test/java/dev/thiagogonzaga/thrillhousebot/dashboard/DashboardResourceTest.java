@@ -21,12 +21,16 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.review.FindingFeedback;
+import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackService;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.common.http.TestHTTPEndpoint;
 import io.quarkus.test.junit.QuarkusTest;
+import jakarta.inject.Inject;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -39,10 +43,19 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
 
   @InjectMock DashboardSessionValidator sessionValidator;
 
+  @Inject FindingFeedbackService findingFeedbackService;
+
   @BeforeEach
   void setUp() {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
+  }
+
+  @AfterEach
+  void cleanupFeedback() throws Exception {
+    tx.begin();
+    FindingFeedback.deleteAll();
+    tx.commit();
   }
 
   @Test
@@ -82,6 +95,65 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   @Test
   void shouldReturnUnauthorizedForListSessionsWithoutCookie() {
     given().when().get("/sessions").then().statusCode(401);
+  }
+
+  @Test
+  void shouldReturnUnauthorizedForFeedbackWithoutCookie() {
+    given().when().get("/feedback").then().statusCode(401);
+  }
+
+  @Test
+  void shouldReturnFeedbackAggregates() {
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "owner/repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "octocat",
+            101L));
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "owner/repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "alice",
+            102L));
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "owner/repo")
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories[0].repository", equalTo("owner/repo"))
+        .body("repositories[0].usefulCount", equalTo(1))
+        .body("repositories[0].notUsefulCount", equalTo(1))
+        .body("repositories[0].totalEvents", equalTo(2))
+        .body("recent", hasSize(2));
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories", not(empty()));
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "   ")
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories", not(empty()));
   }
 
   @Test

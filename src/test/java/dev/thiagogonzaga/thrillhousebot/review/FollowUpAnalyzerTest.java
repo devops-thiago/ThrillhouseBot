@@ -725,6 +725,94 @@ class FollowUpAnalyzerTest {
     assertTrue(analyzer.unresolvedFindings("not json", unresolvedStatus).isEmpty());
   }
 
+  @Test
+  void supersedeVanishedShouldRewriteUnresolvedWhoseFileLeftTheDiff() {
+    // Only src/A.java is still in the diff; src/B.java (finding 2) vanished after a force-push.
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"),
+            new ReviewResponse.PreviousFindingStatus(2, "UNRESOLVED", "still"));
+
+    var rewritten = analyzer.supersedeVanished(PREVIOUS_JSON, statuses, resolver);
+
+    assertEquals("unresolved", rewritten.get(0).status());
+    assertEquals("superseded", rewritten.get(1).status());
+    assertEquals(2, rewritten.get(1).id());
+    assertTrue(rewritten.get(1).note().contains("no longer in this revision's diff"));
+  }
+
+  @Test
+  void supersedeVanishedShouldJudgePresenceByTheAnchorNotTheFile() {
+    var anchoredJson =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 10, "title": "Bad regex",
+           "description": "d", "suggestion_old": "quote(label)"},
+          {"risk": "medium", "file": "src/A.java", "line": 12, "title": "Kept",
+           "description": "d", "suggestion_old": "keepMe()"}
+        ]}
+        """;
+    // The file is still in the diff, but only finding 2's anchored hunk survived.
+    var resolver = new DiffLineResolver(Map.of("src/A.java", "@@ -10,1 +10,1 @@\n-old\n+keepMe()"));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still"));
+
+    var rewritten = analyzer.supersedeVanished(anchoredJson, statuses, resolver);
+
+    assertEquals("superseded", rewritten.get(0).status());
+    assertEquals("unresolved", rewritten.get(1).status());
+  }
+
+  @Test
+  void supersedeVanishedShouldLeaveNonUnresolvedAndUnplaceableStatusesAlone() {
+    var nullFileJson =
+        """
+        {"findings": [
+          {"risk": "medium", "file": null, "line": 3, "title": "No file", "description": "d"},
+          {"risk": "medium", "file": "src/Gone.java", "line": 5, "title": "Gone",
+           "description": "d"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "cannot place"),
+            new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed"),
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", "below range"),
+            new ReviewResponse.PreviousFindingStatus(99, "unresolved", "out of range"));
+
+    var rewritten = analyzer.supersedeVanished(nullFileJson, statuses, resolver);
+
+    assertEquals(statuses, rewritten);
+  }
+
+  @Test
+  void supersedeVanishedShouldPassThroughOnMissingInputs() {
+    var resolver = new DiffLineResolver(Map.of());
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "x"));
+
+    assertTrue(analyzer.supersedeVanished(PREVIOUS_JSON, null, resolver).isEmpty());
+    assertTrue(analyzer.supersedeVanished(PREVIOUS_JSON, List.of(), resolver).isEmpty());
+    assertEquals(statuses, analyzer.supersedeVanished(PREVIOUS_JSON, statuses, null));
+    assertEquals(statuses, analyzer.supersedeVanished(null, statuses, resolver));
+    assertEquals(statuses, analyzer.supersedeVanished("not json", statuses, resolver));
+  }
+
+  @Test
+  void toStatusesShouldKeepTheSyntheticSupersededStatus() {
+    var statuses =
+        analyzer.toStatuses(
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "superseded", "code gone"),
+                new ReviewResponse.PreviousFindingStatus(2, "wontfix", "junk")));
+
+    assertEquals(1, statuses.size());
+    assertEquals("superseded", statuses.get(0).status());
+  }
+
   /** One-line patch whose only right-side line is {@code line}, for backstop presence tests. */
   private static String patch(int line) {
     return "@@ -" + line + ",1 +" + line + ",1 @@\n-old\n+new";

@@ -75,10 +75,30 @@ public interface GitHubCommentClient {
     return all;
   }
 
+  @PATCH
+  @Path("/repos/{owner}/{repo}/issues/comments/{commentId}")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  CommentResponse updateComment(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("commentId") long commentId,
+      CreateCommentRequest request);
+
   record CreateCommentRequest(String body) {}
 
   record CommentResponse(long id, @JsonProperty("html_url") String htmlUrl) {}
 
-  /** A PR conversation comment, carrying just the body and author needed to spot the bot's own. */
-  record IssueComment(String body, GitHubReviewClient.ReviewResponse.User user) {}
+  /**
+   * A PR conversation comment: the id (to edit the bot's own summary in place), plus the body and
+   * author needed to spot it.
+   */
+  record IssueComment(long id, String body, GitHubReviewClient.ReviewResponse.User user) {
+    /** Convenience constructor for callers that never edit the comment. */
+    public IssueComment(String body, GitHubReviewClient.ReviewResponse.User user) {
+      this(0, body, user);
+    }
+  }
 }

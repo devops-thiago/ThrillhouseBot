@@ -7,6 +7,7 @@ All notable changes to ThrillhouseBot.
 ### Added
 
 - **Structured skip transparency for automatic reviews** (#341): every path that skips an automatic review (draft, base-branch and label gates, `/pause`, rate window, duplicate webhook delivery, rejected dispatch) now emits a structured reason code — a `Automatic review skipped [reason=...]` log line, a `thrillhouse.review.skips` OTLP counter tagged with `reason` and `repository`, and per-reason counts on the dashboard summary endpoint (`skippedReviewsByReason`). README gains a "PR opened but no review posted" troubleshooting checklist
+- **Finding feedback capture for the learnings pipeline**: records maintainer 👍/👎 reactions (and conservative "not useful" reply heuristics) on bot finding comments into a `finding_feedback` table, with per-repo aggregates on `GET /api/dashboard/feedback` and a documented data model/retention policy (`docs/FEEDBACK.md`). GitHub Apps have no `reaction` webhook, so reactions are polled via the Reactions API on review-thread replies and follow-up reviews. Precursor to cross-review learnings (#38); does not yet feed prompts (#324)
 
 ## [0.4.0] — 2026-07-12
 
