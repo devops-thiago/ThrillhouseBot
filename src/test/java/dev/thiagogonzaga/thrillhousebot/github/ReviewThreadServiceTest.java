@@ -21,25 +21,21 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class ReviewThreadServiceTest {
 
   @Mock private GitHubGraphQLClient graphQLClient;
 
   private final ObjectMapper mapper = new ObjectMapper();
 
-  private ReviewThreadService service;
-
-  @BeforeEach
-  void setUp() {
-    MockitoAnnotations.openMocks(this);
-    service = new ReviewThreadService(graphQLClient);
-  }
+  @InjectMocks private ReviewThreadService service;
 
   private void stubResponse(String json) throws JsonProcessingException {
     when(graphQLClient.execute(anyString(), any())).thenReturn(mapper.readTree(json));

@@ -26,10 +26,13 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class PrLabelerTest {
 
   @Mock private ThrillhouseConfig config;
@@ -38,18 +41,16 @@ class PrLabelerTest {
   @Mock private GitHubLabelClient labelClient;
   @Mock private GitHubCommentClient commentClient;
 
-  private PrLabeler labeler;
+  @InjectMocks private PrLabeler labeler;
 
   @BeforeEach
   void setUp() {
-    MockitoAnnotations.openMocks(this);
-    when(config.review()).thenReturn(reviewConfig);
-    when(reviewConfig.labels()).thenReturn(labelsConfig);
-    when(labelsConfig.enabled()).thenReturn(true);
-    when(labelsConfig.apply()).thenReturn(true);
-    when(labelsConfig.allowCreate()).thenReturn(false);
-    when(labelsConfig.maxLabels()).thenReturn(3);
-    labeler = new PrLabeler(config, labelClient, commentClient);
+    lenient().when(config.review()).thenReturn(reviewConfig);
+    lenient().when(reviewConfig.labels()).thenReturn(labelsConfig);
+    lenient().when(labelsConfig.enabled()).thenReturn(true);
+    lenient().when(labelsConfig.apply()).thenReturn(true);
+    lenient().when(labelsConfig.allowCreate()).thenReturn(false);
+    lenient().when(labelsConfig.maxLabels()).thenReturn(3);
   }
 
   private static GitHubLabelClient.Label label(String name) {
