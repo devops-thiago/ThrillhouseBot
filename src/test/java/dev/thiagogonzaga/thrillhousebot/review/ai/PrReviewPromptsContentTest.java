@@ -113,6 +113,10 @@ class PrReviewPromptsContentTest {
         "generator must require the calling code before treating a null parameter path as established");
     assertContains(
         sys,
+        "declares a nullable contract",
+        "generator must still allow null-at-entry when the changed signature declares nullability");
+    assertContains(
+        sys,
         "Inventing a null",
         "generator must reject inventing a null argument when the caller is outside the diff");
   }
@@ -130,7 +134,15 @@ class PrReviewPromptsContentTest {
         "verifier must keep the PR #101 accountOwner NPE regression example");
     assertContains(
         sys,
-        "parameter-nullability / precondition claim is demonstrable only when",
+        "declares a nullable",
+        "verifier must not reject when the signature declares @Nullable/Optional nullability");
+    assertContains(
+        sys,
+        "@Nullable / @CheckForNull",
+        "verifier carve-out must name @Nullable/@CheckForNull as a nullable contract");
+    assertContains(
+        sys,
+        "parameter-nullability / precondition claim is demonstrable when",
         "verifier severity calibration must reject unseen-caller precondition claims");
   }
 
