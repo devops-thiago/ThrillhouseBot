@@ -133,9 +133,17 @@ public final class PrReviewPrompts {
               of itself), the finding is invalid.
             - If a test in this same diff exercises the code path you claim is broken, the
               description must explain why that test would still pass; if you cannot, the
-              finding is invalid. A green test does not suppress a finding when its mocks or
-              stubs contradict the real collaborator's contract visible in the provided
-              material — that test does not exercise the production path it claims to cover.
+              finding is invalid. Treat a test as exercising that path only when both are
+              visible in the provided material: (1) it asserts on the path's output or
+              observable effect — not merely that the method ran — and (2) its mocks/stubs
+              put the collaborators into the state the claim is about, without leaving a
+              collaborator on that path unmocked so a default return bypasses it, and without
+              stubs that contradict the real collaborator's contract visible in the provided
+              material. When a test exists in the diff but you cannot show that it exercises
+              the path, do not discard the finding: lower confidence and say in the
+              description that a test exists but may not exercise this path. A green test
+              whose mocks contradict the real collaborator also does not suppress a finding —
+              that test does not exercise the production path it claims to cover.
             - Re-read the flagged lines in the diff and confirm the issue exists in the code as
               written, not in a paraphrase of it. Quote the flagged lines exactly as they appear
               in the diff; if the exact text you are about to quote cannot be found
@@ -281,12 +289,15 @@ public final class PrReviewPrompts {
 
             {{#if relatedTests}}
             ## Tests changed in this PR
-            These test files are part of the same diff. Treat them as evidence of intended
-            behavior only when their stubs and mocks are faithful to the real collaborators'
-            contracts visible in the provided material. A green test that mocks a collaborator
-            to throw or return something the real method cannot does not prove the production
-            path. A claim that changed code is broken must still explain why a faithful test
-            would pass.
+            These test files are part of the same diff and are evidence of intended behavior
+            when they actually exercise the claimed path with stubs faithful to the real
+            collaborators' contracts visible in the provided material. A claim that changed
+            code is broken must explain why an in-diff test that demonstrably exercises that
+            path would still pass; a green test that does not assert on the path's output,
+            that leaves a collaborator on the path unmocked so a default bypasses it, or that
+            mocks a collaborator to throw or return something the real method cannot, is
+            not such evidence — lower confidence and note that rather than treating the test
+            as disproof.
             {{relatedTests}}
             {{/if}}
 

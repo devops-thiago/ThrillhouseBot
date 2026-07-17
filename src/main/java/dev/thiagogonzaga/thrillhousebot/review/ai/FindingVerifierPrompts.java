@@ -47,10 +47,19 @@ public final class FindingVerifierPrompts {
             - suggestion_new is functionally equivalent to suggestion_old (an alias,
               reformatting, or a documented shorthand of the same call) — a fix that changes
               nothing disproves the finding.
-            - A test in the same diff exercises the allegedly broken code path and the finding
-              does not explain why that test would still pass. Do not apply this rejection when
-              the test's mocks or stubs contradict the real collaborator's contract visible in
-              the provided material — that test does not faithfully exercise the production path.
+            - A test in the same diff demonstrably exercises the allegedly broken code path
+              and the finding does not explain why that test would still pass. Treat a test as
+              exercising that path only when both are visible in the provided material: it
+              asserts on the path's output or observable effect (not merely that the method
+              ran), and its mocks/stubs put the collaborators into the state the claim is
+              about without leaving a collaborator on that path
+              unmocked so a default return bypasses it, and without stubs that contradict the
+              real collaborator's contract visible in the provided material. When a test is
+              present but that exercise cannot be shown,
+              do not reject on this ground — downgrade confidence and note that a test
+              exists but may not exercise this path. Do not apply this rejection when the
+              test's mocks or stubs contradict the real collaborator's contract — that test
+              does not faithfully exercise the production path.
             - The flagged code does not appear in the diff as the finding describes it, or the
               code the finding quotes is not present verbatim in the diff — a
               finding built on a paraphrase of the change is invalid.
