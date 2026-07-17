@@ -147,14 +147,24 @@ public record ReviewResult(
 
   /**
    * The highest-risk findings the first-review summary comment lists under "Key Findings" (top
-   * {@value #KEY_FINDINGS_COUNT} by risk). Used by {@code PrSummaryGenerator} to render that
-   * section.
+   * {@value #KEY_FINDINGS_COUNT} by risk among findings that post inline). Used by {@code
+   * PrSummaryGenerator} to render that section. Low-confidence medium/low findings are listed under
+   * "Things to double-check" instead ({@link #doubleCheckFindings()}).
    */
   public List<Finding> keyFindings() {
     return findings.stream()
+        .filter(Finding::postsInline)
         .sorted((a, b) -> a.risk().compareTo(b.risk()))
         .limit(KEY_FINDINGS_COUNT)
         .toList();
+  }
+
+  /**
+   * Findings withheld from inline threads because confidence is low and risk is below high — shown
+   * in the PR summary's collapsed "Things to double-check" section instead.
+   */
+  public List<Finding> doubleCheckFindings() {
+    return findings.stream().filter(f -> !f.postsInline()).toList();
   }
 
   /** True when CI holds approval back: a required check is offending, or CI could not be read. */

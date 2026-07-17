@@ -83,6 +83,45 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldRouteLowConfidenceFindingsToDoubleCheckSectionNotKeyFindings() {
+    var inline =
+        new Finding(
+            RiskLevel.HIGH, Confidence.HIGH, "src/A.java", 1, "Real bug", "desc", null, null);
+    var lowConfidence =
+        new Finding(
+            RiskLevel.MEDIUM, Confidence.LOW, "src/B.java", 22, "Possible NPE", "desc", null, null);
+    var result =
+        new ReviewResult(
+            List.of(inline, lowConfidence),
+            0,
+            1,
+            1,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(2, 10, 2, List.of(), null, result);
+
+    assertTrue(summary.contains("### Key Findings"));
+    assertTrue(summary.contains("Real bug"));
+    assertTrue(summary.contains("### Things to double-check"));
+    assertTrue(summary.contains("1 lower-confidence finding"));
+    assertTrue(summary.contains("Possible NPE"));
+    assertTrue(summary.contains("`src/B.java:22`"));
+    assertTrue(summary.contains("_(low confidence — verify before acting)_"));
+    // Low-confidence item must not also appear under Key Findings.
+    int keyIdx = summary.indexOf("### Key Findings");
+    int doubleCheckIdx = summary.indexOf("### Things to double-check");
+    assertTrue(keyIdx >= 0 && doubleCheckIdx > keyIdx);
+    assertFalse(summary.substring(keyIdx, doubleCheckIdx).contains("Possible NPE"));
+  }
+
+  @Test
   void shouldRenderPrPurposeAndDescriptionGaps() {
     var aiSummary =
         new ReviewResponse.Summary(

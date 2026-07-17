@@ -2875,6 +2875,91 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldExcludeLowConfidenceFindingsFromInlineSet() {
+      var lowConfidence =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.LOW,
+              "src/Main.java",
+              10,
+              "Possible NPE",
+              "desc",
+              null,
+              null);
+      var mediumConfidence =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.MEDIUM,
+              "src/Other.java",
+              20,
+              "Real smell",
+              "desc",
+              null,
+              null);
+      var result =
+          new ReviewResult(
+              List.of(lowConfidence, mediumConfidence),
+              0,
+              0,
+              2,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              0);
+      var resolver =
+          new DiffLineResolver(
+              Map.of(
+                  "src/Main.java", fileDiffWithLine("src/Main.java", 10).patch(),
+                  "src/Other.java", fileDiffWithLine("src/Other.java", 20).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, inline.posted());
+      assertEquals(1, inline.confidenceSkipped().size());
+      assertEquals("Possible NPE", inline.confidenceSkipped().get(0).title());
+      assertTrue(inline.unanchored().isEmpty());
+      assertTrue(inline.capSkipped().isEmpty());
+      verify(reviewClient, times(1))
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldKeepLowConfidenceHighRiskFindingsInline() {
+      var finding =
+          new Finding(
+              RiskLevel.HIGH,
+              Confidence.LOW,
+              "src/Main.java",
+              10,
+              "Severe but uncertain",
+              "desc",
+              null,
+              null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, inline.posted());
+      assertTrue(inline.confidenceSkipped().isEmpty());
+    }
+
+    @Test
     void shouldRespectMaxReviewCommentsLimit() {
       when(reviewConfig.maxReviewComments()).thenReturn(1);
       var first = new Finding(RiskLevel.MEDIUM, "src/A.java", 10, "One", "desc", null, null);

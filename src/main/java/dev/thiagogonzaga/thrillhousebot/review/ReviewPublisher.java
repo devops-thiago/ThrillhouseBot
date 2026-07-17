@@ -217,11 +217,18 @@ public class ReviewPublisher {
         result.reviewState() == ReviewState.REQUEST_CHANGES ? EVENT_REQUEST_CHANGES : EVENT_COMMENT;
 
     if (inline.posted() == 0) {
-      // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
-      // force-push); surface them in the review body instead.
-      Log.warnf(
-          "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
-          owner, repo, prNumber);
+      // Nothing landed inline: either anchoring failed, the comment cap skipped everything, or
+      // every finding was routed to the summary as lower-confidence. Surface them in the review
+      // body so follow-ups (which do not re-post the summary) still carry the signal.
+      if (!inline.unanchored().isEmpty() || !inline.capSkipped().isEmpty()) {
+        Log.warnf(
+            "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
+            owner, repo, prNumber);
+      } else {
+        Log.infof(
+            "No inline comments for %s/%s #%d — lower-confidence findings routed to the summary",
+            owner, repo, prNumber);
+      }
       var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
       appendTruncationNotice(fallbackParts, result);
       createReviewWithFallback(
@@ -264,7 +271,10 @@ public class ReviewPublisher {
     }
   }
 
-  /** Review-body sections for findings not posted inline — un-anchored and/or cap-skipped. */
+  /**
+   * Review-body sections for findings not posted inline — un-anchored, cap-skipped, and/or
+   * confidence-routed to the summary's "Things to double-check" section.
+   */
   private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
@@ -272,6 +282,9 @@ public class ReviewPublisher {
     }
     if (!inline.capSkipped().isEmpty()) {
       parts.add(capSkippedFindingsBody(inline.capSkipped()));
+    }
+    if (!inline.confidenceSkipped().isEmpty()) {
+      parts.add(confidenceSkippedFindingsBody(inline.confidenceSkipped()));
     }
     return parts;
   }
@@ -293,6 +306,20 @@ public class ReviewPublisher {
             """
              issue(s) not posted inline because the per-run comment cap was reached — re-run \
             `/review` or raise the comment cap:
+
+            """);
+    appendFindingList(sb, findings);
+    return sb.toString();
+  }
+
+  private static String confidenceSkippedFindingsBody(List<Finding> findings) {
+    var sb = new StringBuilder();
+    sb.append("ThrillhouseBot noted ")
+        .append(findings.size())
+        .append(
+            """
+             lower-confidence item(s) under **Things to double-check** in the PR summary \
+            (not posted as inline threads):
 
             """);
     appendFindingList(sb, findings);
@@ -390,16 +417,22 @@ public class ReviewPublisher {
   }
 
   /**
-   * How many findings anchored as inline comments, the ones that could not be anchored, and the
-   * ones skipped because {@code maxReviewComments} was reached (never tried for anchoring).
+   * How many findings anchored as inline comments, the ones that could not be anchored, the ones
+   * skipped because {@code maxReviewComments} was reached (never tried for anchoring), and the ones
+   * withheld because confidence is low (routed to the summary instead).
    */
-  record InlineCommentResult(int posted, List<Finding> unanchored, List<Finding> capSkipped) {}
+  record InlineCommentResult(
+      int posted,
+      List<Finding> unanchored,
+      List<Finding> capSkipped,
+      List<Finding> confidenceSkipped) {}
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
    * survive 422s that would reject an entire batched review. Findings whose line falls outside the
    * diff (or are otherwise rejected) are returned as {@code unanchored} so the caller can still
-   * report them in the review body rather than dropping them.
+   * report them in the review body rather than dropping them. Low-confidence medium/low findings
+   * are skipped here and surfaced in the PR summary's "Things to double-check" section instead.
    */
   InlineCommentResult postInlineComments(
       String auth,
@@ -413,11 +446,16 @@ public class ReviewPublisher {
     var posted = 0;
     var unanchored = new ArrayList<Finding>();
     var capSkipped = new ArrayList<Finding>();
+    var confidenceSkipped = new ArrayList<Finding>();
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size(); i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the hidden
       // comment marker, keeping thread matching deterministic on follow-up reviews.
       var finding = result.findings().get(i);
+      if (!finding.postsInline()) {
+        confidenceSkipped.add(finding);
+        continue;
+      }
       if (posted >= maxComments) {
         capSkipped.add(finding);
         continue;
@@ -428,7 +466,8 @@ public class ReviewPublisher {
         unanchored.add(finding);
       }
     }
-    return new InlineCommentResult(posted, List.copyOf(unanchored), List.copyOf(capSkipped));
+    return new InlineCommentResult(
+        posted, List.copyOf(unanchored), List.copyOf(capSkipped), List.copyOf(confidenceSkipped));
   }
 
   /** PR coordinates shared by every inline comment of one review. */

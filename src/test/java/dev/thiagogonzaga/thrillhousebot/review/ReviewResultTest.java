@@ -55,6 +55,30 @@ class ReviewResultTest {
   }
 
   @Test
+  void keyFindingsShouldExcludeLowConfidenceFindingsRoutedToDoubleCheck() {
+    var inline = new Finding(RiskLevel.HIGH, Confidence.HIGH, "a", 1, "Inline", "", null, null);
+    var summaryOnly =
+        new Finding(RiskLevel.MEDIUM, Confidence.LOW, "b", 2, "Double-check", "", null, null);
+    var result =
+        new ReviewResult(
+            List.of(inline, summaryOnly),
+            0,
+            1,
+            1,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    assertEquals(List.of(inline), result.keyFindings());
+    assertEquals(List.of(summaryOnly), result.doubleCheckFindings());
+  }
+
+  @Test
   void totalFindingsShouldReturnListSize() {
     var findings =
         List.of(
