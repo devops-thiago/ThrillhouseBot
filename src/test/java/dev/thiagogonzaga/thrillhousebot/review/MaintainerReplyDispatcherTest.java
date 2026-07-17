@@ -21,27 +21,23 @@ import static org.mockito.Mockito.*;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class MaintainerReplyDispatcherTest {
 
-  @Mock private ExecutorService executor;
+  @Mock private ExecutorService reviewExecutor;
   @Mock private MaintainerReplyService replyService;
 
-  private MaintainerReplyDispatcher dispatcher;
+  @InjectMocks private MaintainerReplyDispatcher dispatcher;
 
   private static final MaintainerReplyService.ReplyTask TASK =
       new MaintainerReplyService.ReplyTask(
           "owner", "repo", 42, 1L, "octocat", "OWNER", "q", "t", "b", true, 99L, 1000L, false, "h");
-
-  @BeforeEach
-  void setUp() {
-    MockitoAnnotations.openMocks(this);
-    dispatcher = new MaintainerReplyDispatcher(executor, replyService);
-  }
 
   @Test
   void dispatchSubmitsTaskToExecutorAndReturnsTrue() {
@@ -51,7 +47,7 @@ class MaintainerReplyDispatcherTest {
               inv.getArgument(0, Runnable.class).run();
               return null;
             })
-        .when(executor)
+        .when(reviewExecutor)
         .execute(any(Runnable.class));
 
     assertTrue(dispatcher.dispatch(TASK));
@@ -61,7 +57,7 @@ class MaintainerReplyDispatcherTest {
   @Test
   void dispatchReturnsFalseWhenExecutorRejects() {
     doThrow(new RejectedExecutionException("saturated"))
-        .when(executor)
+        .when(reviewExecutor)
         .execute(any(Runnable.class));
 
     assertFalse(dispatcher.dispatch(TASK));

@@ -29,9 +29,12 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class ManualReviewAuthorizerTest {
 
   @Mock private ThrillhouseConfig config;
@@ -42,15 +45,13 @@ class ManualReviewAuthorizerTest {
 
   @Mock private GitHubInstallationClient installationClient;
 
-  private ManualReviewAuthorizer authorizer;
+  @InjectMocks private ManualReviewAuthorizer authorizer;
 
   @BeforeEach
   void setUp() {
-    MockitoAnnotations.openMocks(this);
-    when(config.review()).thenReturn(reviewConfig);
-    when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.empty());
-    when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofSeconds(5));
-    authorizer = new ManualReviewAuthorizer(config, authClient, installationClient);
+    lenient().when(config.review()).thenReturn(reviewConfig);
+    lenient().when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.empty());
+    lenient().when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofSeconds(5));
   }
 
   private void stubPermission(String permission) {
@@ -188,11 +189,14 @@ class ManualReviewAuthorizerTest {
 
   @Test
   void shouldFailClosedWhenInterruptedWhileWaitingOnPermissionCheck() {
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    // The latch keeps the check in flight so the waiting thread observes the interrupt.
+    // Interrupt is observed before the permission check runs; stubs stay lenient so Mockito
+    // does not fail the test when the early fail-closed path skips GitHub calls.
+    lenient().when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
     var release = new CountDownLatch(1);
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
+    lenient()
+        .when(
+            installationClient.collaboratorPermission(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(
             inv -> {
               release.await();

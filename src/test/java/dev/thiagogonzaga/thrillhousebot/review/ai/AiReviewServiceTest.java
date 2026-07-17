@@ -33,10 +33,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+@ExtendWith(MockitoExtension.class)
 class AiReviewServiceTest {
 
   @Mock private PrReviewer prReviewer;
@@ -52,17 +55,15 @@ class AiReviewServiceTest {
   private static final AiReviewService.PromptInputs PROMPT_INPUTS =
       new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "");
 
-  private AiReviewService service;
+  @InjectMocks private AiReviewService service;
 
   @BeforeEach
   void setUp() {
     ReviewSessionContext.reset();
-    MockitoAnnotations.openMocks(this);
-    when(config.review()).thenReturn(reviewConfig);
-    when(reviewConfig.maxAiRetries()).thenReturn(3);
-    when(reviewConfig.aiRetryBaseDelayMs()).thenReturn(1L);
-    when(reviewConfig.aiTimeoutSeconds()).thenReturn(5);
-    service = new AiReviewService(prReviewer, parser, config, broadcaster);
+    lenient().when(config.review()).thenReturn(reviewConfig);
+    lenient().when(reviewConfig.maxAiRetries()).thenReturn(3);
+    lenient().when(reviewConfig.aiRetryBaseDelayMs()).thenReturn(1L);
+    lenient().when(reviewConfig.aiTimeoutSeconds()).thenReturn(5);
   }
 
   @Test
@@ -292,7 +293,10 @@ class AiReviewServiceTest {
             anyString(),
             anyString()))
         .thenReturn(new OrphanedAfterCompleteTokenStream(2_000));
-    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    // Timeout wins before parse; stub is present to document the intended happy-path return value.
+    lenient()
+        .when(parser.parse(anyString()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
     assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
 
