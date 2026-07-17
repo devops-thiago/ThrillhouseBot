@@ -118,7 +118,15 @@ public interface GitHubPullRequestClient {
       int additions,
       int deletions,
       int changes,
-      String patch) {}
+      String patch,
+      @JsonProperty("previous_filename") String previousFilename) {
+
+    /** Convenience overload when the rename source path is unused. */
+    public FileDiff(
+        String filename, String status, int additions, int deletions, int changes, String patch) {
+      this(filename, status, additions, deletions, changes, patch, null);
+    }
+  }
 
   record CompareResponse(@JsonProperty("total_commits") int totalCommits, List<FileDiff> files) {
     public CompareResponse {

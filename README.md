@@ -514,6 +514,10 @@ This is still an early-stage project; the current constraints are:
   don't fit are disclosed by name instead of silently dropped. The on-demand commands
   (`/describe`, `/changelog`, `/add-docs`) still send the diff in a single call without
   batching.
+- **Pure renames** — files GitHub reports as `renamed` with zero additions/deletions and
+  no patch are omitted from AI review input (they have nothing to review). The summary
+  overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit
+  (non-empty patch) stays in the budget.
 - **Single process** — OAuth login sessions, the live WebSocket replay buffer, and
   the per-PR auto-review rate-limit window are in-memory (lost on restart / not shared
   across replicas). Review history and cost totals persist in PostgreSQL.

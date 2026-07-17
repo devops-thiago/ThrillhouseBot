@@ -567,6 +567,12 @@ public class FindingPipeline {
     for (var name : plan.omittedFiles()) {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
     }
+    // Pure renames never enter reviewableFiles / omittedFiles — disclose them here so the summary
+    // still sees the bulk move without treating them as a truncation hold (#386).
+    var pureRenames = ReviewDiffFormatter.pureRenameFiles(ctx.files());
+    if (!pureRenames.isEmpty()) {
+      sb.append(ReviewDiffFormatter.formatPureRenameRollup(pureRenames));
+    }
     return sb.toString();
   }
 

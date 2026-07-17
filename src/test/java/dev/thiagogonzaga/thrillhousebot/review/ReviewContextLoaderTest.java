@@ -144,12 +144,17 @@ class ReviewContextLoaderTest {
     void shouldHandleFilesWithZeroChanges() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff("renamed-only.txt", "renamed", 0, 0, 0, null));
+              new GitHubPullRequestClient.FileDiff(
+                  "renamed-only.txt", "renamed", 0, 0, 0, null, "old-name.txt"));
 
       var result = diffFormatter.buildDiffString(files);
 
       assertTrue(result.contains("## Overview: 1 files (+0 -0)"));
-      assertTrue(result.contains("renamed-only.txt (renamed, +0 -0)"));
+      // Pure renames are disclosed in a rollup, not as empty ### sections (#386).
+      assertTrue(
+          result.contains(
+              "1 pure rename omitted from AI review (old-name.txt → renamed-only.txt)"));
+      assertFalse(result.contains("### renamed-only.txt"));
     }
   }
 
