@@ -64,4 +64,13 @@ public record Finding(
         && suggestionNew != null
         && !suggestionNew.isBlank();
   }
+
+  /**
+   * Whether this finding should open an inline review thread. Low-confidence findings at medium/low
+   * risk are routed to the PR summary instead; critical/high risk stays inline even when confidence
+   * is low so severe-but-uncertain items remain visible on the diff.
+   */
+  public boolean postsInline() {
+    return confidence != Confidence.LOW || risk == RiskLevel.CRITICAL || risk == RiskLevel.HIGH;
+  }
 }

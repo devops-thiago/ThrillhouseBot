@@ -1,0 +1,10 @@
+{
+  "kind": "generator",
+  "sourcePr": 102,
+  "why": "Dogfood miss from PR #102 / issue #111: WebhookControllerTest stubbed reviewDispatcher.dispatch(...) to throw RuntimeException(\"executor saturated\"), but the real ReviewDispatcher.dispatch() catches RejectedExecutionException internally and returns false — it never throws to its caller. The green test made a broken rollback path look proven. With both the mock and the real method in the provided material, the review prompt must surface the unfaithful stub.",
+  "expectation": "must-find",
+  "targetFile": "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
+  "keywords": ["mock contradicts", "contradict", "never throw", "swallows"],
+  "prTitle": "fix(webhook): roll back dedup slot when dispatch fails (#89)",
+  "prDescription": "- [x] 🐛 Bug fix\n\nFixes #89\n\nAdds forget(deliveryId) when routeEvent catches a RuntimeException from a saturated review executor."
+}

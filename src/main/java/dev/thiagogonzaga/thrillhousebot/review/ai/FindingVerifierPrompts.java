@@ -52,10 +52,14 @@ public final class FindingVerifierPrompts {
               exercising that path only when both are visible in the provided material: it
               asserts on the path's output or observable effect (not merely that the method
               ran), and its mocks/stubs put the collaborators into the state the claim is
-              about without leaving a collaborator on that path unmocked so a default return
-              bypasses it. When a test is present but that exercise cannot be shown,
+              about without leaving a collaborator on that path
+              unmocked so a default return bypasses it, and without stubs that contradict the
+              real collaborator's contract visible in the provided material. When a test is
+              present but that exercise cannot be shown,
               do not reject on this ground — downgrade confidence and note that a test
-              exists but may not exercise this path.
+              exists but may not exercise this path. Do not apply this rejection when the
+              test's mocks or stubs contradict the real collaborator's contract — that test
+              does not faithfully exercise the production path.
             - The flagged code does not appear in the diff as the finding describes it, or the
               code the finding quotes is not present verbatim in the diff — a
               finding built on a paraphrase of the change is invalid.
@@ -77,6 +81,10 @@ public final class FindingVerifierPrompts {
               present and lacks it) — that finding is demonstrable and stands.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
+            - The finding claims a class is missing a required no-arg/default constructor for
+              dependency injection while the diff shows a constructor annotated @Inject (CDI /
+              Quarkus / Jakarta) or @Autowired (Spring) on that class — constructor injection is
+              the documented idiom and needs no no-arg constructor; the diff refutes the claim.
             - The diff already guards against the condition the finding claims is unhandled —
               not only an adjacent literal check (an existing null check on the flagged line) but
               an upstream guard earlier in the same method, including one on a value derived from
@@ -94,6 +102,28 @@ public final class FindingVerifierPrompts {
               (see the previous findings section when present) while the relevant lines are
               unchanged — at any severity; restating it with a higher severity is still a
               repeat.
+
+            A bug-fix efficacy finding — one claiming the PR's fix does not change behavior for
+            the failure trigger it claims to fix — is judged on the trigger's path, not on the
+            changed lines' local correctness: never reject it merely because every changed line
+            is locally valid, since "locally valid but never executed under the trigger" is
+            exactly what it alleges. Confirm it when the provided material shows no changed line
+            executes under the stated trigger; reject it only when the material shows a changed
+            line that does. When the deciding code is outside the diff, such a finding phrased as
+            a verification request naming what to check is legitimately confidence "low" or
+            "medium" — downgrade it at most; do not reject it as unverifiable.
+
+            A mock-fidelity finding — one claiming a test stub/mock contradicts the real
+            collaborator's behavior — is judged on whether the provided material shows both the
+            stub and the contradicting real-method contract: never reject it merely because the
+            test is green or the production change is locally valid, since an unfaithful mock
+            making a broken path look proven is exactly what it alleges. Confirm it when the
+            material shows the stub is impossible given the real method (throws what the real
+            method swallows, returns what the contract disallows); reject it when the real
+            method's visible contract matches the stub, or when the finding invents a real-method
+            body not present in the provided material. Confidence "low" or "medium" with the mock
+            line and contradicting real-method line named is the expected shape — downgrade
+            inflated severity at most; do not reject as unverifiable when both sides are shown.
 
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the

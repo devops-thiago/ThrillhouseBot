@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 102,
+  "why": "True positive for issue #111: the candidate finding correctly pairs the doThrow stub on reviewDispatcher.dispatch with the real ReviewDispatcher.dispatch() that catches RejectedExecutionException and returns false. The skeptical second pass must confirm it — a green test is not grounds for rejection when the stub contradicts the real collaborator shown in the diff.",
+  "expectedVerdicts": ["confirmed"],
+  "finding": {
+    "risk": "medium",
+    "confidence": "medium",
+    "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
+    "line": 643,
+    "title": "test mock contradicts real collaborator behavior",
+    "description": "WebhookControllerTest.shouldForgetDeliveryIdWhenDispatchFails stubs reviewDispatcher.dispatch(...) with doThrow(new RuntimeException(\"executor saturated\")). The real ReviewDispatcher.dispatch() in this same diff catches RejectedExecutionException from the executor, retires the state, and returns false — it never throws to its caller for executor saturation. The mock is impossible in production for the stated trigger, so the green test does not prove the forget() rollback path runs when the executor is saturated.",
+    "suggestion_old": "",
+    "suggestion_new": ""
+  }
+}

@@ -91,6 +91,16 @@ public interface GitHubReviewClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
+  @GET
+  @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}")
+  @Produces(MediaType.APPLICATION_JSON)
+  PullRequestComment getPullRequestComment(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("commentId") long commentId);
+
   /**
    * Lists a PR's inline review comments, walking pages of {@value #COMMENTS_PER_PAGE} up to {@value
    * #MAX_COMMENT_PAGES} pages so a busy PR's threads are not silently truncated. A single-page

@@ -711,8 +711,9 @@ class FollowUpAnalyzerTest {
 
   @Test
   void previousFindingFilesByIdIsEmptyForMissingOrBadInput() {
-    assertTrue(analyzer.previousFindingFilesById(null).isEmpty());
+    assertTrue(analyzer.previousFindingFilesById((String) null).isEmpty());
     assertTrue(analyzer.previousFindingFilesById("not json").isEmpty());
+    assertTrue(analyzer.previousFindingFilesById((List<ReviewResponse.Finding>) null).isEmpty());
   }
 
   @Test
@@ -721,8 +722,162 @@ class FollowUpAnalyzerTest {
 
     assertTrue(analyzer.unresolvedFindings(PREVIOUS_JSON, null).isEmpty());
     assertTrue(analyzer.unresolvedFindings(PREVIOUS_JSON, List.of()).isEmpty());
-    assertTrue(analyzer.unresolvedFindings(null, unresolvedStatus).isEmpty());
+    assertTrue(analyzer.unresolvedFindings((String) null, unresolvedStatus).isEmpty());
     assertTrue(analyzer.unresolvedFindings("not json", unresolvedStatus).isEmpty());
+    assertTrue(
+        analyzer
+            .unresolvedFindings((List<ReviewResponse.Finding>) null, unresolvedStatus)
+            .isEmpty());
+    assertTrue(analyzer.unresolvedFindings(List.of(), unresolvedStatus).isEmpty());
+  }
+
+  @Test
+  void parsePreviousResponsesHandlesNullEmptyAndValidJson() {
+    assertTrue(analyzer.parsePreviousResponses(null).isEmpty());
+    assertTrue(analyzer.parsePreviousResponses(List.of()).isEmpty());
+    var parsed = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON));
+    assertEquals(1, parsed.size());
+    assertEquals(2, parsed.get(0).findings().size());
+  }
+
+  @Test
+  void preParsedApisReuseFindingsWithoutReReadingJson() {
+    var previous = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)).get(0).findings();
+    var unresolvedStatus = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "x"));
+
+    assertEquals(1, analyzer.unresolvedFindings(previous, unresolvedStatus).size());
+    assertEquals("src/A.java", analyzer.previousFindingFilesById(previous).get(1));
+    assertTrue(
+        analyzer
+            .matchFindingThreads((List<ReviewResponse.Finding>) null, List.of(), BOT_ID)
+            .isEmpty());
+    assertTrue(analyzer.matchFindingThreads(List.of(), List.of(), BOT_ID).isEmpty());
+
+    var ctx =
+        analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), List.of(), BOT_ID);
+    assertTrue(ctx.contains("src/A.java"));
+    assertTrue(ctx.contains("src/B.java"));
+
+    // Null previous findings falls back to the prior-review body path (empty here).
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(
+            (List<ReviewResponse.Finding>) null, List.of(), List.of(), List.of(), BOT_ID));
+
+    // Older rounds with no maintainer reply contribute nothing to the answered-earlier section.
+    var older =
+        analyzer.parsePreviousResponses(
+            List.of(
+                "{\"findings\":[{\"risk\":\"low\",\"file\":\"src/Old.java\",\"line\":1,"
+                    + "\"title\":\"Old\",\"description\":\"d\",\"suggestion_old\":\"o\","
+                    + "\"suggestion_new\":\"n\"}],\"previous_findings_status\":[],\"summary\":null}"));
+    var withOlder =
+        analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), older, BOT_ID);
+    assertTrue(withOlder.contains("src/A.java"));
+    assertFalse(withOlder.contains("Answered in earlier rounds"));
+    assertTrue(
+        analyzer
+            .buildPreviousFindingsContext(previous, List.of(), List.of(), null, BOT_ID)
+            .contains("src/A.java"));
+
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatusesFromParsed(
+                null, List.of(), List.of(), new DiffLineResolver(Map.of()), BOT_ID)
+            .isEmpty());
+    assertTrue(
+        analyzer
+            .unreportedUnresolvedStatusesFromParsed(
+                List.of(), List.of(), List.of(), new DiffLineResolver(Map.of()), BOT_ID)
+            .isEmpty());
+  }
+
+  @Test
+  void supersedeVanishedShouldRewriteUnresolvedWhoseFileLeftTheDiff() {
+    // Only src/A.java is still in the diff; src/B.java (finding 2) vanished after a force-push.
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"),
+            new ReviewResponse.PreviousFindingStatus(2, "UNRESOLVED", "still"));
+
+    var rewritten = analyzer.supersedeVanished(PREVIOUS_JSON, statuses, resolver);
+
+    assertEquals("unresolved", rewritten.get(0).status());
+    assertEquals("superseded", rewritten.get(1).status());
+    assertEquals(2, rewritten.get(1).id());
+    assertTrue(rewritten.get(1).note().contains("no longer in this revision's diff"));
+  }
+
+  @Test
+  void supersedeVanishedShouldJudgePresenceByTheAnchorNotTheFile() {
+    var anchoredJson =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/A.java", "line": 10, "title": "Bad regex",
+           "description": "d", "suggestion_old": "quote(label)"},
+          {"risk": "medium", "file": "src/A.java", "line": 12, "title": "Kept",
+           "description": "d", "suggestion_old": "keepMe()"}
+        ]}
+        """;
+    // The file is still in the diff, but only finding 2's anchored hunk survived.
+    var resolver = new DiffLineResolver(Map.of("src/A.java", "@@ -10,1 +10,1 @@\n-old\n+keepMe()"));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still"));
+
+    var rewritten = analyzer.supersedeVanished(anchoredJson, statuses, resolver);
+
+    assertEquals("superseded", rewritten.get(0).status());
+    assertEquals("unresolved", rewritten.get(1).status());
+  }
+
+  @Test
+  void supersedeVanishedShouldLeaveNonUnresolvedAndUnplaceableStatusesAlone() {
+    var nullFileJson =
+        """
+        {"findings": [
+          {"risk": "medium", "file": null, "line": 3, "title": "No file", "description": "d"},
+          {"risk": "medium", "file": "src/Gone.java", "line": 5, "title": "Gone",
+           "description": "d"}
+        ]}
+        """;
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "cannot place"),
+            new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed"),
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", "below range"),
+            new ReviewResponse.PreviousFindingStatus(99, "unresolved", "out of range"));
+
+    var rewritten = analyzer.supersedeVanished(nullFileJson, statuses, resolver);
+
+    assertEquals(statuses, rewritten);
+  }
+
+  @Test
+  void supersedeVanishedShouldPassThroughOnMissingInputs() {
+    var resolver = new DiffLineResolver(Map.of());
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "x"));
+
+    assertTrue(analyzer.supersedeVanished(PREVIOUS_JSON, null, resolver).isEmpty());
+    assertTrue(analyzer.supersedeVanished(PREVIOUS_JSON, List.of(), resolver).isEmpty());
+    assertEquals(statuses, analyzer.supersedeVanished(PREVIOUS_JSON, statuses, null));
+    assertEquals(statuses, analyzer.supersedeVanished(null, statuses, resolver));
+    assertEquals(statuses, analyzer.supersedeVanished("not json", statuses, resolver));
+  }
+
+  @Test
+  void toStatusesShouldKeepTheSyntheticSupersededStatus() {
+    var statuses =
+        analyzer.toStatuses(
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "superseded", "code gone"),
+                new ReviewResponse.PreviousFindingStatus(2, "wontfix", "junk")));
+
+    assertEquals(1, statuses.size());
+    assertEquals("superseded", statuses.get(0).status());
   }
 
   /** One-line patch whose only right-side line is {@code line}, for backstop presence tests. */

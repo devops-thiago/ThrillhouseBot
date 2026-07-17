@@ -120,4 +120,32 @@ class FindingTest {
 
     assertFalse(finding.hasSuggestion());
   }
+
+  @Test
+  void postsInlineShouldBeFalseForLowConfidenceMediumRisk() {
+    var finding = new Finding(RiskLevel.MEDIUM, Confidence.LOW, "f", 1, "t", "d", null, null);
+
+    assertFalse(finding.postsInline());
+  }
+
+  @Test
+  void postsInlineShouldBeTrueForMediumConfidence() {
+    var finding = new Finding(RiskLevel.MEDIUM, Confidence.MEDIUM, "f", 1, "t", "d", null, null);
+
+    assertTrue(finding.postsInline());
+  }
+
+  @Test
+  void postsInlineShouldBeTrueForHighRiskEvenAtLowConfidence() {
+    var finding = new Finding(RiskLevel.HIGH, Confidence.LOW, "f", 1, "t", "d", null, null);
+
+    assertTrue(finding.postsInline());
+  }
+
+  @Test
+  void postsInlineShouldBeTrueForCriticalRiskEvenAtLowConfidence() {
+    var finding = new Finding(RiskLevel.CRITICAL, Confidence.LOW, "f", 1, "t", "d", null, null);
+
+    assertTrue(finding.postsInline());
+  }
 }

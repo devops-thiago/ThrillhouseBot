@@ -44,6 +44,17 @@ public class FollowUpAnalyzer {
   private static final String STATUS_JUSTIFIED = "justified";
 
   /**
+   * Synthetic status for a prior finding whose flagged code is no longer in the current diff — the
+   * model never emits it; {@link #supersedeVanished} rewrites a stale {@code unresolved} to it so
+   * the finding stops holding APPROVE while its outcome stays visible in the summary counts.
+   */
+  static final String STATUS_SUPERSEDED = "superseded";
+
+  private static final String SUPERSEDED_NOTE =
+      "The code this finding targeted is no longer in this revision's diff (removed by a"
+          + " force-push or a later commit) — superseded.";
+
+  /**
    * The only statuses the prompt contract defines for {@code previous_findings_status} ("resolved"
    * | "unresolved" | "justified"). A value outside this set does not count as the model accounting
    * for a finding — see {@link #isRecognizedStatus}.
@@ -100,8 +111,26 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<String> olderAiResponseJsons,
       BotIdentity botIdentity) {
-    var structured = formatStructuredFindings(previousAiResponseJson, inlineComments, botIdentity);
-    var answered = formatAnsweredEarlier(olderAiResponseJsons, inlineComments, botIdentity);
+    return buildPreviousFindingsContext(
+        parsePreviousFindings(previousAiResponseJson),
+        priorReviews,
+        inlineComments,
+        parsePreviousResponses(olderAiResponseJsons),
+        botIdentity);
+  }
+
+  /**
+   * Same as the JSON overload, but consumes findings already deserialized for this review so the
+   * prior-response JSON is not re-parsed.
+   */
+  public String buildPreviousFindingsContext(
+      List<ReviewResponse.Finding> previousFindings,
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<ReviewResponse> olderAiResponses,
+      BotIdentity botIdentity) {
+    var structured = formatStructuredFindings(previousFindings, inlineComments, botIdentity);
+    var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
     if (!structured.isEmpty()) {
       return structured + answered;
     }
@@ -115,16 +144,16 @@ public class FollowUpAnalyzer {
    * previous_findings_status.
    */
   private String formatAnsweredEarlier(
-      List<String> olderAiResponseJsons,
+      List<ReviewResponse> olderAiResponses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    if (olderAiResponseJsons == null || olderAiResponseJsons.isEmpty()) {
+    if (olderAiResponses == null || olderAiResponses.isEmpty()) {
       return "";
     }
     var sb = new StringBuilder();
     var seen = new HashSet<String>();
-    for (String json : olderAiResponseJsons) {
-      for (var finding : parsePreviousFindings(json)) {
+    for (var response : olderAiResponses) {
+      for (var finding : response.findings()) {
         appendAnsweredEntry(sb, seen, finding, inlineComments, botIdentity);
       }
     }
@@ -171,11 +200,10 @@ public class FollowUpAnalyzer {
    * ids the model references in previous_findings_status.
    */
   private String formatStructuredFindings(
-      String aiResponseJson,
+      List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    var previous = parsePreviousFindings(aiResponseJson);
-    if (previous.isEmpty()) {
+    if (previous == null || previous.isEmpty()) {
       return "";
     }
     // The prompt template provides the lead-in sentence; emit only the numbered findings
@@ -504,8 +532,19 @@ public class FollowUpAnalyzer {
       String previousAiResponseJson,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    var previous = parsePreviousFindings(previousAiResponseJson);
+    return matchFindingThreads(
+        parsePreviousFindings(previousAiResponseJson), inlineComments, botIdentity);
+  }
+
+  /** Same as the JSON overload, using findings already deserialized for this review. */
+  public Map<Integer, Long> matchFindingThreads(
+      List<ReviewResponse.Finding> previous,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
     var threads = new HashMap<Integer, Long>();
+    if (previous == null || previous.isEmpty()) {
+      return threads;
+    }
     for (var i = 0; i < previous.size(); i++) {
       Long rootId = rootCommentId(previous.get(i), i + 1, inlineComments, botIdentity);
       if (rootId != null) {
@@ -521,11 +560,16 @@ public class FollowUpAnalyzer {
    */
   public List<Finding> unresolvedFindings(
       String previousAiResponseJson, List<ReviewResponse.PreviousFindingStatus> statuses) {
+    return unresolvedFindings(parsePreviousFindings(previousAiResponseJson), statuses);
+  }
+
+  /** Same as the JSON overload, using findings already deserialized for this review. */
+  public List<Finding> unresolvedFindings(
+      List<ReviewResponse.Finding> previous, List<ReviewResponse.PreviousFindingStatus> statuses) {
     if (statuses == null || statuses.isEmpty()) {
       return List.of();
     }
-    var previous = parsePreviousFindings(previousAiResponseJson);
-    if (previous.isEmpty()) {
+    if (previous == null || previous.isEmpty()) {
       return List.of();
     }
     var unresolvedIds = new HashSet<Integer>();
@@ -541,6 +585,66 @@ public class FollowUpAnalyzer {
       }
     }
     return unresolved;
+  }
+
+  /**
+   * Rewrites a model-reported {@code unresolved} status to {@link #STATUS_SUPERSEDED} when the
+   * prior finding's flagged code is no longer in the current diff (its file left the diff or the
+   * anchored hunk vanished, typically after a force-push). The model reports on the <em>prior</em>
+   * round's findings and can hold one open even though the code it targeted no longer exists;
+   * presence is judged deterministically via {@link DiffLineResolver#isFindingPresent} on the
+   * finding's persisted {@code suggestion_old} anchor — the same predicate the approve backstop
+   * uses — so a vanished finding no longer blocks APPROVE.
+   *
+   * <p>A finding without a file cannot be placed in the diff at all, so its status is left
+   * untouched — clearing is the dangerous direction, and "cannot verify" must not read as "gone".
+   * Statuses other than {@code unresolved}, or with an id outside the prior round, also pass
+   * through unchanged.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> supersedeVanished(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver) {
+    if (statuses == null || statuses.isEmpty() || lineResolver == null) {
+      return statuses == null ? List.of() : statuses;
+    }
+    var previous = parsePreviousFindings(previousAiResponseJson);
+    if (previous.isEmpty()) {
+      return statuses;
+    }
+    var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      if (hasVanished(status, previous, lineResolver)) {
+        Log.infof(
+            "Superseding unresolved previous finding #%d — its targeted code is no longer in the"
+                + " current diff",
+            status.id());
+        rewritten.add(
+            new ReviewResponse.PreviousFindingStatus(
+                status.id(), STATUS_SUPERSEDED, SUPERSEDED_NOTE));
+      } else {
+        rewritten.add(status);
+      }
+    }
+    return rewritten;
+  }
+
+  private static boolean hasVanished(
+      ReviewResponse.PreviousFindingStatus status,
+      List<ReviewResponse.Finding> previous,
+      DiffLineResolver lineResolver) {
+    if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
+      return false;
+    }
+    var id = status.id();
+    if (id < 1 || id > previous.size()) {
+      return false;
+    }
+    var finding = previous.get(id - 1);
+    if (finding.file() == null) {
+      return false;
+    }
+    return !lineResolver.isFindingPresent(finding.file(), finding.suggestionOld());
   }
 
   /**
@@ -600,10 +704,28 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity) {
-    if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty() || lineResolver == null) {
+    return unreportedUnresolvedStatusesFromParsed(
+        parsePreviousResponses(priorAiResponseJsons),
+        currentStatuses,
+        inlineComments,
+        lineResolver,
+        botIdentity);
+  }
+
+  /**
+   * Same as the JSON overload, using prior responses already deserialized for this review so each
+   * persisted round is not re-parsed.
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity) {
+    if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
-    var chrono = toChronological(priorAiResponseJsons);
+    var chrono = toChronological(priorAiResponses);
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
     return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity);
@@ -614,10 +736,10 @@ public class FollowUpAnalyzer {
    * {@code previous_findings_status} (which reports on the round immediately before it) can close
    * the findings it addressed.
    */
-  private List<ReviewResponse> toChronological(List<String> priorAiResponseJsons) {
-    var chrono = new ArrayList<ReviewResponse>();
-    for (var i = priorAiResponseJsons.size() - 1; i >= 0; i--) {
-      chrono.add(parseResponse(priorAiResponseJsons.get(i)));
+  private static List<ReviewResponse> toChronological(List<ReviewResponse> priorAiResponses) {
+    var chrono = new ArrayList<ReviewResponse>(priorAiResponses.size());
+    for (var i = priorAiResponses.size() - 1; i >= 0; i--) {
+      chrono.add(priorAiResponses.get(i));
     }
     return chrono;
   }
@@ -824,8 +946,15 @@ public class FollowUpAnalyzer {
    * finding's file.
    */
   public Map<Integer, String> previousFindingFilesById(String previousAiResponseJson) {
-    var previous = parsePreviousFindings(previousAiResponseJson);
+    return previousFindingFilesById(parsePreviousFindings(previousAiResponseJson));
+  }
+
+  /** Same as the JSON overload, using findings already deserialized for this review. */
+  public Map<Integer, String> previousFindingFilesById(List<ReviewResponse.Finding> previous) {
     var filesById = new HashMap<Integer, String>();
+    if (previous == null) {
+      return filesById;
+    }
     for (var i = 0; i < previous.size(); i++) {
       filesById.put(i + 1, previous.get(i).file());
     }
@@ -837,11 +966,26 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Deserializes every prior round's persisted AI response (newest first), once per review. Missing
+   * or unparseable entries become empty responses so callers can share one list without re-parsing.
+   */
+  public List<ReviewResponse> parsePreviousResponses(List<String> priorAiResponseJsons) {
+    if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty()) {
+      return List.of();
+    }
+    var parsed = new ArrayList<ReviewResponse>(priorAiResponseJsons.size());
+    for (var json : priorAiResponseJsons) {
+      parsed.add(parseResponse(json));
+    }
+    return List.copyOf(parsed);
+  }
+
+  /**
    * Full persisted previous response, with empty (never null) findings and statuses on a missing or
    * unparseable input — the backstop replay needs both lists, and the compact constructor of {@link
    * ReviewResponse} guarantees non-null copies.
    */
-  private ReviewResponse parseResponse(String aiResponseJson) {
+  ReviewResponse parseResponse(String aiResponseJson) {
     if (aiResponseJson == null || aiResponseJson.isBlank()) {
       return EMPTY_RESPONSE;
     }
@@ -875,11 +1019,12 @@ public class FollowUpAnalyzer {
 
   /**
    * Converts AI response's previous_findings_status into ReviewResult statuses, keeping only the
-   * recognized values (resolved / justified / unresolved). An unrecognized status is meaningless
-   * noise that no count or gate acts on, and for a still-open finding the backstop already emits a
-   * synthetic {@code "unresolved"} for that id — passing the raw value through too would leave two
-   * entries with the same id in the result. Dropping it keeps {@code previousStatuses} one-per-id
-   * and matches the backstop's recognized-status contract.
+   * recognized values (resolved / justified / unresolved) plus the synthetic {@link
+   * #STATUS_SUPERSEDED} that {@link #supersedeVanished} rewrites in. An unrecognized status is
+   * meaningless noise that no count or gate acts on, and for a still-open finding the backstop
+   * already emits a synthetic {@code "unresolved"} for that id — passing the raw value through too
+   * would leave two entries with the same id in the result. Dropping it keeps {@code
+   * previousStatuses} one-per-id and matches the backstop's recognized-status contract.
    */
   public List<ReviewResult.PreviousFindingStatus> toStatuses(
       List<ReviewResponse.PreviousFindingStatus> aiStatuses) {
@@ -887,7 +1032,7 @@ public class FollowUpAnalyzer {
 
     var result = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var s : aiStatuses) {
-      if (isRecognizedStatus(s.status())) {
+      if (isRecognizedStatus(s.status()) || STATUS_SUPERSEDED.equalsIgnoreCase(s.status())) {
         result.add(new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()));
       }
     }

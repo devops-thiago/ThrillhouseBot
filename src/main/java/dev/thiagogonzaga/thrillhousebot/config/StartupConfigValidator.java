@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -87,6 +88,8 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateCiGating(problems, config.review());
+    validateBlockingStrictness(problems, config.review());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
     validateReasoningEffort(problems, config.ai().reasoning());
@@ -97,10 +100,27 @@ public class StartupConfigValidator {
 
     logDashboardStatus();
     logReasoningStatus();
+    logCiGatingStatus();
     logActiveModelStatus();
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
+  }
+
+  /**
+   * Rejects an unrecognized {@code REVIEW_BLOCKING_STRICTNESS} at boot — the same fail-fast pattern
+   * as {@link #validateReasoningEffort} — so a typo never silently falls back to balanced.
+   */
+  private static void validateBlockingStrictness(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    var raw = review.blockingStrictness();
+    if (BlockingStrictness.fromString(raw).isEmpty()) {
+      problems.add(
+          "REVIEW_BLOCKING_STRICTNESS must be one of "
+              + String.join(", ", BlockingStrictness.ALLOWED)
+              + " (thrillhousebot.review.blocking-strictness): "
+              + raw);
+    }
   }
 
   /**
@@ -170,6 +190,14 @@ public class StartupConfigValidator {
               .maxOutputTokens()
               .filter(v -> v < 1)
               .ifPresent(v -> problems.add(prefix + "max-output-tokens must be >= 1: " + v));
+          settings
+              .frequencyPenalty()
+              .filter(v -> v < -2.0 || v > 2.0)
+              .ifPresent(v -> problems.add(prefix + "frequency-penalty must be in [-2, 2]: " + v));
+          settings
+              .presencePenalty()
+              .filter(v -> v < -2.0 || v > 2.0)
+              .ifPresent(v -> problems.add(prefix + "presence-penalty must be in [-2, 2]: " + v));
         });
   }
 
@@ -259,6 +287,35 @@ public class StartupConfigValidator {
   }
 
   /**
+   * Rejects an unrecognized {@code REVIEW_CI_GATING} value at boot so a typo never silently falls
+   * through to the fail-closed default.
+   */
+  private static void validateCiGating(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    var allowed = ThrillhouseConfig.ReviewConfig.ALLOWED_CI_GATING;
+    if (!allowed.contains(ThrillhouseConfig.ReviewConfig.normalizeCiGating(review.ciGating()))) {
+      problems.add(
+          "REVIEW_CI_GATING must be one of "
+              + String.join(", ", allowed)
+              + " (thrillhousebot.review.ci-gating): "
+              + review.ciGating());
+    }
+  }
+
+  private void logCiGatingStatus() {
+    var normalized = ThrillhouseConfig.ReviewConfig.normalizeCiGating(config.review().ciGating());
+    if ("strict".equals(normalized)) {
+      return;
+    }
+    log.info(
+        "CI gating mode={} — APPROVE will {}.",
+        normalized,
+        "warn".equals(normalized)
+            ? "be allowed while CI is noted as uncertain in the summary/check"
+            : "ignore CI status (findings-only gate)");
+  }
+
+  /**
    * Surfaces the per-model resolution at boot: warns when the model's input cap silently lowers the
    * configured global budget (the operator raised {@code REVIEW_MAX_INPUT_TOKENS} past the model's
    * window — or past the 128k default for a model with no entry — and should raise the cap
@@ -281,16 +338,23 @@ public class StartupConfigValidator {
       var temperature = orProviderDefault(activeModel.temperature());
       var topP = orProviderDefault(activeModel.topP());
       var maxOutputTokens = orProviderDefault(activeModel.maxOutputTokens());
+      var frequencyPenalty = orProviderDefault(activeModel.frequencyPenalty());
+      var presencePenalty = orProviderDefault(activeModel.presencePenalty());
+      var seed = activeModel.seed().map(String::valueOf).orElse("none");
       log.info(
           "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
-              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={}",
+              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={},"
+              + " frequency-penalty={}, presence-penalty={}, seed={}",
           activeModel.modelName(),
           activeModel.maxInputTokens(),
           activeModel.outputBufferTokens(),
           activeModel.tokenSafetyMargin(),
           temperature,
           topP,
-          maxOutputTokens);
+          maxOutputTokens,
+          frequencyPenalty,
+          presencePenalty,
+          seed);
     }
   }
 

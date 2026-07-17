@@ -39,6 +39,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -83,6 +84,7 @@ class ReviewOrchestratorTest {
   @Mock private FindingVerificationService findingVerificationService;
 
   private final FindingQuoteValidator quoteValidator = new FindingQuoteValidator();
+  private final FrameworkFalsePositiveFilter frameworkFilter = new FrameworkFalsePositiveFilter();
 
   private final FindingDeduplicator deduplicator = new FindingDeduplicator();
 
@@ -129,11 +131,13 @@ class ReviewOrchestratorTest {
             labeler,
             config,
             BOT_ID);
-    verdictBuilder = new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID);
+    verdictBuilder =
+        new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,
@@ -176,6 +180,23 @@ class ReviewOrchestratorTest {
         .thenAnswer(invocation -> invocation.getArgument(0));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
+    lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
+    lenient()
+        .when(
+            followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                any(), any(), any(), any(), any()))
+        .thenReturn(List.of());
+    lenient()
+        .when(
+            followUpAnalyzer.unresolvedFindings(
+                ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))
+        .thenReturn(List.of());
+    lenient().when(followUpAnalyzer.toStatuses(any())).thenReturn(List.of());
+    lenient().when(followUpAnalyzer.hasUnresolved(any())).thenReturn(false);
+    lenient().when(followUpAnalyzer.previousFindingFilesById(any(List.class))).thenReturn(Map.of());
+    lenient()
+        .when(followUpAnalyzer.previousFindingFilesById(any(String.class)))
+        .thenReturn(Map.of());
     when(reviewClient.createPullRequestComment(
             anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "ok", "main.py", 10));
@@ -198,6 +219,7 @@ class ReviewOrchestratorTest {
             diffFormatter,
             labeler,
             followUpAnalyzer,
+            new BugFixContextResolver(commentClient),
             sessionPersistence,
             BOT_ID,
             new ActiveModelSettings(config, "m")),
@@ -207,6 +229,7 @@ class ReviewOrchestratorTest {
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
+        mock(FindingFeedbackCaptureService.class),
         reviewExecutor);
   }
 
@@ -288,7 +311,9 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedCleanSummaryBodyDoesNotCelebrateEndToEnd() {
-      var realVerdict = new VerdictBuilder(new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID);
+      var realVerdict =
+          new VerdictBuilder(
+              new PrSummaryGenerator(false), followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
 
       var result =
@@ -1042,8 +1067,36 @@ class ReviewOrchestratorTest {
       assertFalse(captureRepoInstructions().contains("Control-Flow Diagram Request"));
     }
 
+    @Test
+    void shouldInjectMockFidelityCheckWhenPrChangesTests() {
+      assertTrue(
+          captureRepoInstructions(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
+                      "modified",
+                      1,
+                      0,
+                      1,
+                      "@@\n+doThrow(new RuntimeException(\"executor saturated\"))"
+                          + ".when(reviewDispatcher).dispatch(any());\n"))
+              .contains("Mock Fidelity Check"));
+    }
+
+    @Test
+    void shouldNotInjectMockFidelityCheckWhenPrHasNoTests() {
+      assertFalse(
+          captureRepoInstructions(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/main/java/Foo.java", "modified", 1, 0, 1, "@@\n+class Foo {}\n"))
+              .contains("Mock Fidelity Check"));
+    }
+
     /** Runs review() far enough to capture the prompt and returns its repoInstructions slot. */
     private String captureRepoInstructions() {
+      return captureRepoInstructions(new GitHubPullRequestClient.FileDiff[0]);
+    }
+
+    private String captureRepoInstructions(GitHubPullRequestClient.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -1062,7 +1115,7 @@ class ReviewOrchestratorTest {
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
+            .thenReturn(List.of(files));
         when(prClient.compareCommits(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
@@ -2079,10 +2132,15 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("Previous finding context");
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of("{\"round\":2}", "{\"round\":1}"));
+        var round2 = new ReviewResponse(List.of(), List.of(), null);
+        var round1 = new ReviewResponse(List.of(), List.of(), null);
+        when(followUpAnalyzer.parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}")))
+            .thenReturn(List.of(round2, round1));
         when(followUpAnalyzer.toStatuses(any())).thenReturn(List.of());
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -2109,9 +2167,10 @@ class ReviewOrchestratorTest {
 
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(followUpAnalyzer).parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}"));
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
-                eq("{\"round\":2}"), any(), any(), eq(List.of("{\"round\":1}")), eq(BOT_ID));
+                eq(List.of()), any(), any(), eq(List.of(round1)), eq(BOT_ID));
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
                 any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID));
@@ -2872,6 +2931,229 @@ class ReviewOrchestratorTest {
       verify(reviewClient, times(1))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldExcludeLowConfidenceFindingsFromInlineSet() {
+      var lowConfidence =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.LOW,
+              "src/Main.java",
+              10,
+              "Possible NPE",
+              "desc",
+              null,
+              null);
+      var mediumConfidence =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.MEDIUM,
+              "src/Other.java",
+              20,
+              "Real smell",
+              "desc",
+              null,
+              null);
+      var result =
+          new ReviewResult(
+              List.of(lowConfidence, mediumConfidence),
+              0,
+              0,
+              2,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              0);
+      var resolver =
+          new DiffLineResolver(
+              Map.of(
+                  "src/Main.java", fileDiffWithLine("src/Main.java", 10).patch(),
+                  "src/Other.java", fileDiffWithLine("src/Other.java", 20).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, inline.posted());
+      assertEquals(1, inline.confidenceSkipped().size());
+      assertEquals("Possible NPE", inline.confidenceSkipped().get(0).title());
+      assertTrue(inline.unanchored().isEmpty());
+      assertTrue(inline.capSkipped().isEmpty());
+      verify(reviewClient, times(1))
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldKeepLowConfidenceHighRiskFindingsInline() {
+      var finding =
+          new Finding(
+              RiskLevel.HIGH,
+              Confidence.LOW,
+              "src/Main.java",
+              10,
+              "Severe but uncertain",
+              "desc",
+              null,
+              null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, inline.posted());
+      assertTrue(inline.confidenceSkipped().isEmpty());
+    }
+
+    @Test
+    void shouldWarnWhenCommentCapSkipsEveryInlineEligibleFinding() {
+      when(reviewConfig.maxReviewComments()).thenReturn(0);
+      var finding =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.HIGH,
+              "src/Main.java",
+              10,
+              "Real smell",
+              "desc",
+              null,
+              null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient, never())
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("comment cap was reached")
+                          && req.body().contains("Real smell")
+                          && !req.body().contains("Things to double-check")));
+    }
+
+    @Test
+    void shouldDiscloseConfidenceSkippedFindingsInReviewBodyWhenNonePostInline() {
+      var finding =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.LOW,
+              "src/Main.java",
+              10,
+              "Possible NPE",
+              "verify the caller",
+              null,
+              null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient, never())
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      "COMMENT".equals(req.event())
+                          && req.body().contains("Things to double-check")
+                          && req.body().contains("Possible NPE")
+                          && req.body().contains("verify the caller")
+                          && req.body().contains("lower-confidence")));
+    }
+
+    @Test
+    void shouldDiscloseConfidenceSkippedFindingsAlongsideInlineComments() {
+      var lowConfidence =
+          new Finding(
+              RiskLevel.LOW,
+              Confidence.LOW,
+              "src/Skip.java",
+              20,
+              "Maybe nit",
+              "double-check this",
+              null,
+              null);
+      var inline =
+          new Finding(
+              RiskLevel.MEDIUM,
+              Confidence.HIGH,
+              "src/Main.java",
+              10,
+              "Real smell",
+              "desc",
+              null,
+              null);
+      var result =
+          new ReviewResult(
+              List.of(lowConfidence, inline),
+              0,
+              0,
+              1,
+              1,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(),
+              0);
+      var resolver =
+          new DiffLineResolver(
+              Map.of(
+                  "src/Main.java", fileDiffWithLine("src/Main.java", 10).patch(),
+                  "src/Skip.java", fileDiffWithLine("src/Skip.java", 20).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      reviewPublisher.postReview("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient, times(1))
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(reviewClient)
+          .createReview(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(
+                  req ->
+                      req.body().contains("Things to double-check")
+                          && req.body().contains("Maybe nit")
+                          && !req.body().contains("could not be anchored")));
     }
 
     @Test
@@ -3646,6 +3928,7 @@ class ReviewOrchestratorTest {
           new FindingPipeline(
               aiReviewService,
               quoteValidator,
+              frameworkFilter,
               deduplicator,
               findingVerificationService,
               followUpAnalyzer,
@@ -3929,10 +4212,110 @@ class ReviewOrchestratorTest {
               List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
               0);
 
-      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void postReviewShouldStillPostUnresolvedCommentOnFirstReviewWhenSummaryPosted() {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("remain unresolved"));
+    }
+
+    @Test
+    void postReviewShouldStillPostTruncatedCommentOnFirstReviewWhenSummaryPosted() {
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.COMMENT, true, "", List.of(), List.of(), 3);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("partial review"));
+    }
+
+    @Test
+    void postReviewShouldStillPostRequestChangesWhenSummaryPosted() {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.REQUEST_CHANGES,
+              true,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("REQUEST_CHANGES", captor.getValue().event());
+    }
+
+    @Test
+    void postReviewShouldStillPostCiPendingCommentOnFirstReviewWhenSummaryDidNotPost() {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              true,
+              "",
+              List.of(),
+              List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertEquals("COMMENT", captor.getValue().event());
+      assertTrue(captor.getValue().body().contains("**build**"));
     }
 
     @Test
@@ -4179,11 +4562,13 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(followUpAnalyzer.unreportedUnresolvedStatuses(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn(
                 List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
@@ -4207,7 +4592,8 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -4215,7 +4601,7 @@ class ReviewOrchestratorTest {
         orchestrator.review(followUpRequest());
 
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
+            .buildPreviousFindingsContext(anyList(), any(), any(), any(), eq(BOT_ID));
       }
     }
 
@@ -4228,7 +4614,8 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -4246,7 +4633,7 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
+            .buildPreviousFindingsContext(anyList(), any(), any(), any(), eq(BOT_ID));
       }
     }
 
@@ -4312,7 +4699,8 @@ class ReviewOrchestratorTest {
               new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional"),
               new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still"),
               new ReviewResponse.PreviousFindingStatus(4, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), any()))
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
           .thenReturn(Map.of(1, 100L, 2, 200L, 3, 300L, 4, 400L));
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
           .thenReturn(
@@ -4325,7 +4713,7 @@ class ReviewOrchestratorTest {
       when(reviewThreadService.resolve(AUTH, "T4")).thenReturn(false);
 
       reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), "{}", List.of(rootComment()), statuses);
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
 
       verify(reviewThreadService).resolve(AUTH, "T1");
       verify(reviewThreadService).resolve(AUTH, "T4");
@@ -4336,11 +4724,13 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSkipFindingsWithoutAMatchedThread() {
       var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of());
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of());
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5)).thenReturn(Map.of());
 
       reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), "{}", List.of(rootComment()), statuses);
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
 
       verify(reviewThreadService, never()).resolve(anyString(), anyString());
     }
@@ -4352,8 +4742,8 @@ class ReviewOrchestratorTest {
       var resolved = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
 
       reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), "{}", List.of(rootComment()), unresolvedOnly);
-      reviewPublisher.resolveAddressedThreads(AUTH, request(), "{}", List.of(), resolved);
+          AUTH, request(), List.of(), List.of(rootComment()), unresolvedOnly);
+      reviewPublisher.resolveAddressedThreads(AUTH, request(), List.of(), List.of(), resolved);
 
       verifyNoInteractions(reviewThreadService);
     }
@@ -4361,7 +4751,9 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSwallowThreadResolutionFailures() {
       var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of(1, 100L));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L));
       when(reviewThreadService.threadsByRootComment(
               anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("graphql down"));
@@ -4369,7 +4761,7 @@ class ReviewOrchestratorTest {
       assertDoesNotThrow(
           () ->
               reviewPublisher.resolveAddressedThreads(
-                  AUTH, request(), "{}", List.of(rootComment()), statuses));
+                  AUTH, request(), List.of(), List.of(rootComment()), statuses));
     }
   }
 
