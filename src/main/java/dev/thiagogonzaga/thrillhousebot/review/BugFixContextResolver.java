@@ -49,7 +49,7 @@ public class BugFixContextResolver {
 
   /** A checked PR-template checkbox whose label contains "bug fix" (emoji between them is fine). */
   private static final Pattern BUG_FIX_CHECKBOX =
-      Pattern.compile("(?im)^\\s*[-*]\\s*\\[x\\][^\\r\\n]*bug\\s*fix");
+      Pattern.compile("(?im)^\\s*[-*]\\s*\\[x\\][^\\r\\n]*\\bbug[\\s-]*fix");
 
   private final GitHubCommentClient commentClient;
 
@@ -110,7 +110,12 @@ public class BugFixContextResolver {
     var title = issue.title() == null ? "" : issue.title().strip();
     var body = issue.body() == null ? "" : issue.body().strip();
     if (body.length() > MAX_ISSUE_BODY_CHARS) {
-      body = body.substring(0, MAX_ISSUE_BODY_CHARS) + "\n[... issue body truncated]";
+      // Back the cut off a high surrogate so a supplementary char (emoji) is never split.
+      int cut = MAX_ISSUE_BODY_CHARS;
+      if (Character.isHighSurrogate(body.charAt(cut - 1))) {
+        cut--;
+      }
+      body = body.substring(0, cut) + "\n[... issue body truncated]";
     }
     var sb = new StringBuilder("### Linked issue #").append(issueNumber);
     if (!title.isEmpty()) {

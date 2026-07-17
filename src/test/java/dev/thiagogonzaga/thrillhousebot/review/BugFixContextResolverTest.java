@@ -41,6 +41,7 @@ class BugFixContextResolverTest {
       assertTrue(BugFixContextResolver.isBugFix("- [x] 🐛 Bug fix\n- [ ] ✨ Feature"));
       assertTrue(BugFixContextResolver.isBugFix("* [X] Bug fix"));
       assertTrue(BugFixContextResolver.isBugFix("- [x] Bugfix"));
+      assertTrue(BugFixContextResolver.isBugFix("- [x] Bug-fix"));
     }
 
     @Test
@@ -54,6 +55,7 @@ class BugFixContextResolverTest {
     @Test
     void shouldNotDetectUncheckedCheckboxOrPlainIssueMention() {
       assertFalse(BugFixContextResolver.isBugFix("- [ ] 🐛 Bug fix\n- [x] ✨ Feature"));
+      assertFalse(BugFixContextResolver.isBugFix("- [x] Debug fixes"));
       assertFalse(BugFixContextResolver.isBugFix("Related to #89, see discussion"));
       assertFalse(BugFixContextResolver.isBugFix("prefix#12 is not a reference"));
       assertFalse(BugFixContextResolver.isBugFix(""));
@@ -129,6 +131,20 @@ class BugFixContextResolverTest {
       assertEquals(
           "### Linked issue #8\njust a body",
           resolver.loadLinkedIssueContext("a", "o", "r", "fix #8"));
+    }
+
+    @Test
+    void shouldNotSplitSurrogatePairAtTruncationBoundary() {
+      // Body char at the exact cut boundary is the high surrogate of an emoji.
+      var body =
+          "x".repeat(BugFixContextResolver.MAX_ISSUE_BODY_CHARS - 1) + "\uD83D\uDC1B" + "tail";
+      when(commentClient.getIssue(any(), any(), eq("o"), eq("r"), eq(6)))
+          .thenReturn(new GitHubCommentClient.IssueDetails(6, "emoji", body));
+
+      var context = resolver.loadLinkedIssueContext("auth", "o", "r", "closes #6");
+
+      assertFalse(context.contains("\uD83D\n"));
+      assertTrue(context.endsWith("[... issue body truncated]"));
     }
 
     @Test
