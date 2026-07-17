@@ -106,7 +106,7 @@ public class VerdictBuilder {
         followUpAnalyzer.supersedeVanished(
             ctx.previousAiResponseJson(),
             rawStatuses,
-            rawStatuses == null || rawStatuses.isEmpty() ? null : ctx.lineResolver());
+            rawStatuses.isEmpty() ? null : ctx.lineResolver());
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
