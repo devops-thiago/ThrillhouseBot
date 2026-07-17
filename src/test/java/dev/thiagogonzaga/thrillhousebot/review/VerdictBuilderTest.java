@@ -23,8 +23,10 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -45,7 +47,10 @@ class VerdictBuilderTest {
 
   private final VerdictBuilder builder =
       new VerdictBuilder(
-          summaryGenerator, followUpAnalyzer, BotIdentity.from(List.of("thrillhousebot[bot]")));
+          summaryGenerator,
+          followUpAnalyzer,
+          BotIdentity.from(List.of("thrillhousebot[bot]")),
+          BlockingStrictness.BALANCED);
 
   {
     lenient().when(followUpAnalyzer.unresolvedFindings(any(), any())).thenReturn(List.of());
@@ -163,5 +168,81 @@ class VerdictBuilderTest {
 
     assertEquals(2, result.omittedFiles());
     assertTrue(result.truncated());
+  }
+
+  @Test
+  void configConstructorHonorsStrictBlockingMode() {
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.blockingStrictness()).thenReturn("strict");
+
+    var strictBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            config);
+    var hedged =
+        new ReviewResponse.Finding("critical", "low", "a.java", 1, "title", "desc", null, null);
+    var response = new ReviewResponse(List.of(hedged), List.of(), null);
+
+    var result =
+        strictBuilder.build(
+            contextWithLineCapOmissions(0),
+            response,
+            CI_CLEAR,
+            new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
+
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+  }
+
+  @Test
+  void configConstructorFallsBackToBalancedOnUnrecognizedMode() {
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.blockingStrictness()).thenReturn("aggressive");
+
+    var fallbackBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            config);
+    var hedged =
+        new ReviewResponse.Finding("critical", "medium", "a.java", 1, "title", "desc", null, null);
+    var response = new ReviewResponse(List.of(hedged), List.of(), null);
+
+    var result =
+        fallbackBuilder.build(
+            contextWithLineCapOmissions(0),
+            response,
+            CI_CLEAR,
+            new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+  }
+
+  @Test
+  void nullStrictnessInTestConstructorFallsBackToBalanced() {
+    var nullModeBuilder =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            (BlockingStrictness) null);
+    var hedged =
+        new ReviewResponse.Finding("critical", "low", "a.java", 1, "title", "desc", null, null);
+    var response = new ReviewResponse(List.of(hedged), List.of(), null);
+
+    var result =
+        nullModeBuilder.build(
+            contextWithLineCapOmissions(0),
+            response,
+            CI_CLEAR,
+            new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false));
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
   }
 }

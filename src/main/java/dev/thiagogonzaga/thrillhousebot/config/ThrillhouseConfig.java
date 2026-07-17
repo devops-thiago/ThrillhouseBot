@@ -205,6 +205,16 @@ public interface ThrillhouseConfig {
     boolean verifierEnabled();
 
     /**
+     * How severely a finding must score before the review escalates to {@code REQUEST_CHANGES}. One
+     * of {@code balanced} (default — CRITICAL/HIGH + HIGH confidence), {@code strict} (any
+     * CRITICAL/HIGH regardless of confidence), or {@code lenient} (CRITICAL + HIGH confidence
+     * only). Case-insensitive; validated at boot by {@link StartupConfigValidator}.
+     */
+    @WithDefault("balanced")
+    @WithName("blocking-strictness")
+    String blockingStrictness();
+
+    /**
      * Whether the bot answers maintainer replies to its review findings and {@code @thrillhousebot}
      * mentions in PR threads with a contextual AI reply. Each reply spends the operator's AI
      * budget, so this is the operator's kill switch; replies are additionally restricted to the

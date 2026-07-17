@@ -241,6 +241,7 @@ will change per provider:
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings | `true` |
+| `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
@@ -277,6 +278,32 @@ per-batch verification calls + one summary call. Set
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
 findings).
+
+### Blocking strictness
+
+By default (`REVIEW_BLOCKING_STRICTNESS=balanced`), only **CRITICAL** or **HIGH**
+risk findings that the model reports at **HIGH** confidence escalate the PR
+review to `REQUEST_CHANGES` (and fail the check run). Medium/low-confidence
+severity findings still post as comments with a neutral check.
+
+| Mode | Blocks merge when |
+|---|---|
+| `balanced` (default) | CRITICAL or HIGH risk **and** HIGH confidence |
+| `strict` | CRITICAL or HIGH risk, **any** confidence |
+| `lenient` | CRITICAL risk **and** HIGH confidence only |
+
+**Security-team recommendation:** use `strict` so a CRITICAL/HIGH finding cannot
+slip through as a comment just because confidence was demoted. Be aware that
+under `strict`, the finding verifier's confidence demotions (hedged claims →
+medium/low) no longer prevent a merge block — only risk reduction or dropping
+the finding does. Stay on `balanced` if you want verifier demotions to keep
+speculative severity findings non-blocking.
+
+This knob controls the **review verdict** only. Where findings are posted
+(inline thread vs summary) is separate confidence gating tracked in
+[#105](https://github.com/devops-thiago/ThrillhouseBot/issues/105); when that
+lands, low-confidence findings can move out of the inline stream without
+changing these blocking rules.
 
 The app validates configuration at startup and **fails fast** if a required value
 (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `AI_API_KEY`) is missing or — for
