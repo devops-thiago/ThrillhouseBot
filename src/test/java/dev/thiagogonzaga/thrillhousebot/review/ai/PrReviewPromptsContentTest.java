@@ -20,15 +20,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the config/IaC severity-recalibration guidance so a future prompt edit cannot silently
- * revert it and re-introduce the suppression. The reviewer was high-precision but suppressed
- * declarative/config/IaC findings (RBAC, container hardening, schema-invalid manifests) because the
- * SECURITY dimension named only application-code threats and severity was anchored on "will fail at
- * runtime". These assertions are intentionally coarse — they check the recalibration intent
- * survives, not exact wording; an intentional rewording should update the matching anchor.
+ * Pins review/verifier prompt guidance so a future edit cannot silently revert it. Covers the
+ * config/IaC severity recalibration (so declarative findings are not suppressed) and the
+ * parameter-nullability / unseen-caller guard (#107). These assertions are intentionally coarse —
+ * they check the intent survives, not exact wording; an intentional rewording should update the
+ * matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
- * tracked separately; this is the cheap deterministic guard.
+ * tracked separately ({@code evalcorpus/}); this is the cheap deterministic guard.
  */
 class PrReviewPromptsContentTest {
 
@@ -99,6 +98,52 @@ class PrReviewPromptsContentTest {
         sys,
         "both places verbatim from the provided material",
         "the guard's body must stay attached to its header, not dangle as a fragment");
+  }
+
+  @Test
+  void generatorPromptCapsParameterNullabilityWithoutCaller() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "method parameter may be null",
+        "generator must cap parameter-nullability / precondition claims when the caller is unseen");
+    assertContains(
+        sys,
+        "calling code is present in the provided",
+        "generator must require the calling code before treating a null parameter path as established");
+    assertContains(
+        sys,
+        "declares a nullable contract",
+        "generator must still allow null-at-entry when the changed signature declares nullability");
+    assertContains(
+        sys,
+        "Inventing a null",
+        "generator must reject inventing a null argument when the caller is outside the diff");
+  }
+
+  @Test
+  void verifierPromptRejectsParameterNullabilityWithoutCaller() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "method parameter may be null / violates a precondition",
+        "verifier must reject parameter-nullability claims whose caller is outside the material");
+    assertContains(
+        sys,
+        "accountOwner.equalsIgnoreCase",
+        "verifier must keep the PR #101 accountOwner NPE regression example");
+    assertContains(
+        sys,
+        "declares a nullable",
+        "verifier must not reject when the signature declares @Nullable/Optional nullability");
+    assertContains(
+        sys,
+        "@Nullable / @CheckForNull",
+        "verifier carve-out must name @Nullable/@CheckForNull as a nullable contract");
+    assertContains(
+        sys,
+        "parameter-nullability / precondition claim is demonstrable when",
+        "verifier severity calibration must reject unseen-caller precondition claims");
   }
 
   @Test
