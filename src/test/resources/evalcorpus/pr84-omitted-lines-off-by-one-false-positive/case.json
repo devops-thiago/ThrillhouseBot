@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 84,
+  "why": "Documented in issues #96/#97: the finding hand-counted lines (7 - 3 = 4) and got it wrong — the test passes as written. Exact line-count arithmetic claims that a test in the same diff exercises must not be confirmed.",
+  "expectedVerdicts": ["rejected"],
+  "finding": {
+    "risk": "medium",
+    "confidence": "low",
+    "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/review/ReviewDiffFormatterTest.java",
+    "line": 194,
+    "title": "Test assertion expects wrong number of omitted lines",
+    "description": "The test `shouldCloseDiffFenceWhenTruncatingInsidePatch` uses `maxLines=5` and a section of 7 lines. The logic will print the first 3 lines (contentLines=3), then add a closing fence and the truncation message. The truncation message will use `lines.length - contentLines = 7 - 3 = 4` omitted lines, but the assertion expects `5 lines omitted`. This mismatch will cause the test to fail.",
+    "suggestion_old": "      assertEquals(\"### a.java\\n```diff\\n@@\\n```\\n(patch truncated — 5 lines omitted)\\n\", result);",
+    "suggestion_new": "      assertEquals(\"### a.java\\n```diff\\n@@\\n```\\n(patch truncated — 4 lines omitted)\\n\", result);"
+  }
+}

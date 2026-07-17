@@ -147,24 +147,46 @@ public record ReviewResult(
 
   /**
    * The highest-risk findings the first-review summary comment lists under "Key Findings" (top
-   * {@value #KEY_FINDINGS_COUNT} by risk). Used by {@code PrSummaryGenerator} to render that
-   * section.
+   * {@value #KEY_FINDINGS_COUNT} by risk among findings that post inline). Used by {@code
+   * PrSummaryGenerator} to render that section. Low-confidence medium/low findings are listed under
+   * "Things to double-check" instead ({@link #doubleCheckFindings()}).
    */
   public List<Finding> keyFindings() {
     return findings.stream()
+        .filter(Finding::postsInline)
         .sorted((a, b) -> a.risk().compareTo(b.risk()))
         .limit(KEY_FINDINGS_COUNT)
         .toList();
   }
 
+  /**
+   * Findings withheld from inline threads because confidence is low and risk is below high — shown
+   * in the PR summary's collapsed "Things to double-check" section instead.
+   */
+  public List<Finding> doubleCheckFindings() {
+    return findings.stream().filter(f -> !f.postsInline()).toList();
+  }
+
   /** True when CI holds approval back: a required check is offending, or CI could not be read. */
   public boolean ciHoldsApproval() {
-    return !offendingCiChecks.isEmpty() || ciUnreadable;
+    // Reflects the verdict after mode-aware gating: APPROVE means CI did not hold (strict), or the
+    // operator chose warn/off. Callers that only need "are there CI issues to surface" should check
+    // offendingCiChecks / ciUnreadable instead.
+    return reviewState != ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable);
   }
 
   /** True when the line budget dropped whole files, so this review covers only part of the diff. */
   public boolean truncated() {
     return omittedFiles > 0;
+  }
+
+  /**
+   * True when a prior finding was superseded this round — its targeted code left the diff (e.g. a
+   * force-push removed it), so the finding was auto-closed instead of holding APPROVE. Triggers a
+   * summary re-post on follow-up reviews, since the earlier summary may describe removed code.
+   */
+  public boolean hasSupersededPrevious() {
+    return previousStatuses.stream().anyMatch(s -> "superseded".equalsIgnoreCase(s.status()));
   }
 
   /** How many previous findings the model (or the backstop) still reports as unresolved. */
@@ -303,7 +325,7 @@ public record ReviewResult(
   @RegisterForReflection
   public record PreviousFindingStatus(
       int id,
-      String status, // resolved, unresolved, justified
+      String status, // resolved, unresolved, justified, superseded
       String note) {}
 
   @RegisterForReflection

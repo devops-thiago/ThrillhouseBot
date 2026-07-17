@@ -24,6 +24,9 @@
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <jackson-bom.version>2.22.1</jackson-bom.version>
         <skipITs>true</skipITs>
+        <!-- JUnit tag filters for surefire; the eval profile flips them to run PromptEvalTest -->
+        <surefire.groups></surefire.groups>
+        <surefire.excluded.groups>eval</surefire.excluded.groups>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
         <argLine></argLine>
@@ -250,6 +253,8 @@
                 <configuration>
                     <!-- @{argLine} preserves the JaCoCo agent injected by prepare-agent -->
                     <argLine>@{argLine} -XX:+UseCompactObjectHeaders</argLine>
+                    <groups>${surefire.groups}</groups>
+                    <excludedGroups>${surefire.excluded.groups}</excludedGroups>
                     <systemPropertyVariables>
                         <java.util.logging.manager
                         >org.jboss.logmanager.LogManager</java.util.logging.manager>
@@ -392,6 +397,15 @@
             <properties>
                 <skipITs>false</skipITs>
                 <quarkus.native.enabled>true</quarkus.native.enabled>
+            </properties>
+        </profile>
+        <profile>
+            <!-- Prompt eval/regression corpus (issue #113): runs only the eval-tagged suite
+                 against a live AI provider. See CONTRIBUTING.md "Prompt eval corpus". -->
+            <id>eval</id>
+            <properties>
+                <surefire.groups>eval</surefire.groups>
+                <surefire.excluded.groups></surefire.excluded.groups>
             </properties>
         </profile>
     </profiles>

@@ -123,6 +123,7 @@ public class PrSummaryGenerator {
 
     appendPreviousFindings(sb, result);
     appendFindingsOrCelebration(sb, result);
+    appendDoubleCheckFindings(sb, result);
     appendCiChecks(sb, result);
 
     sb.append("---\n");
@@ -148,29 +149,42 @@ public class PrSummaryGenerator {
         result.previousStatuses().stream()
             .filter(s -> "justified".equalsIgnoreCase(s.status()))
             .count();
+    var superseded =
+        result.previousStatuses().stream()
+            .filter(s -> "superseded".equalsIgnoreCase(s.status()))
+            .count();
     sb.append("### Previous Findings Status\n");
     sb.append("| Status | Count |\n");
     sb.append("|--------|-------|\n");
     sb.append("| ✅ Resolved | ").append(resolved).append(" |\n");
     sb.append("| ⚠️ Still present | ").append(unresolved).append(" |\n");
-    sb.append("| 💬 Justified | ").append(justified).append(" |\n\n");
+    sb.append("| 💬 Justified | ").append(justified).append(" |\n");
+    if (superseded > 0) {
+      sb.append("| 🗂️ Superseded (targeted code left the diff) | ")
+          .append(superseded)
+          .append(" |\n");
+    }
+    sb.append("\n");
   }
 
   private static void appendFindingsOrCelebration(StringBuilder sb, ReviewResult result) {
     if (result.hasIssues()) {
-      sb.append("### Key Findings\n");
-      for (Finding f : result.keyFindings()) {
-        sb.append("- **")
-            .append(f.risk().name())
-            .append(":** ")
-            .append(f.title())
-            .append(" (`")
-            .append(f.file())
-            .append(":")
-            .append(f.line())
-            .append("`)\n");
+      var keyFindings = result.keyFindings();
+      if (!keyFindings.isEmpty()) {
+        sb.append("### Key Findings\n");
+        for (Finding f : keyFindings) {
+          sb.append("- **")
+              .append(f.risk().name())
+              .append(":** ")
+              .append(f.title())
+              .append(" (`")
+              .append(f.file())
+              .append(":")
+              .append(f.line())
+              .append("`)\n");
+        }
+        sb.append("\n");
       }
-      sb.append("\n");
     } else if (hasNoUnresolvedPrevious(result)) {
       if (result.ciHoldsApproval()) {
         appendCiHold(sb, result);
@@ -181,6 +195,40 @@ public class PrSummaryGenerator {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       }
     }
+  }
+
+  /**
+   * Collapsed section for low-confidence medium/low findings that were withheld from inline
+   * threads. Keeps the signal visible and clearly non-blocking without opening a review thread that
+   * maintainers must triage and resolve.
+   */
+  private static void appendDoubleCheckFindings(StringBuilder sb, ReviewResult result) {
+    var findings = result.doubleCheckFindings();
+    if (findings.isEmpty()) {
+      return;
+    }
+    sb.append("### Things to double-check\n");
+    sb.append("<details>\n");
+    sb.append("<summary>")
+        .append(findings.size())
+        .append(" lower-confidence finding")
+        .append(findings.size() == 1 ? "" : "s")
+        .append("</summary>\n\n");
+    for (Finding f : findings) {
+      // By construction these findings are confidence LOW, so the disclaimer is always present.
+      sb.append("- **")
+          .append(f.risk().name())
+          .append(":** ")
+          .append(f.title())
+          .append(" (`")
+          .append(f.file())
+          .append(":")
+          .append(f.line())
+          .append("`) ")
+          .append(SuggestionFormatter.confidenceDisclaimer(Confidence.LOW))
+          .append("\n");
+    }
+    sb.append("\n</details>\n\n");
   }
 
   /**
@@ -217,33 +265,52 @@ public class PrSummaryGenerator {
   }
 
   private static void appendCiChecks(StringBuilder sb, ReviewResult result) {
-    if (!result.offendingCiChecks().isEmpty()) {
-      if (result.requiredContextsKnown()) {
-        sb.append("### ⚠️ Required CI Checks Status\n");
-        sb.append("Some required checks are still pending or have failed:\n\n");
-      } else {
-        sb.append("### ⚠️ CI Checks Status\n");
-        sb.append("Some checks are still pending or have failed:\n\n");
-      }
-      sb.append("| Check | Type | Status | Detail |\n");
-      sb.append("|-------|------|--------|--------|\n");
-      for (var check : result.offendingCiChecks()) {
-        String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
-        String detail = check.conclusion() != null ? check.conclusion() : "-";
-        sb.append("| **")
-            .append(escapeTableCell(check.name()))
-            .append("** | ")
-            .append(escapeTableCell(check.type()))
-            .append(" | ")
-            .append(statusEmoji)
-            .append(" | ")
-            .append(escapeTableCell(detail))
-            .append(" |\n");
-      }
-      sb.append("\n");
+    appendOffendingCiChecks(sb, result);
+    appendUnreadableCiStatus(sb, result);
+  }
+
+  private static void appendOffendingCiChecks(StringBuilder sb, ReviewResult result) {
+    if (result.offendingCiChecks().isEmpty()) {
+      return;
     }
-    if (result.ciUnreadable()) {
-      sb.append("### ⚠️ CI Status Unavailable\n");
+    if (result.requiredContextsKnown()) {
+      sb.append("### ⚠️ Required CI Checks Status\n");
+      sb.append("Some required checks are still pending or have failed:\n\n");
+    } else {
+      sb.append("### ⚠️ CI Checks Status\n");
+      sb.append("Some checks are still pending or have failed:\n\n");
+    }
+    sb.append("| Check | Type | Status | Detail |\n");
+    sb.append("|-------|------|--------|--------|\n");
+    for (var check : result.offendingCiChecks()) {
+      String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
+      String detail = check.conclusion() != null ? check.conclusion() : "-";
+      sb.append("| **")
+          .append(escapeTableCell(check.name()))
+          .append("** | ")
+          .append(escapeTableCell(check.type()))
+          .append(" | ")
+          .append(statusEmoji)
+          .append(" | ")
+          .append(escapeTableCell(detail))
+          .append(" |\n");
+    }
+    sb.append("\n");
+  }
+
+  private static void appendUnreadableCiStatus(StringBuilder sb, ReviewResult result) {
+    if (!result.ciUnreadable()) {
+      return;
+    }
+    sb.append("### ⚠️ CI Status Unavailable\n");
+    if (result.reviewState() == ReviewState.APPROVE) {
+      sb.append(
+          """
+          The CI status could not be read from GitHub. Approval was still posted because CI \
+          gating is not strict — verify CI separately if needed.
+
+          """);
+    } else {
       sb.append(
           """
           The CI status could not be read from GitHub, so approval is held until it can be \

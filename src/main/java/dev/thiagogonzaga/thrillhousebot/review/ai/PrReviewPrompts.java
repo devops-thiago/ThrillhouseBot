@@ -68,6 +68,19 @@ public final class PrReviewPrompts {
                add, is high; a cosmetic or stylistic config nitpick is low. Not a finding when a
                comment or adjacent value justifies the choice, or when correctness depends on
                cluster/provider state not shown in the diff — phrase that as a verification request.
+            8. MOCK FIDELITY: When a test in the provided material stubs or mocks a collaborator
+               (`when(x.m(...)).thenReturn(...)`, `doThrow(...).when(x).m(...)`, `doReturn(...)`,
+               equivalent fakes), compare the stubbed behavior against the real method's contract
+               when that definition is visible in the provided material (same changed file, or
+               another file already in context). Flag contradictions — a mock that throws an
+               exception the real method catches internally and never propagates; a stub that
+               returns a value the real signature or contract disallows. Anchor at the mock/stub
+               line, quote it, name the contradicting real-method line, and use confidence "low"
+               or "medium" (the green test looks like proof but the stub is unfaithful). Do not
+               invent the real method's body when it is not in the provided material — omit the
+               finding or phrase a verification request only when the mock's impossibility is
+               already demonstrable from what is shown. A green test whose mocks contradict the
+               real collaborator is not evidence the production path works.
 
             For each finding, provide:
             - risk: "critical" | "high" | "medium" | "low"
@@ -108,6 +121,10 @@ public final class PrReviewPrompts {
               description must name exactly what to verify.
             - When the project stack section lists a framework, prefer its documented idioms over
               generic assumptions; never flag idiomatic usage as broken without proof in the diff.
+            - Dependency-injection frameworks do not require a no-arg constructor on a bean whose
+              constructor is annotated for injection: in CDI (Quarkus/Jakarta) an @Inject
+              constructor makes the class a valid bean, and Spring behaves the same with
+              @Autowired. Never report a "missing no-arg/default constructor" on such a class.
             - If you are uncertain whether an issue is real at all, omit it rather than guess.
 
             Self-check before emitting each finding — drop the finding if any check fails:
@@ -116,7 +133,9 @@ public final class PrReviewPrompts {
               of itself), the finding is invalid.
             - If a test in this same diff exercises the code path you claim is broken, the
               description must explain why that test would still pass; if you cannot, the
-              finding is invalid.
+              finding is invalid. A green test does not suppress a finding when its mocks or
+              stubs contradict the real collaborator's contract visible in the provided
+              material — that test does not exercise the production path it claims to cover.
             - Re-read the flagged lines in the diff and confirm the issue exists in the code as
               written, not in a paraphrase of it. Quote the flagged lines exactly as they appear
               in the diff; if the exact text you are about to quote cannot be found
@@ -262,9 +281,12 @@ public final class PrReviewPrompts {
 
             {{#if relatedTests}}
             ## Tests changed in this PR
-            These test files are part of the same diff; they exercise the changed code and are
-            evidence of intended behavior. A claim that changed code is broken must explain why
-            these tests would still pass.
+            These test files are part of the same diff. Treat them as evidence of intended
+            behavior only when their stubs and mocks are faithful to the real collaborators'
+            contracts visible in the provided material. A green test that mocks a collaborator
+            to throw or return something the real method cannot does not prove the production
+            path. A claim that changed code is broken must still explain why a faithful test
+            would pass.
             {{relatedTests}}
             {{/if}}
 
@@ -399,6 +421,86 @@ public final class PrReviewPrompts {
             - Emit ONLY the raw Mermaid source: no ``` fences, no prose, no Markdown around it.
             - For trivial changes (small local edits, dependency bumps, doc-only changes), leave
               walkthrough_diagram as an empty string."""
+          .stripIndent();
+
+  /**
+   * Trailing-guidance block for PRs that declare themselves bug fixes (PR-template "Bug fix"
+   * checkbox or a Fixes/Closes #N reference). Injected into the prompt's {@code repoInstructions}
+   * slot by the assembler, followed by the linked issues' text when it could be fetched. Makes the
+   * model verify the fix actually changes behavior for the failure trigger it claims to fix — a
+   * diff-locally-correct change whose trigger never reaches any changed line is a finding, not an
+   * approval (issue #110).
+   *
+   * <p>Terminated with {@link String#stripIndent()} so the value is not a compile-time constant: it
+   * is referenced from a method body (the assembler), and a plain inline literal this large would
+   * be copied verbatim into that class file (SpotBugs HSC_HUGE_SHARED_STRING_CONSTANT). The call is
+   * a no-op on the already-dedented text block — it exists only to defeat constant folding.
+   */
+  public static final String BUG_FIX_EFFICACY_REQUEST =
+      """
+            ## Bug-Fix Efficacy Check
+            This PR declares itself a bug fix. Local correctness of each changed line is not
+            enough: verify the change actually alters behavior for the failure it claims to fix.
+            - Extract the concrete failure trigger from the PR description and the linked issue
+              text below when present — the input, event, or state that produced the buggy
+              behavior (e.g. "executor saturated, then the delivery is manually redelivered").
+            - Trace that trigger through the changed code and decide whether the change alters
+              behavior on that path. You must be able to name the specific changed line that
+              executes under the trigger.
+            - When no changed line executes under the trigger — the fix adds handling to a catch
+              block the trigger never reaches, guards a branch the trigger does not take, or edits
+              a path the trigger bypasses — emit a finding titled "fix does not change behavior
+              for the stated trigger", anchored at the primary changed fix line and quoting it,
+              at risk "high". Leave suggestion_old/suggestion_new empty unless the correct fix is
+              obvious from the provided material; describing why the trigger misses the change is
+              the finding.
+            - When you cannot determine whether a changed line executes under the trigger because
+              the deciding code is outside the diff (a callee that may swallow the exception, a
+              caller that may never take the path), do not silently approve: emit the finding at
+              confidence "low" or "medium", phrased as a verification request that names the
+              exact unshown method or path to check (e.g. "verify dispatch() propagates
+              RejectedExecutionException to this catch block").
+            - A test in this diff does not prove efficacy when it mocks or fabricates the trigger
+              instead of reproducing it; when the only supporting test does so, say that in the
+              finding's description rather than treating the test as proof.
+            - When a changed line demonstrably executes under the trigger and changes the
+              outcome, the fix is effective — emit no efficacy finding."""
+          .stripIndent();
+
+  /**
+   * Trailing-guidance block injected when the PR changes test files. Complements review dimension 8
+   * (MOCK FIDELITY): related-tests context can reinforce a false premise when a stub makes a broken
+   * change look proven — compare each stub against the real collaborator when that definition is
+   * already in the provided material (issue #111; deepened by #55).
+   *
+   * <p>Terminated with {@link String#stripIndent()} so the value is not a compile-time constant: it
+   * is referenced from a method body (the assembler), and a plain inline literal this large would
+   * be copied verbatim into that class file (SpotBugs HSC_HUGE_SHARED_STRING_CONSTANT). The call is
+   * a no-op on the already-dedented text block — it exists only to defeat constant folding.
+   */
+  public static final String MOCK_FIDELITY_REQUEST =
+      """
+            ## Mock Fidelity Check
+            When tests in this PR stub or mock collaborators, do not treat a green test as proof
+            that the production path works until the stub is faithful to the real method.
+            - For each `when(...).thenReturn(...)`, `doThrow(...).when(...).m(...)`,
+              `doReturn(...)`, or equivalent fake, locate the real collaborator method when its
+              definition is in the provided material (same changed file or another file already
+              in context).
+            - Compare the stubbed behavior to that real contract. Emit a finding titled "test
+              mock contradicts real collaborator behavior" when the stub is impossible in
+              production — for example, the mock throws an exception the real method catches
+              internally and never propagates to its caller, or returns a value the real
+              signature/contract disallows.
+            - Anchor at the mock/stub line, quote it, and name the contradicting real-method
+              line in the description. Use confidence "low" or "medium" and leave
+              suggestion_old/suggestion_new empty unless the faithful stub (or the production
+              fix) is obvious from the provided material.
+            - When the real method's body is not in the provided material, do not invent it:
+              omit a mock-fidelity finding, or phrase a verification request only if the
+              impossibility is already demonstrable from what is shown. Broader cross-file
+              retrieval of collaborator sources is out of scope for this check alone.
+            - A faithful stub that matches the real contract is not a finding."""
           .stripIndent();
 
   private PrReviewPrompts() {}

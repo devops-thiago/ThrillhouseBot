@@ -1,0 +1,286 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/FindingQuoteValidator.java (modified, +177 -39)
+```diff
+@@ -43,6 +43,8 @@ public class FindingQuoteValidator {
+ 
+   private static final String LOW_CONFIDENCE = "low";
+ 
++  public record DiffLine(String normalizedText, int rightLineNum, char marker) {}
++
+   /** Validates each finding's quoted code against the raw (unescaped) diff text. */
+   public ReviewResponse validate(ReviewResponse response, String diff) {
+     if (response.findings().isEmpty() || diff == null || diff.isBlank()) {
+@@ -52,7 +54,11 @@ public class FindingQuoteValidator {
+     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
+     var changed = false;
+     for (ReviewResponse.Finding finding : response.findings()) {
+-      QuoteMatch match = matchQuote(finding.suggestionOld(), index.linesFor(finding.file()));
++      List<String> quoted = normalizedLines(finding.suggestionOld());
++      QuoteMatch match = matchQuote(quoted, index.linesFor(finding.file()));
++      if (match == QuoteMatch.FULL) {
++        match = checkAmbiguity(quoted, finding.line(), index.diffLinesFor(finding.file()));
++      }
+       switch (match) {
+         case FULL, NO_QUOTE -> kept.add(finding);
+         case PARTIAL -> {
+@@ -63,6 +69,14 @@ public class FindingQuoteValidator {
+           kept.add(withoutSuggestion(finding));
+           changed = true;
+         }
++        case AMBIGUOUS -> {
++          Log.infof(
++              "Finding '%s' (%s:%d) quotes code that appears in multiple locations, but the finding's line is ambiguous —"
++                  + " dropping its suggestion and capping confidence",
++              finding.title(), finding.file(), finding.line());
++          kept.add(withoutSuggestion(finding));
++          changed = true;
++        }
+         case NONE -> {
+           Log.infof(
+               "Dropping finding '%s' (%s:%d) — the code it quotes does not appear in the diff",
+@@ -88,11 +102,14 @@ public class FindingQuoteValidator {
+     /** Some quoted lines are present, others are not. */
+     PARTIAL,
+     /** No quoted line is present in the diff. */
+-    NONE
++    NONE,
++    /**
++     * Quote is fully present in multiple locations, but finding line doesn't uniquely select one.
++     */
++    AMBIGUOUS
+   }
+ 
+-  static QuoteMatch matchQuote(String suggestionOld, Set<String> diffLines) {
+-    List<String> quoted = normalizedLines(suggestionOld);
++  static QuoteMatch matchQuote(List<String> quoted, Set<String> diffLines) {
+     if (quoted.isEmpty()) {
+       return QuoteMatch.NO_QUOTE;
+     }
+@@ -103,39 +120,122 @@ public class FindingQuoteValidator {
+     return present == 0 ? QuoteMatch.NONE : QuoteMatch.PARTIAL;
+   }
+ 
++  /**
++   * Disambiguates a quote the {@link #matchQuote} gate already accepted as FULL. Only quotes that
++   * appear as a contiguous run over the retained (context/deleted) lines are scrutinized: additions
++   * are dropped because {@code suggestion_old} is original code, and a quote found in two or more
++   * such locations is AMBIGUOUS unless the finding's line uniquely selects one (within a 3-line
++   * tolerance). Anything not matched contiguously here stays FULL — the conservative direction.
++   */
++  private static QuoteMatch checkAmbiguity(
++      List<String> quoted, int findingLine, List<DiffLine> diffLines) {
++    List<DiffLine> filtered = retainedLines(diffLines);
++    List<Integer> matchIndices = contiguousMatchStarts(filtered, quoted);
++    if (matchIndices.size() <= 1) {
++      return QuoteMatch.FULL;
++    }
++
++    int k = quoted.size();
++    int selectedCount = 0;
++    for (int idx : matchIndices) {
++      int startLine = filtered.get(idx).rightLineNum();
++      int endLine = filtered.get(idx + k - 1).rightLineNum();
++      if (findingLine >= startLine - 3 && findingLine <= endLine + 3) {
++        selectedCount++;
++      }
++    }
++    return selectedCount == 1 ? QuoteMatch.FULL : QuoteMatch.AMBIGUOUS;
++  }
++
++  /**
++   * The diff lines that {@code suggestion_old} can match: context and deletions, never additions.
++   */
++  private static List<DiffLine> retainedLines(List<DiffLine> diffLines) {
++    var filtered = new ArrayList<DiffLine>();
++    for (DiffLine dl : diffLines) {
++      if (dl.marker() != '+') {
++        filtered.add(dl);
++      }
++    }
++    return filtered;
++  }
++
++  /** Start indices where {@code quoted} appears as a contiguous run in {@code lines}. */
++  private static List<Integer> contiguousMatchStarts(List<DiffLine> lines, List<String> quoted) {
++    var starts = new ArrayList<Integer>();
++    int k = quoted.size();
++    for (int i = 0; i <= lines.size() - k; i++) {
++      if (matchesAt(lines, i, quoted)) {
++        starts.add(i);
++      }
++    }
++    return starts;
++  }
++
++  private static boolean matchesAt(List<DiffLine> lines, int offset, List<String> quoted) {
++    for (int j = 0; j < quoted.size(); j++) {
++      if (!lines.get(offset + j).normalizedText().equals(quoted.get(j))) {
++        return false;
++      }
++    }
++    return true;
++  }
++
+   /**
+    * The diff's normalized body lines, both as one union and scoped per file. A quote is checked
+    * against its finding's own file when that file is identifiable in the diff — the same text
+    * appearing in some other file's hunk must not validate a misattributed finding. The union is the
+    * conservative fallback for findings whose file cannot be matched to a diff section.
+    */
+-  record DiffIndex(Map<String, Set<String>> byFile, Set<String> all) {
++  record DiffIndex(
++      Map<String, List<DiffLine>> fileLines,
++      List<DiffLine> allLines,
++      Map<String, Set<String>> byFile,
++      Set<String> all) {
+ 
+     Set<String> linesFor(String file) {
+-      if (file == null || file.isBlank()) {
++      var sections = sectionKeysFor(file);
++      if (sections.isEmpty()) {
+         return all;
+       }
+-      Set<String> exact = byFile.get(file);
+-      if (exact != null) {
+-        return exact;
++      var scoped = new HashSet<String>();
++      for (String section : sections) {
++        scoped.addAll(byFile.get(section));
+       }
+-      // The model sometimes shortens or expands paths; suffix matches still scope. An
+-      // ambiguous name (Handler.java in several modules) scopes to the union of its
+-      // candidates, never to the whole diff — a quote from an unrelated file must not
+-      // validate just because the finding's path was ambiguous.
+-      var candidates =
+-          byFile.keySet().stream()
+-              .filter(k -> k.endsWith("/" + file) || file.endsWith("/" + k))
+-              .toList();
+-      if (candidates.isEmpty()) {
+-        return all;
++      return scoped;
++    }
++
++    List<DiffLine> diffLinesFor(String file) {
++      var sections = sectionKeysFor(file);
++      if (sections.isEmpty()) {
++        return allLines;
+       }
+-      var scoped = new HashSet<String>();
+-      for (String candidate : candidates) {
+-        scoped.addAll(byFile.get(candidate));
++      var scoped = new ArrayList<DiffLine>();
++      for (String section : sections) {
++        scoped.addAll(fileLines.get(section));
+       }
+       return scoped;
+     }
++
++    /**
++     * The diff-section keys a finding's file resolves to, or an empty list when the file cannot be
++     * matched and the caller must fall back to the whole-diff union. An exact section match wins;
++     * otherwise the model sometimes shortens or expands paths, so suffix matches still scope. An
++     * ambiguous name (Handler.java in several modules) scopes to the union of its candidates, never
++     * to the whole diff — a quote from an unrelated file must not validate just because the
++     * finding's path was ambiguous.
++     */
++    private List<String> sectionKeysFor(String file) {
++      if (file == null || file.isBlank()) {
++        return List.of();
++      }
++      if (fileLines.containsKey(file)) {
++        return List.of(file);
++      }
++      return fileLines.keySet().stream()
++          .filter(k -> k.endsWith("/" + file) || file.endsWith("/" + k))
++          .toList();
++    }
+   }
+ 
+   /**
+@@ -146,31 +246,69 @@ public class FindingQuoteValidator {
+    * File scoping follows the formatter's "### filename (status, +A -D)" section headers.
+    */
+   static DiffIndex indexDiff(String diff) {
+-    var byFile = new HashMap<String, Set<String>>();
+-    var all = new HashSet<String>();
+-    Set<String> current = null;
++    var fileLines = new HashMap<String, List<DiffLine>>();
++    var allLines = new ArrayList<DiffLine>();
++    List<DiffLine> current = null;
++    int rightLine = 0;
++
+     for (String raw : PromptTemplateEscaper.neutralizeMarkers(diff).split("\n", -1)) {
+       if (raw.startsWith("### ")) {
+-        current = byFile.computeIfAbsent(sectionFilename(raw), k -> new HashSet<>());
++        current = fileLines.computeIfAbsent(sectionFilename(raw), k -> new ArrayList<>());
++        // A new file section restarts right-side numbering; don't carry the previous file's
++        // counter forward in case its first hunk header is missing or unparseable.
++        rightLine = 0;
++      } else if (raw.startsWith("@@")) {
++        rightLine = hunkStartLine(raw, rightLine);
+       } else if (!isDiffStructureLine(raw)) {
+-        String normalized = bodyOf(raw).strip();
+-        if (!normalized.isEmpty()) {
+-          all.add(normalized);
+-          if (current != null) {
+-            current.add(normalized);
+-          }
+-        }
++        rightLine = appendBodyLine(raw, rightLine, allLines, current);
+       }
+     }
+-    return new DiffIndex(byFile, all);
++
++    var byFile = new HashMap<String, Set<String>>();
++    fileLines.forEach((file, lines) -> byFile.put(file, textSet(lines)));
++    return new DiffIndex(fileLines, allLines, byFile, textSet(allLines));
++  }
++
++  /** The right-side start line of a hunk header, or {@code fallback} when it can't be parsed. */
++  private static int hunkStartLine(String raw, int fallback) {
++    var matcher = DiffLineResolver.HUNK_HEADER.matcher(raw);
++    return matcher.find() ? Integer.parseInt(matcher.group(1)) : fallback;
+   }
+ 
+-  /** Hunk headers, file headers, and code fences are diff plumbing, never quotable content. */
++  /**
++   * Records a normalized body line into the union and (when scoped) its file, then returns the
++   * advanced right-side line counter — additions and context advance it; deletions do not.
++   */
++  private static int appendBodyLine(
++      String raw, int rightLine, List<DiffLine> allLines, List<DiffLine> current) {
++    String normalized = bodyOf(raw).strip();
++    if (normalized.isEmpty()) {
++      return rightLine;
++    }
++    // A non-empty normalized body implies a non-empty raw line, so charAt(0) is safe.
++    char marker = raw.charAt(0);
++    var diffLine = new DiffLine(normalized, rightLine, marker);
++    allLines.add(diffLine);
++    if (current != null) {
++      current.add(diffLine);
++    }
++    return marker == '+' || marker == ' ' ? rightLine + 1 : rightLine;
++  }
++
++  private static Set<String> textSet(List<DiffLine> lines) {
++    var set = new HashSet<String>();
++    for (var dl : lines) {
++      set.add(dl.normalizedText());
++    }
++    return set;
++  }
++
++  /**
++   * File headers and code fences are diff plumbing, never quotable content. Hunk headers
++   * ({@code @@}) are intercepted earlier for line tracking, so they never reach this check.
++   */
+   private static boolean isDiffStructureLine(String raw) {
+-    return raw.startsWith("+++")
+-        || raw.startsWith("---")
+-        || raw.startsWith("@@")
+-        || raw.startsWith("```");
++    return raw.startsWith("+++") || raw.startsWith("---") || raw.startsWith("```");
+   }
+ 
+   /** The line without its unified-diff marker column (+, -, space). */
+```

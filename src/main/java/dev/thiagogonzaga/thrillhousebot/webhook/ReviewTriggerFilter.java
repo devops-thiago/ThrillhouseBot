@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -70,33 +71,44 @@ public class ReviewTriggerFilter {
     this.ignoredBaseBranchMatchers = compileGlobs(ignoredBaseBranches, "ignored-base-branches");
   }
 
+  /** A trigger-filter skip: structured reason code plus human-readable detail. */
+  public record Skip(ReviewSkipReason reason, String detail) {}
+
   /**
-   * @return a short, human-readable reason when the PR should not be auto-reviewed, or {@link
+   * @return the structured reason and detail when the PR should not be auto-reviewed, or {@link
    *     Optional#empty()} when it should proceed to dispatch.
    */
-  public Optional<String> skipReason(WebhookPayload.PullRequest pr) {
+  public Optional<Skip> skipReason(WebhookPayload.PullRequest pr) {
     if (pr == null) {
       return Optional.empty();
     }
 
     if (skipDrafts && pr.draft()) {
-      return Optional.of("PR is a draft (webhook.triggers.skip-drafts=true)");
+      return Optional.of(
+          new Skip(ReviewSkipReason.DRAFT, "PR is a draft (webhook.triggers.skip-drafts=true)"));
     }
 
     var base = pr.base() != null ? pr.base().ref() : null;
     if (matchesAny(ignoredBaseBranchMatchers, base)) {
-      return Optional.of("base branch '" + base + "' matches ignored-base-branches");
+      return Optional.of(
+          new Skip(
+              ReviewSkipReason.IGNORED_BASE_BRANCH,
+              "base branch '" + base + "' matches ignored-base-branches"));
     }
     if (!baseBranchMatchers.isEmpty() && !matchesAny(baseBranchMatchers, base)) {
-      return Optional.of("base branch '" + base + "' is not in the base-branches allowlist");
+      return Optional.of(
+          new Skip(
+              ReviewSkipReason.BASE_BRANCH_NOT_ALLOWED,
+              "base branch '" + base + "' is not in the base-branches allowlist"));
     }
 
     var labels = labelNames(pr);
     if (!excludedLabels.isEmpty() && labels.stream().anyMatch(excludedLabels::contains)) {
-      return Optional.of("PR carries an excluded label");
+      return Optional.of(new Skip(ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label"));
     }
     if (!requiredLabels.isEmpty() && labels.stream().noneMatch(requiredLabels::contains)) {
-      return Optional.of("PR is missing a required label");
+      return Optional.of(
+          new Skip(ReviewSkipReason.MISSING_REQUIRED_LABEL, "PR is missing a required label"));
     }
 
     return Optional.empty();

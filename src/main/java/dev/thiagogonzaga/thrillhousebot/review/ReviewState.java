@@ -24,21 +24,26 @@ public enum ReviewState {
   COMMENT; // Medium or Low only → neutral
 
   /**
-   * Derives the review event from the full finding list: only critical/high findings the model is
-   * highly confident in block the merge — lower-confidence ones still surface as comments, so a
-   * speculative claim about framework behavior can never fail the check run on its own.
+   * Derives the review event under {@link BlockingStrictness#BALANCED}: only critical/high findings
+   * the model is highly confident in block the merge. Prefer {@link #fromFindings(List,
+   * BlockingStrictness)} when the operator-configured mode is available.
    */
   public static ReviewState fromFindings(List<Finding> findings) {
+    return fromFindings(findings, BlockingStrictness.BALANCED);
+  }
+
+  /**
+   * Derives the review event from the full finding list under the given blocking mode. Findings
+   * that do not meet the mode's severity/confidence bar still surface as comments, so speculative
+   * claims never fail the check run unless the operator opted into {@link
+   * BlockingStrictness#STRICT}.
+   */
+  public static ReviewState fromFindings(List<Finding> findings, BlockingStrictness strictness) {
     if (findings == null || findings.isEmpty()) {
       return APPROVE;
     }
-    var blocking =
-        findings.stream()
-            .anyMatch(
-                f ->
-                    (f.risk() == RiskLevel.CRITICAL || f.risk() == RiskLevel.HIGH)
-                        && f.confidence() == Confidence.HIGH);
-    return blocking ? REQUEST_CHANGES : COMMENT;
+    var mode = strictness == null ? BlockingStrictness.BALANCED : strictness;
+    return findings.stream().anyMatch(mode::isBlocking) ? REQUEST_CHANGES : COMMENT;
   }
 
   public static ReviewState fromHighestRisk(RiskLevel highestRisk) {

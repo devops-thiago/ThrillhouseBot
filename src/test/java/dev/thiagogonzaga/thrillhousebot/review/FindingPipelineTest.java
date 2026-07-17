@@ -56,6 +56,7 @@ class FindingPipelineTest {
 
   @Mock private AiReviewService aiReviewService;
   @Mock private FindingQuoteValidator quoteValidator;
+  @Mock private FrameworkFalsePositiveFilter frameworkFilter;
   @Mock private FindingDeduplicator deduplicator;
   @Mock private FindingVerificationService findingVerificationService;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
@@ -70,6 +71,7 @@ class FindingPipelineTest {
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,
@@ -78,12 +80,20 @@ class FindingPipelineTest {
             budgetPlanner,
             new TokenCounter());
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+    when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
     when(findingVerificationService.verify(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
-    lenient().when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of());
+    lenient()
+        .when(
+            followUpAnalyzer.previousFindingFilesById(
+                org.mockito.ArgumentMatchers
+                    .<java.util.List<
+                            dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                        any()))
+        .thenReturn(Map.of());
     lenient().when(budgetPlanner.perCallInputBudget()).thenReturn(Integer.MAX_VALUE);
   }
 
@@ -105,6 +115,7 @@ class FindingPipelineTest {
         0,
         List.of(),
         List.of(),
+        List.of(),
         true,
         false,
         null,
@@ -113,10 +124,11 @@ class FindingPipelineTest {
         new InstructionsResolver.ResolvedInstructions("", ""),
         List.of(),
         "",
+        "",
         List.of(
             new FileDiff("a.java", "modified", 3, 0, 3, ""),
             new FileDiff("b.java", "modified", 2, 0, 2, "")),
-        new DiffLineResolver(Map.of()),
+        () -> new DiffLineResolver(Map.of()),
         null);
   }
 
@@ -137,7 +149,11 @@ class FindingPipelineTest {
 
     var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
     var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
-    when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "b.java"));
+    when(followUpAnalyzer.previousFindingFilesById(
+            org.mockito.ArgumentMatchers
+                .<java.util.List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                    any()))
+        .thenReturn(Map.of(1, "b.java"));
     when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
             new ReviewResponse(List.of(finding("a.java", "A")), List.of(batchOneStatus), null));
@@ -262,7 +278,10 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
-    when(followUpAnalyzer.previousFindingFilesById(any()))
+    when(followUpAnalyzer.previousFindingFilesById(
+            org.mockito.ArgumentMatchers
+                .<java.util.List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                    any()))
         .thenReturn(Map.of(1, "b.java", 2, "a.java"));
 
     when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
@@ -297,7 +316,10 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "One clipped file", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("raw", "ctx", "base", "s", "t", "", "");
-    when(followUpAnalyzer.previousFindingFilesById(any()))
+    when(followUpAnalyzer.previousFindingFilesById(
+            org.mockito.ArgumentMatchers
+                .<java.util.List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                    any()))
         .thenReturn(Map.of(1, "a.java", 2, "b.java"));
     var batchFiles =
         List.of(
@@ -325,7 +347,11 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
-    when(followUpAnalyzer.previousFindingFilesById(any())).thenReturn(Map.of(1, "a.java"));
+    when(followUpAnalyzer.previousFindingFilesById(
+            org.mockito.ArgumentMatchers
+                .<java.util.List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                    any()))
+        .thenReturn(Map.of(1, "a.java"));
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
@@ -561,6 +587,7 @@ class FindingPipelineTest {
         new FindingPipeline(
             aiReviewService,
             quoteValidator,
+            frameworkFilter,
             deduplicator,
             findingVerificationService,
             followUpAnalyzer,

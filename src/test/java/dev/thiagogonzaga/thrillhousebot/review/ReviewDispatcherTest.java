@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -47,6 +48,7 @@ class ReviewDispatcherTest {
 
   @Mock private ReviewOrchestrator orchestrator;
   @Mock private AutoReviewRateLimiter rateLimiter;
+  @Mock private ReviewSkipEmitter skipEmitter;
 
   private ExecutorService reviewExecutor;
   private ReviewDispatcher dispatcher;
@@ -55,7 +57,7 @@ class ReviewDispatcherTest {
   void setUp() {
     MockitoAnnotations.openMocks(this);
     reviewExecutor = Executors.newSingleThreadExecutor();
-    dispatcher = new ReviewDispatcher(reviewExecutor, orchestrator, rateLimiter);
+    dispatcher = new ReviewDispatcher(reviewExecutor, orchestrator, rateLimiter, skipEmitter);
   }
 
   @AfterEach
@@ -178,7 +180,7 @@ class ReviewDispatcherTest {
   void shouldClearStateWhenExecutorRejectsWithoutRunningTask() {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
-    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter);
+    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1"));
     verify(orchestrator, after(500).never()).review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -289,7 +291,7 @@ class ReviewDispatcherTest {
   void shouldReturnFalseWhenExecutorRejectsTask() {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
-    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter);
+    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter);
 
     // A rejected task means no review will run, so callers can roll back dedup state.
     assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
@@ -313,7 +315,7 @@ class ReviewDispatcherTest {
         .when(executor)
         .execute(any());
 
-    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter);
+    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha1"));
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha2"));
@@ -413,6 +415,10 @@ class ReviewDispatcherTest {
     awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
     verify(orchestrator, never()).review(any(ReviewOrchestrator.ReviewRequest.class));
     verify(rateLimiter, never()).recordCompletion(anyString(), anyString(), anyInt());
+    // The async skip still surfaces as a structured event.
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), eq("owner"), eq("repo"), eq(19), anyString());
   }
 
   @Test

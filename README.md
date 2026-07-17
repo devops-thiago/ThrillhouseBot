@@ -44,6 +44,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
 - Follow-up reviews track whether earlier findings were addressed or justified
+- Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`
@@ -235,12 +236,14 @@ will change per provider:
 | `MANUAL_TRIGGER_AUTH_TIMEOUT` | Upper bound on the manual-trigger write-access check on the webhook ACK thread; fails closed (denies) if GitHub is slower | `5s` |
 | `ACK_REACTION_TIMEOUT` | Upper bound on the 👀 command-ack reaction on the webhook ACK thread; the wait is abandoned (reaction may land late) if GitHub is slower | `3s` |
 | `AUTO_REVIEW_MIN_INTERVAL` | Minimum interval between automatic reviews of the same PR — pushes within the window are skipped silently, even on a new head SHA (in-memory, per replica). A manual `/review` always bypasses; unset or `0` reviews every push | `0` (disabled) |
+| `REVIEW_CI_GATING` | How strictly CI status factors into APPROVE: `strict` holds approval while required CI is pending, failing, or unreadable (fail-closed, safest); `warn` allows APPROVE but notes CI uncertainty in the summary/check; `off` skips CI entirely (findings-only). Prefer `strict` unless flaky CI or incomplete required-context resolution makes soft modes necessary | `strict` |
 | `WEBHOOK_SKIP_DRAFTS` | Skip auto-review while a PR is a draft (reviewed once marked ready / on later pushes) | `false` |
 | `WEBHOOK_REQUIRED_LABELS` | Comma-separated labels; only auto-review PRs carrying at least one (case-insensitive) | _(empty — no gate)_ |
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings | `true` |
+| `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
@@ -278,6 +281,32 @@ cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
 findings).
 
+### Blocking strictness
+
+By default (`REVIEW_BLOCKING_STRICTNESS=balanced`), only **CRITICAL** or **HIGH**
+risk findings that the model reports at **HIGH** confidence escalate the PR
+review to `REQUEST_CHANGES` (and fail the check run). Medium/low-confidence
+severity findings still post as comments with a neutral check.
+
+| Mode | Blocks merge when |
+|---|---|
+| `balanced` (default) | CRITICAL or HIGH risk **and** HIGH confidence |
+| `strict` | CRITICAL or HIGH risk, **any** confidence |
+| `lenient` | CRITICAL risk **and** HIGH confidence only |
+
+**Security-team recommendation:** use `strict` so a CRITICAL/HIGH finding cannot
+slip through as a comment just because confidence was demoted. Be aware that
+under `strict`, the finding verifier's confidence demotions (hedged claims →
+medium/low) no longer prevent a merge block — only risk reduction or dropping
+the finding does. Stay on `balanced` if you want verifier demotions to keep
+speculative severity findings non-blocking.
+
+This knob controls the **review verdict** only. Where findings are posted
+(inline thread vs summary) is separate confidence gating tracked in
+[#105](https://github.com/devops-thiago/ThrillhouseBot/issues/105); when that
+lands, low-confidence findings can move out of the inline stream without
+changing these blocking rules.
+
 The app validates configuration at startup and **fails fast** if a required value
 (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `AI_API_KEY`) is missing or — for
 the private key — not a valid PEM RSA key, naming every offending variable in one message instead of
@@ -314,6 +343,9 @@ thrillhousebot.ai.models.deepseek-chat.token-safety-margin=0.9
 thrillhousebot.ai.models.deepseek-chat.temperature=0.2
 thrillhousebot.ai.models.deepseek-chat.top-p=0.95
 thrillhousebot.ai.models.deepseek-chat.max-output-tokens=8192
+thrillhousebot.ai.models.deepseek-chat.frequency-penalty=0.1
+thrillhousebot.ai.models.deepseek-chat.presence-penalty=0.1
+thrillhousebot.ai.models.deepseek-chat.seed=42
 ```
 
 Notes:
@@ -333,9 +365,18 @@ Notes:
   `application.properties` or `-D`) alongside the env var.
 - **`top_k` is not available** on the OpenAI-compatible wire; it becomes
   relevant only with native provider integrations.
+- **`max-output-tokens` vs `output-buffer-tokens`**: `max-output-tokens` is the
+  hard response-length cap sent to the provider; `output-buffer-tokens` only
+  reserves input-budget headroom for the map-reduce budgeter. Keep the buffer
+  at least as large as the output cap so a response the model is allowed to
+  produce always has reserved room — set both when capping output.
+- **`seed`** is a best-effort determinism hint (same seed + same parameters aims
+  for the same sampling) on providers that support it; unsupported providers
+  ignore it. For deterministic reviews, prefer a low `temperature` first.
 - **Generation-parameter validation** happens at boot: temperature must be in
-  `[0, 2]`, `top-p` in `(0, 1]`, token counts positive — a typo in any entry
-  (even an inactive model's) fails startup with a message naming the key.
+  `[0, 2]`, `top-p` in `(0, 1]`, penalties in `[-2, 2]`, token counts positive —
+  a typo in any entry (even an inactive model's) fails startup with a message
+  naming the key.
 <!-- docs:configuration:end -->
 
 ## Dashboard
@@ -411,11 +452,42 @@ All telemetry is exported via OTLP:
 | `gen_ai.client.token.usage` | Histogram: input/output tokens |
 | `gen_ai.client.operation.duration` | Histogram: latency in seconds |
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |
+| `thrillhouse.review.skips` | Counter: automatic reviews skipped, tagged with `reason` and `repository` |
 
 Spans and metrics are tagged with `gen_ai.provider.name`, derived from `AI_BASE_URL`
 (e.g. `deepseek`, `openai`, `groq`, `openrouter`). Loopback and unrecognized endpoints
 report `unknown`; set `AI_PROVIDER` to label them (e.g. a local `ollama` or `vllm` server,
 a proxy, or a self-hosted gateway).
+
+## Troubleshooting
+
+### PR opened but no review posted
+
+When a `pull_request` webhook arrives but no review appears, the bot logs a structured
+skip event (`Automatic review skipped [reason=...]`), increments the
+`thrillhouse.review.skips` counter, and reports per-reason counts in the dashboard
+summary (`GET /api/dashboard/summary`, field `skippedReviewsByReason`). Check, in order:
+
+1. **Is the App installed on the repository?** No webhook delivery at all means the
+   GitHub App isn't installed (or the webhook URL/secret is wrong). Check the App's
+   **Advanced → Recent Deliveries** page on GitHub.
+2. **Is the PR a draft?** (`reason=DRAFT`) — with `WEBHOOK_TRIGGERS_SKIP_DRAFTS=true`,
+   drafts are skipped until marked ready for review.
+3. **Is the PR paused?** (`reason=PAUSED`) — someone commented `/pause`; comment
+   `/resume` to re-enable reviews.
+4. **Label gates** (`reason=MISSING_REQUIRED_LABEL` / `EXCLUDED_LABEL`) — check
+   `WEBHOOK_TRIGGERS_REQUIRED_LABELS` and `WEBHOOK_TRIGGERS_EXCLUDED_LABELS`.
+5. **Base branch filters** (`reason=BASE_BRANCH_NOT_ALLOWED` / `IGNORED_BASE_BRANCH`) —
+   check `WEBHOOK_TRIGGERS_BASE_BRANCHES` and `WEBHOOK_TRIGGERS_IGNORED_BASE_BRANCHES`.
+6. **Rate window** (`reason=RATE_LIMITED`) — an automatic review already completed
+   within `AUTO_REVIEW_MIN_INTERVAL`; a manual `/review` bypasses the window.
+7. **Redelivery** (`reason=DUPLICATE_DELIVERY`) — GitHub redelivered a webhook the bot
+   already processed; this is normal and safe.
+8. **Executor saturated** (`reason=DISPATCH_REJECTED`) — the review executor rejected
+   the task (overload or shutdown); redeliver the webhook from GitHub to retry.
+
+A manual `/review` comment from a user with write access bypasses the draft, label,
+base-branch, and rate-window gates (but not `/pause`).
 
 ## Responsible use and security
 

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -28,7 +29,8 @@ import java.util.Set;
  * Builds the {@link ReviewResult} verdict from the model response and the review's gating inputs,
  * and derives the check-run conclusion/title/summary. The decision core: a review approves only
  * when there are no outstanding new findings AND no unresolved previous findings (backstop), no
- * offending CI checks, and the diff was not truncated.
+ * offending CI checks (when CI gating is {@link CiGatingMode#STRICT}), and the diff was not
+ * truncated.
  */
 @ApplicationScoped
 public class VerdictBuilder {
@@ -36,15 +38,67 @@ public class VerdictBuilder {
   private final PrSummaryGenerator summaryGenerator;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
+  private final CiGatingMode ciGating;
+  private final BlockingStrictness blockingStrictness;
 
   @Inject
   public VerdictBuilder(
       PrSummaryGenerator summaryGenerator,
       FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      ThrillhouseConfig config) {
+    this(
+        summaryGenerator,
+        followUpAnalyzer,
+        botIdentity,
+        CiGatingMode.parse(config.review().ciGating()),
+        BlockingStrictness.fromString(config.review().blockingStrictness())
+            .orElse(BlockingStrictness.BALANCED));
+  }
+
+  /** Visible for tests; defaults to fail-closed CI gating and balanced blocking. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity) {
+    this(
+        summaryGenerator,
+        followUpAnalyzer,
+        botIdentity,
+        CiGatingMode.STRICT,
+        BlockingStrictness.BALANCED);
+  }
+
+  /** Visible for tests: pins CI gating; blocking stays {@link BlockingStrictness#BALANCED}. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      CiGatingMode ciGating) {
+    this(summaryGenerator, followUpAnalyzer, botIdentity, ciGating, BlockingStrictness.BALANCED);
+  }
+
+  /** Visible for tests: pins blocking mode; CI gating stays {@link CiGatingMode#STRICT}. */
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      BlockingStrictness blockingStrictness) {
+    this(summaryGenerator, followUpAnalyzer, botIdentity, CiGatingMode.STRICT, blockingStrictness);
+  }
+
+  VerdictBuilder(
+      PrSummaryGenerator summaryGenerator,
+      FollowUpAnalyzer followUpAnalyzer,
+      BotIdentity botIdentity,
+      CiGatingMode ciGating,
+      BlockingStrictness blockingStrictness) {
     this.summaryGenerator = summaryGenerator;
     this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
+    this.ciGating = ciGating == null ? CiGatingMode.STRICT : ciGating;
+    this.blockingStrictness =
+        blockingStrictness == null ? BlockingStrictness.BALANCED : blockingStrictness;
   }
 
   /**
@@ -78,20 +132,34 @@ public class VerdictBuilder {
             ctx.reviewableFiles().stream()
                 .filter(f -> !omittedNames.contains(f.filename()))
                 .toList());
+    // A model-reported "unresolved" whose targeted code left the diff (force-push) becomes
+    // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
+    // Skip the DiffLineResolver when there are no statuses — first reviews and empty-status
+    // paths must not pay for a patch re-parse (#135).
+    var rawStatuses = aiResponse.previousFindingsStatus();
+    var effectiveStatuses =
+        followUpAnalyzer.supersedeVanished(
+            ctx.previousAiResponseJson(),
+            rawStatuses,
+            rawStatuses.isEmpty() ? null : ctx.lineResolver());
+    var effectiveResponse =
+        new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
-        followUpAnalyzer.unresolvedFindings(
-            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus());
+        followUpAnalyzer.unresolvedFindings(ctx.previousFindingsList(), effectiveStatuses);
+    // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
+    // other no-context paths never pay for a patch re-parse here (FindingPipeline / postReview
+    // still share the same memoized supplier when they need it).
     var backstopUnresolved =
         ctx.hasContext()
-            ? followUpAnalyzer.unreportedUnresolvedStatuses(
-                ctx.priorAiResponseJsons(),
-                aiResponse.previousFindingsStatus(),
+            ? followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                ctx.priorAiResponses(),
+                effectiveStatuses,
                 ctx.inlineComments(),
                 ctx.lineResolver(),
                 botIdentity)
             : List.<ReviewResult.PreviousFindingStatus>of();
     return buildResult(
-        aiResponse,
+        effectiveResponse,
         ctx.isFirstVisibleReview(),
         diffStats,
         changedFiles,
@@ -128,13 +196,24 @@ public class VerdictBuilder {
               result.lowCount())
           + truncationSuffix;
     }
-    var unreadableSuffix =
-        result.ciUnreadable()
-            ? " The CI status for some checks could not be read — holding approval until it can be"
-                + " confirmed."
-            : "";
+    boolean approvedDespiteCi = result.reviewState() == ReviewState.APPROVE;
+    String unreadableSuffix = "";
+    if (result.ciUnreadable()) {
+      unreadableSuffix =
+          approvedDespiteCi
+              ? " Note: the CI status for some checks could not be read."
+              : " The CI status for some checks could not be read — holding approval until it can"
+                  + " be confirmed.";
+    }
     if (!result.offendingCiChecks().isEmpty()) {
       var checkLabel = result.requiredContextsKnown() ? "required CI check(s)" : "CI check(s)";
+      if (approvedDespiteCi) {
+        return String.format(
+                "No new issues found. Note: %d %s are still pending or failing.",
+                result.offendingCiChecks().size(), checkLabel)
+            + unreadableSuffix
+            + truncationSuffix;
+      }
       return String.format(
               "No new issues found, but %d %s are still pending or failing.",
               result.offendingCiChecks().size(), checkLabel)
@@ -142,6 +221,9 @@ public class VerdictBuilder {
           + truncationSuffix;
     }
     if (result.ciUnreadable()) {
+      if (approvedDespiteCi) {
+        return "No new issues found. Note: the CI status could not be read." + truncationSuffix;
+      }
       return "No new issues found, but the CI status could not be read — holding approval until it"
           + " can be confirmed."
           + truncationSuffix;
@@ -239,18 +321,20 @@ public class VerdictBuilder {
 
     var outstanding = new ArrayList<Finding>(tally.findings());
     outstanding.addAll(unresolvedPrevious);
-    ReviewState state = ReviewState.fromFindings(outstanding);
+    ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // Backstop statuses reach the gate but never `outstanding`, keeping the hold downgrade-only
-    // (APPROVE → COMMENT, never REQUEST_CHANGES).
+    // (APPROVE → COMMENT, never REQUEST_CHANGES). Keep the toStatuses list as-is on the common
+    // no-backstop path — no ArrayList wrap/copy when there is nothing to append.
     var previousStatuses =
-        new ArrayList<ReviewResult.PreviousFindingStatus>(
-            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()));
-    previousStatuses.addAll(backstopUnresolved);
+        mergePreviousStatuses(
+            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()), backstopUnresolved);
     if (state == ReviewState.APPROVE && followUpAnalyzer.hasUnresolved(previousStatuses)) {
       state = ReviewState.COMMENT;
     }
 
-    if (state == ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
+    if (state == ReviewState.APPROVE
+        && ciGating.holdsApproval()
+        && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
       state = ReviewState.COMMENT;
     }
 
@@ -303,6 +387,22 @@ public class VerdictBuilder {
         ciUnreadable,
         requiredContextsKnown,
         diffStats.truncation());
+  }
+
+  /**
+   * Merges model-reported previous-finding statuses with the deterministic backstop. Returns {@code
+   * modelStatuses} unchanged when the backstop is empty so the common path does not allocate a
+   * fresh {@link ArrayList}.
+   */
+  static List<ReviewResult.PreviousFindingStatus> mergePreviousStatuses(
+      List<ReviewResult.PreviousFindingStatus> modelStatuses,
+      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+    if (backstopUnresolved == null || backstopUnresolved.isEmpty()) {
+      return modelStatuses;
+    }
+    var merged = new ArrayList<>(modelStatuses);
+    merged.addAll(backstopUnresolved);
+    return merged;
   }
 
   /** Findings parsed from the model response, with per-severity counts and the highest risk. */

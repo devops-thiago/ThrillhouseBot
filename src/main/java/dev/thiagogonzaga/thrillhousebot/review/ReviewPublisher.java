@@ -76,12 +76,18 @@ public class ReviewPublisher {
    * Posts the PR summary comment, but only on the first user-visible review (and only when there is
    * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
    * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
-   * regenerate a summary that was deleted from the PR even though a review already ran.
+   * regenerate a summary that was deleted from the PR even though a review already ran, or a prior
+   * finding was superseded this round ({@link ReviewResult#hasSupersededPrevious}): its targeted
+   * code left the diff, so the earlier summary may describe code that no longer exists. In the
+   * superseded case the bot's existing summary comment is edited in place with the regenerated
+   * markdown — never posted alongside the stale one — falling back to a new comment only when no
+   * prior summary comment exists (e.g. it was deleted).
    *
    * @return {@code true} when the summary comment was actually created; {@code false} when this
-   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses the
-   *     no-issues review on a summary-only re-run only when this returned {@code true} — a failed
-   *     or skipped summary must leave the review as the run's visible outcome.
+   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses a
+   *     redundant no-issues review (summary-only re-run, or a first review held back solely by
+   *     pending/failed CI) only when this returned {@code true} — a failed or skipped summary must
+   *     leave the review as the run's visible outcome.
    */
   boolean publishSummary(
       String auth,
@@ -90,7 +96,10 @@ public class ReviewPublisher {
       int prNumber,
       ReviewResult result,
       boolean forceSummary) {
-    if ((result.isFirstReview() || forceSummary) && !result.summaryMarkdown().isBlank()) {
+    if (result.summaryMarkdown().isBlank()) {
+      return false;
+    }
+    if (result.isFirstReview() || forceSummary) {
       commentClient.createComment(
           auth,
           ACCEPT,
@@ -100,7 +109,35 @@ public class ReviewPublisher {
           new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
       return true;
     }
+    if (result.hasSupersededPrevious()) {
+      refreshSummaryComment(auth, owner, repo, prNumber, result.summaryMarkdown());
+      return true;
+    }
     return false;
+  }
+
+  /**
+   * Replaces the stale summary with the regenerated one after a finding was superseded: edits the
+   * bot's newest existing summary comment in place, so the PR never shows the outdated summary
+   * (describing removed code) next to the fresh one. Creates a new comment only when no summary
+   * comment is found (e.g. a maintainer deleted it).
+   */
+  private void refreshSummaryComment(
+      String auth, String owner, String repo, int prNumber, String summaryMarkdown) {
+    var existing =
+        commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
+            .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
+            .filter(
+                c ->
+                    c.body() != null
+                        && c.body().stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING))
+            .reduce((first, second) -> second);
+    var request = new GitHubCommentClient.CreateCommentRequest(summaryMarkdown);
+    if (existing.isPresent()) {
+      commentClient.updateComment(auth, ACCEPT, owner, repo, existing.get().id(), request);
+    } else {
+      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+    }
   }
 
   /**
@@ -155,10 +192,10 @@ public class ReviewPublisher {
   /**
    * Parameter object for {@link #postReview(PostReviewRequest)}.
    *
-   * @param summaryReposted {@code true} only on a summary-only re-run ({@code /summary}) whose
-   *     regenerated summary comment was actually posted — the caller must AND the request's {@code
-   *     forceSummary} with {@code publishSummary}'s outcome, so a failed summary post never
-   *     suppresses the review too and leave the run with no visible outcome at all.
+   * @param summaryPosted {@code true} only when this run's PR summary comment was actually created
+   *     ({@code publishSummary} returned {@code true}) — never assumed from {@code isFirstReview}
+   *     or {@code forceSummary} alone, so a failed or skipped summary post can never suppress the
+   *     review too and leave the run with no visible outcome at all.
    */
   record PostReviewRequest(
       String auth,
@@ -168,12 +205,11 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver,
-      boolean summaryReposted) {}
+      boolean summaryPosted) {}
 
   /**
-   * Back-compat convenience for the automatic {@code pull_request} / {@code /review} paths and
-   * tests, which are never a summary-only re-run. Defaults {@code summaryReposted} to {@code
-   * false}.
+   * Back-compat convenience for tests and callers with no summary outcome to report. Defaults
+   * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire.
    */
   void postReview(
       String auth,
@@ -198,7 +234,7 @@ public class ReviewPublisher {
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first
       // review, unresolved previous, and truncation still post.
-      if (post.summaryReposted()
+      if (post.summaryPosted()
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && !result.truncated()) {
@@ -208,7 +244,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
         return;
       }
-      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result);
+      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result, post.summaryPosted());
       return;
     }
 
@@ -217,11 +253,18 @@ public class ReviewPublisher {
         result.reviewState() == ReviewState.REQUEST_CHANGES ? EVENT_REQUEST_CHANGES : EVENT_COMMENT;
 
     if (inline.posted() == 0) {
-      // Inline anchoring failed for every finding (e.g. all lines fell outside the diff after a
-      // force-push); surface them in the review body instead.
-      Log.warnf(
-          "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
-          owner, repo, prNumber);
+      // Nothing landed inline: either anchoring failed, the comment cap skipped everything, or
+      // every finding was routed to the summary as lower-confidence. Surface them in the review
+      // body so follow-ups (which do not re-post the summary) still carry the signal.
+      if (!inline.unanchored().isEmpty() || !inline.capSkipped().isEmpty()) {
+        Log.warnf(
+            "No inline comments posted for %s/%s #%d — surfacing findings in the review body",
+            owner, repo, prNumber);
+      } else {
+        Log.infof(
+            "No inline comments for %s/%s #%d — lower-confidence findings routed to the summary",
+            owner, repo, prNumber);
+      }
       var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
       appendTruncationNotice(fallbackParts, result);
       createReviewWithFallback(
@@ -264,7 +307,10 @@ public class ReviewPublisher {
     }
   }
 
-  /** Review-body sections for findings not posted inline — un-anchored and/or cap-skipped. */
+  /**
+   * Review-body sections for findings not posted inline — un-anchored, cap-skipped, and/or
+   * confidence-routed to the summary's "Things to double-check" section.
+   */
   private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
@@ -272,6 +318,9 @@ public class ReviewPublisher {
     }
     if (!inline.capSkipped().isEmpty()) {
       parts.add(capSkippedFindingsBody(inline.capSkipped()));
+    }
+    if (!inline.confidenceSkipped().isEmpty()) {
+      parts.add(confidenceSkippedFindingsBody(inline.confidenceSkipped()));
     }
     return parts;
   }
@@ -299,6 +348,20 @@ public class ReviewPublisher {
     return sb.toString();
   }
 
+  private static String confidenceSkippedFindingsBody(List<Finding> findings) {
+    var sb = new StringBuilder();
+    sb.append("ThrillhouseBot noted ")
+        .append(findings.size())
+        .append(
+            """
+             lower-confidence item(s) under **Things to double-check** in the PR summary \
+            (not posted as inline threads):
+
+            """);
+    appendFindingList(sb, findings);
+    return sb.toString();
+  }
+
   private static void appendFindingList(StringBuilder sb, List<Finding> findings) {
     for (Finding f : findings) {
       sb.append("- **")
@@ -318,10 +381,20 @@ public class ReviewPublisher {
   }
 
   /**
-   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why.
+   * Posts the review when there are no new findings: a bare APPROVE, or a COMMENT explaining why. A
+   * first-review COMMENT held back solely by CI is skipped only when the PR summary comment
+   * actually posted — its Required CI Checks table already carries the same pending/failed list, so
+   * a second surface with identical copy is pure noise (#334). When the summary post failed or was
+   * skipped, the COMMENT review is the round's only visible signal and always posts.
    */
   private void postNoIssuesReview(
-      String auth, String owner, String repo, int prNumber, String commitSha, ReviewResult result) {
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String commitSha,
+      ReviewResult result,
+      boolean summaryPosted) {
     if (result.reviewState() == ReviewState.APPROVE) {
       var req =
           new GitHubReviewClient.CreateReviewRequest(
@@ -332,7 +405,8 @@ public class ReviewPublisher {
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
-    if (result.reviewState() == ReviewState.COMMENT
+    if (summaryPosted
+        && result.reviewState() == ReviewState.COMMENT
         && result.isFirstReview()
         && result.unresolvedPreviousCount() == 0
         && !result.truncated()) {
@@ -390,16 +464,22 @@ public class ReviewPublisher {
   }
 
   /**
-   * How many findings anchored as inline comments, the ones that could not be anchored, and the
-   * ones skipped because {@code maxReviewComments} was reached (never tried for anchoring).
+   * How many findings anchored as inline comments, the ones that could not be anchored, the ones
+   * skipped because {@code maxReviewComments} was reached (never tried for anchoring), and the ones
+   * withheld because confidence is low (routed to the summary instead).
    */
-  record InlineCommentResult(int posted, List<Finding> unanchored, List<Finding> capSkipped) {}
+  record InlineCommentResult(
+      int posted,
+      List<Finding> unanchored,
+      List<Finding> capSkipped,
+      List<Finding> confidenceSkipped) {}
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
    * survive 422s that would reject an entire batched review. Findings whose line falls outside the
    * diff (or are otherwise rejected) are returned as {@code unanchored} so the caller can still
-   * report them in the review body rather than dropping them.
+   * report them in the review body rather than dropping them. Low-confidence medium/low findings
+   * are skipped here and surfaced in the PR summary's "Things to double-check" section instead.
    */
   InlineCommentResult postInlineComments(
       String auth,
@@ -413,11 +493,16 @@ public class ReviewPublisher {
     var posted = 0;
     var unanchored = new ArrayList<Finding>();
     var capSkipped = new ArrayList<Finding>();
+    var confidenceSkipped = new ArrayList<Finding>();
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size(); i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the hidden
       // comment marker, keeping thread matching deterministic on follow-up reviews.
       var finding = result.findings().get(i);
+      if (!finding.postsInline()) {
+        confidenceSkipped.add(finding);
+        continue;
+      }
       if (posted >= maxComments) {
         capSkipped.add(finding);
         continue;
@@ -428,7 +513,8 @@ public class ReviewPublisher {
         unanchored.add(finding);
       }
     }
-    return new InlineCommentResult(posted, List.copyOf(unanchored), List.copyOf(capSkipped));
+    return new InlineCommentResult(
+        posted, List.copyOf(unanchored), List.copyOf(capSkipped), List.copyOf(confidenceSkipped));
   }
 
   /** PR coordinates shared by every inline comment of one review. */
@@ -586,7 +672,7 @@ public class ReviewPublisher {
   void resolveAddressedThreads(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
-      String previousAiResponseJson,
+      List<ReviewResponse.Finding> previousFindings,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse.PreviousFindingStatus> statuses) {
     try {
@@ -602,7 +688,7 @@ public class ReviewPublisher {
         return;
       }
       var rootByFinding =
-          followUpAnalyzer.matchFindingThreads(previousAiResponseJson, inlineComments, botIdentity);
+          followUpAnalyzer.matchFindingThreads(previousFindings, inlineComments, botIdentity);
       var threads =
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;

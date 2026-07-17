@@ -24,6 +24,7 @@ import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
@@ -36,6 +37,12 @@ public final class DiffLineResolver {
   // Shared with FindingQuoteValidator, which tracks the same right-side line numbers.
   static final Pattern HUNK_HEADER = Pattern.compile("@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@");
 
+  /**
+   * Package-visible construction counter so tests can assert one build per review (and none when a
+   * lazy supplier is never touched).
+   */
+  static final AtomicInteger CONSTRUCTION_COUNT = new AtomicInteger();
+
   private final Map<String, TreeSet<Integer>> rightSideLinesByFile;
   private final Map<String, List<String>> rightSideTextByFile;
   private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
@@ -43,6 +50,7 @@ public final class DiffLineResolver {
   private final Map<String, TreeSet<Integer>> rightSideHunkStartsByFile;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
+    CONSTRUCTION_COUNT.incrementAndGet();
     this.rightSideLinesByFile = new HashMap<>();
     this.rightSideTextByFile = new HashMap<>();
     this.rightSideTextLineNumbersByFile = new HashMap<>();
