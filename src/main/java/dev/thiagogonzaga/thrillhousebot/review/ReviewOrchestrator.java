@@ -236,7 +236,7 @@ public class ReviewOrchestrator {
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
       var ctx = contextLoader.load(auth, req, session, repository);
       var priorReviews = ctx.priorReviews();
-      var previousAiResponseJson = ctx.previousAiResponseJson();
+      var previousFindings = ctx.previousFindingsList();
       var inlineComments = ctx.inlineComments();
       var lineResolver = ctx.lineResolver();
 
@@ -297,7 +297,7 @@ public class ReviewOrchestrator {
               reviewPublisher.resolveAddressedThreads(
                   auth,
                   doneReq,
-                  previousAiResponseJson,
+                  previousFindings,
                   inlineComments,
                   aiResponse.previousFindingsStatus()));
       runPostResultStep(

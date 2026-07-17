@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -53,7 +54,22 @@ class VerdictBuilderTest {
           BlockingStrictness.BALANCED);
 
   {
-    lenient().when(followUpAnalyzer.unresolvedFindings(any(), any())).thenReturn(List.of());
+    lenient()
+        .when(
+            followUpAnalyzer.unresolvedFindings(
+                org.mockito.ArgumentMatchers
+                    .<java.util.List<
+                            dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                        any(),
+                any()))
+        .thenReturn(List.of());
+    lenient()
+        .when(followUpAnalyzer.supersedeVanished(any(), any(), any()))
+        .thenAnswer(
+            inv -> {
+              List<?> statuses = inv.getArgument(1);
+              return statuses == null ? List.of() : statuses;
+            });
     lenient()
         .when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
         .thenReturn("");
@@ -68,6 +84,7 @@ class VerdictBuilderTest {
         lineCapOmitted,
         List.of(),
         List.of(),
+        List.of(),
         true,
         false,
         null,
@@ -78,7 +95,7 @@ class VerdictBuilderTest {
         "",
         "",
         List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
-        new DiffLineResolver(Map.of()),
+        () -> new DiffLineResolver(Map.of()),
         null);
   }
 
@@ -167,6 +184,14 @@ class VerdictBuilderTest {
         "title": "Unsafe regex", "description": "d", "suggestion_old": "quote(label)"}]}
       """;
 
+  private static final ReviewResponse PRIOR_RESPONSE =
+      new ReviewResponse(
+          List.of(
+              new ReviewResponse.Finding(
+                  "high", "src/Gone.java", 10, "Unsafe regex", "d", "quote(label)", null)),
+          List.of(),
+          null);
+
   /** A follow-up context whose current diff contains only {@code file}. */
   private static ReviewContextLoader.ReviewContext followUpContext(String file) {
     return new ReviewContextLoader.ReviewContext(
@@ -176,6 +201,7 @@ class VerdictBuilderTest {
         0,
         List.of(),
         List.of(PRIOR_JSON),
+        List.of(PRIOR_RESPONSE),
         false,
         true,
         PRIOR_JSON,
@@ -186,7 +212,7 @@ class VerdictBuilderTest {
         "",
         "",
         List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
-        new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
+        () -> new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
         null);
   }
 
@@ -232,6 +258,7 @@ class VerdictBuilderTest {
             0,
             List.of(),
             List.of(PRIOR_JSON),
+            List.of(PRIOR_RESPONSE),
             false,
             true,
             PRIOR_JSON,
@@ -242,7 +269,9 @@ class VerdictBuilderTest {
             "",
             "",
             List.of(new FileDiff("src/Gone.java", "modified", 1, 0, 1, "")),
-            new DiffLineResolver(Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
+            () ->
+                new DiffLineResolver(
+                    Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
             null);
 
     var result = realBuilder.build(ctx, UNRESOLVED_PRIOR_RESPONSE, CI_CLEAR, plan);
@@ -393,6 +422,59 @@ class VerdictBuilderTest {
     assertEquals(ReviewState.COMMENT, result.reviewState());
     assertTrue(result.ciHoldsApproval());
     assertTrue(VerdictBuilder.checkSummaryForResult(result).contains("holding approval"));
+  }
+
+  @Test
+  void mergePreviousStatusesReusesModelListWhenBackstopIsEmpty() {
+    var model = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "done"));
+    assertSame(model, VerdictBuilder.mergePreviousStatuses(model, List.of()));
+    assertSame(model, VerdictBuilder.mergePreviousStatuses(model, null));
+  }
+
+  @Test
+  void mergePreviousStatusesAppendsBackstopWithoutMutatingModelList() {
+    var model = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "done"));
+    var backstop = List.of(new ReviewResult.PreviousFindingStatus(2, "unresolved", "held"));
+
+    var merged = VerdictBuilder.mergePreviousStatuses(model, backstop);
+
+    assertEquals(2, merged.size());
+    assertEquals(1, model.size());
+    assertEquals("unresolved", merged.get(1).status());
+  }
+
+  @Test
+  void noContextPathDoesNotTouchLineResolverSupplier() {
+    var touched = new boolean[] {false};
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            List.of(),
+            "",
+            "",
+            List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
+            () -> {
+              touched[0] = true;
+              return new DiffLineResolver(Map.of());
+            },
+            null);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertFalse(touched[0]);
   }
 
   @Test

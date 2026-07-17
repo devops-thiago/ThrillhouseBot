@@ -39,6 +39,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -179,6 +180,23 @@ class ReviewOrchestratorTest {
         .thenAnswer(invocation -> invocation.getArgument(0));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));
+    lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
+    lenient()
+        .when(
+            followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                any(), any(), any(), any(), any()))
+        .thenReturn(List.of());
+    lenient()
+        .when(
+            followUpAnalyzer.unresolvedFindings(
+                ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))
+        .thenReturn(List.of());
+    lenient().when(followUpAnalyzer.toStatuses(any())).thenReturn(List.of());
+    lenient().when(followUpAnalyzer.hasUnresolved(any())).thenReturn(false);
+    lenient().when(followUpAnalyzer.previousFindingFilesById(any(List.class))).thenReturn(Map.of());
+    lenient()
+        .when(followUpAnalyzer.previousFindingFilesById(any(String.class)))
+        .thenReturn(Map.of());
     when(reviewClient.createPullRequestComment(
             anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "ok", "main.py", 10));
@@ -2086,10 +2104,15 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("Previous finding context");
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of("{\"round\":2}", "{\"round\":1}"));
+        var round2 = new ReviewResponse(List.of(), List.of(), null);
+        var round1 = new ReviewResponse(List.of(), List.of(), null);
+        when(followUpAnalyzer.parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}")))
+            .thenReturn(List.of(round2, round1));
         when(followUpAnalyzer.toStatuses(any())).thenReturn(List.of());
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -2116,9 +2139,10 @@ class ReviewOrchestratorTest {
 
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(followUpAnalyzer).parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}"));
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
-                eq("{\"round\":2}"), any(), any(), eq(List.of("{\"round\":1}")), eq(BOT_ID));
+                eq(List.of()), any(), any(), eq(List.of(round1)), eq(BOT_ID));
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
                 any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID));
@@ -4287,11 +4311,13 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(followUpAnalyzer.unreportedUnresolvedStatuses(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                any(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn(
                 List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
@@ -4315,7 +4341,8 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -4323,7 +4350,7 @@ class ReviewOrchestratorTest {
         orchestrator.review(followUpRequest());
 
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
+            .buildPreviousFindingsContext(anyList(), any(), any(), any(), eq(BOT_ID));
       }
     }
 
@@ -4336,7 +4363,8 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
-        when(followUpAnalyzer.buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID)))
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -4354,7 +4382,7 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(any(), any(), any(), any(), eq(BOT_ID));
+            .buildPreviousFindingsContext(anyList(), any(), any(), any(), eq(BOT_ID));
       }
     }
 
@@ -4420,7 +4448,8 @@ class ReviewOrchestratorTest {
               new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional"),
               new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still"),
               new ReviewResponse.PreviousFindingStatus(4, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), any()))
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
           .thenReturn(Map.of(1, 100L, 2, 200L, 3, 300L, 4, 400L));
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
           .thenReturn(
@@ -4433,7 +4462,7 @@ class ReviewOrchestratorTest {
       when(reviewThreadService.resolve(AUTH, "T4")).thenReturn(false);
 
       reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), "{}", List.of(rootComment()), statuses);
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
 
       verify(reviewThreadService).resolve(AUTH, "T1");
       verify(reviewThreadService).resolve(AUTH, "T4");
@@ -4444,11 +4473,13 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSkipFindingsWithoutAMatchedThread() {
       var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of());
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of());
       when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5)).thenReturn(Map.of());
 
       reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), "{}", List.of(rootComment()), statuses);
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
 
       verify(reviewThreadService, never()).resolve(anyString(), anyString());
     }
@@ -4460,8 +4491,8 @@ class ReviewOrchestratorTest {
       var resolved = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
 
       reviewPublisher.resolveAddressedThreads(
-          AUTH, request(), "{}", List.of(rootComment()), unresolvedOnly);
-      reviewPublisher.resolveAddressedThreads(AUTH, request(), "{}", List.of(), resolved);
+          AUTH, request(), List.of(), List.of(rootComment()), unresolvedOnly);
+      reviewPublisher.resolveAddressedThreads(AUTH, request(), List.of(), List.of(), resolved);
 
       verifyNoInteractions(reviewThreadService);
     }
@@ -4469,7 +4500,9 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSwallowThreadResolutionFailures() {
       var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
-      when(followUpAnalyzer.matchFindingThreads(any(), any(), any())).thenReturn(Map.of(1, 100L));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L));
       when(reviewThreadService.threadsByRootComment(
               anyString(), anyString(), anyString(), anyInt()))
           .thenThrow(new RuntimeException("graphql down"));
@@ -4477,7 +4510,7 @@ class ReviewOrchestratorTest {
       assertDoesNotThrow(
           () ->
               reviewPublisher.resolveAddressedThreads(
-                  AUTH, request(), "{}", List.of(rootComment()), statuses));
+                  AUTH, request(), List.of(), List.of(rootComment()), statuses));
     }
   }
 

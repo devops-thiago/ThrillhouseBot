@@ -134,17 +134,25 @@ public class VerdictBuilder {
                 .toList());
     // A model-reported "unresolved" whose targeted code left the diff (force-push) becomes
     // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
+    // Skip the DiffLineResolver when there are no statuses — first reviews and empty-status
+    // paths must not pay for a patch re-parse (#135).
+    var rawStatuses = aiResponse.previousFindingsStatus();
     var effectiveStatuses =
         followUpAnalyzer.supersedeVanished(
-            ctx.previousAiResponseJson(), aiResponse.previousFindingsStatus(), ctx.lineResolver());
+            ctx.previousAiResponseJson(),
+            rawStatuses,
+            rawStatuses.isEmpty() ? null : ctx.lineResolver());
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
-        followUpAnalyzer.unresolvedFindings(ctx.previousAiResponseJson(), effectiveStatuses);
+        followUpAnalyzer.unresolvedFindings(ctx.previousFindingsList(), effectiveStatuses);
+    // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
+    // other no-context paths never pay for a patch re-parse here (FindingPipeline / postReview
+    // still share the same memoized supplier when they need it).
     var backstopUnresolved =
         ctx.hasContext()
-            ? followUpAnalyzer.unreportedUnresolvedStatuses(
-                ctx.priorAiResponseJsons(),
+            ? followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                ctx.priorAiResponses(),
                 effectiveStatuses,
                 ctx.inlineComments(),
                 ctx.lineResolver(),
@@ -315,11 +323,11 @@ public class VerdictBuilder {
     outstanding.addAll(unresolvedPrevious);
     ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // Backstop statuses reach the gate but never `outstanding`, keeping the hold downgrade-only
-    // (APPROVE → COMMENT, never REQUEST_CHANGES).
+    // (APPROVE → COMMENT, never REQUEST_CHANGES). Keep the toStatuses list as-is on the common
+    // no-backstop path — no ArrayList wrap/copy when there is nothing to append.
     var previousStatuses =
-        new ArrayList<ReviewResult.PreviousFindingStatus>(
-            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()));
-    previousStatuses.addAll(backstopUnresolved);
+        mergePreviousStatuses(
+            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()), backstopUnresolved);
     if (state == ReviewState.APPROVE && followUpAnalyzer.hasUnresolved(previousStatuses)) {
       state = ReviewState.COMMENT;
     }
@@ -379,6 +387,22 @@ public class VerdictBuilder {
         ciUnreadable,
         requiredContextsKnown,
         diffStats.truncation());
+  }
+
+  /**
+   * Merges model-reported previous-finding statuses with the deterministic backstop. Returns {@code
+   * modelStatuses} unchanged when the backstop is empty so the common path does not allocate a
+   * fresh {@link ArrayList}.
+   */
+  static List<ReviewResult.PreviousFindingStatus> mergePreviousStatuses(
+      List<ReviewResult.PreviousFindingStatus> modelStatuses,
+      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+    if (backstopUnresolved == null || backstopUnresolved.isEmpty()) {
+      return modelStatuses;
+    }
+    var merged = new ArrayList<>(modelStatuses);
+    merged.addAll(backstopUnresolved);
+    return merged;
   }
 
   /** Findings parsed from the model response, with per-severity counts and the highest risk. */
