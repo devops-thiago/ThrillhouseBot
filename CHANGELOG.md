@@ -6,6 +6,7 @@ All notable changes to ThrillhouseBot.
 
 ### Added
 
+- **Bug-fix efficacy check**: when a PR declares itself a bug fix (the PR-template "Bug fix" checkbox or a `Fixes/Closes/Resolves #N` reference), the review prompt now extracts the concrete failure trigger from the PR description and the linked issues' text (fetched best-effort, up to 3 issues) and verifies the change actually alters behavior on that trigger's path — a locally-correct fix that the stated trigger never reaches is reported as a finding instead of passing silently, and when the deciding code is outside the diff the verdict is held at low confidence as a verification request rather than approved
 - **Finding feedback capture for the learnings pipeline**: records maintainer 👍/👎 reactions (and conservative "not useful" reply heuristics) on bot finding comments into a `finding_feedback` table, with per-repo aggregates on `GET /api/dashboard/feedback` and a documented data model/retention policy (`docs/FEEDBACK.md`). GitHub Apps have no `reaction` webhook, so reactions are polled via the Reactions API on review-thread replies and follow-up reviews. Precursor to cross-review learnings (#38); does not yet feed prompts (#324)
 
 ## [0.4.0] — 2026-07-12

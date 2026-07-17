@@ -76,6 +76,7 @@ class VerdictBuilderTest {
         new InstructionsResolver.ResolvedInstructions("", ""),
         List.of(),
         "",
+        "",
         List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
         new DiffLineResolver(Map.of()),
         null);
@@ -183,6 +184,7 @@ class VerdictBuilderTest {
         new InstructionsResolver.ResolvedInstructions("", ""),
         List.of(),
         "",
+        "",
         List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
         new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
         null);
@@ -200,7 +202,8 @@ class VerdictBuilderTest {
         new VerdictBuilder(
             summaryGenerator,
             new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
-            BotIdentity.from(List.of("thrillhousebot[bot]")));
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
 
     var result =
@@ -218,7 +221,8 @@ class VerdictBuilderTest {
         new VerdictBuilder(
             summaryGenerator,
             new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
-            BotIdentity.from(List.of("thrillhousebot[bot]")));
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
     var ctx =
         new ReviewContextLoader.ReviewContext(
@@ -235,6 +239,7 @@ class VerdictBuilderTest {
             "",
             new InstructionsResolver.ResolvedInstructions("", ""),
             List.of(),
+            "",
             "",
             List.of(new FileDiff("src/Gone.java", "modified", 1, 0, 1, "")),
             new DiffLineResolver(Map.of("src/Gone.java", "@@ -10,1 +10,1 @@\n-old\n+quote(label)")),
