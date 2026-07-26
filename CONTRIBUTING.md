@@ -15,7 +15,7 @@ part you agree to uphold it.
 
 ## Development setup
 
-Prerequisites: **Java 25+**, **Node.js 20+** (dashboard only), **Docker** (native builds only). Maven is bundled via the wrapper.
+Prerequisites: **Java 25+**, **Node.js 22+** (dashboard only), **Docker** (native builds only). Maven is bundled via the wrapper.
 
 Follow the [README Quick Start](https://github.com/devops-thiago/ThrillhouseBot#quick-start) for cloning, credentials, dev mode, and webhook forwarding — it is the single source of truth for setup commands. Contributor-specific extras:
 

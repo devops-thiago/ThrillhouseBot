@@ -378,7 +378,7 @@ class StartupConfigValidatorTest {
     lenient().when(settings.tokenSafetyMargin()).thenReturn(Optional.of(0.8));
     lenient().when(settings.temperature()).thenReturn(Optional.of(0.2));
     lenient().when(settings.topP()).thenReturn(Optional.of(0.95));
-    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_192));
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(4_096));
     lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.0));
     lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.0));
     lenient().when(settings.seed()).thenReturn(Optional.of(42));
@@ -410,8 +410,16 @@ class StartupConfigValidatorTest {
 
   @Test
   void allowsTokenBudgetingDisabledWithZeroInputTokens() {
-    // 0 input tokens disables budgeting (single call); the output-buffer cross-check is skipped.
-    new ConfigBuilder().maxInputTokens(0).build().validate();
+    // 0 input tokens disables budgeting (single call); neither output-buffer cross-check applies,
+    // even when the provider response cap is larger than the otherwise-unused buffer.
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_192));
+    new ConfigBuilder()
+        .maxInputTokens(0)
+        .outputBufferTokens(4_096)
+        .model("deepseek-chat", settings)
+        .build()
+        .validate();
   }
 
   @Test

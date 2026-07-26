@@ -869,6 +869,22 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedPureRenameShouldRemainUnresolved() {
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "medium", "old/A.java", 10, "Finding", "description", "flagged()", null));
+
+    var statuses =
+        analyzer.addUnreportedVanished(
+            previous, List.of(), new DiffLineResolver(Map.of()), Map.of("old/A.java", ""));
+
+    assertEquals(1, statuses.size());
+    assertEquals("unresolved", statuses.get(0).status());
+    assertTrue(statuses.get(0).note().contains("renamed without content changes"));
+  }
+
+  @Test
   void toStatusesShouldKeepTheSyntheticSupersededStatus() {
     var statuses =
         analyzer.toStatuses(

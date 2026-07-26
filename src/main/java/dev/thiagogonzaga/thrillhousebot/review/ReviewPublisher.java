@@ -127,10 +127,7 @@ public class ReviewPublisher {
     var existing =
         commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
             .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
-            .filter(
-                c ->
-                    c.body() != null
-                        && c.body().stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING))
+            .filter(c -> ReviewContextLoader.isBotSummaryComment(c.body()))
             .reduce((first, second) -> second);
     var request = new GitHubCommentClient.CreateCommentRequest(summaryMarkdown);
     if (existing.isPresent()) {

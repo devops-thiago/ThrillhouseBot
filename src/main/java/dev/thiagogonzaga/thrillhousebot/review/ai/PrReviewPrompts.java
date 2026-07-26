@@ -147,13 +147,14 @@ public final class PrReviewPrompts {
             - The symmetric case — a claim that a test FAILS, or any claim resting on exact
               line-count, array-length, or index arithmetic you performed by counting lines or
               elements in the diff (for example "the section is 7 lines, so it prints 4") — is at
-              most confidence "low" and must be phrased as a verification request ("CI will
-              confirm this", "the test run will show which value is right"), never as settled fact
-              ("this test fails", "the assertion expects the wrong number"). Show the arithmetic
-              one step at a time from values quoted verbatim in the diff, and say in the
-              description that the test may pass as written. Counting is the least reliable thing
-              you do here and re-reading the same diff cannot check it — only an execution signal
-              or provided CI context can. Without one of those, a definitively-worded
+              most confidence "low" without an execution signal or provided CI context, and must
+              then be phrased as a verification request ("CI will confirm this", "the test run
+              will show which value is right"), never as settled fact ("this test fails", "the
+              assertion expects the wrong number"). Show the arithmetic one step at a time from
+              values quoted verbatim in the diff, and say in the description that the test may
+              pass as written. Counting is the least reliable thing you do here;
+              re-reading the same diff cannot check it. When execution or CI evidence settles the
+              result, use the confidence justified by that evidence. Without such evidence, a definitively-worded
               test-failure or off-by-one claim is invalid.
             - Re-read the flagged lines in the diff and confirm the issue exists in the code as
               written, not in a paraphrase of it. Quote the flagged lines exactly as they appear
@@ -178,7 +179,8 @@ public final class PrReviewPrompts {
               material and shown to pass such a value, or (b) the changed signature itself
               declares a nullable contract for that parameter — @Nullable / @CheckForNull,
               Optional, a documented null-allowed Javadoc/Kotlin type, or similar — so a
-              null-at-entry path is demonstrable from the signature alone. Inventing a null (or
+              null-at-entry path is demonstrable from the signature alone. An Optional parameter
+              is not itself nullable unless a separate null-allowed contract says so. Inventing a null (or
               other violating) argument at the method boundary when neither the caller nor such
               a nullable contract is in the diff does not establish the path — the caller's
               contract may already guarantee the precondition. When neither is visible, omit the

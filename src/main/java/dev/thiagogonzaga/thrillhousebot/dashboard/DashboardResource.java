@@ -284,8 +284,14 @@ public class DashboardResource {
       return unauthorizedResponse();
     }
     if (repository != null && !repository.isBlank()) {
-      var summary = findingFeedbackService.summarize(repository.strip());
-      var recent = findingFeedbackService.listRecent(repository.strip(), 50);
+      var normalizedRepository = repository.strip();
+      if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
+        return Response.status(Response.Status.FORBIDDEN)
+            .entity(Map.of(KEY_ERROR, "Repository access denied"))
+            .build();
+      }
+      var summary = findingFeedbackService.summarize(normalizedRepository);
+      var recent = findingFeedbackService.listRecent(normalizedRepository, 50);
       return Response.ok(
               Map.of(
                   "repositories",
@@ -303,7 +309,10 @@ public class DashboardResource {
                   recent))
           .build();
     }
-    var summaries = findingFeedbackService.summarizeAll();
+    var summaries =
+        findingFeedbackService.summarizeAll().stream()
+            .filter(s -> sessionValidator.hasRepositoryAccess(sessionToken, s.repository()))
+            .toList();
     var rows =
         summaries.stream()
             .map(

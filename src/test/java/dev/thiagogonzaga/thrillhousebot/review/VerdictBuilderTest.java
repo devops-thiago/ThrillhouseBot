@@ -64,7 +64,14 @@ class VerdictBuilderTest {
                 any()))
         .thenReturn(List.of());
     lenient()
-        .when(followUpAnalyzer.supersedeVanished(any(), any(), any()))
+        .when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any()))
+        .thenAnswer(
+            inv -> {
+              List<?> statuses = inv.getArgument(1);
+              return statuses == null ? List.of() : statuses;
+            });
+    lenient()
+        .when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any()))
         .thenAnswer(
             inv -> {
               List<?> statuses = inv.getArgument(1);

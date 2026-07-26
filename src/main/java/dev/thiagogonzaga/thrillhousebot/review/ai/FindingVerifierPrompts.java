@@ -68,9 +68,9 @@ public final class FindingVerifierPrompts {
               the same diff, so you would repeat a miscount rather than catch it — which is how a
               hand-counted off-by-one ("the section is 7 lines, so 7 - 3 = 4 omitted") reached a
               PR against a test that passes as written. Reject it. Do NOT reject when the finding
-              is already phrased as a verification request naming what to run, or when an
-              execution/CI signal in the provided material shows the failure — downgrade to
-              confidence "low" instead.
+              is already phrased as a verification request naming what to run. When an
+              execution/CI signal in the provided material shows the failure, keep the finding
+              and assign the confidence justified by that evidence instead of forcing it low.
             - The flagged code does not appear in the diff as the finding describes it, or the
               code the finding quotes is not present verbatim in the diff — a
               finding built on a paraphrase of the change is invalid.
@@ -101,9 +101,10 @@ public final class FindingVerifierPrompts {
               the hunk — already guarantee a non-null owner and dereference it first). Reject
               it. Do NOT reject when (a) the material shows a caller that can pass null or
               another violating value, or (b) the changed signature itself declares a nullable
-              contract for that parameter — @Nullable / @CheckForNull, Optional, a documented
-              null-allowed Javadoc/Kotlin type, or similar — so a null-at-entry trace is
-              demonstrable from the signature without any caller hunk. Those findings stand.
+              contract for that parameter — @Nullable / @CheckForNull, a documented null-allowed
+              Javadoc/Kotlin type, or similar — so a null-at-entry trace is demonstrable from the
+              signature without any caller hunk. An Optional parameter is not itself nullable
+              unless a separate null-allowed contract says so. Those findings stand.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
             - The finding claims a class is missing a required no-arg/default constructor for

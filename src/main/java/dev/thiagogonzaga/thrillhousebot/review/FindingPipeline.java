@@ -625,8 +625,8 @@ public class FindingPipeline {
         String fallback = lineResolver.getLineText(finding.file(), finding.line());
         if (fallback != null && !fallback.isBlank()) {
           Log.infof(
-              "Populating missing content anchor for finding '%s' (%s:%d) with: '%s'",
-              finding.title(), finding.file(), finding.line(), fallback.strip());
+              "Populating missing content anchor for finding '%s' (%s:%d)",
+              finding.title(), finding.file(), finding.line());
           adjusted.add(
               new ReviewResponse.Finding(
                   finding.risk(),

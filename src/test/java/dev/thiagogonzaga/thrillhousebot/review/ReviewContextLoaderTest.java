@@ -385,6 +385,56 @@ class ReviewContextLoaderTest {
   }
 
   @Nested
+  class StaleHeadValidation {
+
+    private ReviewOrchestrator.ReviewRequest request() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 42, "expected-sha", "Title", "", "base-sha", "main", 9L, false);
+    }
+
+    private ReviewSession session() {
+      var session = ReviewSession.create("owner/repo", 42, "Title", "expected-sha");
+      session.id = 1L;
+      return session;
+    }
+
+    @Test
+    void shouldRejectWhenHeadChangesAfterFilesAreFetched() {
+      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(List.of());
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "",
+                  new GitHubPullRequestClient.Ref("new-sha"),
+                  new GitHubPullRequestClient.Ref("base-sha")));
+
+      var error =
+          assertThrows(
+              ReviewContextLoader.StaleReviewException.class,
+              () -> loader.load("auth", request(), session(), "owner/repo"));
+
+      assertTrue(error.getMessage().contains("expected expected-sha, current new-sha"));
+    }
+
+    @Test
+    void shouldFailClosedWhenCurrentHeadCannotBeRead() {
+      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(List.of());
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenThrow(new RuntimeException("GitHub unavailable"));
+
+      var error =
+          assertThrows(
+              IllegalStateException.class,
+              () -> loader.load("auth", request(), session(), "owner/repo"));
+
+      assertTrue(error.getMessage().contains("refusing to review potentially mixed revisions"));
+    }
+  }
+
+  @Nested
   class FetchPrFiles {
 
     @Test

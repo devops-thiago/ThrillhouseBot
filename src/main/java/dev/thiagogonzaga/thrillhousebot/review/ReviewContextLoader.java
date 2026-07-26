@@ -159,7 +159,7 @@ public class ReviewContextLoader {
   ReviewContext load(
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
-    var prTotals = fetchPrTotals(auth, req.owner(), req.repo(), req.prNumber());
+    var prTotals = fetchPrTotalsForReview(auth, req);
     var reviewableFiles = diffFormatter.reviewableFiles(files);
     var tokenBudgeted = activeModel.maxInputTokens() > 0;
     var diffResult =
@@ -322,6 +322,41 @@ public class ReviewContextLoader {
     }
   }
 
+  /**
+   * Reads totals after the file list and rejects a review whose webhook SHA is no longer current.
+   * The files endpoint is keyed only by PR number, so without this check a force-push can pair the
+   * old request SHA with the new revision's files.
+   */
+  private PrTotals fetchPrTotalsForReview(String auth, ReviewOrchestrator.ReviewRequest req) {
+    try {
+      var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      var currentHead = pr != null && pr.head() != null ? pr.head().sha() : null;
+      if (currentHead == null
+          || req.commitSha() == null
+          || !currentHead.equalsIgnoreCase(req.commitSha())) {
+        throw new StaleReviewException(req.commitSha(), currentHead);
+      }
+      return new PrTotals(pr.changedFiles(), pr.additions(), pr.deletions());
+    } catch (StaleReviewException e) {
+      throw e;
+    } catch (RuntimeException e) {
+      throw new IllegalStateException(
+          "Unable to confirm the current PR head; refusing to review potentially mixed revisions",
+          e);
+    }
+  }
+
+  static final class StaleReviewException extends RuntimeException {
+    StaleReviewException(String expectedHead, String currentHead) {
+      super(
+          "PR head changed while loading review context (expected "
+              + expectedHead
+              + ", current "
+              + currentHead
+              + "); refusing to review mixed revisions");
+    }
+  }
+
   ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
       String auth, String owner, String repo, String base, String head) {
     return buildBaseComparisonWithStats(auth, owner, repo, base, head, true);
@@ -379,15 +414,9 @@ public class ReviewContextLoader {
    * starts-with-heading check alone would miss an already-posted summary on a large PR and re-post
    * it on every re-review.
    */
-  private static boolean isBotSummaryComment(String body) {
-    if (body == null) {
-      return false;
-    }
-    if (body.stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING)) {
-      return true;
-    }
-    return body.lines()
-        .anyMatch(line -> line.stripLeading().startsWith(PrSummaryGenerator.SUMMARY_HEADING));
+  static boolean isBotSummaryComment(String body) {
+    return body != null
+        && body.lines().anyMatch(line -> line.strip().equals(PrSummaryGenerator.SUMMARY_HEADING));
   }
 
   List<GitHubCommentClient.IssueComment> fetchIssueComments(

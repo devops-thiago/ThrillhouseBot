@@ -79,6 +79,33 @@ class ReviewPublisherTest {
   }
 
   @Test
+  void followUpWithSupersededFindingIgnoresNewerConversationalHeadingReference() {
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+    when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        .thenReturn(
+            List.of(
+                new GitHubCommentClient.IssueComment(
+                    66L,
+                    ReviewResult.truncationNotice(2)
+                        + PrSummaryGenerator.SUMMARY_HEADING
+                        + "\n\nstale",
+                    bot),
+                new GitHubCommentClient.IssueComment(
+                    77L,
+                    "As noted in the "
+                        + PrSummaryGenerator.SUMMARY_HEADING
+                        + ", this was reviewed.",
+                    bot)));
+
+    assertTrue(publisher.publishSummary("auth", "o", "r", 1, SUPERSEDED_RESULT, false));
+
+    verify(commentClient)
+        .updateComment(anyString(), anyString(), anyString(), anyString(), eq(66L), any());
+    verify(commentClient, never())
+        .updateComment(anyString(), anyString(), anyString(), anyString(), eq(77L), any());
+  }
+
+  @Test
   void followUpWithSupersededFindingPostsANewSummaryWhenNoneExists() {
     // None of these is the bot's summary: no author, another author, no body, unrelated body.
     var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");

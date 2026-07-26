@@ -155,6 +155,17 @@ class ReviewOrchestratorTest {
     lenient()
         .when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
         .thenReturn(List.of());
+    lenient()
+        .when(prClient.getPullRequest(any(), any(), any(), any(), anyInt()))
+        .thenReturn(
+            new GitHubPullRequestClient.PullRequestDetails(
+                "Test PR",
+                "",
+                new GitHubPullRequestClient.Ref("abcdefgh"),
+                new GitHubPullRequestClient.Ref("base-sha"),
+                1,
+                1,
+                1));
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
     doAnswer(
