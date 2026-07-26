@@ -60,6 +60,17 @@ public final class FindingVerifierPrompts {
               exists but may not exercise this path. Do not apply this rejection when the
               test's mocks or stubs contradict the real collaborator's contract — that test
               does not faithfully exercise the production path.
+            - The finding rests on exact line-count, array-length, or index arithmetic (counting
+              lines or elements in the diff to derive a number), or claims a specific test fails,
+              AND states it as settled fact ("this test fails", "the assertion expects the wrong
+              number") with no execution signal or provided CI context behind it. You cannot
+              settle such a claim by recounting: you are the same modality as its author reading
+              the same diff, so you would repeat a miscount rather than catch it — which is how a
+              hand-counted off-by-one ("the section is 7 lines, so 7 - 3 = 4 omitted") reached a
+              PR against a test that passes as written. Reject it. Do NOT reject when the finding
+              is already phrased as a verification request naming what to run, or when an
+              execution/CI signal in the provided material shows the failure — downgrade to
+              confidence "low" instead.
             - The flagged code does not appear in the diff as the finding describes it, or the
               code the finding quotes is not present verbatim in the diff — a
               finding built on a paraphrase of the change is invalid.
@@ -156,7 +167,9 @@ public final class FindingVerifierPrompts {
             material includes the calling code that supplies the parameter, or when the changed
             signature itself declares a nullable contract for that parameter; when neither is
             shown the nullability is unestablished, so reject the finding (per above) rather
-            than post it.
+            than post it. An exact-arithmetic or test-failure claim is demonstrable only when an
+            execution signal or provided CI context settles it; on the strength of counting alone
+            it is never "confirmed" and never above confidence "low".
 
             Also audit each finding's suggested fix: when the underlying issue is real but
             suggestion_new is incorrect, incomplete, or would introduce a new defect, return

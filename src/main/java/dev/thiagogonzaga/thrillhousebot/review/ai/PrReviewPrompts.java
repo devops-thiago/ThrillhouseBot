@@ -144,6 +144,17 @@ public final class PrReviewPrompts {
               description that a test exists but may not exercise this path. A green test
               whose mocks contradict the real collaborator also does not suppress a finding —
               that test does not exercise the production path it claims to cover.
+            - The symmetric case — a claim that a test FAILS, or any claim resting on exact
+              line-count, array-length, or index arithmetic you performed by counting lines or
+              elements in the diff (for example "the section is 7 lines, so it prints 4") — is at
+              most confidence "low" and must be phrased as a verification request ("CI will
+              confirm this", "the test run will show which value is right"), never as settled fact
+              ("this test fails", "the assertion expects the wrong number"). Show the arithmetic
+              one step at a time from values quoted verbatim in the diff, and say in the
+              description that the test may pass as written. Counting is the least reliable thing
+              you do here and re-reading the same diff cannot check it — only an execution signal
+              or provided CI context can. Without one of those, a definitively-worded
+              test-failure or off-by-one claim is invalid.
             - Re-read the flagged lines in the diff and confirm the issue exists in the code as
               written, not in a paraphrase of it. Quote the flagged lines exactly as they appear
               in the diff; if the exact text you are about to quote cannot be found
@@ -297,7 +308,10 @@ public final class PrReviewPrompts {
             that leaves a collaborator on the path unmocked so a default bypasses it, or that
             mocks a collaborator to throw or return something the real method cannot, is
             not such evidence — lower confidence and note that rather than treating the test
-            as disproof.
+            as disproof. The reverse claim — that one of these tests itself fails, an assertion
+            expecting the wrong value or an off-by-one in an expected count — rests on arithmetic
+            that no amount of re-reading can check: keep it at confidence "low", phrase it as
+            "CI will confirm", and never state the failure as settled fact.
             {{relatedTests}}
             {{/if}}
 

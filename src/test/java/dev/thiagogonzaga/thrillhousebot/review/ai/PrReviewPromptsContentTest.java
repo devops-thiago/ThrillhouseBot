@@ -22,10 +22,11 @@ import org.junit.jupiter.api.Test;
 /**
  * Pins review/verifier prompt guidance so a future edit cannot silently revert it. Covers the
  * config/IaC severity recalibration (so declarative findings are not suppressed), the
- * parameter-nullability / unseen-caller guard (#107), and the in-diff-test exercise gate (a green
- * test must demonstrably hit the claimed path before it can invalidate a finding — #116). These
- * assertions are intentionally coarse — they check intent survives, not exact wording; an
- * intentional rewording should update the matching anchor.
+ * parameter-nullability / unseen-caller guard (#107), the in-diff-test exercise gate (a green test
+ * must demonstrably hit the claimed path before it can invalidate a finding — #116), and the
+ * symmetric exact-arithmetic / "test fails" cap (#97). These assertions are intentionally coarse —
+ * they check intent survives, not exact wording; an intentional rewording should update the
+ * matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
  * tracked separately ({@code evalcorpus/}); this is the cheap deterministic guard.
@@ -146,6 +147,65 @@ class PrReviewPromptsContentTest {
         sys,
         "may not exercise this path",
         "verifier downgrade reason must name that the test may not exercise the path");
+  }
+
+  @Test
+  void generatorPromptCapsExactArithmeticAndTestFailureClaims() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "a claim that a test FAILS",
+        "generator must carry the symmetric guard for the test-failure direction");
+    assertContains(
+        sys,
+        "line-count, array-length, or index arithmetic",
+        "generator must name exact-arithmetic claims as the capped category");
+    assertContains(
+        sys,
+        "never as settled fact",
+        "an arithmetic/test-failure claim must be phrased as a verification request");
+    assertContains(
+        sys,
+        "re-reading the same diff cannot check it",
+        "generator must say why a second reading cannot validate counting");
+  }
+
+  @Test
+  void generatorUserPromptHedgesClaimsThatAnInDiffTestItselfFails() {
+    String user = PrReviewPrompts.USER;
+    assertContains(
+        user,
+        "that one of these tests itself fails",
+        "related-tests guidance must cover the reverse claim that a provided test fails");
+    assertContains(
+        user,
+        "CI will confirm",
+        "a test-failure claim must be phrased as awaiting CI, not asserted");
+  }
+
+  @Test
+  void verifierPromptRejectsRecountedArithmeticAndTestFailureClaims() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "claims a specific test fails",
+        "verifier must have a rejection ground for definitive test-failure claims");
+    assertContains(
+        sys,
+        "settle such a claim by recounting",
+        "verifier must state that same-modality recounting cannot validate arithmetic");
+    assertContains(
+        sys,
+        "7 - 3 = 4 omitted",
+        "verifier must keep the PR #84 hand-counted off-by-one regression example");
+    assertContains(
+        sys,
+        "phrased as a verification request naming what to run",
+        "a properly hedged arithmetic claim must be downgraded rather than rejected");
+    assertContains(
+        sys,
+        "exact-arithmetic or test-failure claim is demonstrable only when",
+        "verifier severity calibration must cap arithmetic claims without an execution signal");
   }
 
   @Test
