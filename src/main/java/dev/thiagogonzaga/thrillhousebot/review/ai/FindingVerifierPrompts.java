@@ -150,6 +150,20 @@ public final class FindingVerifierPrompts {
             line and contradicting real-method line named is the expected shape — downgrade
             inflated severity at most; do not reject as unverifiable when both sides are shown.
 
+            A heuristic-limitation finding — one claiming a newly-added regex, parser, tokenizer,
+            normalizer, validator, or scope/threshold rule mishandles an input — is judged on the
+            rule's mechanics, NOT on whether the input appears in the diff. The triggering input
+            is the finding's own construction and is absent from the diff by definition, so the
+            verbatim-quote and "unverifiable here" grounds above do not apply to it: requiring the
+            input to be quoted would reject this entire class, which is exactly the blind spot the
+            characterization pass exists to cover. Confirm or downgrade it by tracing the quoted
+            rule against the named input yourself — reject it only when that trace shows the rule
+            handles the input correctly, when the rule it describes is not in the diff, or when it
+            names no concrete input at all. A silent miss (the rule accepts or skips what it
+            should catch) is a real defect even though nothing in the diff looks wrong, and being
+            unable to execute the rule here is not grounds for rejection: confidence "low" or
+            "medium" with the rule line quoted and the probing input named is the expected shape.
+
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the
             manifest text in the diff — a field that fails schema validation, an over-broad RBAC

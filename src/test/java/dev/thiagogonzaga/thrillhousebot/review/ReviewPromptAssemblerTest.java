@@ -63,6 +63,30 @@ class ReviewPromptAssemblerTest {
   }
 
   @Test
+  void shouldOmitHeuristicSectionWhenDiffAddsNoHeuristicCode() {
+    assertEquals("", ReviewPromptAssembler.heuristicFailureModesSection(null));
+    assertEquals("", ReviewPromptAssembler.heuristicFailureModesSection(""));
+    assertEquals(
+        "",
+        ReviewPromptAssembler.heuristicFailureModesSection(
+            "--- a/src/main/java/dev/thiagogonzaga/Service.java\n"
+                + "+++ b/src/main/java/dev/thiagogonzaga/Service.java\n"
+                + "@@ -1,2 +1,3 @@\n"
+                + "+    var trimmed = payload.trim();\n"));
+  }
+
+  @Test
+  void shouldEmitHeuristicSectionWhenDiffAddsARegex() {
+    assertEquals(
+        PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST,
+        ReviewPromptAssembler.heuristicFailureModesSection(
+            "--- a/src/main/java/dev/thiagogonzaga/Trigger.java\n"
+                + "+++ b/src/main/java/dev/thiagogonzaga/Trigger.java\n"
+                + "@@ -1,2 +1,3 @@\n"
+                + "+  private static final Pattern P = Pattern.compile(\"/pause\");\n"));
+  }
+
+  @Test
   void shouldOmitBugFixSectionWhenPrIsNotABugFix() {
     assertEquals("", ReviewPromptAssembler.bugFixEfficacySection("Adds a new feature", "ctx"));
   }
