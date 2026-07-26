@@ -73,11 +73,27 @@ final class HeuristicCodeDetector {
   /** Diff header naming the file the following hunks belong to. */
   private static final Pattern DIFF_FILE_HEADER = Pattern.compile("^\\+\\+\\+ b/(.+)$");
 
-  private static final Pattern TEST_PATH =
-      Pattern.compile(
-          "(?i)(?:(?:^|/)(?:test|tests|spec|__tests__)/|[._-](?:test|spec)\\.|Test\\.java$)");
+  /**
+   * Test-path recognition, split across three patterns rather than one alternation: an anchor
+   * sitting in one branch of a top-level alternation leaves its scope implicit (java:S5850), and
+   * each of these carries at most one anchor and no competing branch.
+   */
+  private static final Pattern TEST_DIRECTORY_SEGMENT =
+      Pattern.compile("(?i)(?:^|/)(?:test|tests|spec|__tests__)/");
+
+  /** A {@code .test.} / {@code _spec.} style marker in the file name. */
+  private static final Pattern TEST_FILENAME_MARKER = Pattern.compile("(?i)[._-](?:test|spec)\\.");
+
+  /** The Java convention, which only counts at the end of the path. */
+  private static final Pattern JAVA_TEST_SUFFIX = Pattern.compile("Test\\.java$");
 
   private HeuristicCodeDetector() {}
+
+  private static boolean isTestPath(String path) {
+    return TEST_DIRECTORY_SEGMENT.matcher(path).find()
+        || TEST_FILENAME_MARKER.matcher(path).find()
+        || JAVA_TEST_SUFFIX.matcher(path).find();
+  }
 
   /**
    * Whether any added line outside a test file introduces heuristic code. Scans the unified diff in
@@ -93,7 +109,7 @@ final class HeuristicCodeDetector {
       // all here keeps the flag from carrying over to the next file and out of the content check.
       if (line.startsWith("+++ ")) {
         var header = DIFF_FILE_HEADER.matcher(line);
-        inTestFile = header.matches() && TEST_PATH.matcher(header.group(1)).find();
+        inTestFile = header.matches() && isTestPath(header.group(1));
         continue;
       }
       if (inTestFile || line.length() < 2 || line.charAt(0) != '+') {
