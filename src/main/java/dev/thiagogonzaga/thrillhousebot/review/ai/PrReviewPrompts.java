@@ -528,5 +528,39 @@ public final class PrReviewPrompts {
             - A faithful stub that matches the real contract is not a finding."""
           .stripIndent();
 
+  public static final String HEURISTIC_FAILURE_MODES_REQUEST =
+      """
+            ## Heuristic Failure-Mode Characterization
+            This PR introduces parsing, regex, validation, or heuristic code. Do not grade it the
+            way you grade a null check. It is a function whose decision boundary you must
+            characterize, and the input that breaks it is by definition NOT in the diff — so
+            re-reading the added lines cannot find the defect. For those hunks only:
+            - Identify each new decision rule: a regex or `Pattern.compile`, a tokenizer or
+              segmenter, a normalize/compact step, a matching or scoping rule, a threshold or
+              window constant.
+            - For each, SYNTHESIZE the inputs that probe its edges and name them literally in the
+              description. Work from the rule's own mechanics, for example: a paren-counting
+              regex meets a lambda or a nested call; an ASCII whitespace class meets a non-breaking
+              space, a zero-width joiner, or a line-wrapped string; a line-oriented rule meets a
+              CRLF file or a line with no trailing newline; a scope window meets an occurrence one
+              line outside it; a "starts with" check meets the token inside a fenced code block or
+              a blockquote; a presence check meets a value that is present but the wrong shape
+              (non-numeric where a number is required).
+            - Report BOTH directions, and weight the one the code cannot tell you about: a false
+              positive (it matches what it should not) is visible when you read the rule; a false
+              NEGATIVE (it silently misses, mis-segments, or accepts) is the defect class this
+              section exists for. "Handles the shown cases correctly" is not a conclusion — say
+              which inputs you probed and which the rule mishandles.
+            - Anchor at the new rule's line and quote that line. The synthesized input is your
+              own construction and will NOT appear in the diff — say so plainly ("input not in
+              the diff: ..."), and never present it as quoted material.
+            - Use confidence "low" or "medium" and phrase the consequence as a verification
+              request naming the input to try. A limitation you cannot execute here is still worth
+              reporting at that confidence; it is not a nitpick and the uncertainty is inherent to
+              the claim, not a reason to omit it.
+            - A rule whose edges you probed and found sound is not a finding. Say nothing rather
+              than manufacturing a limitation."""
+          .stripIndent();
+
   private PrReviewPrompts() {}
 }

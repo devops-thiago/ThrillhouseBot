@@ -68,10 +68,14 @@ public class ReviewPromptAssembler {
             combineSections(
                 combineSections(
                     combineSections(
-                        labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
-                        diagramGuidance),
-                    mockFidelitySection(relatedTests)),
-                bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext())),
+                        combineSections(
+                            labelGuidance.isBlank()
+                                ? ""
+                                : PromptTemplateEscaper.escape(labelGuidance),
+                            diagramGuidance),
+                        mockFidelitySection(relatedTests)),
+                    bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext())),
+                heuristicFailureModesSection(ctx.diff())),
             PromptSections.instructionsSection(ctx.instructions(), INSTRUCTIONS_GUIDANCE));
     return new AiReviewService.PromptInputs(
         fencedDiff,
@@ -93,6 +97,18 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PrReviewPrompts.MOCK_FIDELITY_REQUEST;
+  }
+
+  /**
+   * Failure-mode characterization guidance — empty unless the diff introduces parsing / regex /
+   * validation / heuristic code, whose defects need synthesized inputs rather than closer reading
+   * (issue #123).
+   */
+  static String heuristicFailureModesSection(String diff) {
+    if (!HeuristicCodeDetector.introducesHeuristicCode(diff)) {
+      return "";
+    }
+    return PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
   }
 
   /**

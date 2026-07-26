@@ -23,10 +23,10 @@ import org.junit.jupiter.api.Test;
  * Pins review/verifier prompt guidance so a future edit cannot silently revert it. Covers the
  * config/IaC severity recalibration (so declarative findings are not suppressed), the
  * parameter-nullability / unseen-caller guard (#107), the in-diff-test exercise gate (a green test
- * must demonstrably hit the claimed path before it can invalidate a finding — #116), and the
- * symmetric exact-arithmetic / "test fails" cap (#97). These assertions are intentionally coarse —
- * they check intent survives, not exact wording; an intentional rewording should update the
- * matching anchor.
+ * must demonstrably hit the claimed path before it can invalidate a finding — #116), the symmetric
+ * exact-arithmetic / "test fails" cap (#97), and the heuristic failure-mode characterization pass
+ * with its verifier exemption (#123). These assertions are intentionally coarse — they check intent
+ * survives, not exact wording; an intentional rewording should update the matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
  * tracked separately ({@code evalcorpus/}); this is the cheap deterministic guard.
@@ -252,6 +252,48 @@ class PrReviewPromptsContentTest {
         sys,
         "parameter-nullability / precondition claim is demonstrable when",
         "verifier severity calibration must reject unseen-caller precondition claims");
+  }
+
+  @Test
+  void heuristicRequestDemandsSynthesizedInputsAndFalseNegativeReporting() {
+    String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
+    assertContains(
+        req,
+        "SYNTHESIZE",
+        "the characterization pass must instruct the model to invent probing inputs");
+    assertContains(
+        req,
+        "NEGATIVE (it silently misses",
+        "the pass must weight silent misses, not only visible false positives");
+    assertContains(
+        req,
+        "never present it as quoted material",
+        "a synthesized input must be labelled as absent from the diff, not quoted as material");
+    assertContains(
+        req,
+        "not a nitpick",
+        "an unexecutable heuristic limitation must not be omitted as uncertain");
+  }
+
+  @Test
+  void verifierPromptExemptsHeuristicLimitationsFromTheQuotedInputRule() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "A heuristic-limitation finding",
+        "verifier must judge heuristic-limitation findings on their own terms");
+    assertContains(
+        sys,
+        "absent from the diff by definition",
+        "verifier must accept that the triggering input cannot appear in the diff");
+    assertContains(
+        sys,
+        "would reject this entire class",
+        "verifier must be told the quote rule would otherwise erase the whole finding class");
+    assertContains(
+        sys,
+        "not grounds for rejection",
+        "inability to execute the rule must not become a rejection ground");
   }
 
   @Test
