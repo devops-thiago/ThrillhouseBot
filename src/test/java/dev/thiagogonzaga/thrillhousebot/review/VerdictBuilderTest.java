@@ -562,6 +562,72 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void renameTargetsFiltersMixedInputsAndDistinguishesPureFromContentRenames() {
+    var targets =
+        VerdictBuilder.renameTargets(
+            java.util.Arrays.asList(
+                null,
+                new FileDiff("src/Modified.java", "modified", 1, 0, 1, "+change", "old.java"),
+                new FileDiff("src/NoPrevious.java", "renamed", 0, 0, 0, null, null),
+                new FileDiff("src/BlankPrevious.java", "renamed", 0, 0, 0, "", "  "),
+                new FileDiff("new/Pure.java", "RENAMED", 0, 0, 0, "  ", "old/Pure.java"),
+                new FileDiff(
+                    "new/Edited.java",
+                    "renamed",
+                    1,
+                    0,
+                    1,
+                    "@@ -1 +1 @@\n-old\n+new",
+                    "old/Edited.java")));
+
+    assertEquals(Map.of("old/Pure.java", "", "old/Edited.java", "new/Edited.java"), targets);
+  }
+
+  @Test
+  void pureRenameRollupIsInsertedIntoPositiveSummaryAsAiReviewScope() {
+    var pureRename = new FileDiff("new/Pure.java", "renamed", 0, 0, 0, null, "old/Pure.java");
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(pureRename),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            List.of(),
+            "",
+            "",
+            List.of(),
+            () -> new DiffLineResolver(Map.of()),
+            null);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 pure rename omitted from AI review "
+                    + "(old/Pure.java → new/Pure.java)\n\n"),
+        result.summaryMarkdown());
+  }
+
+  @Test
   void nullStrictnessInTestConstructorFallsBackToBalanced() {
     var nullModeBuilder =
         new VerdictBuilder(

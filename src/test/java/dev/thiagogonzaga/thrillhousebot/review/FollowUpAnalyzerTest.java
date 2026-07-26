@@ -869,6 +869,70 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void addUnreportedVanishedShouldPassThroughGuardInputsAndAcceptNullStatuses() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", "@@ -1,1 +1,1 @@\n-old\n+flagged()"));
+    var reported = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "medium", "src/A.java", 1, "Finding", "description", "flagged()", null));
+
+    assertEquals(reported, analyzer.addUnreportedVanished(null, reported, resolver, Map.of()));
+    assertEquals(reported, analyzer.addUnreportedVanished(List.of(), reported, resolver, Map.of()));
+    assertEquals(reported, analyzer.addUnreportedVanished(previous, reported, null, Map.of()));
+    assertTrue(analyzer.addUnreportedVanished(previous, null, resolver, Map.of()).isEmpty());
+  }
+
+  @Test
+  void addUnreportedVanishedShouldHandleReportedUnplaceablePresentVanishedAndRenamedFindings() {
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "medium", "src/Reported.java", 1, "Reported", "d", "reported()", null),
+            new ReviewResponse.Finding("medium", null, 2, "No file", "d", "unplaceable()", null),
+            new ReviewResponse.Finding(
+                "medium", "src/Still.java", 3, "Still", "d", "stillFlagged()", null),
+            new ReviewResponse.Finding(
+                "medium", "src/Gone.java", 4, "Gone", "d", "goneFlagged()", null),
+            new ReviewResponse.Finding(
+                "medium", "old/Moved.java", 5, "Moved", "d", "movedFlagged()", null),
+            new ReviewResponse.Finding(
+                "medium", "old/Gone.java", 6, "Moved then gone", "d", "goneAgain()", null),
+            new ReviewResponse.Finding(
+                "medium", "old/Pure.java", 7, "Pure rename", "d", "unchanged()", null));
+    var reported = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                "src/Still.java", "@@ -3,1 +3,1 @@\n-old\n+stillFlagged()",
+                "new/Moved.java", "@@ -5,1 +5,1 @@\n-old\n+movedFlagged()"));
+    var renameTargets =
+        Map.of(
+            "old/Moved.java", "new/Moved.java",
+            "old/Gone.java", "new/Gone.java",
+            "old/Pure.java", "");
+
+    var statuses = analyzer.addUnreportedVanished(previous, reported, resolver, renameTargets);
+
+    assertEquals(List.of(1, 4, 6, 7), statuses.stream().map(s -> s.id()).toList());
+    assertEquals("superseded", statuses.get(1).status());
+    assertEquals("superseded", statuses.get(2).status());
+    assertEquals("unresolved", statuses.get(3).status());
+    assertTrue(statuses.get(3).note().contains("renamed without content changes"));
+  }
+
+  @Test
+  void supersedeVanishedShouldKeepUnresolvedAcrossPureRename() {
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
+
+    var rewritten =
+        analyzer.supersedeVanished(
+            PREVIOUS_JSON, statuses, new DiffLineResolver(Map.of()), Map.of("src/A.java", ""));
+
+    assertEquals(statuses, rewritten);
+  }
+
+  @Test
   void unreportedPureRenameShouldRemainUnresolved() {
     var previous =
         List.of(

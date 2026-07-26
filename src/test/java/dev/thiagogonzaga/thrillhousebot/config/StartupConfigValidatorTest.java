@@ -295,6 +295,47 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenGlobalSafetyMarginIsNonFinite() {
+    for (var margin :
+        new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY}) {
+      var ex = assertFailsValidation(new ConfigBuilder().tokenSafetyMargin(margin).build());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_TOKEN_SAFETY_MARGIN must be in (0, 1] and finite"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void failsFastWhenPerModelFloatingPointSettingsAreNonFinite() {
+    var settings = emptyModelSettings();
+    lenient().when(settings.tokenSafetyMargin()).thenReturn(Optional.of(Double.NaN));
+    lenient().when(settings.temperature()).thenReturn(Optional.of(Double.POSITIVE_INFINITY));
+    lenient().when(settings.topP()).thenReturn(Optional.of(Double.NEGATIVE_INFINITY));
+    lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(Double.NaN));
+    lenient().when(settings.presencePenalty()).thenReturn(Optional.of(Double.POSITIVE_INFINITY));
+
+    var ex = assertFailsValidation(new ConfigBuilder().model("non-finite", settings).build());
+    var message = ex.getMessage();
+    assertTrue(message.contains("token-safety-margin must be in (0, 1] and finite"), message);
+    assertTrue(message.contains("temperature must be in [0, 2] and finite"), message);
+    assertTrue(message.contains("top-p must be in (0, 1] and finite"), message);
+    assertTrue(message.contains("frequency-penalty must be in [-2, 2] and finite"), message);
+    assertTrue(message.contains("presence-penalty must be in [-2, 2] and finite"), message);
+  }
+
+  @Test
+  void failsFastWhenEnabledBudgetDoesNotReserveConfiguredResponseCap() {
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_193));
+
+    var ex = assertFailsValidation(new ConfigBuilder().model("deepseek-chat", settings).build());
+    assertTrue(
+        ex.getMessage()
+            .contains("effective output buffer (8192) must be >= max-output-tokens (8193)"),
+        ex.getMessage());
+  }
+
+  @Test
   void failsFastWhenOutputBufferLeavesNoDiffBudget() {
     var ex =
         assertFailsValidation(
