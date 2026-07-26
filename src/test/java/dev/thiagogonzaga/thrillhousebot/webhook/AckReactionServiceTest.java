@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -156,26 +157,46 @@ class AckReactionServiceTest {
   }
 
   @Test
-  void shouldRestoreInterruptFlagWhenInterrupted() {
-    // Block the reaction so the wait cannot return before noticing the interrupt — Future.get only
-    // throws InterruptedException when it actually has to wait, so an already-completed task would
-    // race past the interrupted path.
+  void shouldRestoreInterruptFlagWhenInterrupted() throws Exception {
+    // Interrupting before addEyes makes the stub's use a race: awaitDone throws on its first
+    // iteration while the task is still NEW, so the wait can end before the virtual thread ever
+    // calls the client, and strict stubs then fails with UnnecessaryStubbing — intermittently, and
+    // only under load, which is why it surfaced in CI and not locally. Ordering is therefore
+    // explicit: enter the stub, then interrupt, then assert.
+    var entered = new CountDownLatch(1);
     var release = new CountDownLatch(1);
     doAnswer(
             invocation -> {
+              entered.countDown();
               release.await(5, TimeUnit.SECONDS);
               return null;
             })
         .when(reactionClient)
         .createIssueCommentReaction(
             anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-    Thread.currentThread().interrupt();
 
-    assertDoesNotThrow(
-        () -> service.addEyes(42L, "owner", "repo", 1001L, AckReactionService.CommentKind.ISSUE));
+    var interruptFlagAfterCall = new AtomicBoolean();
+    var returned = new CountDownLatch(1);
+    var caller =
+        new Thread(
+            () -> {
+              service.addEyes(42L, "owner", "repo", 1001L, AckReactionService.CommentKind.ISSUE);
+              interruptFlagAfterCall.set(Thread.currentThread().isInterrupted());
+              returned.countDown();
+            },
+            "ack-interrupt-caller");
+    caller.start();
 
-    // The interrupt is swallowed for the caller but must stay visible on the thread.
-    assertTrue(Thread.interrupted());
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "reaction call never started");
+    caller.interrupt();
+
+    // The interrupt is swallowed for the caller — addEyes returns instead of throwing.
+    assertTrue(returned.await(5, TimeUnit.SECONDS), "addEyes never returned after the interrupt");
     release.countDown();
+    caller.join(5_000);
+
+    // Only the production catch block can have set this: the test never interrupts this thread
+    // before addEyes, so a missing Thread.currentThread().interrupt() fails here.
+    assertTrue(interruptFlagAfterCall.get(), "interrupt flag must stay visible on the caller");
   }
 }
