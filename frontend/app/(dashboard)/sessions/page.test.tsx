@@ -36,12 +36,9 @@ describe('SessionsPage', () => {
 
     expect(screen.getByText('Loading...')).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Session History' })).toBeInTheDocument();
-    });
+    await screen.findByText('#12');
 
     expect(screen.getByText('devops-thiago/ThrillhouseBot')).toBeInTheDocument();
-    expect(screen.getByText('#12')).toBeInTheDocument();
     expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
   });
 

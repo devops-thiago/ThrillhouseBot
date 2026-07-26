@@ -556,6 +556,13 @@ public final class PrReviewPrompts {
             - Anchor at the new rule's line and quote that line. The synthesized input is your
               own construction and will NOT appear in the diff — say so plainly ("input not in
               the diff: ..."), and never present it as quoted material.
+            - Before treating a synthesized input as a defect, require visible evidence in the
+              provided material that the input belongs to the rule's expected domain, or that the
+              observed result violates its contract — requirements, callers, tests, documentation,
+              comments, or API contracts. The rule's mechanics can prove what it does, but mechanics
+              alone cannot prove what it should accept or reject. Without that expected-domain
+              evidence, report only a confidence "low" verification request naming the input and
+              the missing contract to check; do not call the behavior a confirmed defect.
             - Use confidence "low" or "medium" and phrase the consequence as a verification
               request naming the input to try. A limitation you cannot execute here is still worth
               reporting at that confidence; it is not a nitpick and the uncertainty is inherent to

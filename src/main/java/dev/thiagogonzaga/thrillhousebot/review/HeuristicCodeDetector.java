@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayDeque;
 import java.util.regex.Pattern;
 
 /**
@@ -35,7 +36,17 @@ final class HeuristicCodeDetector {
   /** Explicit regex construction, across the languages the bot reviews. */
   private static final Pattern REGEX_CONSTRUCTION =
       Pattern.compile(
-          "Pattern\\.compile\\(|re\\.compile\\(|new\\s+RegExp\\(|regexp\\.MustCompile\\(|\\bRegex\\(");
+          "Pattern\\s*\\.\\s*compile\\s*\\(|re\\s*\\.\\s*compile\\s*\\("
+              + "|new\\s+RegExp\\s*\\(|regexp\\s*\\.\\s*MustCompile\\s*\\(|\\bRegex\\s*\\(");
+
+  /** JavaScript/TypeScript regex literal in a value-producing position, not division or a URL. */
+  private static final Pattern JS_REGEX_LITERAL =
+      Pattern.compile(
+          "(?:=|\\breturn\\b|\\(|,|:)\\s*/(?:\\\\.|[^/\\\\\\r\\n])+/[dgimsuvy]*"
+              + "(?:\\s*[,;).]|\\s*$)");
+
+  /** Source paths where slash-delimited regex literals are language syntax. */
+  private static final Pattern JS_REGEX_PATH = Pattern.compile("(?i)\\.(?:[cm]?js|jsx|tsx?)$");
 
   /** Char-level scanning: a parser written by hand, where an index slips silently. */
   private static final Pattern CHAR_SCANNING = Pattern.compile("\\.charAt\\(|\\.codePointAt\\(");
@@ -53,9 +64,26 @@ final class HeuristicCodeDetector {
    */
   private static final Pattern HEURISTIC_DECLARATION =
       Pattern.compile(
-          "(?i)\\b(?:private|public|protected|internal|static|final|fun|def|func)\\b[^(=\\r\\n]*"
-              + "(?<![.\\w])(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e"
-              + "|canonicali[sz]e|sanitiz|lex|scan|split)\\w*\\s*\\(");
+          "(?i)\\b(?:private|public|protected|internal|static|final|fun|def|func|function)\\b"
+              + "[^(=\\r\\n]*(?<![.\\w])"
+              + "(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e|canonicali[sz]e"
+              + "|sanitiz|lex|scan|split)\\w*\\s*\\(");
+
+  /** Package-private Java-style method declaration, where no visibility keyword is present. */
+  private static final Pattern PACKAGE_PRIVATE_HEURISTIC_DECLARATION =
+      Pattern.compile(
+          "(?i)^\\+\\s*(?!(?:return|if|for|while|switch|throw|new)\\b)"
+              + "(?:@[\\w.]+\\s+)?(?:[\\w$<>?,.\\[\\]]+\\s+)+"
+              + "(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e|canonicali[sz]e"
+              + "|sanitiz|lex|scan|split)\\w*\\s*\\(");
+
+  /** JavaScript/TypeScript parser or validator assigned to an arrow/function expression. */
+  private static final Pattern ASSIGNED_HEURISTIC_DECLARATION =
+      Pattern.compile(
+          "(?i)\\b(?:const|let|var)\\s+"
+              + "(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e|canonicali[sz]e"
+              + "|sanitiz|lex|scan|split)\\w*\\s*=\\s*"
+              + "(?:function\\s*\\(|(?:async\\s*)?(?:\\([^\\r\\n]*\\)|[\\w$]+)\\s*=>)");
 
   /**
    * An import/package line mentions a type without using it, so it is never itself heuristic code —
@@ -104,25 +132,40 @@ final class HeuristicCodeDetector {
       return false;
     }
     var inTestFile = false;
+    var inJavaScriptFile = false;
+    var addedLines = new ArrayDeque<String>(4);
     for (String line : diff.split("\n", -1)) {
       // Every "+++ " line is a header, including the "+++ /dev/null" of a deletion — consuming them
-      // all here keeps the flag from carrying over to the next file and out of the content check.
+      // all here keeps file state and the multiline window from carrying into the next file.
       if (line.startsWith("+++ ")) {
         var header = DIFF_FILE_HEADER.matcher(line);
-        inTestFile = header.matches() && isTestPath(header.group(1));
+        var hasSourcePath = header.matches();
+        var path = hasSourcePath ? header.group(1) : "";
+        inTestFile = hasSourcePath && isTestPath(path);
+        inJavaScriptFile = hasSourcePath && JS_REGEX_PATH.matcher(path).find();
+        addedLines.clear();
         continue;
       }
-      if (inTestFile || line.length() < 2 || line.charAt(0) != '+') {
+      // Only contiguous additions can form one declaration or construction. Context, removals,
+      // hunk headers, and ignored test-file content all terminate the bounded window.
+      if (inTestFile || line.isEmpty() || line.charAt(0) != '+') {
+        addedLines.clear();
         continue;
       }
-      if (isHeuristicLine(line)) {
+
+      addedLines.addLast(line);
+      if (addedLines.size() > 4) {
+        addedLines.removeFirst();
+      }
+      if (isHeuristicLine(line, inJavaScriptFile)
+          || isHeuristicWindow(addedLines, inJavaScriptFile)) {
         return true;
       }
     }
     return false;
   }
 
-  private static boolean isHeuristicLine(String addedLine) {
+  private static boolean isHeuristicLine(String addedLine, boolean inJavaScriptFile) {
     if (DECLARATION_ONLY_LINE.matcher(addedLine).find()) {
       return false;
     }
@@ -130,6 +173,38 @@ final class HeuristicCodeDetector {
         || CHAR_SCANNING.matcher(addedLine).find()
         || NORMALIZATION.matcher(addedLine).find()
         || HEURISTIC_DECLARATION.matcher(addedLine).find()
+        || PACKAGE_PRIVATE_HEURISTIC_DECLARATION.matcher(addedLine).find()
+        || (inJavaScriptFile
+            && (JS_REGEX_LITERAL.matcher(addedLine).find()
+                || ASSIGNED_HEURISTIC_DECLARATION.matcher(addedLine).find()))
         || THRESHOLD_CONSTANT.matcher(addedLine).find();
+  }
+
+  private static boolean isHeuristicWindow(
+      ArrayDeque<String> addedLines, boolean inJavaScriptFile) {
+    if (addedLines.size() < 2) {
+      return false;
+    }
+    String[] lines = addedLines.toArray(String[]::new);
+    // Check every suffix ending at the newest line. This recognizes a declaration that starts
+    // after an unrelated addition without letting text older than four lines influence the match.
+    for (int start = 0; start < lines.length - 1; start++) {
+      var joined = new StringBuilder(lines[start]);
+      for (int index = start + 1; index < lines.length; index++) {
+        joined.append(' ').append(lines[index], 1, lines[index].length());
+      }
+      if (hasMultilineHeuristicSignal(joined, inJavaScriptFile)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean hasMultilineHeuristicSignal(
+      CharSequence addedLines, boolean inJavaScriptFile) {
+    return REGEX_CONSTRUCTION.matcher(addedLines).find()
+        || HEURISTIC_DECLARATION.matcher(addedLines).find()
+        || PACKAGE_PRIVATE_HEURISTIC_DECLARATION.matcher(addedLines).find()
+        || (inJavaScriptFile && ASSIGNED_HEURISTIC_DECLARATION.matcher(addedLines).find());
   }
 }

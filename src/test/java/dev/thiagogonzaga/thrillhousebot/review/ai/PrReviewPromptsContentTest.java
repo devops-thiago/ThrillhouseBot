@@ -297,6 +297,40 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void heuristicRequestRequiresVisibleContractBeforeCallingBehaviorDefective() {
+    String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
+    assertContains(
+        req,
+        "input belongs to the rule's expected domain",
+        "mechanical edge probing must be tied to visible expected-domain evidence");
+    assertContains(
+        req,
+        "alone cannot prove what it should accept or reject",
+        "the generator must distinguish observed mechanics from contract violation");
+    assertContains(
+        req,
+        "do not call the behavior a confirmed defect",
+        "contract-free probes must remain low-confidence verification requests");
+  }
+
+  @Test
+  void verifierRequiresVisibleContractForHeuristicLimitations() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "input belongs to the expected domain",
+        "the verifier must require expected-domain evidence before confirmation");
+    assertContains(
+        sys,
+        "Mechanics alone prove behavior",
+        "the verifier must not infer the intended contract from mechanics alone");
+    assertContains(
+        sys,
+        "do not confirm it as a defect",
+        "a contract-free heuristic claim must be downgraded to a verification request");
+  }
+
+  @Test
   void diagramRequestRequiresQuotedNodeLabels() {
     String req = PrReviewPrompts.DIAGRAM_REQUEST;
     assertContains(
