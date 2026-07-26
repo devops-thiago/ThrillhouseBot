@@ -75,7 +75,7 @@ final class HeuristicCodeDetector {
 
   private static final Pattern TEST_PATH =
       Pattern.compile(
-          "(?i)(?:^|/)(?:test|tests|spec|__tests__)/|[._-](?:test|spec)\\.|Test\\.java$");
+          "(?i)(?:(?:^|/)(?:test|tests|spec|__tests__)/|[._-](?:test|spec)\\.|Test\\.java$)");
 
   private HeuristicCodeDetector() {}
 
