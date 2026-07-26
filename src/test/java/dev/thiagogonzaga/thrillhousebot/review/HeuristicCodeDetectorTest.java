@@ -145,6 +145,42 @@ class HeuristicCodeDetectorTest {
   }
 
   @Test
+  void shouldNotTriggerOnReceiverCallsThatMerelyStartWithAHeuristicName() {
+    // A declaration keyword plus Integer.parseInt(...) is an assignment, not a declared parser.
+    // The earlier ordinary-string-handling case used no declaration keyword and so missed this.
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Service.java",
+                "  private int id = Integer.parseInt(raw);",
+                "  private static final long WAIT = Long.parseLong(env);",
+                "  public boolean ok = validator.validate(input);")));
+  }
+
+  @Test
+  void shouldNotTriggerOnImportOrPackageLines() {
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Service.java",
+                "import java.text.Normalizer;",
+                "import java.util.regex.Pattern;")));
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("scripts/tool.py", "from re import compile")));
+  }
+
+  @Test
+  void shouldStillTriggerWhenTheImportIsAccompaniedByRealUse() {
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Compact.java",
+                "import java.text.Normalizer;",
+                "    return Normalizer.normalize(in, Normalizer.Form.NFKC);")));
+  }
+
+  @Test
   void shouldNotTriggerOnRemovedHeuristicCode() {
     String removal =
         "--- a/src/main/java/dev/thiagogonzaga/Old.java\n"

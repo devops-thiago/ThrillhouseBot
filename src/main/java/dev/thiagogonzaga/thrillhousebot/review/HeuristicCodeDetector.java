@@ -46,14 +46,23 @@ final class HeuristicCodeDetector {
 
   /**
    * A <em>declared</em> parse/validate/tokenize-style member — the decision boundary lives in its
-   * body. Requires a declaration keyword on the same line so a call like {@code parseInt(...)} does
-   * not trigger.
+   * body. Three constraints keep ordinary calls out: a declaration keyword on the same line, no
+   * {@code =} before the name (a field initializer is an assignment, not a declaration), and no
+   * {@code .} or word character immediately before it (so the receiver call {@code
+   * Integer.parseInt(...)} cannot pose as a declared {@code parse} member).
    */
   private static final Pattern HEURISTIC_DECLARATION =
       Pattern.compile(
-          "(?i)\\b(?:private|public|protected|internal|static|final|fun|def|func)\\b[^(\\r\\n]*"
-              + "\\b(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e|canonicali[sz]e"
-              + "|sanitiz|lex|scan|split)\\w*\\s*\\(");
+          "(?i)\\b(?:private|public|protected|internal|static|final|fun|def|func)\\b[^(=\\r\\n]*"
+              + "(?<![.\\w])(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e"
+              + "|canonicali[sz]e|sanitiz|lex|scan|split)\\w*\\s*\\(");
+
+  /**
+   * An import/package line mentions a type without using it, so it is never itself heuristic code —
+   * {@code import java.text.Normalizer;} must not stand in for normalization logic.
+   */
+  private static final Pattern DECLARATION_ONLY_LINE =
+      Pattern.compile("^\\+\\s*(?:import|from|package|using|#include)\\b");
 
   /** A tolerance/window constant — the #55 three-line ambiguity window is the motivating shape. */
   private static final Pattern THRESHOLD_CONSTANT =
@@ -98,6 +107,9 @@ final class HeuristicCodeDetector {
   }
 
   private static boolean isHeuristicLine(String addedLine) {
+    if (DECLARATION_ONLY_LINE.matcher(addedLine).find()) {
+      return false;
+    }
     return REGEX_CONSTRUCTION.matcher(addedLine).find()
         || CHAR_SCANNING.matcher(addedLine).find()
         || NORMALIZATION.matcher(addedLine).find()
