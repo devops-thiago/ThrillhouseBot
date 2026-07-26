@@ -4637,6 +4637,73 @@ class ReviewOrchestratorTest {
       }
     }
 
+    /**
+     * End-to-end guard for #136(c): every other backstop test stubs {@code
+     * unreportedUnresolvedStatusesFromParsed} to a canned list, so only the gate wiring (backstop
+     * list → previousStatuses → hasUnresolved → COMMENT) is exercised. Here the real analyzer runs
+     * inside {@code review()}, so a break anywhere along parse prior JSON → presence check →
+     * maintainer-reply check → 1-based id mapping fails this test.
+     */
+    @Test
+    void shouldHoldApproveViaTheRealBackstopComputationThroughReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = followUpSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        delegateStatusGate();
+        delegateBackstopComputation();
+        // The prior finding's line must still be in the diff, or presence correctly clears it.
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+        // Only the bot has spoken on the thread — no maintainer reply to justify dropping it.
+        when(reviewClient.listPullRequestComments(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.PullRequestComment(
+                        1L,
+                        null,
+                        "src/Main.java",
+                        "body",
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of(PRIOR_FINDING_JSON));
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), any(), any(), any(), eq(BOT_ID)))
+            .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
+        // The silent drop: this round reports neither the finding nor a status for it.
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+        orchestrator.review(followUpRequest());
+
+        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        verify(reviewClient)
+            .createReview(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+        assertEquals("COMMENT", captor.getValue().event());
+        assertTrue(captor.getValue().body().contains("remain unresolved"));
+      }
+    }
+
+    /** Runs the real parse + backstop computation instead of a canned status list. */
+    private void delegateBackstopComputation() {
+      when(followUpAnalyzer.parsePreviousResponses(any()))
+          .thenAnswer(invocation -> realAnalyzer.parsePreviousResponses(invocation.getArgument(0)));
+      when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+              any(), any(), any(), any(), eq(BOT_ID)))
+          .thenAnswer(
+              invocation ->
+                  realAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                      invocation.getArgument(0),
+                      invocation.getArgument(1),
+                      invocation.getArgument(2),
+                      invocation.getArgument(3),
+                      invocation.getArgument(4)));
+    }
+
     private static final String PRIOR_FINDING_JSON =
         "{\"findings\":[{\"risk\":\"medium\",\"file\":\"src/Main.java\",\"line\":10,"
             + "\"title\":\"Dropped finding\",\"description\":\"d\"}]}";
