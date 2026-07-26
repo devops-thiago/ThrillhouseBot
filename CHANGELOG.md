@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-26
+
+Review precision: confidence now decides where a finding lands, newly-added parsers and regexes are stress-tested for their own failure modes, and several classes of false positive are guarded at both the generator and the verifier. Operators gain configurable CI-gating and blocking strictness, structured skip reasons, and per-model generation parameters.
+
 ### Added
 
 - **Mock-fidelity review check** (#111): when a PR changes tests, the review prompt compares stubs/mocks (`when`/`doThrow`/`doReturn`) against the real collaborator's contract when that definition is already in the provided material, and flags contradictions (e.g. a mock that throws an exception the real method swallows) at low/medium confidence instead of treating the green test as proof. Softens the related-tests framing that previously reinforced unfaithful stubs; the skeptical verifier gains a matching rule. Broader cross-file collaborator retrieval remains with #55
