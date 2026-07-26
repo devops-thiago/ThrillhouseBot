@@ -84,7 +84,7 @@ final class HeuristicCodeDetector {
               + "(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e|canonicali[sz]e"
               + "|sanitiz|lex|scan|split)\\w*\\s*=\\s*"
               + "(?:function\\s*\\(|(?:async\\s*)?"
-              + "(?:\\((?:[^()\\r\\n]++|\\([^()\\r\\n]*+\\))*+\\)|[\\w$]+)\\s*=>)");
+              + "(?:\\((?=[^\\r\\n]*\\)\\s*=>)|[\\w$]+\\s*=>))");
 
   /**
    * An import/package line mentions a type without using it, so it is never itself heuristic code —
