@@ -140,9 +140,7 @@ public class FindingFeedbackCaptureService {
                   repo,
                   prNumber,
                   rootCommentId,
-                  replyAuthorLogin,
-                  replyAuthorAssociation,
-                  replyBody);
+                  new ReviewReply(replyAuthorLogin, replyAuthorAssociation, replyBody));
             } catch (RuntimeException e) {
               log.warn(
                   "Finding feedback capture failed for {}/{} #{} comment {} (continuing)",
@@ -153,7 +151,7 @@ public class FindingFeedbackCaptureService {
                   e);
             }
           });
-    } catch (RejectedExecutionException e) {
+    } catch (RejectedExecutionException _) {
       log.warn(
           "Finding feedback capture at capacity for {}/{} #{} comment {}; dropping task",
           owner,
@@ -203,6 +201,9 @@ public class FindingFeedbackCaptureService {
     }
   }
 
+  /** The reply that may carry feedback: who wrote it, their author association, and its body. */
+  record ReviewReply(String authorLogin, String authorAssociation, String body) {}
+
   void captureOnReviewReply(
       long installationId,
       String owner,
@@ -212,7 +213,12 @@ public class FindingFeedbackCaptureService {
       String replyAuthorLogin,
       String replyBody) {
     captureOnReviewReply(
-        installationId, owner, repo, prNumber, rootCommentId, replyAuthorLogin, "OWNER", replyBody);
+        installationId,
+        owner,
+        repo,
+        prNumber,
+        rootCommentId,
+        new ReviewReply(replyAuthorLogin, "OWNER", replyBody));
   }
 
   void captureOnReviewReply(
@@ -221,12 +227,12 @@ public class FindingFeedbackCaptureService {
       String repo,
       int prNumber,
       long rootCommentId,
-      String replyAuthorLogin,
-      String replyAuthorAssociation,
-      String replyBody) {
+      ReviewReply reply) {
+    var replyAuthorLogin = reply.authorLogin();
+    var replyBody = reply.body();
     var auth = authClient.getAuthHeader(installationId);
     var permissionCache = new HashMap<String, Boolean>();
-    if (!mayHoldWriteAccess(replyAuthorAssociation)
+    if (!mayHoldWriteAccess(reply.authorAssociation())
         || !hasWriteAccess(auth, owner, repo, replyAuthorLogin, permissionCache)) {
       return;
     }

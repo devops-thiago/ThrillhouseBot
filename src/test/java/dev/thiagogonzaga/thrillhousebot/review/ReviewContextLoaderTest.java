@@ -473,10 +473,12 @@ class ReviewContextLoaderTest {
       when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("GitHub unavailable"));
 
+      var reviewRequest = request();
+      var reviewSession = session();
       var error =
           assertThrows(
               IllegalStateException.class,
-              () -> loader.load("auth", request(), session(), "owner/repo"));
+              () -> loader.load("auth", reviewRequest, reviewSession, "owner/repo"));
 
       assertTrue(error.getMessage().contains("refusing to review potentially mixed revisions"));
     }

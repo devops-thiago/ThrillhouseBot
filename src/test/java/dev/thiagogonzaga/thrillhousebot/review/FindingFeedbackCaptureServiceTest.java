@@ -66,12 +66,17 @@ class FindingFeedbackCaptureServiceTest {
     capture.shutdown();
   }
 
+  /** An OWNER-association reply, the common case in these tests. */
+  private static FindingFeedbackCaptureService.ReviewReply reply(String authorLogin, String body) {
+    return new FindingFeedbackCaptureService.ReviewReply(authorLogin, "OWNER", body);
+  }
+
   @Test
   void captureOnReviewReplyRejectsNullOrBlankActorBeforePermissionLookup() {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
 
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, null, "OWNER", "false positive");
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "   ", "OWNER", "false positive");
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, reply(null, "false positive"));
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, reply("   ", "false positive"));
 
     verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
   }
@@ -80,7 +85,13 @@ class FindingFeedbackCaptureServiceTest {
   void captureOnReviewReplyRejectsNullAssociationBeforePermissionLookup() {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
 
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", null, "false positive");
+    capture.captureOnReviewReply(
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply("octocat", null, "false positive"));
 
     verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
   }
@@ -96,9 +107,9 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(new GitHubInstallationClient.CollaboratorPermission(null, null));
 
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, "null-response", "OWNER", "false positive");
+        9L, "owner", "repo", 7, 99L, reply("null-response", "false positive"));
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, "null-level", "OWNER", "false positive");
+        9L, "owner", "repo", 7, 99L, reply("null-level", "false positive"));
 
     verifyNoInteractions(reviewClient, reactionClient, feedbackService);
   }
@@ -113,7 +124,7 @@ class FindingFeedbackCaptureServiceTest {
     assertDoesNotThrow(
         () ->
             capture.captureOnReviewReply(
-                9L, "owner", "repo", 7, 99L, "octocat", "OWNER", "false positive"));
+                9L, "owner", "repo", 7, 99L, reply("octocat", "false positive")));
 
     verifyNoInteractions(reviewClient, reactionClient, feedbackService);
   }
@@ -244,7 +255,13 @@ class FindingFeedbackCaptureServiceTest {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
 
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, "external-contributor", "CONTRIBUTOR", "false positive");
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply(
+            "external-contributor", "CONTRIBUTOR", "false positive"));
 
     verifyNoInteractions(reviewClient, reactionClient, installationClient, feedbackService);
   }
@@ -257,7 +274,12 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", "read"));
 
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, "octocat", "MEMBER", "false positive");
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply("octocat", "MEMBER", "false positive"));
 
     verifyNoInteractions(reviewClient, reactionClient, feedbackService);
   }

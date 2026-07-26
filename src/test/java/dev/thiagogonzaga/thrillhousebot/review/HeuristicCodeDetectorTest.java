@@ -179,6 +179,20 @@ class HeuristicCodeDetectorTest {
   }
 
   @Test
+  void shouldNotTriggerOnDeclaredMembersWithoutAHeuristicName() {
+    // These carry the full declaration shape, so rejection happens on the captured member name.
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Service.java",
+                "  public String renderTitle(String raw) {",
+                "  Token renderToken(String raw) {")));
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/render.ts", "const renderToken = (value: string) => value;")));
+  }
+
+  @Test
   void shouldNotTriggerOnImportOrPackageLines() {
     assertFalse(
         HeuristicCodeDetector.introducesHeuristicCode(
@@ -347,12 +361,14 @@ class HeuristicCodeDetectorTest {
                 "      .compile(\"too-far-away\");")));
 
     String interrupted =
-        "--- a/src/main/java/dev/thiagogonzaga/Interrupted.java\n"
-            + "+++ b/src/main/java/dev/thiagogonzaga/Interrupted.java\n"
-            + "@@ -1,2 +1,4 @@\n"
-            + "+  Pattern\n"
-            + "   String context = value;\n"
-            + "+      .compile(\"after-context\");\n";
+        """
+        --- a/src/main/java/dev/thiagogonzaga/Interrupted.java
+        +++ b/src/main/java/dev/thiagogonzaga/Interrupted.java
+        @@ -1,2 +1,4 @@
+        +  Pattern
+           String context = value;
+        +      .compile("after-context");
+        """;
     assertFalse(HeuristicCodeDetector.introducesHeuristicCode(interrupted));
 
     String files =

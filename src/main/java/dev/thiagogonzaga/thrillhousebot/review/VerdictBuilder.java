@@ -175,12 +175,13 @@ public class VerdictBuilder {
         effectiveResponse,
         ctx.isFirstVisibleReview(),
         diffStats,
-        changedFiles,
+        new SummaryInputs(
+            changedFiles,
+            ReviewDiffFormatter.formatPureRenameRollup(
+                ReviewDiffFormatter.pureRenameFiles(ctx.files()))),
         unresolvedPrevious,
         ciEvaluation,
-        backstopUnresolved,
-        ReviewDiffFormatter.formatPureRenameRollup(
-            ReviewDiffFormatter.pureRenameFiles(ctx.files())));
+        backstopUnresolved);
   }
 
   static String conclusionForResult(ReviewResult result) {
@@ -356,6 +357,10 @@ public class VerdictBuilder {
         .toList();
   }
 
+  /** Inputs that only shape the summary walkthrough: the file rows and the pure-rename rollup. */
+  private record SummaryInputs(
+      List<PrSummaryGenerator.ChangedFile> changedFiles, String pureRenameRollup) {}
+
   ReviewResult buildResult(
       ReviewResponse aiResponse,
       boolean isFirstReview,
@@ -368,22 +373,22 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        changedFiles,
+        new SummaryInputs(changedFiles, ""),
         unresolvedPrevious,
         ciEvaluation,
-        backstopUnresolved,
-        "");
+        backstopUnresolved);
   }
 
   private ReviewResult buildResult(
       ReviewResponse aiResponse,
       boolean isFirstReview,
       DiffStats diffStats,
-      List<PrSummaryGenerator.ChangedFile> changedFiles,
+      SummaryInputs summaryInputs,
       List<Finding> unresolvedPrevious,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
-      List<ReviewResult.PreviousFindingStatus> backstopUnresolved,
-      String pureRenameRollup) {
+      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+    var changedFiles = summaryInputs.changedFiles();
+    var pureRenameRollup = summaryInputs.pureRenameRollup();
     var offendingCiChecks = ciEvaluation.offendingChecks();
     var ciUnreadable = ciEvaluation.unreadable();
     var requiredContextsKnown = ciEvaluation.requiredContextsKnown();
