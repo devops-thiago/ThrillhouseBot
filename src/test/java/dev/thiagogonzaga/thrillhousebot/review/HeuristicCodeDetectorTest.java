@@ -124,6 +124,21 @@ class HeuristicCodeDetectorTest {
   }
 
   @Test
+  void shouldIgnoreTestFilesRecognisedByFilenameRatherThanDirectory() {
+    // No test directory in either path, so these reach the filename marker and the Java suffix —
+    // the two checks a path like src/test/java/... short-circuits past.
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/page.spec.ts", "const RE = new RegExp('fixture');")));
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/parse.test.ts", "const RE = new RegExp('fixture');")));
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("app/src/FindingQuoteValidatorTest.java", "    if (raw.charAt(0) == '@') {")));
+  }
+
+  @Test
   void shouldStillTriggerWhenProductionAndTestFilesBothChange() {
     String combined =
         diff("src/test/java/dev/thiagogonzaga/FooTest.java", "    var re = Pattern.compile(\"x\");")
