@@ -237,6 +237,21 @@ class HeuristicCodeDetectorTest {
     assertTrue(
         HeuristicCodeDetector.introducesHeuristicCode(
             diff("frontend/src/version.tsx", "return /^(?:major|minor|patch)$/;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/path.ts", "const PATH = /^\\/api\\/v[0-9]+$/;")));
+  }
+
+  @Test
+  void shouldHandleLargeRegexAndArrowBodiesWithoutBacktrackingOverflow() {
+    var longToken = "x".repeat(100_000);
+
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/version.ts", "const VERSION = /" + longToken + "/;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/validate.ts", "const validateTag = (" + longToken + ") => true;")));
   }
 
   @Test
@@ -249,6 +264,14 @@ class HeuristicCodeDetectorTest {
             diff(
                 "frontend/src/validate.ts",
                 "const validateTag = (value: string) => value.length > 0;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/parse.ts", "const parseTag = value => value.split(':');")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "frontend/src/validate.ts",
+                "const validateTag = (predicate: (value: string) => boolean) => predicate('v1');")));
     assertTrue(
         HeuristicCodeDetector.introducesHeuristicCode(
             diff(

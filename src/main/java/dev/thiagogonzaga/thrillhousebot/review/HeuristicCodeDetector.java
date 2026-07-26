@@ -42,8 +42,8 @@ final class HeuristicCodeDetector {
   /** JavaScript/TypeScript regex literal in a value-producing position, not division or a URL. */
   private static final Pattern JS_REGEX_LITERAL =
       Pattern.compile(
-          "(?:=|\\breturn\\b|\\(|,|:)\\s*/(?:\\\\.|[^/\\\\\\r\\n])+/[dgimsuvy]*"
-              + "(?:\\s*[,;).]|\\s*$)");
+          "(?:=|\\breturn\\b|\\(|,|:)\\s*/(?:\\\\.|[^/\\\\\\r\\n])++/[dgimsuvy]*"
+              + "(?=\\s*(?:[,;).]|$))");
 
   /** Source paths where slash-delimited regex literals are language syntax. */
   private static final Pattern JS_REGEX_PATH = Pattern.compile("(?i)\\.(?:[cm]?js|jsx|tsx?)$");
@@ -83,7 +83,8 @@ final class HeuristicCodeDetector {
           "(?i)\\b(?:const|let|var)\\s+"
               + "(?:parse|validate|isValid|tokeni[sz]e|segment|normali[sz]e|canonicali[sz]e"
               + "|sanitiz|lex|scan|split)\\w*\\s*=\\s*"
-              + "(?:function\\s*\\(|(?:async\\s*)?(?:\\([^\\r\\n]*\\)|[\\w$]+)\\s*=>)");
+              + "(?:function\\s*\\(|(?:async\\s*)?"
+              + "(?:\\((?:[^()\\r\\n]++|\\([^()\\r\\n]*+\\))*+\\)|[\\w$]+)\\s*=>)");
 
   /**
    * An import/package line mentions a type without using it, so it is never itself heuristic code —
