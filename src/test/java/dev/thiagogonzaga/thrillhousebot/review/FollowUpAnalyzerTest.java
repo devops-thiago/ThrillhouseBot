@@ -878,6 +878,7 @@ class FollowUpAnalyzerTest {
                 "medium", "src/A.java", 1, "Finding", "description", "flagged()", null));
 
     assertEquals(reported, analyzer.addUnreportedVanished(null, reported, resolver, Map.of()));
+    assertTrue(analyzer.addUnreportedVanished(null, null, resolver, Map.of()).isEmpty());
     assertEquals(reported, analyzer.addUnreportedVanished(List.of(), reported, resolver, Map.of()));
     assertEquals(reported, analyzer.addUnreportedVanished(previous, reported, null, Map.of()));
     assertTrue(analyzer.addUnreportedVanished(previous, null, resolver, Map.of()).isEmpty());

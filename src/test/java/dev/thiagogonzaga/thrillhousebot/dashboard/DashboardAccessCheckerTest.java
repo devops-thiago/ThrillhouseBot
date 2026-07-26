@@ -109,6 +109,31 @@ class DashboardAccessCheckerTest {
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
+  @SuppressWarnings("unchecked")
+  @Test
+  void shouldIgnoreForeignRepositoryEntriesInCachedSnapshot() throws ReflectiveOperationException {
+    var repoRefClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoRef");
+    var repoRefConstructor = repoRefClass.getDeclaredConstructor(String.class, String.class);
+    repoRefConstructor.setAccessible(true);
+    var foreignRepo = repoRefConstructor.newInstance("other-owner", "demo");
+
+    var snapshotClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoSnapshot");
+    var snapshotConstructor =
+        snapshotClass.getDeclaredConstructor(
+            String.class, List.class, String.class, java.time.Instant.class);
+    snapshotConstructor.setAccessible(true);
+    var snapshot =
+        snapshotConstructor.newInstance("myowner", List.of(foreignRepo), "Bearer token", now.get());
+    var cacheField = DashboardAccessChecker.class.getDeclaredField("cachedSnapshot");
+    cacheField.setAccessible(true);
+    var cache = (java.util.concurrent.atomic.AtomicReference<Object>) cacheField.get(checker);
+    cache.set(snapshot);
+
+    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
   @Test
   void shouldAllowCollaboratorAccessToInstalledRepository() {
     stubInstalledRepo("myowner", "demo");

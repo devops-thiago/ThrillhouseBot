@@ -21,8 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -625,6 +627,18 @@ class VerdictBuilderTest {
                     + "\n\n> **AI review scope:** 1 pure rename omitted from AI review "
                     + "(old/Pure.java → new/Pure.java)\n\n"),
         result.summaryMarkdown());
+  }
+
+  @Test
+  void nullPureRenameRollupIsIgnored() {
+    try (var formatter = mockStatic(ReviewDiffFormatter.class, CALLS_REAL_METHODS)) {
+      formatter.when(() -> ReviewDiffFormatter.formatPureRenameRollup(List.of())).thenReturn(null);
+
+      var result =
+          builder.build(contextWithLineCapOmissions(0), CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+      assertEquals("", result.summaryMarkdown());
+    }
   }
 
   @Test
