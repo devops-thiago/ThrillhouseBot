@@ -53,6 +53,19 @@ public interface ThrillhouseConfig {
 
   AiPricingConfig ai();
 
+  MetricsConfig metrics();
+
+  interface MetricsConfig {
+    /**
+     * Serves the OpenTelemetry metrics in Prometheus text format at {@code GET /metrics} on the
+     * main HTTP port, alongside the OTLP export. Off by default: the endpoint is unauthenticated,
+     * so shield it at the proxy before enabling it on internet-facing deployments.
+     */
+    @WithDefault("false")
+    @WithName("prometheus-enabled")
+    boolean prometheusEnabled();
+  }
+
   NotificationsConfig notifications();
 
   interface GitHubConfig {
