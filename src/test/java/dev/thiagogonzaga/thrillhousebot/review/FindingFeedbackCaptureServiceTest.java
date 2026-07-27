@@ -166,14 +166,24 @@ class FindingFeedbackCaptureServiceTest {
     try {
       for (int i = 1; i <= maxConcurrentCaptures; i++) {
         capture.scheduleCaptureOnReviewReply(
-            i, "owner", "repo", 7, 99L, "octocat", "OWNER", "not useful");
+            i,
+            "owner",
+            "repo",
+            7,
+            99L,
+            new FindingFeedbackCaptureService.ReviewReply("octocat", "OWNER", "not useful"));
       }
       assertTrue(started.await(10, TimeUnit.SECONDS), "capture workers did not all start");
 
       assertDoesNotThrow(
           () ->
               capture.scheduleCaptureOnReviewReply(
-                  99L, "owner", "repo", 7, 99L, "octocat", "OWNER", "not useful"));
+                  99L,
+                  "owner",
+                  "repo",
+                  7,
+                  99L,
+                  new FindingFeedbackCaptureService.ReviewReply("octocat", "OWNER", "not useful")));
 
       verify(authClient, times(maxConcurrentCaptures)).getAuthHeader(anyLong());
       verify(authClient, never()).getAuthHeader(99L);
@@ -575,10 +585,45 @@ class FindingFeedbackCaptureServiceTest {
             any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
-    capture.scheduleCaptureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "OWNER", "thanks");
+    capture.scheduleCaptureOnReviewReply(
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply("octocat", "OWNER", "thanks"));
     verify(authClient, timeout(2000)).getAuthHeader(9L);
     verify(reviewClient, timeout(2000))
         .getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L));
+  }
+
+  @Test
+  void scheduleCaptureOnReviewReplyStopsWhenTheBotRootCarriesNoFindingMarker() {
+    // A bot comment that is not a finding — a summary or a conversational reply — has no index to
+    // attribute feedback to, so capture must stop before polling reactions.
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(reviewClient.getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L)))
+        .thenReturn(
+            new GitHubReviewClient.PullRequestComment(
+                99L,
+                null,
+                "Main.java",
+                "just a conversational reply, no marker",
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+
+    capture.scheduleCaptureOnReviewReply(
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply("octocat", "OWNER", "not useful"));
+
+    verify(reviewClient, timeout(2000))
+        .getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L));
+    verify(reactionClient, never())
+        .listReviewCommentReactions(
+            any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt());
   }
 
   @Test
@@ -609,7 +654,13 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() {
     when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth fail"));
-    capture.scheduleCaptureOnReviewReply(1L, "o", "r", 1, 9L, "u", "OWNER", "not useful");
+    capture.scheduleCaptureOnReviewReply(
+        1L,
+        "o",
+        "r",
+        1,
+        9L,
+        new FindingFeedbackCaptureService.ReviewReply("u", "OWNER", "not useful"));
     verify(authClient, timeout(2000)).getAuthHeader(1L);
   }
 

@@ -108,8 +108,13 @@ class FindingPipelineTest {
   }
 
   private static ReviewContextLoader.ReviewContext reviewContext() {
+    return reviewContext(List.of());
+  }
+
+  /** Same context with a caller-supplied changed-file list, so rename disclosure can be driven. */
+  private static ReviewContextLoader.ReviewContext reviewContext(List<FileDiff> files) {
     return new ReviewContextLoader.ReviewContext(
-        List.of(),
+        files,
         "raw legacy diff",
         "",
         0,
@@ -233,6 +238,41 @@ class FindingPipelineTest {
     var wrapped = FindingPipeline.unwrapParallelFailure(missingCause);
     assertEquals("Parallel batch review failed", wrapped.getMessage());
     assertSame(missingCause, wrapped.getCause());
+  }
+
+  @Test
+  void unwrapParallelFailurePreservesTheUnderlyingCause() {
+    // The caller distinguishes an AI failure from a wiring failure through getCause(), so the
+    // real cause must survive the IllegalStateException wrapper SpotBugs requires.
+    var cause = new IllegalArgumentException("model refused");
+    var wrapped = FindingPipeline.unwrapParallelFailure(new CompletionException(cause));
+
+    assertEquals("Parallel batch review failed", wrapped.getMessage());
+    assertSame(cause, wrapped.getCause());
+  }
+
+  @Test
+  void summaryOverviewLeadsWithThePureRenameRollup() {
+    var session = ReviewSession.create("owner/repo", 1, "Move a package", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var ctx =
+        reviewContext(
+            List.of(
+                new FileDiff("pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java"),
+                new FileDiff("a.java", "modified", 3, 0, 3, "")));
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    // Leading, so clamping a long overview can never drop the disclosure (#386).
+    assertTrue(
+        captor.getValue().changedFiles().startsWith("1 pure rename omitted from AI review"),
+        captor.getValue().changedFiles());
+    assertTrue(captor.getValue().changedFiles().contains("pkg/A.java → pkg/B.java"));
   }
 
   @Test

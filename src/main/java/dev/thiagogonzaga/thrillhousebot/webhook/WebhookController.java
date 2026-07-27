@@ -437,9 +437,8 @@ public class WebhookController {
           repo.name(),
           pr.number(),
           rootCommentId,
-          comment.user().login(),
-          comment.authorAssociation(),
-          comment.body());
+          new FindingFeedbackCaptureService.ReviewReply(
+              comment.user().login(), comment.authorAssociation(), comment.body()));
     }
 
     if (!config.review().conversationalRepliesEnabled()) {
