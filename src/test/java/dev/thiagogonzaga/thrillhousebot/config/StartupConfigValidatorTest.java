@@ -25,6 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 class StartupConfigValidatorTest {
@@ -578,5 +580,94 @@ class StartupConfigValidatorTest {
     assertEquals(
         StartupConfigValidator.DashboardOauthStatus.PARTIAL,
         StartupConfigValidator.dashboardOauthStatus(false, true));
+  }
+
+  @Nested
+  class ModelEnvVarMapping {
+
+    /** The properties key is unquoted (hyphens only), so SmallRye reads single underscores. */
+    @Test
+    void shouldUseSingleUnderscoresForAHyphenOnlyModelKey() {
+      assertEquals(
+          "THRILLHOUSEBOT_AI_MODELS_DEEPSEEK_V4_PRO_",
+          StartupConfigValidator.modelEnvPrefix("deepseek-v4-pro"));
+    }
+
+    /**
+     * A dotted key needs quoting in the properties file and doubles the surrounding underscores.
+     */
+    @Test
+    void shouldUseDoubledUnderscoresForADottedModelKey() {
+      assertEquals(
+          "THRILLHOUSEBOT_AI_MODELS__GPT_5_5__", StartupConfigValidator.modelEnvPrefix("gpt-5.5"));
+    }
+
+    @Test
+    void shouldWarnWhenTheWrongUnderscoreFormIsUsedForAKnownModel() {
+      // The doubled form belongs to dotted keys; on a hyphen-only key it resolves to nothing and
+      // the model silently keeps its default cap.
+      var warnings =
+          StartupConfigValidator.unmappedModelEnvWarnings(
+              Set.of("deepseek-v4-pro"),
+              Map.of("THRILLHOUSEBOT_AI_MODELS__DEEPSEEK_V4_PRO__MAX_INPUT_TOKENS", "1000000"));
+
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.get(0).contains("does not map to any model setting"), warnings.get(0));
+      assertTrue(
+          warnings.get(0).contains("THRILLHOUSEBOT_AI_MODELS_DEEPSEEK_V4_PRO_MAX_INPUT_TOKENS"),
+          "must name the spelling that actually works: " + warnings.get(0));
+    }
+
+    @Test
+    void shouldStaySilentWhenTheFormIsCorrect() {
+      assertTrue(
+          StartupConfigValidator.unmappedModelEnvWarnings(
+                  Set.of("deepseek-v4-pro"),
+                  Map.of("THRILLHOUSEBOT_AI_MODELS_DEEPSEEK_V4_PRO_MAX_INPUT_TOKENS", "1000000"))
+              .isEmpty());
+    }
+
+    @Test
+    void shouldStaySilentForACorrectlySpelledDottedKey() {
+      assertTrue(
+          StartupConfigValidator.unmappedModelEnvWarnings(
+                  Set.of("gpt-5.5"),
+                  Map.of("THRILLHOUSEBOT_AI_MODELS__GPT_5_5__MAX_INPUT_TOKENS", "256000"))
+              .isEmpty());
+    }
+
+    @Test
+    void shouldWarnWhenTheModelHasNoConfiguredStubAtAll() {
+      var warnings =
+          StartupConfigValidator.unmappedModelEnvWarnings(
+              Set.of("deepseek-v4-pro"),
+              Map.of("THRILLHOUSEBOT_AI_MODELS_LLAMA_9_MAX_INPUT_TOKENS", "8000"));
+
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.get(0).contains("does not map to any configured model"), warnings.get(0));
+      assertTrue(warnings.get(0).contains("empty stub"), warnings.get(0));
+    }
+
+    @Test
+    void shouldFallBackToTheGenericWarningWhenTheSettingNameIsNotRecognised() {
+      // Right model, wrong setting: naming a spelling would be misleading when the suffix itself
+      // is not a real per-model setting, so this takes the generic branch.
+      var warnings =
+          StartupConfigValidator.unmappedModelEnvWarnings(
+              Set.of("deepseek-v4-pro"),
+              Map.of("THRILLHOUSEBOT_AI_MODELS__DEEPSEEK_V4_PRO__CONTEXT_SIZE", "1000000"));
+
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.get(0).contains("does not map to any configured model"), warnings.get(0));
+    }
+
+    @Test
+    void shouldIgnoreUnrelatedEnvironmentVariables() {
+      assertTrue(
+          StartupConfigValidator.unmappedModelEnvWarnings(
+                  Set.of("deepseek-v4-pro"),
+                  Map.of("PATH", "/usr/bin", "REVIEW_MAX_INPUT_TOKENS", "900000"))
+              .isEmpty());
+    }
   }
 }

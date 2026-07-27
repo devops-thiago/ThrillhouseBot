@@ -22,8 +22,10 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,6 +104,7 @@ public class StartupConfigValidator {
     logReasoningStatus();
     logCiGatingStatus();
     logActiveModelStatus();
+    warnUnmappedModelEnvVars(System.getenv());
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
@@ -379,6 +382,91 @@ public class StartupConfigValidator {
           presencePenalty,
           seed);
     }
+  }
+
+  /** Env-var prefix every per-model setting shares. */
+  private static final String MODEL_ENV_PREFIX = "THRILLHOUSEBOT_AI_MODELS_";
+
+  /** The per-model setting names, in env-var form. */
+  private static final List<String> MODEL_SETTING_SUFFIXES =
+      List.of(
+          "MAX_INPUT_TOKENS",
+          "OUTPUT_BUFFER_TOKENS",
+          "TOKEN_SAFETY_MARGIN",
+          "MAX_OUTPUT_TOKENS",
+          "FREQUENCY_PENALTY",
+          "PRESENCE_PENALTY",
+          "TEMPERATURE",
+          "TOP_P",
+          "SEED");
+
+  /**
+   * The env-var prefix SmallRye actually reads for a model key. A key that needs quoting in the
+   * properties file because it contains a dot ({@code "gpt-5.5"}) maps with a doubled underscore
+   * either side of the key; a hyphen-only key ({@code deepseek-v4-pro}) maps with single ones.
+   */
+  static String modelEnvPrefix(String model) {
+    var upper = model.toUpperCase(Locale.ROOT).replace('-', '_').replace('.', '_');
+    return model.indexOf('.') >= 0
+        ? MODEL_ENV_PREFIX + "_" + upper + "__"
+        : MODEL_ENV_PREFIX + upper + "_";
+  }
+
+  /** Separator-insensitive form, so both underscore spellings of one key compare equal. */
+  private static String separatorInsensitive(String value) {
+    return value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+  }
+
+  /**
+   * Warns about {@code THRILLHOUSEBOT_AI_MODELS_*} variables that map to no configured model.
+   * Choosing the wrong underscore spelling resolves to nothing and the tuning silently never
+   * applies — the model keeps its default cap, and the only downstream signal is a budget that
+   * looks inexplicably small. Package-private so tests can drive an environment map.
+   */
+  void warnUnmappedModelEnvVars(Map<String, String> environment) {
+    unmappedModelEnvWarnings(config.ai().models().keySet(), environment).forEach(log::warn);
+  }
+
+  /**
+   * The warnings {@link #warnUnmappedModelEnvVars} emits, as plain strings so the rule is testable
+   * without a log appender. Sorted so the output is stable across environment iteration order.
+   */
+  static List<String> unmappedModelEnvWarnings(
+      Set<String> configuredModels, Map<String, String> environment) {
+    var warnings = new ArrayList<String>();
+    for (var name : environment.keySet()) {
+      if (!name.startsWith(MODEL_ENV_PREFIX)
+          || configuredModels.stream().anyMatch(model -> name.startsWith(modelEnvPrefix(model)))) {
+        continue;
+      }
+      var intended =
+          configuredModels.stream()
+              .filter(
+                  model ->
+                      separatorInsensitive(name)
+                          .startsWith(separatorInsensitive(modelEnvPrefix(model))))
+              .findFirst();
+      var setting = MODEL_SETTING_SUFFIXES.stream().filter(name::endsWith).findFirst();
+      if (intended.isPresent() && setting.isPresent()) {
+        warnings.add(
+            name
+                + " does not map to any model setting and is being ignored — model '"
+                + intended.get()
+                + "' is read as "
+                + modelEnvPrefix(intended.get())
+                + setting.get()
+                + ". Fix the underscores or the setting will silently never apply.");
+      } else {
+        warnings.add(
+            name
+                + " does not map to any configured model and is being ignored. Known models: "
+                + configuredModels
+                + ". An unlisted model needs an empty stub"
+                + " (thrillhousebot.ai.models.\"<model>\".max-input-tokens=) so its key exists.");
+      }
+    }
+    warnings.sort(String::compareTo);
+    return List.copyOf(warnings);
   }
 
   private static String orProviderDefault(Optional<? extends Number> value) {
