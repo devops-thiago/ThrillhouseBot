@@ -132,7 +132,7 @@ public class FindingFeedbackService {
             FindingFeedback.SIGNAL_NOT_USEFUL);
     var storedKey =
         repository
-            .find("lower(repository) = lower(?1)", key)
+            .find("lower(repository) = lower(?1) order by repository", key)
             .firstResultOptional()
             .map(f -> f.repository)
             .orElse(key);
