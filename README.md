@@ -564,7 +564,7 @@ gh attestation verify thrillhousebot-v0.1.0-linux-amd64.tar.gz \
 
 ## Development
 
-For local development without Docker, you'll need Java 25+, Node.js 20+ (dashboard),
+For local development without Docker, you'll need Java 25+, Node.js 22+ (dashboard),
 and a [Smee.io](https://smee.io/) channel for webhook forwarding. Use `./mvnw`
 for Maven (wrapper included).
 

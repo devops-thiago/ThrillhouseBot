@@ -21,9 +21,13 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -35,19 +39,148 @@ class FindingFeedbackCaptureServiceTest {
   @Mock private GitHubAuthClient authClient;
   @Mock private GitHubReactionClient reactionClient;
   @Mock private GitHubReviewClient reviewClient;
+  @Mock private GitHubInstallationClient installationClient;
 
   private FindingFeedbackCaptureService capture;
 
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    lenient()
+        .when(
+            installationClient.collaboratorPermission(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("write", "write"));
     capture =
         new FindingFeedbackCaptureService(
             feedbackService,
             BotIdentity.of("thrillhousebot[bot]"),
             authClient,
             reactionClient,
-            reviewClient);
+            reviewClient,
+            installationClient);
+  }
+
+  @AfterEach
+  void tearDown() {
+    capture.shutdown();
+  }
+
+  /** An OWNER-association reply, the common case in these tests. */
+  private static FindingFeedbackCaptureService.ReviewReply reply(String authorLogin, String body) {
+    return new FindingFeedbackCaptureService.ReviewReply(authorLogin, "OWNER", body);
+  }
+
+  @Test
+  void captureOnReviewReplyRejectsNullOrBlankActorBeforePermissionLookup() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, reply(null, "false positive"));
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, reply("   ", "false positive"));
+
+    verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplyRejectsNullAssociationBeforePermissionLookup() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+
+    capture.captureOnReviewReply(
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply("octocat", null, "false positive"));
+
+    verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplyRejectsMissingPermissionResponseOrLevel() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq("null-response")))
+        .thenReturn(null);
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq("null-level")))
+        .thenReturn(new GitHubInstallationClient.CollaboratorPermission(null, null));
+
+    capture.captureOnReviewReply(
+        9L, "owner", "repo", 7, 99L, reply("null-response", "false positive"));
+    capture.captureOnReviewReply(
+        9L, "owner", "repo", 7, 99L, reply("null-level", "false positive"));
+
+    verifyNoInteractions(reviewClient, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplyIgnoresPermissionApiException() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq("octocat")))
+        .thenThrow(new RuntimeException("api down"));
+
+    assertDoesNotThrow(
+        () ->
+            capture.captureOnReviewReply(
+                9L, "owner", "repo", 7, 99L, reply("octocat", "false positive")));
+
+    verifyNoInteractions(reviewClient, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplySkipsRootCommentWithNullUser() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(reviewClient.getPullRequestComment(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L)))
+        .thenReturn(
+            new GitHubReviewClient.PullRequestComment(
+                99L, null, "Main.java", "finding\n" + SuggestionFormatter.findingMarker(1), null));
+
+    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+
+    verifyNoInteractions(reactionClient, feedbackService);
+  }
+
+  @Test
+  void scheduleCaptureOnReviewReplyDropsTaskWhenExecutorIsAtCapacity() throws InterruptedException {
+    int maxConcurrentCaptures = 8;
+    var started = new CountDownLatch(maxConcurrentCaptures);
+    var release = new CountDownLatch(1);
+    var completed = new CountDownLatch(maxConcurrentCaptures);
+    when(authClient.getAuthHeader(anyLong()))
+        .thenAnswer(
+            ignored -> {
+              started.countDown();
+              release.await();
+              return "Bearer t";
+            });
+    when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
+        .thenAnswer(
+            ignored -> {
+              completed.countDown();
+              return null;
+            });
+
+    try {
+      for (int i = 1; i <= maxConcurrentCaptures; i++) {
+        capture.scheduleCaptureOnReviewReply(
+            i, "owner", "repo", 7, 99L, "octocat", "OWNER", "not useful");
+      }
+      assertTrue(started.await(10, TimeUnit.SECONDS), "capture workers did not all start");
+
+      assertDoesNotThrow(
+          () ->
+              capture.scheduleCaptureOnReviewReply(
+                  99L, "owner", "repo", 7, 99L, "octocat", "OWNER", "not useful"));
+
+      verify(authClient, times(maxConcurrentCaptures)).getAuthHeader(anyLong());
+      verify(authClient, never()).getAuthHeader(99L);
+    } finally {
+      release.countDown();
+    }
+    assertTrue(completed.await(10, TimeUnit.SECONDS), "accepted capture tasks did not complete");
   }
 
   @Test
@@ -97,6 +230,58 @@ class FindingFeedbackCaptureServiceTest {
                 3L));
     verify(feedbackService, never())
         .recordFeedback(argThat(in -> "thrillhousebot[bot]".equals(in.reactorLogin())));
+  }
+
+  @Test
+  void captureReactionsIgnoresReadOnlyCollaborators() {
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq("octocat")))
+        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", "read"));
+    when(reactionClient.listReviewCommentReactions(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
+        .thenReturn(
+            List.of(
+                new GitHubReactionClient.Reaction(
+                    1L, "+1", new GitHubReactionClient.Reaction.User("octocat", 1), "t")));
+
+    capture.captureReactions(
+        "Bearer t", "owner", "repo", 7, 99L, SuggestionFormatter.findingMarker(2));
+
+    verifyNoInteractions(feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplyRejectsNonMaintainerAssociationBeforeFetchingRoot() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+
+    capture.captureOnReviewReply(
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply(
+            "external-contributor", "CONTRIBUTOR", "false positive"));
+
+    verifyNoInteractions(reviewClient, reactionClient, installationClient, feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplyRejectsReadOnlyCollaboratorBeforeFetchingRoot() {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), eq("owner"), eq("repo"), eq("octocat")))
+        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", "read"));
+
+    capture.captureOnReviewReply(
+        9L,
+        "owner",
+        "repo",
+        7,
+        99L,
+        new FindingFeedbackCaptureService.ReviewReply("octocat", "MEMBER", "false positive"));
+
+    verifyNoInteractions(reviewClient, reactionClient, feedbackService);
   }
 
   @Test
@@ -329,8 +514,8 @@ class FindingFeedbackCaptureServiceTest {
   void captureOnPriorFindingsStopsAtMaxFindingsInDeterministicIdOrder() {
     var comments = new java.util.ArrayList<GitHubReviewClient.PullRequestComment>();
     int max = FindingFeedbackCaptureService.MAX_FINDINGS_PER_CAPTURE;
-    // Insert higher ids first so insertion order would prefer them; we must still poll the
-    // lowest comment ids and skip the highest.
+    // Insert higher ids first; newest roots are polled so recently added reaction-only feedback is
+    // not starved behind the oldest roots forever.
     for (int i = max + 2; i >= 1; i--) {
       long id = 1000L + i;
       comments.add(
@@ -357,21 +542,19 @@ class FindingFeedbackCaptureServiceTest {
             anyString(),
             eq(100),
             anyInt());
-    long skippedLow = 1000L + max + 1;
-    long skippedHigh = 1000L + max + 2;
     verify(reactionClient, never())
         .listReviewCommentReactions(
-            any(), any(), any(), any(), eq(skippedLow), anyString(), anyInt(), anyInt());
+            any(), any(), any(), any(), eq(1001L), anyString(), anyInt(), anyInt());
     verify(reactionClient, never())
         .listReviewCommentReactions(
-            any(), any(), any(), any(), eq(skippedHigh), anyString(), anyInt(), anyInt());
+            any(), any(), any(), any(), eq(1002L), anyString(), anyInt(), anyInt());
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
             eq("Bearer t"),
             anyString(),
             eq("owner"),
             eq("repo"),
-            eq(1001L),
+            eq(1000L + max + 2),
             anyString(),
             eq(100),
             anyInt());
@@ -392,7 +575,7 @@ class FindingFeedbackCaptureServiceTest {
             any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
-    capture.scheduleCaptureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "thanks");
+    capture.scheduleCaptureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "OWNER", "thanks");
     verify(authClient, timeout(2000)).getAuthHeader(9L);
     verify(reviewClient, timeout(2000))
         .getPullRequestComment(any(), any(), eq("owner"), eq("repo"), eq(99L));
@@ -426,7 +609,7 @@ class FindingFeedbackCaptureServiceTest {
   @Test
   void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() {
     when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth fail"));
-    capture.scheduleCaptureOnReviewReply(1L, "o", "r", 1, 9L, "u", "not useful");
+    capture.scheduleCaptureOnReviewReply(1L, "o", "r", 1, 9L, "u", "OWNER", "not useful");
     verify(authClient, timeout(2000)).getAuthHeader(1L);
   }
 

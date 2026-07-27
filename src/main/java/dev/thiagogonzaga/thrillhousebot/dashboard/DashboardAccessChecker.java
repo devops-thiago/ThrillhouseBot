@@ -112,6 +112,42 @@ public class DashboardAccessChecker {
   }
 
   /**
+   * Checks access to one installed repository rather than treating access to any installation as
+   * account-wide data access. The requested repository must belong to the configured account and be
+   * present in the current installation snapshot.
+   */
+  public boolean hasRepositoryAccess(String githubLogin, String repository) {
+    if (githubLogin == null || githubLogin.isBlank() || repository == null) {
+      return false;
+    }
+    var separator = repository.indexOf('/');
+    if (separator <= 0
+        || separator != repository.lastIndexOf('/')
+        || separator == repository.length() - 1) {
+      return false;
+    }
+    var requested =
+        new RepoRef(repository.substring(0, separator), repository.substring(separator + 1));
+    var accountOwner = accountOwner();
+    if (accountOwner.isEmpty() || !accountOwner.get().equalsIgnoreCase(requested.owner())) {
+      return false;
+    }
+    var snapshot = installedRepos(accountOwner.get());
+    var installed =
+        snapshot.repos().stream()
+            .filter(
+                repo ->
+                    repo.owner().equalsIgnoreCase(requested.owner())
+                        && repo.name().equalsIgnoreCase(requested.name()))
+            .findFirst();
+    if (installed.isEmpty() || snapshot.installationAuth() == null) {
+      return false;
+    }
+    return accountOwner.get().equalsIgnoreCase(githubLogin)
+        || hasRepoAccess(snapshot.installationAuth(), installed.get(), githubLogin);
+  }
+
+  /**
    * Resolves whether {@code githubLogin} may use the dashboard. Fails closed: when no account owner
    * can be determined the result is {@link AccessDecision#NOT_CONFIGURED} (deny), never an implicit
    * grant. The underlying misconfiguration is logged once per resolution attempt in {@link

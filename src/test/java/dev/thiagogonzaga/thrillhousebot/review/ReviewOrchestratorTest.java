@@ -155,6 +155,17 @@ class ReviewOrchestratorTest {
     lenient()
         .when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
         .thenReturn(List.of());
+    lenient()
+        .when(prClient.getPullRequest(any(), any(), any(), any(), anyInt()))
+        .thenReturn(
+            new GitHubPullRequestClient.PullRequestDetails(
+                "Test PR",
+                "",
+                new GitHubPullRequestClient.Ref("abcdefgh"),
+                new GitHubPullRequestClient.Ref("base-sha"),
+                1,
+                1,
+                1));
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
     doAnswer(
@@ -4641,8 +4652,8 @@ class ReviewOrchestratorTest {
      * End-to-end guard for #136(c): every other backstop test stubs {@code
      * unreportedUnresolvedStatusesFromParsed} to a canned list, so only the gate wiring (backstop
      * list → previousStatuses → hasUnresolved → COMMENT) is exercised. Here the real analyzer runs
-     * inside {@code review()}, so a break anywhere along parse prior JSON → presence check →
-     * maintainer-reply check → 1-based id mapping fails this test.
+     * inside {@code review()}, so a break anywhere along parse prior JSON → anchored presence check
+     * → maintainer-reply check → 1-based id mapping fails this test.
      */
     @Test
     void shouldHoldApproveViaTheRealBackstopComputationThroughReview() {
@@ -4653,11 +4664,11 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
         delegateStatusGate();
         delegateBackstopComputation();
-        // The prior finding's line must still be in the diff, or presence correctly clears it.
+        // The persisted "new" anchor must remain in the diff, or presence correctly clears it.
         when(prClient.getPullRequestFiles(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
-        // Only the bot has spoken on the thread — no maintainer reply to justify dropping it.
+        // A matchable bot root exists, but no maintainer replied to justify dropping the finding.
         when(reviewClient.listPullRequestComments(
                 anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
@@ -4666,7 +4677,8 @@ class ReviewOrchestratorTest {
                         1L,
                         null,
                         "src/Main.java",
-                        "body",
+                        "**🟡 MEDIUM — Dropped finding**\n\nd\n\n"
+                            + SuggestionFormatter.findingMarker(1),
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
@@ -4679,12 +4691,24 @@ class ReviewOrchestratorTest {
 
         orchestrator.review(followUpRequest());
 
-        var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+        var reviewCaptor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
         verify(reviewClient)
             .createReview(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
-        assertEquals("COMMENT", captor.getValue().event());
-        assertTrue(captor.getValue().body().contains("remain unresolved"));
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                reviewCaptor.capture());
+        assertEquals("COMMENT", reviewCaptor.getValue().event());
+        assertTrue(reviewCaptor.getValue().body().contains("remain unresolved"));
+
+        var resultCaptor = ArgumentCaptor.forClass(ReviewResult.class);
+        verify(summaryGenerator)
+            .generate(anyInt(), anyInt(), anyInt(), any(), any(), resultCaptor.capture());
+        var previousStatuses = resultCaptor.getValue().previousStatuses();
+        assertEquals(1, previousStatuses.size());
+        assertEquals(1, previousStatuses.get(0).id());
       }
     }
 
@@ -4706,7 +4730,8 @@ class ReviewOrchestratorTest {
 
     private static final String PRIOR_FINDING_JSON =
         "{\"findings\":[{\"risk\":\"medium\",\"file\":\"src/Main.java\",\"line\":10,"
-            + "\"title\":\"Dropped finding\",\"description\":\"d\"}]}";
+            + "\"title\":\"Dropped finding\",\"description\":\"d\","
+            + "\"suggestion_old\":\"new\"}]}";
 
     private ReviewSession followUpSession() {
       var session = mock(ReviewSession.class);

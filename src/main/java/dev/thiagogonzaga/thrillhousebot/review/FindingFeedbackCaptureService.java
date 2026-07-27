@@ -17,16 +17,24 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
@@ -48,6 +56,10 @@ public class FindingFeedbackCaptureService {
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String CONTENT_PLUS_ONE = "+1";
   private static final String CONTENT_MINUS_ONE = "-1";
+  private static final int MAX_CONCURRENT_CAPTURES = 8;
+  private static final Set<String> WRITE_PERMISSIONS = Set.of("admin", "maintain", "write");
+  private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
+      Set.of("OWNER", "MEMBER", "COLLABORATOR");
 
   /** Cap on finding threads polled during a follow-up review (package-visible for tests). */
   static final int MAX_FINDINGS_PER_CAPTURE = 40;
@@ -71,9 +83,17 @@ public class FindingFeedbackCaptureService {
   private final GitHubAuthClient authClient;
   private final GitHubReactionClient reactionClient;
   private final GitHubReviewClient reviewClient;
+  private final GitHubInstallationClient installationClient;
 
   private final ExecutorService captureExecutor =
-      Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("finding-feedback-", 0).factory());
+      new ThreadPoolExecutor(
+          0,
+          MAX_CONCURRENT_CAPTURES,
+          30,
+          TimeUnit.SECONDS,
+          new SynchronousQueue<>(),
+          Thread.ofVirtual().name("finding-feedback-", 0).factory(),
+          new ThreadPoolExecutor.AbortPolicy());
 
   @Inject
   public FindingFeedbackCaptureService(
@@ -81,12 +101,14 @@ public class FindingFeedbackCaptureService {
       BotIdentity botIdentity,
       GitHubAuthClient authClient,
       @RestClient GitHubReactionClient reactionClient,
-      @RestClient GitHubReviewClient reviewClient) {
+      @RestClient GitHubReviewClient reviewClient,
+      @RestClient GitHubInstallationClient installationClient) {
     this.feedbackService = feedbackService;
     this.botIdentity = botIdentity;
     this.authClient = authClient;
     this.reactionClient = reactionClient;
     this.reviewClient = reviewClient;
+    this.installationClient = installationClient;
   }
 
   @PreDestroy
@@ -106,22 +128,37 @@ public class FindingFeedbackCaptureService {
       int prNumber,
       long rootCommentId,
       String replyAuthorLogin,
+      String replyAuthorAssociation,
       String replyBody) {
-    captureExecutor.execute(
-        () -> {
-          try {
-            captureOnReviewReply(
-                installationId, owner, repo, prNumber, rootCommentId, replyAuthorLogin, replyBody);
-          } catch (RuntimeException e) {
-            log.warn(
-                "Finding feedback capture failed for {}/{} #{} comment {} (continuing)",
-                owner,
-                repo,
-                prNumber,
-                rootCommentId,
-                e);
-          }
-        });
+    try {
+      captureExecutor.execute(
+          () -> {
+            try {
+              captureOnReviewReply(
+                  installationId,
+                  owner,
+                  repo,
+                  prNumber,
+                  rootCommentId,
+                  new ReviewReply(replyAuthorLogin, replyAuthorAssociation, replyBody));
+            } catch (RuntimeException e) {
+              log.warn(
+                  "Finding feedback capture failed for {}/{} #{} comment {} (continuing)",
+                  owner,
+                  repo,
+                  prNumber,
+                  rootCommentId,
+                  e);
+            }
+          });
+    } catch (RejectedExecutionException _) {
+      log.warn(
+          "Finding feedback capture at capacity for {}/{} #{} comment {}; dropping task",
+          owner,
+          repo,
+          prNumber,
+          rootCommentId);
+    }
   }
 
   /**
@@ -145,11 +182,14 @@ public class FindingFeedbackCaptureService {
               .filter(c -> c != null && c.inReplyToId() == null)
               .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
               .filter(c -> SuggestionFormatter.parseFindingMarker(c.body()).isPresent())
-              .sorted(Comparator.comparingLong(GitHubReviewClient.PullRequestComment::id))
+              .sorted(
+                  Comparator.comparingLong(GitHubReviewClient.PullRequestComment::id).reversed())
               .limit(MAX_FINDINGS_PER_CAPTURE)
               .toList();
+      var permissionCache = new HashMap<String, Boolean>();
       for (var comment : candidates) {
-        captureReactions(auth, owner, repo, prNumber, comment.id(), comment.body());
+        captureReactions(
+            auth, owner, repo, prNumber, comment.id(), comment.body(), permissionCache);
       }
     } catch (RuntimeException e) {
       log.warn(
@@ -161,6 +201,9 @@ public class FindingFeedbackCaptureService {
     }
   }
 
+  /** The reply that may carry feedback: who wrote it, their author association, and its body. */
+  record ReviewReply(String authorLogin, String authorAssociation, String body) {}
+
   void captureOnReviewReply(
       long installationId,
       String owner,
@@ -169,21 +212,47 @@ public class FindingFeedbackCaptureService {
       long rootCommentId,
       String replyAuthorLogin,
       String replyBody) {
+    captureOnReviewReply(
+        installationId,
+        owner,
+        repo,
+        prNumber,
+        rootCommentId,
+        new ReviewReply(replyAuthorLogin, "OWNER", replyBody));
+  }
+
+  void captureOnReviewReply(
+      long installationId,
+      String owner,
+      String repo,
+      int prNumber,
+      long rootCommentId,
+      ReviewReply reply) {
+    var replyAuthorLogin = reply.authorLogin();
+    var replyBody = reply.body();
     var auth = authClient.getAuthHeader(installationId);
-    String rootBody = fetchCommentBody(auth, owner, repo, rootCommentId);
-    OptionalInt findingIndex = SuggestionFormatter.parseFindingMarker(rootBody);
+    var permissionCache = new HashMap<String, Boolean>();
+    if (!mayHoldWriteAccess(reply.authorAssociation())
+        || !hasWriteAccess(auth, owner, repo, replyAuthorLogin, permissionCache)) {
+      return;
+    }
+    var root = fetchRootComment(auth, owner, repo, rootCommentId);
+    if (root == null || root.user() == null || !botIdentity.matches(root.user().login())) {
+      return;
+    }
+    OptionalInt findingIndex = SuggestionFormatter.parseFindingMarker(root.body());
     if (findingIndex.isEmpty()) {
       return;
     }
-    captureReactions(auth, owner, repo, prNumber, rootCommentId, rootBody);
+    captureReactions(auth, owner, repo, prNumber, rootCommentId, root.body(), permissionCache);
     captureReplyHeuristic(
         owner, repo, prNumber, rootCommentId, findingIndex.getAsInt(), replyAuthorLogin, replyBody);
   }
 
-  private String fetchCommentBody(String auth, String owner, String repo, long commentId) {
+  private GitHubReviewClient.PullRequestComment fetchRootComment(
+      String auth, String owner, String repo, long commentId) {
     try {
-      var comment = reviewClient.getPullRequestComment(auth, ACCEPT, owner, repo, commentId);
-      return comment != null ? comment.body() : null;
+      return reviewClient.getPullRequestComment(auth, ACCEPT, owner, repo, commentId);
     } catch (RuntimeException e) {
       log.debug(
           "Failed to fetch review comment {} on {}/{} for feedback capture (continuing)",
@@ -197,13 +266,31 @@ public class FindingFeedbackCaptureService {
 
   void captureReactions(
       String auth, String owner, String repo, int prNumber, long commentId, String commentBody) {
+    captureReactions(auth, owner, repo, prNumber, commentId, commentBody, new HashMap<>());
+  }
+
+  private void captureReactions(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      long commentId,
+      String commentBody,
+      Map<String, Boolean> permissionCache) {
     OptionalInt findingIndex = SuggestionFormatter.parseFindingMarker(commentBody);
     if (findingIndex.isEmpty()) {
       return;
     }
     var ctx =
         new ReactionPollContext(
-            auth, owner, repo, owner + "/" + repo, prNumber, commentId, findingIndex.getAsInt());
+            auth,
+            owner,
+            repo,
+            owner + "/" + repo,
+            prNumber,
+            commentId,
+            findingIndex.getAsInt(),
+            permissionCache);
     listAndRecord(ctx, CONTENT_PLUS_ONE);
     listAndRecord(ctx, CONTENT_MINUS_ONE);
   }
@@ -215,7 +302,8 @@ public class FindingFeedbackCaptureService {
       String repoKey,
       int prNumber,
       long commentId,
-      Integer findingIndex) {}
+      Integer findingIndex,
+      Map<String, Boolean> permissionCache) {}
 
   private void listAndRecord(ReactionPollContext ctx, String content) {
     String signal =
@@ -265,7 +353,8 @@ public class FindingFeedbackCaptureService {
       ReactionPollContext ctx, String signal, List<GitHubReactionClient.Reaction> reactions) {
     for (var reaction : reactions) {
       String login = humanReactorLogin(reaction);
-      if (login == null) {
+      if (login == null
+          || !hasWriteAccess(ctx.auth(), ctx.owner(), ctx.repo(), login, ctx.permissionCache())) {
         continue;
       }
       feedbackService.recordFeedback(
@@ -288,6 +377,37 @@ public class FindingFeedbackCaptureService {
     }
     String login = reaction.user().login();
     return botIdentity.matches(login) ? null : login;
+  }
+
+  private boolean hasWriteAccess(
+      String auth, String owner, String repo, String login, Map<String, Boolean> permissionCache) {
+    if (login == null || login.isBlank()) {
+      return false;
+    }
+    return permissionCache.computeIfAbsent(
+        login.toLowerCase(Locale.ROOT),
+        ignored -> {
+          try {
+            var permission =
+                installationClient.collaboratorPermission(auth, ACCEPT, owner, repo, login);
+            var level = permission == null ? null : permission.permission();
+            return level != null
+                && WRITE_PERMISSIONS.contains(level.strip().toLowerCase(Locale.ROOT));
+          } catch (RuntimeException e) {
+            log.debug(
+                "Failed to verify feedback actor @{} on {}/{}; ignoring signal",
+                login,
+                owner,
+                repo,
+                e);
+            return false;
+          }
+        });
+  }
+
+  private static boolean mayHoldWriteAccess(String authorAssociation) {
+    return authorAssociation != null
+        && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
 
   void captureReplyHeuristic(

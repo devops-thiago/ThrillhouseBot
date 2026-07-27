@@ -1179,7 +1179,14 @@ class WebhookControllerTest {
 
     verify(findingFeedbackCapture)
         .scheduleCaptureOnReviewReply(
-            12345L, "owner", "repo", 42, 99L, "octocat", "@thrillhousebot why is this flagged?");
+            12345L,
+            "owner",
+            "repo",
+            42,
+            99L,
+            "octocat",
+            "OWNER",
+            "@thrillhousebot why is this flagged?");
 
     verify(replyDispatcher)
         .dispatch(
@@ -1216,7 +1223,8 @@ class WebhookControllerTest {
     assertEquals(200, response.getStatus());
 
     verify(findingFeedbackCapture)
-        .scheduleCaptureOnReviewReply(12345L, "owner", "repo", 42, 99L, "octocat", "not useful");
+        .scheduleCaptureOnReviewReply(
+            12345L, "owner", "repo", 42, 99L, "octocat", "OWNER", "not useful");
     verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
   }
 

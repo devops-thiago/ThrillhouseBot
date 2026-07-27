@@ -438,6 +438,7 @@ public class WebhookController {
           pr.number(),
           rootCommentId,
           comment.user().login(),
+          comment.authorAssociation(),
           comment.body());
     }
 

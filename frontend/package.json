@@ -2,6 +2,9 @@
   "name": "thrillhousebot-dashboard",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "dev:mock": "NEXT_PUBLIC_MOCK_API=true next dev",
@@ -18,8 +21,8 @@
     "react-dom": "^19.2.8"
   },
   "overrides": {
-    "postcss": "^8.5.10",
-    "sharp": "-"
+    "postcss": "8.5.23",
+    "sharp": "0.35.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",

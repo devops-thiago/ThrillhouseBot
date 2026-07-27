@@ -148,9 +148,9 @@ public class StartupConfigValidator {
               + review.maxAiCalls());
     }
     var margin = review.tokenSafetyMargin();
-    if (margin <= 0 || margin > 1.0) {
+    if (!Double.isFinite(margin) || margin <= 0 || margin > 1.0) {
       problems.add(
-          "REVIEW_TOKEN_SAFETY_MARGIN must be in (0, 1]"
+          "REVIEW_TOKEN_SAFETY_MARGIN must be in (0, 1] and finite"
               + " (thrillhousebot.review.token-safety-margin): "
               + margin);
     }
@@ -176,56 +176,79 @@ public class StartupConfigValidator {
               .ifPresent(v -> problems.add(prefix + "output-buffer-tokens must be >= 0: " + v));
           settings
               .tokenSafetyMargin()
-              .filter(v -> v <= 0 || v > 1.0)
-              .ifPresent(v -> problems.add(prefix + "token-safety-margin must be in (0, 1]: " + v));
+              .filter(v -> !Double.isFinite(v) || v <= 0 || v > 1.0)
+              .ifPresent(
+                  v ->
+                      problems.add(
+                          prefix + "token-safety-margin must be in (0, 1] and finite: " + v));
           settings
               .temperature()
-              .filter(v -> v < 0 || v > 2.0)
-              .ifPresent(v -> problems.add(prefix + "temperature must be in [0, 2]: " + v));
+              .filter(v -> !Double.isFinite(v) || v < 0 || v > 2.0)
+              .ifPresent(
+                  v -> problems.add(prefix + "temperature must be in [0, 2] and finite: " + v));
           settings
               .topP()
-              .filter(v -> v <= 0 || v > 1.0)
-              .ifPresent(v -> problems.add(prefix + "top-p must be in (0, 1]: " + v));
+              .filter(v -> !Double.isFinite(v) || v <= 0 || v > 1.0)
+              .ifPresent(v -> problems.add(prefix + "top-p must be in (0, 1] and finite: " + v));
           settings
               .maxOutputTokens()
               .filter(v -> v < 1)
               .ifPresent(v -> problems.add(prefix + "max-output-tokens must be >= 1: " + v));
           settings
               .frequencyPenalty()
-              .filter(v -> v < -2.0 || v > 2.0)
-              .ifPresent(v -> problems.add(prefix + "frequency-penalty must be in [-2, 2]: " + v));
+              .filter(v -> !Double.isFinite(v) || v < -2.0 || v > 2.0)
+              .ifPresent(
+                  v ->
+                      problems.add(
+                          prefix + "frequency-penalty must be in [-2, 2] and finite: " + v));
           settings
               .presencePenalty()
-              .filter(v -> v < -2.0 || v > 2.0)
-              .ifPresent(v -> problems.add(prefix + "presence-penalty must be in [-2, 2]: " + v));
+              .filter(v -> !Double.isFinite(v) || v < -2.0 || v > 2.0)
+              .ifPresent(
+                  v ->
+                      problems.add(
+                          prefix + "presence-penalty must be in [-2, 2] and finite: " + v));
         });
   }
 
   /**
    * Rejects a configuration whose <em>effective</em> per-call budget for the active model is
-   * degenerate. The buffer is subtracted from the margin-scaled ceiling at runtime, so validating
-   * it against the raw max would pass configs whose effective budget is still {@code <= 0} (e.g.
-   * 48000/45000/0.9 -> -1800) — the silent-disable this validator exists to reject. Checked on the
-   * active model's resolved values (per-model overrides and input cap), because that is the
-   * combination the budgeter will actually run with — the global combination alone may be broken
-   * yet fixed by an override, or vice versa.
+   * degenerate or reserves fewer output tokens than the provider may generate. Checked on the
+   * active model's resolved values because that is the combination the budgeter actually uses.
    */
   private void validateEffectiveBudget(List<String> problems) {
     var maxInputTokens = activeModel.maxInputTokens();
     var margin = activeModel.tokenSafetyMargin();
+    var outputBuffer = activeModel.outputBufferTokens();
     if (maxInputTokens > 0
+        && Double.isFinite(margin)
         && margin > 0
         && margin <= 1.0
-        && (int) (maxInputTokens * margin) - activeModel.outputBufferTokens() <= 0) {
+        && (int) (maxInputTokens * margin) - outputBuffer <= 0) {
       problems.add(
           "the effective output buffer ("
-              + activeModel.outputBufferTokens()
+              + outputBuffer
               + ") must be less than the effective max input tokens x safety margin ("
               + (int) (maxInputTokens * margin)
               + ") for model '"
               + activeModel.modelName()
               + "' so there is budget left for the diff (thrillhousebot.review.* with"
               + " thrillhousebot.ai.models overrides)");
+    }
+    if (maxInputTokens > 0) {
+      activeModel
+          .maxOutputTokens()
+          .filter(maxOutput -> maxOutput > outputBuffer)
+          .ifPresent(
+              maxOutput ->
+                  problems.add(
+                      "the effective output buffer ("
+                          + outputBuffer
+                          + ") must be >= max-output-tokens ("
+                          + maxOutput
+                          + ") for model '"
+                          + activeModel.modelName()
+                          + "' so the token budget reserves the configured response cap"));
     }
   }
 

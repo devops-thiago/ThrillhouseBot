@@ -42,4 +42,12 @@ public class DashboardSessionValidator {
         .filter(session -> accessChecker.hasAccess(session.login()))
         .map(DashboardSessionStore.DashboardSession::login);
   }
+
+  /** Returns whether this session's login may read data for the requested installed repository. */
+  public boolean hasRepositoryAccess(String sessionId, String repository) {
+    return sessionStore
+        .findSession(sessionId)
+        .filter(session -> accessChecker.hasRepositoryAccess(session.login(), repository))
+        .isPresent();
+  }
 }

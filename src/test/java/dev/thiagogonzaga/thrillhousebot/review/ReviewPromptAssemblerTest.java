@@ -87,6 +87,57 @@ class ReviewPromptAssemblerTest {
   }
 
   @Test
+  void shouldEmitHeuristicSectionForEverySupportedDeclarationAndRegexForm() {
+    String[] diffs = {
+      """
+      --- a/frontend/src/validate.ts
+      +++ b/frontend/src/validate.ts
+      @@ -1 +1 @@
+      +const TOKEN = /^[a-z]+$/i;
+      """,
+      """
+      --- a/frontend/src/validate.js
+      +++ b/frontend/src/validate.js
+      @@ -1 +1 @@
+      +function validateToken(value) {
+      """,
+      """
+      --- a/frontend/src/parse.ts
+      +++ b/frontend/src/parse.ts
+      @@ -1 +1,2 @@
+      +const parseToken =
+      +    (value: string) => value.split(':');
+      """,
+      """
+      --- a/src/main/java/dev/thiagogonzaga/Parser.java
+      +++ b/src/main/java/dev/thiagogonzaga/Parser.java
+      @@ -1 +1 @@
+      +  Token parseToken(String raw) {
+      """,
+      """
+      --- a/src/main/java/dev/thiagogonzaga/Parser.java
+      +++ b/src/main/java/dev/thiagogonzaga/Parser.java
+      @@ -1 +1,2 @@
+      +  private static final Pattern TOKEN = Pattern
+      +      .compile("^[a-z]+$");
+      """,
+      """
+      --- a/frontend/src/parse.ts
+      +++ b/frontend/src/parse.ts
+      @@ -1 +1,2 @@
+      +const token = new RegExp
+      +    ('^[a-z]+$', 'i');
+      """
+    };
+
+    for (String diff : diffs) {
+      assertEquals(
+          PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST,
+          ReviewPromptAssembler.heuristicFailureModesSection(diff));
+    }
+  }
+
+  @Test
   void shouldOmitBugFixSectionWhenPrIsNotABugFix() {
     assertEquals("", ReviewPromptAssembler.bugFixEfficacySection("Adds a new feature", "ctx"));
   }

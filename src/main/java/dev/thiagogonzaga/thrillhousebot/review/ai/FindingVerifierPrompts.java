@@ -68,9 +68,9 @@ public final class FindingVerifierPrompts {
               the same diff, so you would repeat a miscount rather than catch it — which is how a
               hand-counted off-by-one ("the section is 7 lines, so 7 - 3 = 4 omitted") reached a
               PR against a test that passes as written. Reject it. Do NOT reject when the finding
-              is already phrased as a verification request naming what to run, or when an
-              execution/CI signal in the provided material shows the failure — downgrade to
-              confidence "low" instead.
+              is already phrased as a verification request naming what to run. When an
+              execution/CI signal in the provided material shows the failure, keep the finding
+              and assign the confidence justified by that evidence instead of forcing it low.
             - The flagged code does not appear in the diff as the finding describes it, or the
               code the finding quotes is not present verbatim in the diff — a
               finding built on a paraphrase of the change is invalid.
@@ -101,9 +101,10 @@ public final class FindingVerifierPrompts {
               the hunk — already guarantee a non-null owner and dereference it first). Reject
               it. Do NOT reject when (a) the material shows a caller that can pass null or
               another violating value, or (b) the changed signature itself declares a nullable
-              contract for that parameter — @Nullable / @CheckForNull, Optional, a documented
-              null-allowed Javadoc/Kotlin type, or similar — so a null-at-entry trace is
-              demonstrable from the signature without any caller hunk. Those findings stand.
+              contract for that parameter — @Nullable / @CheckForNull, a documented null-allowed
+              Javadoc/Kotlin type, or similar — so a null-at-entry trace is demonstrable from the
+              signature without any caller hunk. An Optional parameter is not itself nullable
+              unless a separate null-allowed contract says so. Those findings stand.
             - The finding misstates language semantics — for example, claiming the string
               escape "\\n" produces a literal backslash and n rather than a newline.
             - The finding claims a class is missing a required no-arg/default constructor for
@@ -156,13 +157,20 @@ public final class FindingVerifierPrompts {
             is the finding's own construction and is absent from the diff by definition, so the
             verbatim-quote and "unverifiable here" grounds above do not apply to it: requiring the
             input to be quoted would reject this entire class, which is exactly the blind spot the
-            characterization pass exists to cover. Confirm or downgrade it by tracing the quoted
-            rule against the named input yourself — reject it only when that trace shows the rule
-            handles the input correctly, when the rule it describes is not in the diff, or when it
-            names no concrete input at all. A silent miss (the rule accepts or skips what it
-            should catch) is a real defect even though nothing in the diff looks wrong, and being
-            unable to execute the rule here is not grounds for rejection: confidence "low" or
-            "medium" with the rule line quoted and the probing input named is the expected shape.
+            characterization pass exists to cover. Trace the quoted rule against the named input
+            yourself to establish what the rule actually does, but confirm a defect only when the
+            provided material also shows that the input belongs to the expected domain or that the
+            result violates a visible requirement, caller expectation, test, documentation, comment,
+            or API contract. Mechanics alone prove behavior, not what the rule should accept or
+            reject. When that expected-domain evidence is absent, downgrade the claim to confidence
+            "low" and phrase it as a verification request naming both the input and the missing
+            contract; do not confirm it as a defect. Otherwise, reject it when the trace shows the
+            rule handles the input correctly, when the rule it describes is not in the diff, or when
+            it names no concrete input at all. A silent miss (the rule accepts or skips what visible
+            contract evidence says it should catch) is a real defect even though nothing in the diff
+            looks wrong, and being unable to execute the rule here is not grounds for rejection:
+            confidence "low" or "medium" with the rule line quoted and the probing input named is
+            the expected shape.
 
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the

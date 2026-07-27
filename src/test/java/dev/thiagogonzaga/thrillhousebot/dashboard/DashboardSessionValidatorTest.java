@@ -86,4 +86,28 @@ class DashboardSessionValidatorTest {
 
     assertTrue(validator.resolveLogin(sessionId).isEmpty());
   }
+
+  @Test
+  void shouldDelegateAllowedRepositoryAccessForKnownSession() {
+    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
+    when(accessChecker.hasRepositoryAccess("octocat", "owner/repo")).thenReturn(true);
+
+    assertTrue(validator.hasRepositoryAccess(sessionId, "owner/repo"));
+    verify(accessChecker).hasRepositoryAccess("octocat", "owner/repo");
+  }
+
+  @Test
+  void shouldDelegateDeniedRepositoryAccessForKnownSession() {
+    var sessionId = sessionStore.createSession("outsider", "gho_secret", "https://a.co", "Out");
+    when(accessChecker.hasRepositoryAccess("outsider", "owner/repo")).thenReturn(false);
+
+    assertFalse(validator.hasRepositoryAccess(sessionId, "owner/repo"));
+    verify(accessChecker).hasRepositoryAccess("outsider", "owner/repo");
+  }
+
+  @Test
+  void shouldRejectRepositoryAccessForUnknownSessionWithoutDelegating() {
+    assertFalse(validator.hasRepositoryAccess("unknown", "owner/repo"));
+    verify(accessChecker, never()).hasRepositoryAccess(anyString(), anyString());
+  }
 }

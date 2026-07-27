@@ -49,6 +49,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void setUp() {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
+    when(sessionValidator.hasRepositoryAccess(anyString(), anyString())).thenReturn(true);
   }
 
   @AfterEach
@@ -154,6 +155,54 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .then()
         .statusCode(200)
         .body("repositories", not(empty()));
+  }
+
+  @Test
+  void shouldRejectFeedbackForAnInaccessibleRepository() {
+    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "private/repo")).thenReturn(false);
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "private/repo")
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(403)
+        .body("error", equalTo("Repository access denied"));
+  }
+
+  @Test
+  void shouldFilterInaccessibleRepositoriesFromFeedbackAggregates() {
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "allowed/repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "octocat",
+            201L));
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "private/repo",
+            2,
+            20L,
+            1,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "alice",
+            202L));
+    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "private/repo")).thenReturn(false);
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories", hasSize(1))
+        .body("repositories[0].repository", equalTo("allowed/repo"));
   }
 
   @Test

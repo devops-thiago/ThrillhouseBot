@@ -100,6 +100,12 @@ class HeuristicCodeDetectorTest {
             diff(
                 "src/main/java/dev/thiagogonzaga/thrillhousebot/config/StartupConfigValidator.java",
                 "  private void validateAppId(String appId) {")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/thrillhousebot/config/StartupConfigValidator.java",
+                "  private boolean",
+                "      validateInstallation(long installationId) {")));
   }
 
   @Test
@@ -173,6 +179,20 @@ class HeuristicCodeDetectorTest {
   }
 
   @Test
+  void shouldNotTriggerOnDeclaredMembersWithoutAHeuristicName() {
+    // These carry the full declaration shape, so rejection happens on the captured member name.
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Service.java",
+                "  public String renderTitle(String raw) {",
+                "  Token renderToken(String raw) {")));
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/render.ts", "const renderToken = (value: string) => value;")));
+  }
+
+  @Test
   void shouldNotTriggerOnImportOrPackageLines() {
     assertFalse(
         HeuristicCodeDetector.introducesHeuristicCode(
@@ -221,6 +241,142 @@ class HeuristicCodeDetectorTest {
             + "-  int gone = 1;\n"
             + diff("src/main/java/dev/thiagogonzaga/Kept.java", "  int i = s.charAt(2);");
     assertTrue(HeuristicCodeDetector.introducesHeuristicCode(combined));
+  }
+
+  @Test
+  void shouldTriggerOnJavaScriptAndTypeScriptRegexLiterals() {
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/version.js", "const VERSION = /^v[0-9]+$/i;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/version.tsx", "return /^(?:major|minor|patch)$/;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/path.ts", "const PATH = /^\\/api\\/v[0-9]+$/;")));
+  }
+
+  @Test
+  void shouldHandleLargeRegexAndArrowBodiesWithoutBacktrackingOverflow() {
+    var longToken = "x".repeat(100_000);
+
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/version.ts", "const VERSION = /" + longToken + "/;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/validate.ts", "const validateTag = (" + longToken + ") => true;")));
+  }
+
+  @Test
+  void shouldTriggerOnJavaScriptFunctionAndArrowValidatorDeclarations() {
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/validate.ts", "function validateTag(value: string) {")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "frontend/src/validate.ts",
+                "const validateTag = (value: string) => value.length > 0;")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/parse.ts", "const parseTag = value => value.split(':');")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "frontend/src/validate.ts",
+                "const validateTag = (predicate: (value: string) => boolean) => predicate('v1');")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "frontend/src/parse.ts",
+                "const parseTag =",
+                "    (value: string) => value.split(':');")));
+  }
+
+  @Test
+  void shouldTriggerOnPackagePrivateJavaHeuristicDeclaration() {
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/TagParser.java",
+                "  Optional<Tag> parseTag(String raw) {")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/TagParser.java",
+                "  Optional<Tag>",
+                "      parseMultilineTag(String raw) {")));
+  }
+
+  @Test
+  void shouldTriggerOnMultilineRegexConstruction() {
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/TagParser.java",
+                "  private static final Pattern TAG = Pattern",
+                "      .compile(\"^v[0-9]+$\");")));
+    assertTrue(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff("frontend/src/parse.ts", "const tag = new RegExp", "    ('^v[0-9]+$', 'i');")));
+  }
+
+  @Test
+  void shouldRestrictRegexLiteralsAndAssignedHeuristicsToJavaScriptSources() {
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Math.java",
+                "  var ratio = total / count;",
+                "  var url = \"https://example.test/path\";",
+                "  var matcher = /^v[0-9]+$/;",
+                "  const validateTag = (value) => true;")));
+  }
+
+  @Test
+  void shouldNotMistakeJavaScriptDivisionUrlsCallsOrAssignmentsForHeuristicCode() {
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "frontend/src/service.ts",
+                "const ratio = total / count;",
+                "const endpoint = 'https://example.test/path';",
+                "const result = validator.validate(input);",
+                "const validateResult = existingValidator;",
+                "const parser = service.parse(input);")));
+  }
+
+  @Test
+  void shouldBoundAndResetTheMultilineDetectionWindow() {
+    assertFalse(
+        HeuristicCodeDetector.introducesHeuristicCode(
+            diff(
+                "src/main/java/dev/thiagogonzaga/Separated.java",
+                "  Pattern",
+                "  int one = 1;",
+                "  int two = 2;",
+                "  int three = 3;",
+                "  int four = 4;",
+                "      .compile(\"too-far-away\");")));
+
+    String interrupted =
+        """
+        --- a/src/main/java/dev/thiagogonzaga/Interrupted.java
+        +++ b/src/main/java/dev/thiagogonzaga/Interrupted.java
+        @@ -1,2 +1,4 @@
+        +  Pattern
+           String context = value;
+        +      .compile("after-context");
+        """;
+    assertFalse(HeuristicCodeDetector.introducesHeuristicCode(interrupted));
+
+    String files =
+        diff("src/main/java/dev/thiagogonzaga/First.java", "  Pattern")
+            + diff("src/main/java/dev/thiagogonzaga/Second.java", "      .compile(\"x\");")
+            + diff("src/test/java/dev/thiagogonzaga/FixtureTest.java", "  Pattern")
+            + diff("src/main/java/dev/thiagogonzaga/Third.java", "      .compile(\"y\");");
+    assertFalse(HeuristicCodeDetector.introducesHeuristicCode(files));
   }
 
   @Test

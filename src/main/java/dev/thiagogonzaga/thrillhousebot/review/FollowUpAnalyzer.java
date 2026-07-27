@@ -54,6 +54,9 @@ public class FollowUpAnalyzer {
       "The code this finding targeted is no longer in this revision's diff (removed by a"
           + " force-push or a later commit) — superseded.";
 
+  private static final String PURE_RENAME_UNRESOLVED_NOTE =
+      "The finding's file was renamed without content changes, so the finding remains unresolved.";
+
   /**
    * The only statuses the prompt contract defines for {@code previous_findings_status} ("resolved"
    * | "unresolved" | "justified"). A value outside this set does not count as the model accounting
@@ -605,6 +608,15 @@ public class FollowUpAnalyzer {
       String previousAiResponseJson,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       DiffLineResolver lineResolver) {
+    return supersedeVanished(previousAiResponseJson, statuses, lineResolver, Map.of());
+  }
+
+  /** Rename-aware variant used by the review verdict path. */
+  public List<ReviewResponse.PreviousFindingStatus> supersedeVanished(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
     if (statuses == null || statuses.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -614,7 +626,7 @@ public class FollowUpAnalyzer {
     }
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
-      if (hasVanished(status, previous, lineResolver)) {
+      if (hasVanished(status, previous, lineResolver, renameTargets)) {
         Log.infof(
             "Superseding unresolved previous finding #%d — its targeted code is no longer in the"
                 + " current diff",
@@ -629,10 +641,52 @@ public class FollowUpAnalyzer {
     return rewritten;
   }
 
+  /**
+   * Adds deterministic statuses when the model omits a prior finding entirely. Vanished findings
+   * become superseded; findings moved by a content-identical pure rename remain unresolved because
+   * their flagged code is unchanged. This keeps the regenerated summary and approval gate in sync
+   * even when {@code previous_findings_status} is empty.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> addUnreportedVanished(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    if (previous == null || previous.isEmpty() || lineResolver == null) {
+      return statuses == null ? List.of() : statuses;
+    }
+    var result = new ArrayList<>(statuses == null ? List.of() : statuses);
+    var reportedIds = new HashSet<Integer>();
+    for (var status : result) {
+      reportedIds.add(status.id());
+    }
+    for (int index = 0; index < previous.size(); index++) {
+      var id = index + 1;
+      var finding = previous.get(index);
+      if (reportedIds.contains(id) || finding.file() == null) {
+        continue;
+      }
+      var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());
+      if (currentPath.isBlank()) {
+        // A content-identical rename is deliberately absent from the reviewable diff. The anchor
+        // therefore cannot be resolved at either path, but the unchanged finding must keep holding
+        // approval when the model silently omits it.
+        result.add(
+            new ReviewResponse.PreviousFindingStatus(
+                id, STATUS_UNRESOLVED, PURE_RENAME_UNRESOLVED_NOTE));
+      } else if (!lineResolver.isFindingPresent(currentPath, finding.suggestionOld())) {
+        result.add(
+            new ReviewResponse.PreviousFindingStatus(id, STATUS_SUPERSEDED, SUPERSEDED_NOTE));
+      }
+    }
+    return result;
+  }
+
   private static boolean hasVanished(
       ReviewResponse.PreviousFindingStatus status,
       List<ReviewResponse.Finding> previous,
-      DiffLineResolver lineResolver) {
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
     if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
       return false;
     }
@@ -644,7 +698,11 @@ public class FollowUpAnalyzer {
     if (finding.file() == null) {
       return false;
     }
-    return !lineResolver.isFindingPresent(finding.file(), finding.suggestionOld());
+    var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());
+    if (currentPath.isBlank()) {
+      return false;
+    }
+    return !lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
   }
 
   /**

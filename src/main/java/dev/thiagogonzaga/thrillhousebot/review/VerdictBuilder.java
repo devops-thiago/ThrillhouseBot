@@ -22,7 +22,9 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -138,11 +140,21 @@ public class VerdictBuilder {
     // Skip the DiffLineResolver when there are no statuses — first reviews and empty-status
     // paths must not pay for a patch re-parse (#135).
     var rawStatuses = aiResponse.previousFindingsStatus();
+    var currentRenameTargets = renameTargets(ctx.files());
     var effectiveStatuses =
         followUpAnalyzer.supersedeVanished(
             ctx.previousAiResponseJson(),
             rawStatuses,
-            rawStatuses.isEmpty() ? null : ctx.lineResolver());
+            rawStatuses.isEmpty() ? null : ctx.lineResolver(),
+            currentRenameTargets);
+    if (ctx.hasContext()) {
+      effectiveStatuses =
+          followUpAnalyzer.addUnreportedVanished(
+              ctx.previousFindingsList(),
+              effectiveStatuses,
+              ctx.lineResolver(),
+              currentRenameTargets);
+    }
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
@@ -163,7 +175,10 @@ public class VerdictBuilder {
         effectiveResponse,
         ctx.isFirstVisibleReview(),
         diffStats,
-        changedFiles,
+        new SummaryInputs(
+            changedFiles,
+            ReviewDiffFormatter.formatPureRenameRollup(
+                ReviewDiffFormatter.pureRenameFiles(ctx.files()))),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -316,6 +331,23 @@ public class VerdictBuilder {
   }
 
   /**
+   * Maps a prior path to its current rename target; blank means a content-identical pure rename.
+   */
+  static Map<String, String> renameTargets(List<GitHubPullRequestClient.FileDiff> files) {
+    var targets = new HashMap<String, String>();
+    for (var file : files) {
+      if (file != null
+          && "renamed".equalsIgnoreCase(file.status())
+          && file.previousFilename() != null
+          && !file.previousFilename().isBlank()) {
+        targets.putIfAbsent(
+            file.previousFilename(), ReviewDiffFormatter.isPureRename(file) ? "" : file.filename());
+      }
+    }
+    return targets;
+  }
+
+  /**
    * Projects the reviewed diff onto the (path, change type) rows the summary walkthrough renders.
    */
   static List<PrSummaryGenerator.ChangedFile> toChangedFiles(
@@ -325,6 +357,10 @@ public class VerdictBuilder {
         .toList();
   }
 
+  /** Inputs that only shape the summary walkthrough: the file rows and the pure-rename rollup. */
+  private record SummaryInputs(
+      List<PrSummaryGenerator.ChangedFile> changedFiles, String pureRenameRollup) {}
+
   ReviewResult buildResult(
       ReviewResponse aiResponse,
       boolean isFirstReview,
@@ -333,6 +369,26 @@ public class VerdictBuilder {
       List<Finding> unresolvedPrevious,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+    return buildResult(
+        aiResponse,
+        isFirstReview,
+        diffStats,
+        new SummaryInputs(changedFiles, ""),
+        unresolvedPrevious,
+        ciEvaluation,
+        backstopUnresolved);
+  }
+
+  private ReviewResult buildResult(
+      ReviewResponse aiResponse,
+      boolean isFirstReview,
+      DiffStats diffStats,
+      SummaryInputs summaryInputs,
+      List<Finding> unresolvedPrevious,
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
+      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+    var changedFiles = summaryInputs.changedFiles();
+    var pureRenameRollup = summaryInputs.pureRenameRollup();
     var offendingCiChecks = ciEvaluation.offendingChecks();
     var ciUnreadable = ciEvaluation.unreadable();
     var requiredContextsKnown = ciEvaluation.requiredContextsKnown();
@@ -384,6 +440,15 @@ public class VerdictBuilder {
                 ciUnreadable,
                 requiredContextsKnown,
                 diffStats.truncation()));
+    if (pureRenameRollup != null && !pureRenameRollup.isBlank()) {
+      summaryMarkdown =
+          summaryMarkdown.replace(
+              PrSummaryGenerator.SUMMARY_HEADING + "\n\n",
+              PrSummaryGenerator.SUMMARY_HEADING
+                  + "\n\n> **AI review scope:** "
+                  + pureRenameRollup.strip()
+                  + "\n\n");
+    }
     if (diffStats.truncated()) {
       summaryMarkdown =
           ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())

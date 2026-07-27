@@ -100,6 +100,126 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void shouldAllowOwnerAccessToInstalledRepositoryCaseInsensitively() {
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+
+    assertTrue(checker.hasRepositoryAccess("MYOWNER", "MyOwner/DEMO"));
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @SuppressWarnings("unchecked")
+  @Test
+  void shouldIgnoreForeignRepositoryEntriesInCachedSnapshot() throws ReflectiveOperationException {
+    var repoRefClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoRef");
+    var repoRefConstructor = repoRefClass.getDeclaredConstructor(String.class, String.class);
+    repoRefConstructor.setAccessible(true);
+    var foreignRepo = repoRefConstructor.newInstance("other-owner", "demo");
+
+    var snapshotClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoSnapshot");
+    var snapshotConstructor =
+        snapshotClass.getDeclaredConstructor(
+            String.class, List.class, String.class, java.time.Instant.class);
+    snapshotConstructor.setAccessible(true);
+    var snapshot =
+        snapshotConstructor.newInstance("myowner", List.of(foreignRepo), "Bearer token", now.get());
+    var cacheField = DashboardAccessChecker.class.getDeclaredField("cachedSnapshot");
+    cacheField.setAccessible(true);
+    var cache = (java.util.concurrent.atomic.AtomicReference<Object>) cacheField.get(checker);
+    cache.set(snapshot);
+
+    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void shouldAllowCollaboratorAccessToInstalledRepository() {
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    Response collaboratorResponse = mock(Response.class);
+    when(collaboratorResponse.getStatus()).thenReturn(204);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
+        .thenReturn(collaboratorResponse);
+
+    assertTrue(checker.hasRepositoryAccess("collab", "myowner/demo"));
+  }
+
+  @Test
+  void shouldDenyNonCollaboratorAccessToInstalledRepository() {
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    Response notCollaborator = mock(Response.class);
+    when(notCollaborator.getStatus()).thenReturn(404);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("outsider")))
+        .thenReturn(notCollaborator);
+
+    assertFalse(checker.hasRepositoryAccess("outsider", "myowner/demo"));
+  }
+
+  @Test
+  void shouldDenyMissingAndForeignRepositoriesWithoutCheckingCollaborator() {
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+
+    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/missing"));
+    assertFalse(checker.hasRepositoryAccess("myowner", "other-owner/demo"));
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void shouldDenyMalformedRepositoryAccessInputs() {
+    assertAll(
+        () -> assertFalse(checker.hasRepositoryAccess(null, "myowner/demo")),
+        () -> assertFalse(checker.hasRepositoryAccess("   ", "myowner/demo")),
+        () -> assertFalse(checker.hasRepositoryAccess("myowner", null)),
+        () -> assertFalse(checker.hasRepositoryAccess("myowner", "   ")),
+        () -> assertFalse(checker.hasRepositoryAccess("myowner", "demo")),
+        () -> assertFalse(checker.hasRepositoryAccess("myowner", "/demo")),
+        () -> assertFalse(checker.hasRepositoryAccess("myowner", "myowner/")),
+        () -> assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo/extra")));
+    verifyNoInteractions(authClient, installationClient);
+  }
+
+  @Test
+  void shouldDenyRepositoryAccessWhenInstallationIsMissing() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of());
+
+    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    verify(authClient, never()).getAuthHeader(anyLong());
+  }
+
+  @Test
+  void shouldDenyRepositoryAccessWhenInstallationAuthIsMissing() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn(null);
+    when(installationClient.listInstallationRepositories(isNull(), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                1, ownerRepos("myowner", "demo")));
+
+    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void shouldDenyRepositoryAccessWhenOwnerCannotBeResolved() {
+    when(installationClient.getApp(anyString(), anyString()))
+        .thenThrow(new RuntimeException("GitHub App unavailable"));
+
+    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    verify(installationClient, never())
+        .listInstallations(anyString(), anyString(), anyInt(), anyInt());
+  }
+
+  @Test
   void shouldDenyUserWhoIsNotCollaborator() {
     stubInstalledRepo("myowner", "demo");
     when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
