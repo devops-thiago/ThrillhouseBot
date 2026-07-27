@@ -1,0 +1,24 @@
+# Shapes the notes GitHub generates for a release. The release workflow appends that
+# generated section after the curated CHANGELOG.md notes, so this controls the merged-PR
+# list and the "New Contributors" credit — not the hand-written part.
+#
+# Dependency bumps are excluded: they are already summarised under "Dependencies" in
+# CHANGELOG.md, and seven Dependabot PRs in one release would bury the humans in both the
+# PR list and the contributor credit.
+changelog:
+  exclude:
+    authors:
+      - dependabot
+      - dependabot[bot]
+      - github-actions
+      - github-actions[bot]
+  categories:
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Other changes
+      labels:
+        - "*"

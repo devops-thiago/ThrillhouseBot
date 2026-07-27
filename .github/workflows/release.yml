@@ -286,10 +286,23 @@ jobs:
             exit 1
           fi
 
+          # Curated CHANGELOG notes first, then GitHub's generated section — the merged-PR list
+          # and, the point of this, "New Contributors". Generated explicitly rather than with
+          # `gh release create --generate-notes` because `gh release edit` has no such flag: the
+          # re-run path below would otherwise overwrite the body and drop the credit. Shaped by
+          # .github/release.yml. Best-effort — a failure here must not fail the release.
+          cp release_notes.md release_body.md
+          if generated=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" --jq .body 2>/dev/null) && [ -n "$generated" ]; then
+            printf '\n\n%s\n' "$generated" >> release_body.md
+          else
+            echo "::warning::Could not generate release notes; publishing CHANGELOG notes only"
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; uploading artifacts and refreshing notes"
             gh release upload "$TAG" "${artifacts[@]}" --clobber
-            edit_args=( "$TAG" --notes-file release_notes.md )
+            edit_args=( "$TAG" --notes-file release_body.md )
             if [ "$UPDATE_LATEST" = "true" ]; then
               edit_args+=( --latest )
             else
@@ -297,7 +310,7 @@ jobs:
             fi
             gh release edit "${edit_args[@]}"
           else
-            args=( "$TAG" --notes-file release_notes.md )
+            args=( "$TAG" --notes-file release_body.md )
             if [ "$UPDATE_LATEST" = "true" ]; then
               args+=( --latest )
             else
