@@ -224,7 +224,18 @@ public interface ThrillhouseConfig {
     @WithName("add-docs-enabled")
     boolean addDocsEnabled();
 
-    @WithDefault("**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**")
+    /**
+     * Glob patterns for files excluded from review scope. Defaults cover lockfiles, minified
+     * bundles, sourcemaps, protobuf-generated code, and build/vendor output dirs across common
+     * ecosystems — generated or vendored artifacts only, never handwritten source. Overridable per
+     * deployment; directory globs like {@code **}{@code /build/**} may need narrowing in repos that
+     * keep real source under those names.
+     */
+    @WithDefault(
+        "**/pom.xml,**/package-lock.json,**/pnpm-lock.yaml,**/go.sum,**/*.lock,**/*.generated.*,"
+            + "**/*.pb.go,**/*_pb2.py,**/*.min.js,**/*.min.css,**/*.map,"
+            + "**/target/**,**/node_modules/**,**/dist/**,**/build/**,**/out/**,**/.next/**,"
+            + "**/vendor/**,**/__pycache__/**,**/.venv/**,**/bin/**,**/obj/**")
     @WithName("ignored-files")
     List<String> ignoredFiles();
 
