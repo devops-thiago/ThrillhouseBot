@@ -649,6 +649,19 @@ class StartupConfigValidatorTest {
     }
 
     @Test
+    void shouldFallBackToTheGenericWarningWhenTheSettingNameIsNotRecognised() {
+      // Right model, wrong setting: naming a spelling would be misleading when the suffix itself
+      // is not a real per-model setting, so this takes the generic branch.
+      var warnings =
+          StartupConfigValidator.unmappedModelEnvWarnings(
+              Set.of("deepseek-v4-pro"),
+              Map.of("THRILLHOUSEBOT_AI_MODELS__DEEPSEEK_V4_PRO__CONTEXT_SIZE", "1000000"));
+
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.get(0).contains("does not map to any configured model"), warnings.get(0));
+    }
+
+    @Test
     void shouldIgnoreUnrelatedEnvironmentVariables() {
       assertTrue(
           StartupConfigValidator.unmappedModelEnvWarnings(

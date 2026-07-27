@@ -348,6 +348,42 @@ public class StartupConfigValidator {
    * deliberately), and logs the active generation parameters so a tuning entry that targets the
    * wrong model name is visible immediately.
    */
+  private void logActiveModelStatus() {
+    if (config.review().maxInputTokens() > 0 && activeModel.budgetClampedByModelCap()) {
+      log.warn(
+          "REVIEW_MAX_INPUT_TOKENS ({}) exceeds the input cap of model '{}' ({}); using {}. Raise"
+              + " thrillhousebot.ai.models.\"{}\".max-input-tokens if the model's context window"
+              + " allows it.",
+          config.review().maxInputTokens(),
+          activeModel.modelName(),
+          activeModel.modelInputCap(),
+          activeModel.maxInputTokens(),
+          activeModel.modelName());
+    }
+    if (config.ai().models().containsKey(activeModel.modelName())) {
+      var temperature = orProviderDefault(activeModel.temperature());
+      var topP = orProviderDefault(activeModel.topP());
+      var maxOutputTokens = orProviderDefault(activeModel.maxOutputTokens());
+      var frequencyPenalty = orProviderDefault(activeModel.frequencyPenalty());
+      var presencePenalty = orProviderDefault(activeModel.presencePenalty());
+      var seed = activeModel.seed().map(String::valueOf).orElse("none");
+      log.info(
+          "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
+              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={},"
+              + " frequency-penalty={}, presence-penalty={}, seed={}",
+          activeModel.modelName(),
+          activeModel.maxInputTokens(),
+          activeModel.outputBufferTokens(),
+          activeModel.tokenSafetyMargin(),
+          temperature,
+          topP,
+          maxOutputTokens,
+          frequencyPenalty,
+          presencePenalty,
+          seed);
+    }
+  }
+
   /** Env-var prefix every per-model setting shares. */
   private static final String MODEL_ENV_PREFIX = "THRILLHOUSEBOT_AI_MODELS_";
 
@@ -431,42 +467,6 @@ public class StartupConfigValidator {
     }
     warnings.sort(String::compareTo);
     return List.copyOf(warnings);
-  }
-
-  private void logActiveModelStatus() {
-    if (config.review().maxInputTokens() > 0 && activeModel.budgetClampedByModelCap()) {
-      log.warn(
-          "REVIEW_MAX_INPUT_TOKENS ({}) exceeds the input cap of model '{}' ({}); using {}. Raise"
-              + " thrillhousebot.ai.models.\"{}\".max-input-tokens if the model's context window"
-              + " allows it.",
-          config.review().maxInputTokens(),
-          activeModel.modelName(),
-          activeModel.modelInputCap(),
-          activeModel.maxInputTokens(),
-          activeModel.modelName());
-    }
-    if (config.ai().models().containsKey(activeModel.modelName())) {
-      var temperature = orProviderDefault(activeModel.temperature());
-      var topP = orProviderDefault(activeModel.topP());
-      var maxOutputTokens = orProviderDefault(activeModel.maxOutputTokens());
-      var frequencyPenalty = orProviderDefault(activeModel.frequencyPenalty());
-      var presencePenalty = orProviderDefault(activeModel.presencePenalty());
-      var seed = activeModel.seed().map(String::valueOf).orElse("none");
-      log.info(
-          "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
-              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={},"
-              + " frequency-penalty={}, presence-penalty={}, seed={}",
-          activeModel.modelName(),
-          activeModel.maxInputTokens(),
-          activeModel.outputBufferTokens(),
-          activeModel.tokenSafetyMargin(),
-          temperature,
-          topP,
-          maxOutputTokens,
-          frequencyPenalty,
-          presencePenalty,
-          seed);
-    }
   }
 
   private static String orProviderDefault(Optional<? extends Number> value) {
