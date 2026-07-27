@@ -121,11 +121,22 @@ public class FindingFeedbackService {
       return new FeedbackPreferenceSummary("", 0, 0, 0);
     }
     var key = repositoryKey.strip();
+    // Match stored webhook casing case-insensitively so dashboard filters like Owner/Repo work.
     long useful =
-        repository.count("repository = ?1 and signal = ?2", key, FindingFeedback.SIGNAL_USEFUL);
+        repository.count(
+            "lower(repository) = lower(?1) and signal = ?2", key, FindingFeedback.SIGNAL_USEFUL);
     long notUseful =
-        repository.count("repository = ?1 and signal = ?2", key, FindingFeedback.SIGNAL_NOT_USEFUL);
-    return new FeedbackPreferenceSummary(key, useful, notUseful, useful + notUseful);
+        repository.count(
+            "lower(repository) = lower(?1) and signal = ?2",
+            key,
+            FindingFeedback.SIGNAL_NOT_USEFUL);
+    var storedKey =
+        repository
+            .find("lower(repository) = lower(?1) order by repository", key)
+            .firstResultOptional()
+            .map(f -> f.repository)
+            .orElse(key);
+    return new FeedbackPreferenceSummary(storedKey, useful, notUseful, useful + notUseful);
   }
 
   /** Newest events for a repository (dashboard detail); empty when the key is blank. */
@@ -135,7 +146,7 @@ public class FindingFeedbackService {
       return List.of();
     }
     return repository
-        .find("repository = ?1 order by createdAt desc", repositoryKey.strip())
+        .find("lower(repository) = lower(?1) order by createdAt desc", repositoryKey.strip())
         .page(0, Math.min(limit, 100))
         .list()
         .stream()

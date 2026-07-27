@@ -172,6 +172,33 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void shouldReturnFeedbackWhenRepositoryQueryCasingDiffers() {
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "Owner/Repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "octocat",
+            301L));
+    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "owner/repo")).thenReturn(true);
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "owner/repo")
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories[0].repository", equalTo("Owner/Repo"))
+        .body("repositories[0].usefulCount", equalTo(1))
+        .body("repositories[0].totalEvents", equalTo(1))
+        .body("recent", hasSize(1));
+  }
+
+  @Test
   void shouldFilterInaccessibleRepositoriesFromFeedbackAggregates() {
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(

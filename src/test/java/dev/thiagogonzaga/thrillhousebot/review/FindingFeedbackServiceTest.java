@@ -154,6 +154,30 @@ class FindingFeedbackServiceTest {
   }
 
   @Test
+  void summarizeAndListRecentMatchRepositoryCaseInsensitively() {
+    assertTrue(
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                "Owner/Repo",
+                1,
+                10L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "octocat",
+                301L)));
+
+    var summary = service.summarize("owner/repo");
+    assertEquals("Owner/Repo", summary.repository());
+    assertEquals(1, summary.usefulCount());
+    assertEquals(1, summary.totalEvents());
+
+    var recent = service.listRecent("OWNER/REPO", 10);
+    assertEquals(1, recent.size());
+    assertEquals("Owner/Repo", recent.get(0).repository());
+  }
+
+  @Test
   void recordAcceptsNullReactionIdAndRejectsNullReactor() {
     assertTrue(
         service.recordFeedback(
