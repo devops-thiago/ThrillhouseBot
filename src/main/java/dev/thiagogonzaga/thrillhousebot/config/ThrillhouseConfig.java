@@ -309,6 +309,30 @@ public interface ThrillhouseConfig {
     LabelsConfig labels();
 
     DiagramConfig diagram();
+
+    FixConfig fix();
+  }
+
+  /**
+   * Opt-in agentic {@code /fix} command. When {@link #enabled()} a write-access holder can reply
+   * {@code /fix} on a review finding thread; the model drafts the change across the relevant files
+   * and the bot commits it to a bot-owned branch and opens a pull request targeting the reviewed
+   * PR's branch. Off by default: the bot never pushes code unless the operator opts in, keeping the
+   * "AI review is advisory" stance — the fix PR is a proposal a human reviews and merges.
+   */
+  interface FixConfig {
+    /** Master switch — the whole feature is off unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Upper bound on how many files one {@code /fix} may edit or create. A fix that needs more is
+     * rejected with an explanatory reply instead of being partially applied — a suspiciously broad
+     * fix deserves a human, not a bigger commit.
+     */
+    @WithName("max-edited-files")
+    @WithDefault("10")
+    int maxEditedFiles();
   }
 
   /**

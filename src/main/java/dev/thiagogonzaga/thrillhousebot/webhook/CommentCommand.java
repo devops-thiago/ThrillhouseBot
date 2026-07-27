@@ -35,6 +35,11 @@ public enum CommentCommand {
   CHANGELOG,
   /** Generate docstrings/inline docs for changed symbols as committable suggestions. */
   ADD_DOCS,
+  /**
+   * Agentic fix (opt-in): on a review finding thread, draft the change across the relevant files,
+   * commit it to a bot branch, and open a PR targeting the reviewed PR's branch.
+   */
+  FIX,
   /** Resolve the bot's outstanding finding threads on the PR. */
   RESOLVE,
   /** Silence the bot on the PR until {@link #RESUME}. */

@@ -77,6 +77,7 @@ class StartupConfigValidatorTest {
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
     private String blockingStrictness = "balanced";
+    private int fixMaxEditedFiles = 10;
     private String modelName = "deepseek-chat";
     private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
         new HashMap<>();
@@ -151,6 +152,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder fixMaxEditedFiles(int v) {
+      this.fixMaxEditedFiles = v;
+      return this;
+    }
+
     ConfigBuilder model(String name, ThrillhouseConfig.AiPricingConfig.ModelSettings settings) {
       this.models.put(name, settings);
       return this;
@@ -181,6 +187,9 @@ class StartupConfigValidatorTest {
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
       lenient().when(review.ciGating()).thenReturn(ciGating);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
+      var fix = mock(ThrillhouseConfig.FixConfig.class);
+      lenient().when(review.fix()).thenReturn(fix);
+      lenient().when(fix.maxEditedFiles()).thenReturn(fixMaxEditedFiles);
       lenient().when(ai.models()).thenReturn(models);
       return new StartupConfigValidator(
           config, aiApiKey, new ActiveModelSettings(config, modelName));
@@ -282,6 +291,12 @@ class StartupConfigValidatorTest {
   void failsFastWhenMaxAiCallsBelowOne() {
     var ex = assertFailsValidation(new ConfigBuilder().maxAiCalls(0).build());
     assertTrue(ex.getMessage().contains("REVIEW_MAX_AI_CALLS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenFixMaxEditedFilesBelowOne() {
+    var ex = assertFailsValidation(new ConfigBuilder().fixMaxEditedFiles(0).build());
+    assertTrue(ex.getMessage().contains("REVIEW_FIX_MAX_EDITED_FILES"), ex.getMessage());
   }
 
   @Test

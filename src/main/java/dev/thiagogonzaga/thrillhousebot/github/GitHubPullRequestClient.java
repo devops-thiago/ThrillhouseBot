@@ -82,6 +82,17 @@ public interface GitHubPullRequestClient {
       @PathParam("base") String base,
       @PathParam("head") String head);
 
+  @POST
+  @Path("/repos/{owner}/{repo}/pulls")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  CreatedPullRequest createPullRequest(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      CreatePullRequestRequest request);
+
   @GET
   @Path("/repos/{owner}/{repo}/contents/{path}")
   @Produces(MediaType.APPLICATION_JSON)
@@ -106,11 +117,27 @@ public interface GitHubPullRequestClient {
     }
   }
 
-  record Ref(String sha, String ref) {
+  record Ref(String sha, String ref, RefRepo repo) {
     public Ref(String sha) {
-      this(sha, null);
+      this(sha, null, null);
+    }
+
+    public Ref(String sha, String ref) {
+      this(sha, ref, null);
     }
   }
+
+  /** The repository a PR ref lives in; used to detect fork PRs (head repo ≠ base repo). */
+  record RefRepo(@JsonProperty("full_name") String fullName) {}
+
+  record CreatePullRequestRequest(
+      String title,
+      String body,
+      String head,
+      String base,
+      @JsonProperty("maintainer_can_modify") boolean maintainerCanModify) {}
+
+  record CreatedPullRequest(int number, @JsonProperty("html_url") String htmlUrl) {}
 
   record FileDiff(
       String filename,
