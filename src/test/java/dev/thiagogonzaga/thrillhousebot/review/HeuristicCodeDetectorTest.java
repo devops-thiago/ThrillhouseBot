@@ -218,11 +218,13 @@ class HeuristicCodeDetectorTest {
   @Test
   void shouldNotTriggerOnRemovedHeuristicCode() {
     String removal =
-        "--- a/src/main/java/dev/thiagogonzaga/Old.java\n"
-            + "+++ b/src/main/java/dev/thiagogonzaga/Old.java\n"
-            + "@@ -1,3 +1,2 @@\n"
-            + "-  private static final Pattern P = Pattern.compile(\"x\");\n"
-            + "   int keep = 1;\n";
+        """
+        --- a/src/main/java/dev/thiagogonzaga/Old.java
+        +++ b/src/main/java/dev/thiagogonzaga/Old.java
+        @@ -1,3 +1,2 @@
+        -  private static final Pattern P = Pattern.compile("x");
+           int keep = 1;
+        """;
     assertFalse(HeuristicCodeDetector.introducesHeuristicCode(removal));
   }
 
@@ -383,9 +385,11 @@ class HeuristicCodeDetectorTest {
   void shouldNotTriggerOnDiffHeaderTextAlone() {
     assertFalse(
         HeuristicCodeDetector.introducesHeuristicCode(
-            "--- a/src/main/java/dev/thiagogonzaga/Parser.java\n"
-                + "+++ b/src/main/java/dev/thiagogonzaga/Parser.java\n"
-                + "@@ -1,2 +1,2 @@\n"
-                + "   int unchanged = 1;\n"));
+            """
+            --- a/src/main/java/dev/thiagogonzaga/Parser.java
+            +++ b/src/main/java/dev/thiagogonzaga/Parser.java
+            @@ -1,2 +1,2 @@
+               int unchanged = 1;
+            """));
   }
 }

@@ -498,13 +498,9 @@ public class ReviewPublisher {
       var finding = result.findings().get(i);
       if (!finding.postsInline()) {
         confidenceSkipped.add(finding);
-        continue;
-      }
-      if (posted >= maxComments) {
+      } else if (posted >= maxComments) {
         capSkipped.add(finding);
-        continue;
-      }
-      if (postFindingComment(target, finding, i + 1, lineResolver)) {
+      } else if (postFindingComment(target, finding, i + 1, lineResolver)) {
         posted++;
       } else {
         unanchored.add(finding);

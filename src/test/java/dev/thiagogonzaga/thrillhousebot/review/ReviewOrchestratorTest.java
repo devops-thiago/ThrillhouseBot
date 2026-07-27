@@ -1088,8 +1088,11 @@ class ReviewOrchestratorTest {
                       1,
                       0,
                       1,
-                      "@@\n+doThrow(new RuntimeException(\"executor saturated\"))"
-                          + ".when(reviewDispatcher).dispatch(any());\n"))
+                      """
+                      @@
+                      +doThrow(new RuntimeException("executor saturated")).when(reviewDispatcher)\
+                      .dispatch(any());
+                      """))
               .contains("Mock Fidelity Check"));
     }
 

@@ -69,10 +69,12 @@ class ReviewPromptAssemblerTest {
     assertEquals(
         "",
         ReviewPromptAssembler.heuristicFailureModesSection(
-            "--- a/src/main/java/dev/thiagogonzaga/Service.java\n"
-                + "+++ b/src/main/java/dev/thiagogonzaga/Service.java\n"
-                + "@@ -1,2 +1,3 @@\n"
-                + "+    var trimmed = payload.trim();\n"));
+            """
+            --- a/src/main/java/dev/thiagogonzaga/Service.java
+            +++ b/src/main/java/dev/thiagogonzaga/Service.java
+            @@ -1,2 +1,3 @@
+            +    var trimmed = payload.trim();
+            """));
   }
 
   @Test
@@ -80,10 +82,12 @@ class ReviewPromptAssemblerTest {
     assertEquals(
         PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST,
         ReviewPromptAssembler.heuristicFailureModesSection(
-            "--- a/src/main/java/dev/thiagogonzaga/Trigger.java\n"
-                + "+++ b/src/main/java/dev/thiagogonzaga/Trigger.java\n"
-                + "@@ -1,2 +1,3 @@\n"
-                + "+  private static final Pattern P = Pattern.compile(\"/pause\");\n"));
+            """
+            --- a/src/main/java/dev/thiagogonzaga/Trigger.java
+            +++ b/src/main/java/dev/thiagogonzaga/Trigger.java
+            @@ -1,2 +1,3 @@
+            +  private static final Pattern P = Pattern.compile("/pause");
+            """));
   }
 
   @Test

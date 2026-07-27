@@ -756,5 +756,62 @@ class ReviewDiffFormatterTest {
       assertTrue(rollup.contains("o0.java → n0.java"));
       assertFalse(rollup.contains("o5.java"));
     }
+
+    @Test
+    void isPureRenameToleratesAbsentFileAndStatus() {
+      assertFalse(ReviewDiffFormatter.isPureRename(null));
+      assertFalse(
+          ReviewDiffFormatter.isPureRename(
+              new GitHubPullRequestClient.FileDiff("b.java", null, 0, 0, 0, null, "a.java")));
+    }
+
+    @Test
+    void isPureRenameRejectsARenameCarryingPatchTextWithZeroCounts() {
+      // Counts can read 0 while GitHub still ships hunks; the patch decides, so this stays
+      // reviewable rather than being silently dropped from the budget.
+      assertFalse(
+          ReviewDiffFormatter.isPureRename(
+              new GitHubPullRequestClient.FileDiff(
+                  "b.java", "renamed", 0, 0, 0, "@@ -1 +1 @@\n-a\n+b", "a.java")));
+    }
+
+    @Test
+    void pureRenameHelpersReturnEmptyForAbsentInput() {
+      assertTrue(ReviewDiffFormatter.pureRenameFiles(null).isEmpty());
+      assertTrue(ReviewDiffFormatter.pureRenameFiles(List.of()).isEmpty());
+      assertEquals("", ReviewDiffFormatter.formatPureRenameRollup(null));
+      assertEquals("", ReviewDiffFormatter.formatPureRenameRollup(List.of()));
+    }
+
+    @Test
+    void rollupFallsBackToTheNewPathWhenGitHubOmitsThePreviousFilename() {
+      var noPrevious =
+          new GitHubPullRequestClient.FileDiff("new/Only.java", "renamed", 0, 0, 0, null, null);
+      var blankPrevious =
+          new GitHubPullRequestClient.FileDiff("new/Blank.java", "renamed", 0, 0, 0, null, "  ");
+
+      var rollup = ReviewDiffFormatter.formatPureRenameRollup(List.of(noPrevious, blankPrevious));
+
+      assertTrue(rollup.contains("new/Only.java"));
+      assertTrue(rollup.contains("new/Blank.java"));
+      assertFalse(rollup.contains("→"), "no arrow without a source path: " + rollup);
+    }
+
+    @Test
+    void withPureRenamesAppendsRenamesAndReturnsTheInputWhenThereAreNone() {
+      var reviewable = List.of(file("src/App.java", "modified", 1, 0, "@@ -1 +1,2 @@\n+ok"));
+      var rename =
+          new GitHubPullRequestClient.FileDiff(
+              "pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java");
+
+      // Identity when nothing was renamed — the caller's list is handed straight back.
+      assertSame(reviewable, ReviewDiffFormatter.withPureRenames(reviewable, reviewable));
+
+      var merged = ReviewDiffFormatter.withPureRenames(reviewable, List.of(rename));
+
+      assertEquals(2, merged.size());
+      assertEquals("src/App.java", merged.get(0).filename());
+      assertEquals("pkg/B.java", merged.get(1).filename(), "renames are appended after reviewable");
+    }
   }
 }

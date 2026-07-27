@@ -89,11 +89,15 @@ final class HeuristicCodeDetector {
    * {@code .} or word character immediately before it (so the receiver call {@code
    * Integer.parseInt(...)} cannot pose as a declared {@code parse} member). The member name is
    * captured; {@link #isHeuristicName(String)} decides whether it is heuristic.
+   *
+   * <p>The gap is atomic and must end on a separator, so it cannot overlap the captured name and
+   * re-split on backtracking — that overlap is what made the earlier form super-linear (java:S8786)
+   * on a long line with no {@code (}.
    */
   private static final Pattern HEURISTIC_DECLARATION =
       Pattern.compile(
           "(?i)\\b(?:private|public|protected|internal|static|final|fun|def|func|function)\\b"
-              + "[^(=\\r\\n]*(?<![.\\w])(\\w+)\\s*\\(");
+              + "(?>[^(=\\r\\n]*[^\\w.(=\\r\\n])(\\w+)\\s*\\(");
 
   /**
    * Package-private Java-style method declaration, where no visibility keyword is present. The type
@@ -127,11 +131,19 @@ final class HeuristicCodeDetector {
   private static final Pattern DECLARATION_ONLY_LINE =
       Pattern.compile("^\\+\\s*(?:import|from|package|using|#include)\\b");
 
-  /** A tolerance/window constant — the #55 three-line ambiguity window is the motivating shape. */
-  private static final Pattern THRESHOLD_CONSTANT =
-      Pattern.compile(
-          "(?i)\\b(?:static\\s+final|const|val|let|var)\\b[^=\\r\\n]*"
-              + "\\b\\w*(?:WINDOW|THRESHOLD|TOLERANCE|RADIUS|FUZZ|_LINES|LINES_)\\w*\\b[^=\\r\\n]*=");
+  /**
+   * A tolerance/window constant — the #55 three-line ambiguity window is the motivating shape. The
+   * declaration is matched structurally and the name tokens are checked in plain code, the same
+   * split as {@link #HEURISTIC_NAME_STEMS}: three unbounded runs in one expression overlapped and
+   * made it super-linear (java:S8786), and a single run terminated by {@code =} cannot.
+   */
+  private static final Pattern THRESHOLD_DECLARATION =
+      Pattern.compile("(?i)\\b(?:static\\s+final|const|val|let|var)\\b([^=\\r\\n]*)=");
+
+  /** Name fragments (lowercase) that mark a declared constant as a tolerance or window. */
+  private static final String[] THRESHOLD_NAME_TOKENS = {
+    "window", "threshold", "tolerance", "radius", "fuzz", "_lines", "lines_"
+  };
 
   /** Diff header naming the file the following hunks belong to. */
   private static final Pattern DIFF_FILE_HEADER = Pattern.compile("^\\+\\+\\+ b/(.+)$");
@@ -188,22 +200,19 @@ final class HeuristicCodeDetector {
       if (line.startsWith("+++ ")) {
         scope = FileScope.of(line);
         addedLines.clear();
-        continue;
-      }
-      // Only contiguous additions can form one declaration or construction. Context, removals,
-      // hunk headers, and ignored test-file content all terminate the bounded window.
-      if (scope.testFile() || line.isEmpty() || line.charAt(0) != '+') {
+      } else if (scope.testFile() || line.isEmpty() || line.charAt(0) != '+') {
+        // Only contiguous additions can form one declaration or construction. Context, removals,
+        // hunk headers, and ignored test-file content all terminate the bounded window.
         addedLines.clear();
-        continue;
-      }
-
-      addedLines.addLast(line);
-      if (addedLines.size() > 4) {
-        addedLines.removeFirst();
-      }
-      if (isHeuristicLine(line, scope.javaScript())
-          || isHeuristicWindow(addedLines, scope.javaScript())) {
-        return true;
+      } else {
+        addedLines.addLast(line);
+        if (addedLines.size() > 4) {
+          addedLines.removeFirst();
+        }
+        if (isHeuristicLine(line, scope.javaScript())
+            || isHeuristicWindow(addedLines, scope.javaScript())) {
+          return true;
+        }
       }
     }
     return false;
@@ -218,7 +227,21 @@ final class HeuristicCodeDetector {
         || NORMALIZATION.matcher(addedLine).find()
         || declaresHeuristicMember(addedLine, inJavaScriptFile)
         || (inJavaScriptFile && JS_REGEX_LITERAL.matcher(addedLine).find())
-        || THRESHOLD_CONSTANT.matcher(addedLine).find();
+        || declaresThresholdConstant(addedLine);
+  }
+
+  /** Whether the text declares a constant whose name carries a tolerance/window token. */
+  private static boolean declaresThresholdConstant(CharSequence text) {
+    var matcher = THRESHOLD_DECLARATION.matcher(text);
+    while (matcher.find()) {
+      var declared = matcher.group(1).toLowerCase(Locale.ROOT);
+      for (String token : THRESHOLD_NAME_TOKENS) {
+        if (declared.contains(token)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private static boolean matchesAny(List<Pattern> patterns, CharSequence text) {

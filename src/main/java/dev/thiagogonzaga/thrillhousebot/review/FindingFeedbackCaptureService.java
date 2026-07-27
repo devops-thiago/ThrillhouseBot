@@ -120,6 +120,9 @@ public class FindingFeedbackCaptureService {
    * Schedules best-effort capture for a review-thread reply: fetch the root body (to confirm it is
    * a bot finding), poll 👍/👎 on that root, and apply reply-body heuristics. Never blocks the
    * webhook ACK thread beyond queueing the task.
+   *
+   * <p>The reply's author and body travel as one {@link ReviewReply} — the same record the capture
+   * already used internally — rather than as three more positional parameters (java:S107).
    */
   public void scheduleCaptureOnReviewReply(
       long installationId,
@@ -127,20 +130,12 @@ public class FindingFeedbackCaptureService {
       String repo,
       int prNumber,
       long rootCommentId,
-      String replyAuthorLogin,
-      String replyAuthorAssociation,
-      String replyBody) {
+      ReviewReply reply) {
     try {
       captureExecutor.execute(
           () -> {
             try {
-              captureOnReviewReply(
-                  installationId,
-                  owner,
-                  repo,
-                  prNumber,
-                  rootCommentId,
-                  new ReviewReply(replyAuthorLogin, replyAuthorAssociation, replyBody));
+              captureOnReviewReply(installationId, owner, repo, prNumber, rootCommentId, reply);
             } catch (RuntimeException e) {
               log.warn(
                   "Finding feedback capture failed for {}/{} #{} comment {} (continuing)",
@@ -202,7 +197,7 @@ public class FindingFeedbackCaptureService {
   }
 
   /** The reply that may carry feedback: who wrote it, their author association, and its body. */
-  record ReviewReply(String authorLogin, String authorAssociation, String body) {}
+  public record ReviewReply(String authorLogin, String authorAssociation, String body) {}
 
   void captureOnReviewReply(
       long installationId,
