@@ -536,8 +536,12 @@ This is still an early-stage project; the current constraints are:
   counts stay accurate, and adding the pricing entry backfills the flagged sessions
   on the next restart.
 - **Review output caps** — at most 50 inline PR comments per review
-  (`thrillhousebot.review.max-review-comments`). Lockfiles, `pom.xml`, generated
-  paths, and `target/` are skipped by default (`thrillhousebot.review.ignored-files`).
+  (`thrillhousebot.review.max-review-comments`). Lockfiles (`*.lock`,
+  `package-lock.json`, `pnpm-lock.yaml`, `go.sum`), minified bundles and
+  sourcemaps, generated code (`*.generated.*`, protobuf output), and build or
+  vendor directories (`target/`, `node_modules/`, `dist/`, `build/`, `out/`,
+  `.next/`, `vendor/`, `__pycache__/`, `.venv/`, `bin/`, `obj/`) are skipped by
+  default (`thrillhousebot.review.ignored-files`, overridable per deployment).
 - **Self-hosted** — no managed offering from this project.
 
 ## Verifying a release

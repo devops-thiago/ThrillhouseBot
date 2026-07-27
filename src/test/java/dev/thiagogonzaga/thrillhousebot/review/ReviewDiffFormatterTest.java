@@ -20,6 +20,7 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import io.smallrye.config.WithDefault;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -631,6 +632,74 @@ class ReviewDiffFormatterTest {
 
       assertFalse(formatter.isIgnored(null));
       assertFalse(formatter.isIgnored("  "));
+    }
+  }
+
+  @Nested
+  class DefaultIgnoredPatterns {
+
+    private ReviewDiffFormatter defaultFormatter() throws Exception {
+      var defaults =
+          ThrillhouseConfig.ReviewConfig.class
+              .getMethod("ignoredFiles")
+              .getAnnotation(WithDefault.class)
+              .value();
+      return new ReviewDiffFormatter(Arrays.asList(defaults.split(",")), 5000);
+    }
+
+    @Test
+    void shouldIgnoreLockfilesAcrossEcosystems() throws Exception {
+      var formatter = defaultFormatter();
+
+      assertTrue(formatter.isIgnored("pnpm-lock.yaml"));
+      assertTrue(formatter.isIgnored("frontend/pnpm-lock.yaml"));
+      assertTrue(formatter.isIgnored("go.sum"));
+      assertTrue(formatter.isIgnored("composer.lock"));
+      assertTrue(formatter.isIgnored("Cargo.lock"));
+      assertTrue(formatter.isIgnored("api/package-lock.json"));
+    }
+
+    @Test
+    void shouldIgnoreBuildAndVendorDirectories() throws Exception {
+      var formatter = defaultFormatter();
+
+      assertTrue(formatter.isIgnored("node_modules/lodash/index.js"));
+      assertTrue(formatter.isIgnored("frontend/dist/app.js"));
+      assertTrue(formatter.isIgnored("build/classes/Foo.class"));
+      assertTrue(formatter.isIgnored("packages/app/out/index.html"));
+      assertTrue(formatter.isIgnored(".next/server/page.js"));
+      assertTrue(formatter.isIgnored("vendor/github.com/pkg/errors/errors.go"));
+      assertTrue(formatter.isIgnored("app/__pycache__/mod.cpython-312.pyc"));
+      assertTrue(formatter.isIgnored(".venv/lib/python3.12/site.py"));
+      assertTrue(formatter.isIgnored("Service/bin/Debug/App.dll"));
+      assertTrue(formatter.isIgnored("Service/obj/project.assets.json"));
+    }
+
+    @Test
+    void shouldIgnoreMinifiedAndGeneratedFiles() throws Exception {
+      var formatter = defaultFormatter();
+
+      assertTrue(formatter.isIgnored("assets/app.min.js"));
+      assertTrue(formatter.isIgnored("assets/styles.min.css"));
+      assertTrue(formatter.isIgnored("assets/app.js.map"));
+      assertTrue(formatter.isIgnored("api/service.pb.go"));
+      assertTrue(formatter.isIgnored("proto/service_pb2.py"));
+      assertTrue(formatter.isIgnored("src/schema.generated.ts"));
+    }
+
+    @Test
+    void shouldKeepHandwrittenSourceReviewable() throws Exception {
+      var formatter = defaultFormatter();
+
+      assertFalse(formatter.isIgnored("src/Main.java"));
+      assertFalse(formatter.isIgnored("frontend/src/App.tsx"));
+      assertFalse(formatter.isIgnored("cmd/server/main.go"));
+      assertFalse(formatter.isIgnored("app/models.py"));
+      // Directory globs must not match mere name prefixes of real source dirs
+      assertFalse(formatter.isIgnored("builder/pipeline.py"));
+      assertFalse(formatter.isIgnored("cabin/logger.ts"));
+      assertFalse(formatter.isIgnored("outbox/handler.java"));
+      assertFalse(formatter.isIgnored("distance.js"));
     }
   }
 
