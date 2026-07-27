@@ -471,14 +471,14 @@ summary (`GET /api/dashboard/summary`, field `skippedReviewsByReason`). Check, i
 1. **Is the App installed on the repository?** No webhook delivery at all means the
    GitHub App isn't installed (or the webhook URL/secret is wrong). Check the App's
    **Advanced → Recent Deliveries** page on GitHub.
-2. **Is the PR a draft?** (`reason=DRAFT`) — with `WEBHOOK_TRIGGERS_SKIP_DRAFTS=true`,
+2. **Is the PR a draft?** (`reason=DRAFT`) — with `WEBHOOK_SKIP_DRAFTS=true`,
    drafts are skipped until marked ready for review.
 3. **Is the PR paused?** (`reason=PAUSED`) — someone commented `/pause`; comment
    `/resume` to re-enable reviews.
 4. **Label gates** (`reason=MISSING_REQUIRED_LABEL` / `EXCLUDED_LABEL`) — check
-   `WEBHOOK_TRIGGERS_REQUIRED_LABELS` and `WEBHOOK_TRIGGERS_EXCLUDED_LABELS`.
+   `WEBHOOK_REQUIRED_LABELS` and `WEBHOOK_EXCLUDED_LABELS`.
 5. **Base branch filters** (`reason=BASE_BRANCH_NOT_ALLOWED` / `IGNORED_BASE_BRANCH`) —
-   check `WEBHOOK_TRIGGERS_BASE_BRANCHES` and `WEBHOOK_TRIGGERS_IGNORED_BASE_BRANCHES`.
+   check `WEBHOOK_BASE_BRANCHES` and `WEBHOOK_IGNORED_BASE_BRANCHES`.
 6. **Rate window** (`reason=RATE_LIMITED`) — an automatic review already completed
    within `AUTO_REVIEW_MIN_INTERVAL`; a manual `/review` bypasses the window.
 7. **Redelivery** (`reason=DUPLICATE_DELIVERY`) — GitHub redelivered a webhook the bot
