@@ -27,10 +27,12 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import io.opentelemetry.api.OpenTelemetry;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -240,6 +242,7 @@ class ReviewOrchestratorTest {
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
+        new ReviewOutcomeMetrics(OpenTelemetry.noop()),
         mock(FindingFeedbackCaptureService.class),
         reviewExecutor);
   }

@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -59,6 +60,8 @@ public class ReviewOrchestrator {
   private final VerdictBuilder verdictBuilder;
 
   private final FindingPipeline findingPipeline;
+
+  private final ReviewOutcomeMetrics outcomeMetrics;
 
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
@@ -176,6 +179,7 @@ public class ReviewOrchestrator {
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
+      ReviewOutcomeMetrics outcomeMetrics,
       FindingFeedbackCaptureService findingFeedbackCapture,
       @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
@@ -190,6 +194,7 @@ public class ReviewOrchestrator {
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
+    this.outcomeMetrics = outcomeMetrics;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.reviewExecutor = reviewExecutor;
   }
@@ -469,6 +474,7 @@ public class ReviewOrchestrator {
             s.setAiResponseJson(session.getAiResponseJson());
           }
         });
+    outcomeMetrics.recordCompleted();
   }
 
   /** Applies failure fields to the in-memory session and persisted entity together. */
@@ -479,6 +485,7 @@ public class ReviewOrchestrator {
           s.setStatus(ReviewSession.STATUS_FAILED);
           s.setErrorMessage(errorMessage);
         });
+    outcomeMetrics.recordFailed();
   }
 
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {
