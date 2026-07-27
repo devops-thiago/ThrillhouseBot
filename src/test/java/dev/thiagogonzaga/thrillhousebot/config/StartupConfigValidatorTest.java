@@ -98,6 +98,7 @@ class StartupConfigValidatorTest {
     private Optional<String> repeatReasoningEffort = Optional.empty();
     private String blockingStrictness = "balanced";
     private double secretScanEntropyThreshold = 3.5;
+    private int fixMaxEditedFiles = 10;
     private String modelName = "deepseek-chat";
     private Optional<String> lowRiskModel = Optional.empty();
     private Optional<String> fallbackModel = Optional.empty();
@@ -234,6 +235,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder fixMaxEditedFiles(int v) {
+      this.fixMaxEditedFiles = v;
+      return this;
+    }
+
     ConfigBuilder conciseMaxOutputTokens(Optional<Integer> v) {
       this.conciseMaxOutputTokens = v;
       return this;
@@ -314,6 +320,9 @@ class StartupConfigValidatorTest {
       var securityScan = mock(ThrillhouseConfig.SecurityScanConfig.class);
       lenient().when(review.securityScan()).thenReturn(securityScan);
       lenient().when(securityScan.entropyThreshold()).thenReturn(secretScanEntropyThreshold);
+      var fix = mock(ThrillhouseConfig.FixConfig.class);
+      lenient().when(review.fix()).thenReturn(fix);
+      lenient().when(fix.maxEditedFiles()).thenReturn(fixMaxEditedFiles);
       lenient().when(ai.models()).thenReturn(models);
       lenient().when(ai.pricing()).thenReturn(pricing);
       lenient().when(ai.maxConcurrentCalls()).thenReturn(maxConcurrentCalls);
@@ -737,6 +746,12 @@ class StartupConfigValidatorTest {
         ex.getMessage().contains("REVIEW_OUTPUT_BUFFER_TOKENS"),
         "the global env var is inert under the override and must not be advised: "
             + ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenFixMaxEditedFilesBelowOne() {
+    var ex = assertFailsValidation(new ConfigBuilder().fixMaxEditedFiles(0).build());
+    assertTrue(ex.getMessage().contains("REVIEW_FIX_MAX_EDITED_FILES"), ex.getMessage());
   }
 
   @Test

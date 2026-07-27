@@ -113,6 +113,7 @@ same diff.
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
 | Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066). The reply and the review accept the same lines for it (`FollowUpAnalyzer.threadLines`): the thread's line and original line, and, on a thread posted on removed lines, the finding's head-side line its marker carries (`line=`, `SuggestionFormatter.withMarkedLine`, #1360) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
+| Opt-in `/fix` on a finding thread (#57): routed by `WebhookEvents.handleFixCommand` (switch, pause, write access, then the 👀 ack), drafted by `review/ai/FixGenerator`, applied all-or-nothing and pushed to a `thrillhousebot/fix-*` branch through `github/GitHubGitDataClient`, the only client that writes repository content | `review/FixService` |
 
 ## Model-call invariants
 

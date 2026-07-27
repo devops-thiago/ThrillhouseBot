@@ -63,6 +63,7 @@ class CommentCommandServiceTest {
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
   @Mock private LearningCommands learningCommands;
+  @Mock private ThrillhouseConfig.FixConfig fixConfig;
 
   private CommentCommandService service;
 
@@ -467,6 +468,44 @@ class CommentCommandServiceTest {
     service.handle(ctx(CommentCommand.HELP));
 
     assertTrue(postedBody().contains("`/generate-tests`"));
+  }
+
+  @Test
+  void fixAsPrCommentPostsUsagePointerWhenEnabledAndAuthorized() {
+    authorize(true);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.FIX));
+
+    assertEquals(CommentCommandService.FIX_USAGE, postedBody());
+  }
+
+  @Test
+  void fixSaysSoWhenDisabled() {
+    authorize(true);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.FIX));
+
+    assertTrue(postedBody().contains("`/fix` is disabled"), postedBody());
+    assertTrue(postedBody().contains("thrillhousebot.review.fix.enabled=true"), postedBody());
+  }
+
+  @Test
+  void fixIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.FIX));
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(fixConfig);
+  }
+
+  @Test
+  void helpTextListsFixCommand() {
+    assertTrue(CommentCommandService.HELP_TEXT.contains("`/fix`"));
   }
 
   @Test

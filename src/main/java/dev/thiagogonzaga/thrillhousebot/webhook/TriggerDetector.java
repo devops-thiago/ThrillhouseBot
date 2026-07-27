@@ -91,6 +91,7 @@ public class TriggerDetector {
     patterns.put(CommentCommand.ADD_DOCS, patternsFor("add-docs", mentionAlternation));
     patterns.put(CommentCommand.IMPROVE, patternsFor("improve", mentionAlternation));
     patterns.put(CommentCommand.GENERATE_TESTS, patternsFor("generate-tests", mentionAlternation));
+    patterns.put(CommentCommand.FIX, patternsFor("fix", mentionAlternation));
     patterns.put(CommentCommand.RESOLVE, patternsFor("resolve", mentionAlternation));
     patterns.put(CommentCommand.PAUSE, patternsFor("pause", mentionAlternation));
     patterns.put(CommentCommand.RESUME, patternsFor("resume", mentionAlternation));

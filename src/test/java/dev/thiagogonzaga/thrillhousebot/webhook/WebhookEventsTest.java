@@ -31,6 +31,7 @@ import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
+import dev.thiagogonzaga.thrillhousebot.review.FixService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
 import dev.thiagogonzaga.thrillhousebot.review.PullRequestLabelGate;
@@ -99,6 +100,9 @@ class WebhookEventsTest {
 
   @Mock private jakarta.enterprise.inject.spi.BeanManager beanManager;
   @Mock private jakarta.enterprise.event.Event<Object> installationEvents;
+  @Mock private FixService fixService;
+
+  @Mock private ThrillhouseConfig.FixConfig fixConfig;
 
   private final ObjectMapper mapper = new ObjectMapper();
 
@@ -402,6 +406,7 @@ class WebhookEventsTest {
         ackReactionService,
         skipEmitter,
         findingFeedbackCapture,
+        fixService,
         ciHoldRegistry,
         allowedAccounts,
         beanManager,
@@ -1803,6 +1808,106 @@ class WebhookEventsTest {
 
     // /pause silences the bot, so a review-thread reply must not spend a paid conversational reply.
     verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldDispatchFixForFixCommandOnFindingThread() {
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    // A /fix replied into a finding thread targets the thread root (in_reply_to_id 99).
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1000L, AckReactionService.CommentKind.REVIEW);
+    verify(fixService)
+        .handle(
+            new FixService.FixTask(
+                "owner", "repo", 42, "main", 12345L, "octocat", 99L, "src/Foo.java"));
+    verify(replyDispatcher, never()).dispatch(any(MaintainerReplyService.ReplyTask.class));
+  }
+
+  @Test
+  void shouldAnchorFixOnOwnCommentWhenItStartsTheThread() {
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    // A /fix posted as a new inline comment (no in_reply_to_id) is its own thread root.
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", null, 2000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    verify(fixService)
+        .handle(
+            new FixService.FixTask(
+                "owner", "repo", 42, "main", 12345L, "octocat", 2000L, "src/Foo.java"));
+  }
+
+  @Test
+  void shouldIgnoreFixCommandWhenFeatureIsDisabled() {
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    verify(fixService, never()).handle(any());
+    verify(ackReactionService, never()).addEyes(anyLong(), any(), any(), anyLong(), any());
+  }
+
+  @Test
+  void shouldIgnoreUnauthorizedFixCommand() {
+    when(triggerDetector.isBotComment("drive-by")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "drive-by", "OWNER"))
+        .thenReturn(false);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "drive-by", "/fix", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    // /fix pushes a branch and spends AI budget, so it is gated like a manual /review.
+    verify(fixService, never()).handle(any());
+  }
+
+  @Test
+  void shouldIgnoreFixCommandOnPausedPr() {
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(triggerDetector.detectCommand("/fix")).thenReturn(CommentCommand.FIX);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(42))).thenReturn(true);
+
+    var body =
+        buildReviewCommentPayload("created", 42, "owner/repo", "octocat", "/fix", 99L, 1000L)
+            .getBytes(StandardCharsets.UTF_8);
+
+    deliver("pull_request_review_comment", event("pull_request_review_comment", DELIVERY, body));
+
+    verify(fixService, never()).handle(any());
   }
 
   @ParameterizedTest

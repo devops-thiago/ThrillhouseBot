@@ -39,6 +39,11 @@ public enum CommentCommand {
   IMPROVE,
   /** Propose unit tests for the code the PR changed, as a comment to copy in. */
   GENERATE_TESTS,
+  /**
+   * Agentic fix (opt-in): on a review finding thread, draft the change across the relevant files,
+   * commit it to a bot branch, and open a PR targeting the reviewed PR's branch.
+   */
+  FIX,
   /** Resolve the bot's outstanding finding threads on the PR. */
   RESOLVE,
   /** Silence the bot on the PR until {@link #RESUME}. */

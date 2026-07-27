@@ -117,6 +117,7 @@ public class StartupConfigValidator {
         "thrillhousebot.github.webhook-secret");
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
+    validateFixSettings(problems, config.review().fix());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
     validateTicketContext(problems, config.review().ticketContext());
@@ -233,6 +234,18 @@ public class StartupConfigValidator {
           "REVIEW_MAX_TOKENS_PER_REVIEW must be >= 0, where 0 disables the per-review token spend"
               + " ceiling (thrillhousebot.review.max-tokens-per-review): "
               + review.maxTokensPerReview());
+    }
+  }
+
+  /**
+   * Validates the {@code /fix} file cap even while the feature is disabled, so an operator who
+   * mistyped the value discovers it at boot rather than on the first {@code /fix} after enabling.
+   */
+  private static void validateFixSettings(List<String> problems, ThrillhouseConfig.FixConfig fix) {
+    if (fix.maxEditedFiles() < 1) {
+      problems.add(
+          "REVIEW_FIX_MAX_EDITED_FILES must be >= 1 (thrillhousebot.review.fix.max-edited-files): "
+              + fix.maxEditedFiles());
     }
   }
 

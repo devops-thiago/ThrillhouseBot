@@ -204,6 +204,13 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `REVIEW_DIAGRAM_ENABLED`<br>`thrillhousebot.review.diagram.enabled` | Add a Mermaid control-flow diagram to the summary. | boolean | `false` |
 
+## `thrillhousebot.review.fix`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_FIX_ENABLED`<br>`thrillhousebot.review.fix.enabled` | Allow `/fix` on a finding thread: the bot commits a proposed fix to a `thrillhousebot/fix-*` branch and opens a pull request targeting the reviewed PR's branch. Needs the GitHub App to hold Contents: Read and write. | boolean | `false` |
+| `REVIEW_FIX_MAX_EDITED_FILES`<br>`thrillhousebot.review.fix.max-edited-files` | Most files one `/fix` may edit or create. A fix that needs more is rejected with a reply instead of being partly applied. Must be at least 1. | integer | `10` |
+
 ## `thrillhousebot.review.follow-up-summary`
 
 | Variable | Description | Type | Default |

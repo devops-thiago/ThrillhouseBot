@@ -65,6 +65,7 @@ class BoundedChatModelWiringTest {
   @Inject PrDescribeAssistant describeAssistant;
   @Inject PrImproveAssistant improveAssistant;
   @Inject UnitTestAssistant unitTestAssistant;
+  @Inject FixGenerator fixGenerator;
 
   @Test
   void everyBlockingAiServiceCallHoldsASlotWhileItReachesTheModel() {
@@ -92,6 +93,7 @@ class BoundedChatModelWiringTest {
     calls.put("PrImproveAssistant#improve", () -> improveAssistant.improve("d", "t", "b", "i"));
     calls.put(
         "UnitTestAssistant#generate", () -> unitTestAssistant.generate("d", "c", "s", "i", "p"));
+    calls.put("FixGenerator#generate", () -> fixGenerator.generate("f", "c", "d", "p", "s", "i"));
 
     for (var call : calls.entrySet()) {
       slotsSeen.clear();
