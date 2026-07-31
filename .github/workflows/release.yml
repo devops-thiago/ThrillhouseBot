@@ -65,7 +65,7 @@ jobs:
             echo "::error::Tag ${TAG} does not match pom.xml version ${POM_VERSION}"
             exit 1
           fi
-      - uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4.5.0
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: devops-thiago
@@ -117,7 +117,7 @@ jobs:
             echo "::error::No .trivyignore on ${{ needs.verify.outputs.tag }} or origin/main"
             exit 1
           fi
-      - uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4.5.0
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: devops-thiago
@@ -151,7 +151,7 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
       update_latest: ${{ steps.promote.outputs.update_latest }}
     steps:
-      - uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4.5.0
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: devops-thiago
@@ -226,7 +226,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.tag }}
-      - uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4.5.0
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: devops-thiago
