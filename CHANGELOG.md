@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Per-repo ignore patterns** (#51): a repository can now declare ignore globs of its own in an optional `.github/thrillhousebot.yml`, under `review.ignored-files`. They are **additive** — the effective set is the union of the deployment-wide `thrillhousebot.review.ignored-files` list and whatever the repository declared, so a repo can take more files out of review scope (generated dirs, vendored code, fixtures) but can never put back a file the deployment excludes. One install can therefore serve repositories with different layouts without everyone sharing a single global list. The file is read from the default branch and cached per repository for five minutes, alongside the existing instructions lookup, and fails soft in every direction: a missing file, invalid YAML, an unexpected shape, or an uncompilable glob is logged and skipped, leaving the global list in force. Operators who do not want repositories adjusting their own review scope can disable the mechanism with `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`
+
 ## [0.5.0] — 2026-07-26
 
 Review precision: confidence now decides where a finding lands, newly-added parsers and regexes are stress-tested for their own failure modes, and several classes of false positive are guarded at both the generator and the verifier. Operators gain configurable CI-gating and blocking strictness, structured skip reasons, and per-model generation parameters.

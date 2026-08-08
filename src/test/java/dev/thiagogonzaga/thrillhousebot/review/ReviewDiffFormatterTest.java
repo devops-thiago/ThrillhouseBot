@@ -140,6 +140,118 @@ class ReviewDiffFormatterTest {
     }
   }
 
+  /**
+   * Per-repo ignore globs (#51): a repository extends the deployment-wide list through {@code
+   * .github/thrillhousebot.yml}, and the effective set is the union of the two.
+   */
+  @Nested
+  class PerRepoIgnorePatterns {
+
+    private final ReviewDiffFormatter formatter =
+        new ReviewDiffFormatter(List.of("**/*.lock"), 5000);
+
+    private final GitHubPullRequestClient.FileDiff lockFile =
+        file("deps.lock", "modified", 3, 1, "@@ -1 +1 @@\n+lock");
+    private final GitHubPullRequestClient.FileDiff fixture =
+        file("test/fixtures/big.json", "modified", 900, 0, "@@ -1 +1 @@\n+fixture");
+    private final GitHubPullRequestClient.FileDiff source =
+        file("src/Main.java", "modified", 5, 1, "@@ -1 +1,2 @@\n+ok");
+
+    @Test
+    void repoDeclaredPatternTakesEffect() {
+      var globs = formatter.ignoreGlobs(List.of("test/fixtures/**"));
+
+      var reviewable = formatter.reviewableFiles(List.of(fixture, source), globs);
+
+      assertEquals(1, reviewable.size());
+      assertEquals("src/Main.java", reviewable.get(0).filename());
+    }
+
+    @Test
+    void repoThatDeclaresNothingKeepsGlobalOnlyBehavior() {
+      var files = List.of(lockFile, fixture, source);
+
+      // The fixture is only excluded by a per-repo pattern, so with none declared it stays in
+      // scope and only the globally ignored lockfile is dropped.
+      for (var globs : List.of(formatter.ignoreGlobs(List.of()), formatter.ignoreGlobs(null))) {
+        var reviewable = formatter.reviewableFiles(files, globs);
+
+        assertEquals(2, reviewable.size());
+        assertEquals("test/fixtures/big.json", reviewable.get(0).filename());
+        assertEquals("src/Main.java", reviewable.get(1).filename());
+      }
+      assertEquals(
+          formatter.reviewableFiles(files),
+          formatter.reviewableFiles(files, formatter.ignoreGlobs(List.of())),
+          "an empty per-repo list must resolve back to the global set");
+    }
+
+    @Test
+    void effectiveSetIsTheUnionOfGlobalAndPerRepoPatterns() {
+      var globs = formatter.ignoreGlobs(List.of("test/fixtures/**"));
+
+      var reviewable = formatter.reviewableFiles(List.of(lockFile, fixture, source), globs);
+
+      // A file matching EITHER list is skipped; per-repo patterns never replace the global ones.
+      assertEquals(1, reviewable.size());
+      assertEquals("src/Main.java", reviewable.get(0).filename());
+    }
+
+    @Test
+    void malformedRepoPatternIsDroppedWithoutFailingTheReview() {
+      var globs =
+          assertDoesNotThrow(
+              () -> formatter.ignoreGlobs(List.of("[unclosed", "  ", "test/fixtures/**")));
+
+      var reviewable = formatter.reviewableFiles(List.of(lockFile, fixture, source), globs);
+
+      // The invalid glob is skipped; the valid per-repo glob and the global list both still apply.
+      assertEquals(1, reviewable.size());
+      assertEquals("src/Main.java", reviewable.get(0).filename());
+    }
+
+    @Test
+    void aRepoListOfOnlyInvalidPatternsFallsBackToExactlyTheGlobalSet() {
+      var files = List.of(lockFile, fixture, source);
+
+      var globs =
+          assertDoesNotThrow(() -> formatter.ignoreGlobs(List.of("[unclosed", "{also[bad")));
+
+      // Nothing compiled, so the union contributes nothing and global-only behaviour remains:
+      // the lockfile is still dropped and the fixture is still reviewed.
+      assertEquals(formatter.reviewableFiles(files), formatter.reviewableFiles(files, globs));
+      var reviewable = formatter.reviewableFiles(files, globs);
+      assertEquals(2, reviewable.size());
+      assertEquals("test/fixtures/big.json", reviewable.get(0).filename());
+      assertEquals("src/Main.java", reviewable.get(1).filename());
+    }
+
+    @Test
+    void aNullIgnoreSetFallsBackToTheGlobalList() {
+      var reviewable = formatter.reviewableFiles(List.of(lockFile, fixture, source), null);
+
+      // Not "everything is reviewable": the global lockfile glob must still be applied.
+      assertEquals(2, reviewable.size());
+      assertEquals("test/fixtures/big.json", reviewable.get(0).filename());
+      assertEquals("src/Main.java", reviewable.get(1).filename());
+    }
+
+    @Test
+    void perRepoPatternsAlsoScopeTheBaseComparison() {
+      var globs = formatter.ignoreGlobs(List.of("test/fixtures/**"));
+      var comparison = new GitHubPullRequestClient.CompareResponse(1, List.of(fixture, source));
+
+      var result =
+          formatter.buildBaseComparisonWithStats(comparison, "abcdefgh", "hijklmno", true, globs);
+
+      assertTrue(
+          result.text().contains("(test/fixtures/big.json skipped: matches ignored pattern"),
+          result.text());
+      assertTrue(result.text().contains("+ok"));
+      assertFalse(result.text().contains("+fixture"));
+    }
+  }
+
   @Nested
   class TruncationHelpers {
 

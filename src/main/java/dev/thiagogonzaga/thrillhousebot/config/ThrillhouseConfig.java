@@ -250,6 +250,18 @@ public interface ThrillhouseConfig {
     List<String> ignoredFiles();
 
     /**
+     * Whether a repository may extend {@link #ignoredFiles()} with globs of its own, declared under
+     * {@code review.ignored-files} in {@code .github/thrillhousebot.yml}. Per-repo patterns are
+     * additive — the effective set is always global ∪ per-repo, so a repository can take more files
+     * out of review scope but can never put back a file the deployment excludes. This is the
+     * operator's kill switch for installs that must not let a repository narrow its own review
+     * coverage; a missing or malformed file is ignored either way and never fails a review.
+     */
+    @WithDefault("true")
+    @WithName("repo-config-enabled")
+    boolean repoConfigEnabled();
+
+    /**
      * GitHub logins permitted to manually trigger reviews regardless of repository permission. When
      * empty, only users with write access to the repository may trigger a manual review.
      */
