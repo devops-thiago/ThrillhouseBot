@@ -18,8 +18,8 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.version>3.37.4</quarkus.platform.version>
-        <quarkus-langchain4j.version>1.12.0</quarkus-langchain4j.version>
+        <quarkus.platform.version>3.38.0</quarkus.platform.version>
+        <quarkus-langchain4j.version>1.12.2</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <jackson-bom.version>2.22.1</jackson-bom.version>
@@ -124,6 +124,15 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-rest-client-jackson</artifactId>
+        </dependency>
+        <!--
+            YAML reading for a repository's own .github/thrillhousebot.yml. Already on the
+            classpath transitively (via quarkus-smallrye-openapi) and version-managed by the
+            jackson-bom import above; declared explicitly because it is now used directly.
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

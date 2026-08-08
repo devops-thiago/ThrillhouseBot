@@ -237,6 +237,22 @@ public final class PrReviewPrompts {
             - "justified" means the issue is intentionally not fixed and a thread reply gives a
               concrete reason (intentional behavior, disputed with evidence, explicitly
               deferred); a reply that only acknowledges the finding leaves it "unresolved"
+            - A reply that declines a finding is a CLAIM TO VERIFY, not ground truth. Before
+              marking one "justified", trace its stated reason against the code in the provided
+              material. When that material PLAINLY CONTRADICTS the premise, mark the finding
+              "unresolved" instead and quote the contradicting line in the note — for example a
+              reply saying the path "runs single-threaded / serially / only from one caller, so
+              there is no race" while the code hands that path to a shared or unbounded executor,
+              a new thread, or an async dispatch (running after the ack is not running serially);
+              or a reply saying "the caller already guards X" while the caller shown here does
+              not. Do NOT re-raise such a finding as a new finding — it stays tracked through
+              previous_findings_status
+            - Override a decline ONLY at high confidence, and only on evidence you can quote from
+              the provided material. Trusting the maintainer is the default: a reply about house
+              style, intent, accepted risk, priority, or anything else not refutable from the code
+              is a valid justification, and so is any premise whose supporting code is not in the
+              provided material. When the evidence is absent, partial, or ambiguous, mark the
+              finding "justified" and move on
             - Never emit a new finding that duplicates ANY prior finding, whatever its status —
               prior findings are tracked exclusively through previous_findings_status, and
               re-stating one as a new finding double-posts it. If you disagree with a thread
@@ -357,16 +373,25 @@ public final class PrReviewPrompts {
             - Base summary.total_findings and the per-severity counts on the findings provided
               below — unless a "(+N more findings not shown …)" note follows the array; use that
               note's stated true totals then, since the list was truncated to fit your input.
-            - overall_assessment and pr_purpose must be consistent with those findings and the
-              changed-files list; do not contradict them.
+            - overall_assessment and pr_purpose must be consistent with those findings, with the PR
+              scope totals, and with the changed-files list; do not contradict them. A summary whose
+              scope is narrower than the stated PR scope is wrong: few or no findings means the
+              reviewed code looked fine, never that the change was small or touched one file.
 
             The "summary" object must include:
             - total_findings, critical, high, medium, low: counts of the findings provided below
             - overall_assessment: one-sentence verdict on the change
-            - pr_purpose: 1-3 sentences on what this change does, derived from the changed files and
-              findings — describe behavior, not file names
+            - pr_purpose: 1-3 sentences on what the WHOLE change set does. You do not see the diff,
+              so ground it in the PR title and description (the author's stated intent) together
+              with the PR scope totals and the changed-file list below, which are computed from the
+              diff and are authoritative. Cover the change set as a whole: when it spans many files
+              or several directories, say so and name the main areas it touches. Never present one
+              extracted class, one file, or the one component that happens to carry findings as if
+              it were the whole pull request. Describe behavior, not a file listing.
             - description_gaps: when a PR description is provided, an array of concrete mismatches
-              between what the author claims and what the change does. Empty array otherwise.
+              between what the author claims and what the change does — including a description
+              whose scope is narrower than the change itself (it covers one component, or far fewer
+              files than the PR scope totals report). Empty array otherwise.
             - file_summaries: an array of { path, summary } objects giving a file-by-file
               walkthrough. "path" must match a changed-file path exactly; "summary" is a single line
               (max ~100 chars) on what changed in that file. Most impactful first, cap at 15.
@@ -396,7 +421,9 @@ public final class PrReviewPrompts {
             ## Findings already computed for this PR (final — summarize, do not change)
             {{findings}}
 
-            ## Changed files
+            ## PR scope and changed files (computed from the diff — authoritative)
+            Everything listed here belongs to this pull request; the purpose you write must
+            account for all of it, not just the entries with findings.
             {{changedFiles}}
 
             {{#if previousFindings}}

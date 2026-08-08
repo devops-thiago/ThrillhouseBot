@@ -155,6 +155,15 @@ public class VerdictBuilder {
               ctx.lineResolver(),
               currentRenameTargets);
     }
+    // A maintainer's decline is a claim, not ground truth: a "justified" whose stated reason the
+    // reviewed code plainly contradicts goes back to "unresolved" for one more round (#169).
+    effectiveStatuses =
+        followUpAnalyzer.recheckDeclines(
+            ctx.previousFindingsList(),
+            effectiveStatuses,
+            ctx.inlineComments(),
+            botIdentity,
+            () -> reviewedCode(ctx, plan));
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
@@ -328,6 +337,25 @@ public class VerdictBuilder {
     merged.addAll(ctx.reviewableFiles());
     merged.addAll(pureRenames);
     return merged;
+  }
+
+  /**
+   * The diff text the review call(s) actually saw — the only material a decline may be re-checked
+   * against. With token budgeting on, {@code ctx.diff()} is empty and the planned batches are
+   * authoritative for what the model received, so they are concatenated; with budgeting disabled
+   * the legacy single diff is it. Resolved lazily by {@link FollowUpAnalyzer#recheckDeclines}, so a
+   * round with no declined finding never pays for the concatenation.
+   */
+  private static String reviewedCode(
+      ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
+    if (!plan.budgeted() || plan.batches().isEmpty()) {
+      return ctx.diff();
+    }
+    var sb = new StringBuilder();
+    for (var batch : plan.batches()) {
+      sb.append(batch.text()).append('\n');
+    }
+    return sb.toString();
   }
 
   /**

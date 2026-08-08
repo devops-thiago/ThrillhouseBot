@@ -18,6 +18,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import io.quarkus.logging.Log;
 import java.util.List;
 
@@ -103,6 +105,32 @@ final class SoftLoaders {
           owner,
           repo);
       return InstructionsResolver.ResolvedInstructions.EMPTY;
+    }
+  }
+
+  /**
+   * The repository's own structured settings, or {@link RepoSettings#EMPTY}. The resolver already
+   * degrades internally; this wrapper is the outer guarantee that no per-repo configuration problem
+   * can reach the review pipeline.
+   */
+  static RepoSettings repoSettings(
+      RepoSettingsResolver resolver,
+      String owner,
+      String repo,
+      String defaultBranch,
+      long installationId,
+      String context) {
+    try {
+      var settings = resolver.resolve(owner, repo, defaultBranch, installationId);
+      return settings != null ? settings : RepoSettings.EMPTY;
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Repository config resolution failed for %s on %s/%s, continuing with the global settings",
+          context,
+          owner,
+          repo);
+      return RepoSettings.EMPTY;
     }
   }
 }

@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -54,6 +55,7 @@ public class ReviewContextLoader {
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
   private final InstructionsResolver instructionsResolver;
+  private final RepoSettingsResolver repoSettingsResolver;
   private final ProjectStackResolver projectStackResolver;
   private final ReviewDiffFormatter diffFormatter;
   private final PrLabeler labeler;
@@ -70,6 +72,7 @@ public class ReviewContextLoader {
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       InstructionsResolver instructionsResolver,
+      RepoSettingsResolver repoSettingsResolver,
       ProjectStackResolver projectStackResolver,
       ReviewDiffFormatter diffFormatter,
       PrLabeler labeler,
@@ -83,6 +86,7 @@ public class ReviewContextLoader {
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.instructionsResolver = instructionsResolver;
+    this.repoSettingsResolver = repoSettingsResolver;
     this.projectStackResolver = projectStackResolver;
     this.diffFormatter = diffFormatter;
     this.labeler = labeler;
@@ -165,7 +169,10 @@ public class ReviewContextLoader {
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     var prTotals = fetchPrTotalsForReview(auth, req);
-    var reviewableFiles = diffFormatter.reviewableFiles(files);
+    // Global ∪ per-repo ignore globs, compiled once so the ignore filter is still walked a single
+    // time per review; a repo that declares nothing resolves straight back to the global set.
+    var ignoreGlobs = resolveIgnoreGlobs(req);
+    var reviewableFiles = diffFormatter.reviewableFiles(files, ignoreGlobs);
     var tokenBudgeted = activeModel.maxInputTokens() > 0;
     var diffResult =
         tokenBudgeted
@@ -175,7 +182,7 @@ public class ReviewContextLoader {
         tokenBudgeted
             ? new ReviewDiffFormatter.FormattedDiff("", 0)
             : buildBaseComparisonWithStats(
-                auth, req.owner(), req.repo(), req.baseSha(), req.commitSha(), true);
+                auth, req.owner(), req.repo(), req.baseSha(), req.commitSha(), true, ignoreGlobs);
     var omittedFiles = diffResult.omittedFiles();
     // One DiffLineResolver per review, shared by the finding pipeline / backstop / postReview.
     // Memoized so a no-context path that never touches it (e.g. VerdictBuilder when hasContext is
@@ -296,6 +303,24 @@ public class ReviewContextLoader {
   }
 
   /**
+   * The ignore set for this review: the deployment-wide {@code review.ignored-files} globs unioned
+   * with whatever the repository declared in {@code .github/thrillhousebot.yml}. Per-repo patterns
+   * are strictly additive, and every failure mode (feature off, file absent, YAML malformed, glob
+   * invalid) collapses back to the global set rather than failing the review.
+   */
+  ReviewDiffFormatter.IgnoreGlobs resolveIgnoreGlobs(ReviewOrchestrator.ReviewRequest req) {
+    var repoSettings =
+        SoftLoaders.repoSettings(
+            repoSettingsResolver,
+            req.owner(),
+            req.repo(),
+            req.defaultBranch(),
+            req.installationId(),
+            "review");
+    return diffFormatter.ignoreGlobs(repoSettings.ignoredFiles());
+  }
+
+  /**
    * Definition sites for the config keys the PR's documentation/config files name, read at the PR
    * head so a key added by this same PR resolves. Best-effort enrichment like the project stack: a
    * failure degrades to no extra context, never a failed review.
@@ -399,13 +424,30 @@ public class ReviewContextLoader {
    */
   ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
       String auth, String owner, String repo, String base, String head, boolean applyLineBudget) {
+    return buildBaseComparisonWithStats(
+        auth, owner, repo, base, head, applyLineBudget, diffFormatter.ignoreGlobs(List.of()));
+  }
+
+  /**
+   * @param ignoreGlobs the review's effective ignore set (global ∪ per-repo), so the base
+   *     comparison hides exactly what the PR diff hides
+   */
+  ReviewDiffFormatter.FormattedDiff buildBaseComparisonWithStats(
+      String auth,
+      String owner,
+      String repo,
+      String base,
+      String head,
+      boolean applyLineBudget,
+      ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     if (base == null || head == null || base.length() < 7 || head.length() < 7) {
       return new ReviewDiffFormatter.FormattedDiff(
           "(regression comparison unavailable — refs too short)", 0);
     }
     try {
       var comparison = prClient.compareCommits(auth, ACCEPT, owner, repo, base, head);
-      return diffFormatter.buildBaseComparisonWithStats(comparison, base, head, applyLineBudget);
+      return diffFormatter.buildBaseComparisonWithStats(
+          comparison, base, head, applyLineBudget, ignoreGlobs);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch base comparison, continuing without regression context", e);
       return new ReviewDiffFormatter.FormattedDiff("(regression comparison unavailable)", 0);

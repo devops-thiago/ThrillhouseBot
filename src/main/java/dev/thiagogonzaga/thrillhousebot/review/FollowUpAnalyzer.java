@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -33,6 +34,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /** Analyzes follow-up reviews by comparing new findings against prior reviews. */
@@ -71,9 +73,23 @@ public class FollowUpAnalyzer {
 
   private final ObjectMapper mapper;
 
+  /** Whether {@link #recheckDeclines} may override a maintainer decline; see the config key. */
+  private final boolean declineRecheckEnabled;
+
   @Inject
-  public FollowUpAnalyzer(ObjectMapper mapper) {
+  public FollowUpAnalyzer(ObjectMapper mapper, ThrillhouseConfig config) {
+    this(mapper, config.review().declineRecheckEnabled());
+  }
+
+  /** Visible for tests; the decline re-check is on, matching the shipped default. */
+  FollowUpAnalyzer(ObjectMapper mapper) {
+    this(mapper, true);
+  }
+
+  /** Visible for tests: pins the decline re-check flag. */
+  FollowUpAnalyzer(ObjectMapper mapper, boolean declineRecheckEnabled) {
     this.mapper = mapper;
+    this.declineRecheckEnabled = declineRecheckEnabled;
   }
 
   /**
@@ -703,6 +719,119 @@ public class FollowUpAnalyzer {
       return false;
     }
     return !lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
+  }
+
+  /**
+   * Re-checks a maintainer's decline against the code before it is recorded {@code justified}. The
+   * model reports a decline as an outcome; this step treats it as a <em>claim</em>. When the code
+   * the review actually saw plainly contradicts the rebuttal's premise ({@link
+   * RebuttalContradiction}), the status is rewritten back to {@code unresolved} with a one-line
+   * note quoting both the claim and the contradicting line — so a correct finding is not closed by
+   * an incorrect rebuttal, and only declines that survive the re-check are safe to remember.
+   *
+   * <p>Trusting the maintainer stays the default; every leg below must hold before an override
+   * fires, and any one of them missing leaves the {@code justified} status untouched:
+   *
+   * <ul>
+   *   <li>the re-check is enabled ({@code thrillhousebot.review.decline-recheck-enabled});
+   *   <li>the finding's own thread is identifiable and carries <em>exactly one</em> maintainer
+   *       reply. One reply is the decline, and the re-check pushes back once; a second human reply
+   *       is the maintainer answering that push-back, and it always wins — that is the guaranteed
+   *       escape hatch, and it is why the override cannot recur round after round;
+   *   <li>{@link RebuttalContradiction} finds a contradiction, which it only reports for a premise
+   *       refutable from code text. A rebuttal about style, intent, accepted risk, or priority
+   *       matches nothing and keeps the decline.
+   * </ul>
+   *
+   * <p>Overridden findings re-enter the ordinary {@code unresolved} path — they hold APPROVE
+   * exactly like a model-reported unresolved status and are never re-posted as new findings, so the
+   * maintainer is not asked to answer the same comment twice.
+   *
+   * @param reviewedCode supplies the diff text the review call saw; resolved lazily because most
+   *     rounds have no declined finding at all
+   */
+  public List<ReviewResponse.PreviousFindingStatus> recheckDeclines(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      Supplier<String> reviewedCode) {
+    if (statuses == null || statuses.isEmpty()) {
+      return statuses == null ? List.of() : statuses;
+    }
+    if (!declineRecheckEnabled || !hasDecline(statuses)) {
+      return statuses;
+    }
+    // An empty prior round and an empty comment list need no fast path of their own: the
+    // id-range check and the thread lookup below already yield "no contradiction" for both.
+    String code = reviewedCode == null ? null : reviewedCode.get();
+    if (previous == null || inlineComments == null || code == null || code.isBlank()) {
+      return statuses;
+    }
+    var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var contradiction = declineContradiction(status, previous, inlineComments, botIdentity, code);
+      if (contradiction == null) {
+        rewritten.add(status);
+        continue;
+      }
+      Log.infof(
+          "Re-opening previous finding #%d: the maintainer's decline claims '%s' but the reviewed"
+              + " code shows '%s'",
+          status.id(), contradiction.claim(), contradiction.evidence());
+      rewritten.add(
+          new ReviewResponse.PreviousFindingStatus(
+              status.id(), STATUS_UNRESOLVED, contradiction.note()));
+    }
+    return rewritten;
+  }
+
+  /** Whether any status is a maintainer decline — the only kind this re-check looks at. */
+  private static boolean hasDecline(List<ReviewResponse.PreviousFindingStatus> statuses) {
+    return statuses.stream().anyMatch(s -> STATUS_JUSTIFIED.equalsIgnoreCase(s.status()));
+  }
+
+  /**
+   * The contradiction that disqualifies a {@code justified} status, or {@code null} when the
+   * decline stands. Returning {@code null} is the conservative outcome and is what every unmatched,
+   * absent, or ambiguous input produces.
+   */
+  private static RebuttalContradiction.Contradiction declineContradiction(
+      ReviewResponse.PreviousFindingStatus status,
+      List<ReviewResponse.Finding> previous,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      String reviewedCode) {
+    if (!STATUS_JUSTIFIED.equalsIgnoreCase(status.status())) {
+      return null;
+    }
+    var id = status.id();
+    if (id < 1 || id > previous.size()) {
+      return null;
+    }
+    var finding = previous.get(id - 1);
+    Long rootId = rootCommentId(finding, id, inlineComments, botIdentity);
+    if (rootId == null) {
+      return null;
+    }
+    var humanReplies = humanReplies(rootId, inlineComments, botIdentity);
+    if (humanReplies.size() != 1) {
+      return null;
+    }
+    return RebuttalContradiction.find(finding, humanReplies.get(0), reviewedCode).orElse(null);
+  }
+
+  /** Bodies of the maintainer replies on a thread, oldest first; bot replies are not rebuttals. */
+  private static List<String> humanReplies(
+      Long rootId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    return inlineComments.stream()
+        .filter(c -> rootId.equals(c.inReplyToId()))
+        .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
+        .map(GitHubReviewClient.PullRequestComment::body)
+        .filter(body -> body != null && !body.isBlank())
+        .toList();
   }
 
   /**

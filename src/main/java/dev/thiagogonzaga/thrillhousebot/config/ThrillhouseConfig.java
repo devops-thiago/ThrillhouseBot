@@ -205,6 +205,17 @@ public interface ThrillhouseConfig {
     boolean verifierEnabled();
 
     /**
+     * Whether a maintainer's decline is re-checked against the reviewed code before a prior finding
+     * is recorded "justified". When the reviewed code plainly contradicts the rebuttal's premise
+     * the finding stays open for one more round; every other decline is respected, and a second
+     * reply on the thread always ends the re-check. Turn it off to make a maintainer's reply final,
+     * unconditionally.
+     */
+    @WithDefault("true")
+    @WithName("decline-recheck-enabled")
+    boolean declineRecheckEnabled();
+
+    /**
      * How severely a finding must score before the review escalates to {@code REQUEST_CHANGES}. One
      * of {@code balanced} (default — CRITICAL/HIGH + HIGH confidence), {@code strict} (any
      * CRITICAL/HIGH regardless of confidence), or {@code lenient} (CRITICAL + HIGH confidence
@@ -248,6 +259,18 @@ public interface ThrillhouseConfig {
             + "**/vendor/**,**/__pycache__/**,**/.venv/**,**/bin/**,**/obj/**")
     @WithName("ignored-files")
     List<String> ignoredFiles();
+
+    /**
+     * Whether a repository may extend {@link #ignoredFiles()} with globs of its own, declared under
+     * {@code review.ignored-files} in {@code .github/thrillhousebot.yml}. Per-repo patterns are
+     * additive — the effective set is always global ∪ per-repo, so a repository can take more files
+     * out of review scope but can never put back a file the deployment excludes. This is the
+     * operator's kill switch for installs that must not let a repository narrow its own review
+     * coverage; a missing or malformed file is ignored either way and never fails a review.
+     */
+    @WithDefault("true")
+    @WithName("repo-config-enabled")
+    boolean repoConfigEnabled();
 
     /**
      * GitHub logins permitted to manually trigger reviews regardless of repository permission. When

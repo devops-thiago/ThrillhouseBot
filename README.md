@@ -52,6 +52,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
+- Lets each repository add its own ignore globs in `.github/thrillhousebot.yml`, unioned with the deployment default
 - Compiles ahead-of-time with GraalVM/Mandrel, so it starts fast and stays small
 <!-- docs:features:end -->
 
@@ -243,6 +244,7 @@ will change per provider:
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings | `true` |
+| `REVIEW_DECLINE_RECHECK_ENABLED` | Re-check a maintainer's decline against the reviewed code before a prior finding is recorded "justified" (see [Re-checking declines](#re-checking-declines)); the finding stays open for one more round only when the reviewed diff plainly contradicts the stated reason. `false` makes a maintainer reply close the finding unconditionally | `true` |
 | `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
@@ -258,6 +260,7 @@ will change per provider:
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per AI streaming attempt; keep it >= `AI_TIMEOUT` so timed-out attempts don't leave orphaned provider streams | `300` |
 | `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repo-relative path of the per-repo instructions file read on each review | `.github/thrillhousebot.md` |
 | `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs excluded from review — lockfiles, generated code, build output. `*` does not cross `/`; use `**` to span directories. Replaces (not extends) the default list, so re-include the defaults you still want | `**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**` |
+| `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Let each repository extend the ignore list with globs of its own from `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)). Per-repo globs are additive; set `false` to make the deployment list the only one that counts | `true` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |
@@ -280,6 +283,34 @@ per-batch verification calls + one summary call. Set
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
 findings).
+
+### Re-checking declines
+
+When a maintainer replies to a finding to decline it, the follow-up analysis
+records that finding as **justified** and the bot moves on. A dismissal is a
+claim, though, not ground truth — a correct finding can be closed by an
+incorrect rebuttal, and the rebuttal often names the very mechanism that makes
+the bug real ("it only runs after the webhook is acked, so there's no race" —
+on an executor that starts a thread per event).
+
+`REVIEW_DECLINE_RECHECK_ENABLED=true` (the default) therefore traces a decline's
+stated reason against the code the review actually saw. When the reviewed diff
+**plainly contradicts** that reason, the finding is kept **open for one more
+round** with a note quoting both the claim and the contradicting line, instead
+of being recorded justified. It is deliberately conservative:
+
+- Trusting the maintainer is the default. A rebuttal about house style, intent,
+  accepted risk, or priority — anything not refutable from the code — is
+  respected, as is any premise whose supporting code is not in the diff.
+- **One push-back, then defer.** The re-check only fires while the thread carries
+  a single maintainer reply; replying again always ends it, so the bot can never
+  keep re-opening the same finding round after round.
+- The re-opened finding is never re-posted as a new comment — it stays tracked in
+  *Previous Findings Status*, so nobody is asked to answer the same comment twice.
+- The override holds approval (`APPROVE` → `COMMENT`) exactly like any other
+  unresolved previous finding; it never invents a new blocking finding.
+
+Set it to `false` to make a maintainer's reply final, unconditionally.
 
 ### Blocking strictness
 
@@ -420,6 +451,40 @@ Place a `.github/thrillhousebot.md` file in any repo to customize the review:
 
 Fallback chain: `.github/thrillhousebot.md` → `.github/copilot-instructions.md` → `CLAUDE.md` → `AGENTS.md` → `AGENT.md`
 
+<!-- docs:repository-configuration:start -->
+## Repository configuration
+
+The instructions file (`.github/thrillhousebot.md`) is prose for the model.
+Structured settings live in a separate, optional `.github/thrillhousebot.yml`
+(`.github/thrillhousebot.yaml` also works) — kept apart on purpose, because the
+instructions fallback chain may land on a file owned by another tool, and its whole
+content is fed to the model as untrusted prose:
+
+```yaml
+review:
+  # Extra paths this repository never wants reviewed, on top of the deployment default.
+  ignored-files:
+    - "docs/generated/**"
+    - "**/*.snap"
+    - "testdata/**"
+```
+
+**Precedence: the effective ignore list is the union of both — global ∪ per-repo.**
+A file is skipped if it matches *either* the deployment-wide
+`thrillhousebot.review.ignored-files` list *or* a glob the repository declared. A
+repository can therefore take more files out of review scope, but never put back a
+file the deployment excludes, and a repository that ships no config file gets the
+global list exactly as before. Globs use the same gitignore-style syntax as the
+global key (`*` does not cross `/`; use `**` to span directories).
+
+The file is read from the repository's default branch on each review and cached for
+five minutes. Everything about it fails soft: a missing file, invalid YAML, an
+unexpected shape, or an uncompilable glob is logged and skipped, leaving the global
+list in force — it never fails a review. Operators who do not want repositories
+adjusting their own review scope can turn the whole mechanism off with
+`THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`.
+<!-- docs:repository-configuration:end -->
+
 <!-- docs:pr-labels:start -->
 ## PR labels
 
@@ -541,7 +606,9 @@ This is still an early-stage project; the current constraints are:
   sourcemaps, generated code (`*.generated.*`, protobuf output), and build or
   vendor directories (`target/`, `node_modules/`, `dist/`, `build/`, `out/`,
   `.next/`, `vendor/`, `__pycache__/`, `.venv/`, `bin/`, `obj/`) are skipped by
-  default (`thrillhousebot.review.ignored-files`, overridable per deployment).
+  default (`thrillhousebot.review.ignored-files`, overridable per deployment, and
+  extendable per repository via `.github/thrillhousebot.yml` — see
+  [Repository configuration](#repository-configuration)).
 - **Self-hosted** — no managed offering from this project.
 
 ## Verifying a release

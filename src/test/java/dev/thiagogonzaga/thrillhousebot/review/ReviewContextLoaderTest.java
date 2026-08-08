@@ -46,6 +46,7 @@ class ReviewContextLoaderTest {
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
+  @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ProjectStackResolver projectStackResolver;
   @Mock private ConfigKeyContextResolver configKeyContextResolver;
   @Mock private PrLabeler labeler;
@@ -68,6 +69,7 @@ class ReviewContextLoaderTest {
             reviewClient,
             commentClient,
             instructionsResolver,
+            repoSettingsResolver,
             projectStackResolver,
             diffFormatter,
             labeler,
@@ -383,6 +385,103 @@ class ReviewContextLoaderTest {
       assertTrue(ctx.diff().contains("## Overview"));
       assertTrue(ctx.diff().contains("### a.java"));
       assertEquals(0, ctx.omittedFiles());
+    }
+
+    /**
+     * Per-repo ignore globs (#51): what the repository declares in {@code
+     * .github/thrillhousebot.yml} is unioned with the deployment-wide list before the
+     * reviewable-file set is computed, so the extra paths never reach the model.
+     */
+    @Test
+    void perRepoIgnorePatternsNarrowTheReviewableFileSet() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new GitHubPullRequestClient.FileDiff(
+                  "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(new RepoSettings(List.of("docs/generated/**"), ".github/thrillhousebot.yml"));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(1, ctx.reviewableFiles().size());
+      assertEquals("src/App.java", ctx.reviewableFiles().get(0).filename());
+      assertTrue(
+          ctx.diff().contains("(docs/generated/api.md skipped: matches ignored pattern"),
+          ctx.diff());
+      assertFalse(ctx.diff().contains("+gen"), ctx.diff());
+    }
+
+    /**
+     * #108 meets #51: config-key resolution reads the post-ignore-filter file set, so a key
+     * documented only in an ignored Markdown file is never resolved. The resolver takes the
+     * reviewable list rather than the raw one precisely so it inherits every ignore rule.
+     */
+    @Test
+    void configKeyResolutionSeesOnlyFilesThatSurvivedTheIgnoreFilter() {
+      var ignoredDoc =
+          new GitHubPullRequestClient.FileDiff(
+              "docs/generated/api.md", "modified", 1, 0, 1, "@@ -1 +1 @@\n+`IGNORED_DOC_KEY`");
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              ignoredDoc);
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(new RepoSettings(List.of("docs/generated/**"), ".github/thrillhousebot.yml"));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertFalse(
+          ctx.reviewableFiles().contains(ignoredDoc),
+          () -> "an ignored doc file must not reach config-key resolution: " + ctx.files());
+      verify(configKeyContextResolver)
+          .resolve("auth", "owner", "repo", "headsha1", ctx.reviewableFiles());
+    }
+
+    @Test
+    void repoWithNoDeclaredPatternsKeepsEveryFileTheGlobalListAllows() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new GitHubPullRequestClient.FileDiff(
+                  "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(RepoSettings.EMPTY);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(2, ctx.reviewableFiles().size());
+      assertTrue(ctx.diff().contains("+gen"), ctx.diff());
+    }
+
+    @Test
+    void aFailingRepoSettingsResolverFallsBackToTheGlobalListInsteadOfFailingTheReview() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenThrow(new IllegalStateException("boom"));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = assertDoesNotThrow(() -> loader.load("auth", request(), session, "owner/repo"));
+
+      assertEquals(1, ctx.reviewableFiles().size());
+      assertEquals("src/App.java", ctx.reviewableFiles().get(0).filename());
     }
   }
 
