@@ -81,6 +81,26 @@ public final class PrReviewPrompts {
                finding or phrase a verification request only when the mock's impossibility is
                already demonstrable from what is shown. A green test whose mocks contradict the
                real collaborator is not evidence the production path works.
+            9. PRODUCER → CONSUMER CONTRACT: hunks are judged locally, so a change can be correct
+               line by line and still wrong end to end. Once per PR, for the change's PRIMARY new
+               or modified data structure — a returned collection, a flag, a computed verdict —
+               name where it is PRODUCED (the code that populates or computes it) and where it is
+               CONSUMED (the code that gates, branches, or renders on it), then check the
+               consumer's assumption against what the producer actually puts in it. (a) A value
+               whose NAME asserts a predicate — offending, invalid, failed, missing, stale,
+               duplicate — must be populated ONLY with items that satisfy it: a producer that
+               appends every item it walks, including the ones it just classified as passing,
+               contradicts its own name and every consumer that trusts the name. (b) A collection
+               consumed as a gate through isEmpty()/size()/anyMatch must hold ONLY gate-worthy
+               entries, or the gate fires on the ordinary case — the inverse of what it was added
+               for. (c) The resulting end-to-end behavior must match the PR title and description;
+               when the trace shows the opposite of the stated intent (a downgrade meant to fire
+               "only when checks are failing" also firing when every check passed), report it here
+               AND as a summary.description_gaps entry. Anchor at the producer line that breaks
+               the contract, quote it, and quote the consumer's gate line in the description; risk
+               "high" when the trace inverts the feature for its normal case. Not a finding when
+               producer and consumer agree, or when the consumer is not in the provided material —
+               say nothing rather than narrating the data flow of an ordinary local change.
 
             For each finding, provide:
             - risk: "critical" | "high" | "medium" | "low"
@@ -199,6 +219,13 @@ public final class PrReviewPrompts {
               in different units, first verify the units are genuinely equivalent; when the
               other place is not visible in the provided material at all, do not claim the
               comparison.
+            - A producer→consumer contract claim (dimension 9) must quote BOTH ends from the
+              provided material — the line that populates or computes the structure and the line
+              that gates or branches on it — and name the concrete case on which they disagree
+              (an item the producer admits and the consumer mishandles). When only one end is
+              visible, or you cannot name that case, the finding is invalid. Raise it for the
+              structure the change is about, not for every local variable that crosses a hunk
+              boundary.
             - Claims about the contents or behavior of artifacts not shown in the diff (base
               images, registries, installed packages, remote services) cannot be verified here:
               they are never "critical" or "high", and the description must be phrased as a
@@ -271,8 +298,9 @@ public final class PrReviewPrompts {
               the diff itself — describe behavior, not file names
             - description_gaps: when the PR title/description is provided, an array of concrete
               mismatches between what the author claims and what the code does (claimed changes
-              that are missing, significant changes the description never mentions). Empty array
-              when there is no description or no mismatch.
+              that are missing, significant changes the description never mentions, and a
+              producer→consumer trace whose end-to-end behavior is the inverse of the stated
+              intent — dimension 9). Empty array when there is no description or no mismatch.
             - file_summaries: an array of { path, summary } objects, one per changed file, that gives
               reviewers a file-by-file walkthrough. "path" must match the file path exactly as it
               appears in the diff; "summary" is a single line (max ~100 chars) describing what
