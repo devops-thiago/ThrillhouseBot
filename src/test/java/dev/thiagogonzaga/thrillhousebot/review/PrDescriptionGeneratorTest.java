@@ -423,7 +423,8 @@ class PrDescriptionGeneratorTest {
     // #449: per-repo ignore patterns are additive on top of the global set, and the filtered list
     // is what the batches are planned from — so an ignored file is never described.
     when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
-        .thenReturn(new RepoSettings(List.of("src/Other.java"), ".github/thrillhousebot.yml"));
+        .thenReturn(
+            new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
     prWithFiles(foo(), otherFile());
     describeReturns("### Suggested title\n`x`");
 

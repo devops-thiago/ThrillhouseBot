@@ -49,6 +49,10 @@ public class ReviewDiffFormatter {
    * deployment-wide {@code thrillhousebot.review.ignored-files} list and the extra patterns a
    * repository declares for itself are both compiled and matched through here, so a repository can
    * never end up with different matching semantics than the global default.
+   *
+   * <p>{@link PathScopedInstructions} matches path-scoped review rules through the same type (one
+   * single-pattern set per declared scope) rather than adding a second matcher, so a scope glob and
+   * an ignore glob mean the same thing to a maintainer.
    */
   record IgnoreGlobs(List<GlobMatcher> matchers) {
 

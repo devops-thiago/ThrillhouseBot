@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -121,6 +122,7 @@ public class ReviewContextLoader {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       String previousFindings,
       InstructionsResolver.ResolvedInstructions instructions,
+      PathScopedInstructions pathInstructions,
       List<GitHubLabelClient.Label> repoLabels,
       String projectStack,
       String linkedIssuesContext,
@@ -169,10 +171,20 @@ public class ReviewContextLoader {
       String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     var prTotals = fetchPrTotalsForReview(auth, req);
+    // One read of the repository's own settings for the whole review: the ignore globs below and
+    // the path-scoped review rules further down are both derived from it.
+    var repoSettings = resolveRepoSettings(req);
     // Global ∪ per-repo ignore globs, compiled once so the ignore filter is still walked a single
     // time per review; a repo that declares nothing resolves straight back to the global set.
-    var ignoreGlobs = resolveIgnoreGlobs(req);
+    var ignoreGlobs = diffFormatter.ignoreGlobs(repoSettings.ignoredFiles());
     var reviewableFiles = diffFormatter.reviewableFiles(files, ignoreGlobs);
+    // Which declared scopes govern which files, resolved once against the post-ignore-filter list:
+    // rules never apply to a file the ignore set already took out of review scope, and no later
+    // stage re-walks a glob per finding.
+    var pathInstructions =
+        PathScopedInstructions.resolve(
+            repoSettings,
+            reviewableFiles.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
     var tokenBudgeted = activeModel.maxInputTokens() > 0;
     var diffResult =
         tokenBudgeted
@@ -248,6 +260,7 @@ public class ReviewContextLoader {
         inlineComments,
         previousFindings,
         instructions,
+        pathInstructions,
         repoLabels,
         projectStack,
         linkedIssuesContext,
@@ -303,21 +316,20 @@ public class ReviewContextLoader {
   }
 
   /**
-   * The ignore set for this review: the deployment-wide {@code review.ignored-files} globs unioned
-   * with whatever the repository declared in {@code .github/thrillhousebot.yml}. Per-repo patterns
-   * are strictly additive, and every failure mode (feature off, file absent, YAML malformed, glob
-   * invalid) collapses back to the global set rather than failing the review.
+   * The repository's own structured settings from {@code .github/thrillhousebot.yml}, read once per
+   * review and used for both the effective ignore set (deployment-wide globs ∪ the repository's
+   * own, strictly additive) and its path-scoped review rules. Every failure mode (feature off, file
+   * absent, YAML malformed, glob invalid) collapses back to {@link RepoSettings#EMPTY} — the global
+   * ignore list and the global instructions alone — rather than failing the review.
    */
-  ReviewDiffFormatter.IgnoreGlobs resolveIgnoreGlobs(ReviewOrchestrator.ReviewRequest req) {
-    var repoSettings =
-        SoftLoaders.repoSettings(
-            repoSettingsResolver,
-            req.owner(),
-            req.repo(),
-            req.defaultBranch(),
-            req.installationId(),
-            "review");
-    return diffFormatter.ignoreGlobs(repoSettings.ignoredFiles());
+  RepoSettings resolveRepoSettings(ReviewOrchestrator.ReviewRequest req) {
+    return SoftLoaders.repoSettings(
+        repoSettingsResolver,
+        req.owner(),
+        req.repo(),
+        req.defaultBranch(),
+        req.installationId(),
+        "review");
   }
 
   /**
