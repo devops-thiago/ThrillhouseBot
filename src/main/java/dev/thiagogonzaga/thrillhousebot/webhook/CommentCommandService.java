@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.PrImprovementService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
+import dev.thiagogonzaga.thrillhousebot.review.UnitTestGenerator;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
@@ -39,9 +40,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Executes the comment commands beyond {@code /review} — {@code /help}, {@code /summary}, {@code
- * /describe}, {@code /changelog}, {@code /add-docs}, {@code /improve}, {@code /resolve}, {@code
- * /pause}, {@code /resume}. Work runs on the shared review executor so the webhook 200-ack thread
- * is never blocked by GitHub API calls.
+ * /describe}, {@code /changelog}, {@code /add-docs}, {@code /improve}, {@code /generate-tests},
+ * {@code /resolve}, {@code /pause}, {@code /resume}. Work runs on the shared review executor so the
+ * webhook 200-ack thread is never blocked by GitHub API calls.
  */
 @ApplicationScoped
 public class CommentCommandService {
@@ -66,6 +67,7 @@ public class CommentCommandService {
       | `/changelog` | Draft a CHANGELOG entry for this PR from the diff |
       | `/add-docs` | Suggest docstrings for the symbols changed in this PR |
       | `/improve` | Suggest committable improvements across the whole PR |
+      | `/generate-tests` | Suggest unit tests for the code changed in this PR |
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
       | `/resume` | Re-enable the bot on a paused PR |
@@ -88,6 +90,7 @@ public class CommentCommandService {
   private final ChangelogEntryGenerator changelogGenerator;
   private final DocGenerationService docGenerationService;
   private final PrImprovementService improvementService;
+  private final UnitTestGenerator testGenerator;
   private final ThrillhouseConfig config;
 
   @Inject
@@ -106,6 +109,7 @@ public class CommentCommandService {
       ChangelogEntryGenerator changelogGenerator,
       DocGenerationService docGenerationService,
       PrImprovementService improvementService,
+      UnitTestGenerator testGenerator,
       ThrillhouseConfig config) {
     this.executor = executor;
     this.authClient = authClient;
@@ -121,6 +125,7 @@ public class CommentCommandService {
     this.changelogGenerator = changelogGenerator;
     this.docGenerationService = docGenerationService;
     this.improvementService = improvementService;
+    this.testGenerator = testGenerator;
     this.config = config;
   }
 
@@ -164,6 +169,7 @@ public class CommentCommandService {
         case CHANGELOG -> handleChangelog(ctx, auth);
         case ADD_DOCS -> handleAddDocs(ctx, auth);
         case IMPROVE -> handleImprove(ctx, auth);
+        case GENERATE_TESTS -> handleGenerateTests(ctx, auth);
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
         case RESUME -> handleResume(ctx, auth);
@@ -324,6 +330,39 @@ public class CommentCommandService {
         new PrImprovementService.ImproveTask(
             ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.defaultBranch(), ctx.installationId()),
         auth);
+  }
+
+  private void handleGenerateTests(CommandContext ctx, String auth) {
+    if (!config.review().generateTestsEnabled()) {
+      log.info("Ignoring /generate-tests on PR #{} — the command is disabled", num(ctx));
+      return;
+    }
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized /generate-tests from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      postComment(auth, ctx, PAUSED_NOTICE);
+      return;
+    }
+    log.info(
+        "Generating unit tests for {}/{} #{} (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    var suggestion =
+        testGenerator.generate(
+            ctx.owner(),
+            ctx.repo(),
+            ctx.prNumber(),
+            ctx.defaultBranch(),
+            ctx.installationId(),
+            auth);
+    if (suggestion == null) {
+      return;
+    }
+    postComment(auth, ctx, suggestion);
   }
 
   private void handleResolve(CommandContext ctx, String auth) {

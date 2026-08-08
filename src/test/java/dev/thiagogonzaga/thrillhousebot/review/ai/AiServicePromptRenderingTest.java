@@ -58,6 +58,7 @@ class AiServicePromptRenderingTest {
   @Inject PrDescribeAssistant describeAssistant;
   @Inject ChangelogAssistant changelogAssistant;
   @Inject DocGenerator docGenerator;
+  @Inject UnitTestAssistant unitTestAssistant;
 
   @Test
   void describePromptIncludesEveryContextVariable() {
@@ -158,6 +159,24 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
     assertTrue(user.contains("STACK_SENTINEL"), "projectStack missing");
     assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+  }
+
+  @Test
+  void unitTestPromptIncludesEveryContextVariable() {
+    String user =
+        captureBlocking(
+            () ->
+                unitTestAssistant.generate(
+                    PromptTemplateEscaper.escape("DIFF_SENTINEL"),
+                    PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
+                    PromptTemplateEscaper.escape("STACK_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+
+    assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
+    assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
+    assertTrue(user.contains("STACK_SENTINEL"), "projectStack missing");
+    assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+    assertTrue(user.contains("## The change"), "template did not render");
   }
 
   @Test

@@ -192,12 +192,34 @@ public abstract class AbstractPrSuggestionGenerator {
       String systemPrompt,
       String userPrompt,
       int reservedCalls) {
+    return planBatches(reviewable, inputs, systemPrompt, userPrompt, "", reservedCalls);
+  }
+
+  /**
+   * As {@link #planBatches(List, Inputs, String, String, int)}, for a command that repeats a
+   * non-diff section the shared overhead does not know about — {@code extraPerCallSections} is that
+   * section, already escaped exactly as the command sends it.
+   *
+   * <p>This exists because {@link #sharedPromptOverhead} can only account for the inputs every
+   * command carries. {@code /generate-tests} also sends the resolved project stack on every call,
+   * and a project stack is dependency manifests: kilobytes, not a rounding error. Leaving it out of
+   * the estimate is precisely the "in-budget batch overshoots the real input limit" failure the
+   * overhead exists to prevent, so a command with its own extra section must declare it here rather
+   * than rely on the five-argument form.
+   */
+  protected DiffBudgetPlanner.BudgetPlan planBatches(
+      List<GitHubPullRequestClient.FileDiff> reviewable,
+      Inputs inputs,
+      String systemPrompt,
+      String userPrompt,
+      String extraPerCallSections,
+      int reservedCalls) {
     if (activeModel.maxInputTokens() <= 0) {
       return budgetPlanner.plan(reviewable, 0, 1);
     }
     return budgetPlanner.plan(
         reviewable,
-        sharedPromptOverhead(systemPrompt, userPrompt, inputs),
+        sharedPromptOverhead(systemPrompt, userPrompt, inputs) + extraPerCallSections,
         budgetPlanner.perCallInputBudget(),
         maxBatches(reservedCalls));
   }

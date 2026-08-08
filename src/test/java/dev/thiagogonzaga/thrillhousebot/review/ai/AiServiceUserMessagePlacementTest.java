@@ -46,6 +46,11 @@ class AiServiceUserMessagePlacementTest {
     assertUserMessageOnMethodNotParameter(FindingVerifier.class);
   }
 
+  @Test
+  void unitTestAssistantPutsUserMessageOnTheMethod() {
+    assertUserMessageOnMethodNotParameter(UnitTestAssistant.class);
+  }
+
   private static void assertUserMessageOnMethodNotParameter(Class<?> aiService) {
     for (Method method : aiService.getDeclaredMethods()) {
       assertTrue(

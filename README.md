@@ -47,7 +47,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
-- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/resolve`, `/pause`, `/resume`
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
@@ -92,6 +92,7 @@ not a reaction.
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
 | `/improve` | Run a whole-PR improvement pass over the diff and post the improvements as committable suggestions (with copy-paste blocks for the ones that can't be pinned to the diff) | write |
+| `/generate-tests` | Propose unit tests for the code the PR changed, as a comment with one ready-to-paste code block per test file (never commits) | write |
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
@@ -102,8 +103,9 @@ the repository (or to be named in
 AI budget.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
-ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, and `/improve`, and does not answer
-`@thrillhousebot` mentions (it replies once to say it is paused). `/resume` lifts the pause.
+ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve` and
+`/generate-tests`, and does not answer `@thrillhousebot` mentions (it replies once to say it is
+paused). `/resume` lifts the pause.
 `/help` and `/resolve` keep working while paused.
 
 **`/describe` and `/changelog`** — both read the whole change set rather than the first
@@ -136,6 +138,19 @@ copy-paste blocks in the run's summary comment, together with a partial-coverage
 any file the budget could not cover. Nothing is ever committed for you. It spends AI budget per
 run — at most `REVIEW_MAX_AI_CALLS` model calls, the same ceiling as one review — and operators
 can turn it off with `REVIEW_IMPROVE_ENABLED=false`.
+
+**`/generate-tests`** — on demand, the bot reads the diff and proposes unit tests for the
+behavior the PR added or changed, in the test framework the project already uses. A proposed
+test is usually a whole new file, which has no diff line for GitHub to anchor a committable
+`suggestion` block to, so each one is posted as a code block headed by the path it belongs at
+— ready to paste into a new file, or to merge into an existing test file. Nothing is committed
+and no file is edited. Like a review, the pass is token-budgeted rather than line-capped: the
+changed files are packed into batches that each fit `REVIEW_MAX_INPUT_TOKENS`, one model call
+per batch, and the per-batch proposals are unioned by path — so "nothing here warrants a test"
+is never a verdict on code that was too far down a long diff to be read. Any file the budget
+could not cover is named in a partial-coverage note. It spends AI budget per run — at most
+`REVIEW_MAX_AI_CALLS` model calls, the same ceiling as one review — and operators can turn it
+off with `REVIEW_GENERATE_TESTS_ENABLED=false`.
 <!-- docs:commands:end -->
 
 ## Quick start
@@ -273,13 +288,14 @@ will change per provider:
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_IMPROVE_ENABLED` | Allow the on-demand `/improve` command to run a whole-PR improvement pass and post committable suggestions | `true` |
+| `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. Only the first review posts the full summary; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve` run (batch calls only — its summary is assembled locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/add-docs`, replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/add-docs`, replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
 | `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
@@ -310,13 +326,16 @@ cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
 findings).
 
-The on-request commands are budgeted the same way. `/improve`, `/describe` and
-`/changelog` each split a large PR into batches under `REVIEW_MAX_INPUT_TOKENS`
-and spend one call per batch, capped by `REVIEW_MAX_AI_CALLS`. `/describe` and
-`/changelog` additionally reserve one call of that cap for the step that reduces
-the per-batch results to a single description or entry, and only spend it when
-the PR needed more than one batch — so a single-batch PR still costs exactly one
-call. When the cap is reached before every file has been batched, the uncovered
+The on-request commands are budgeted the same way. `/improve`, `/describe`,
+`/changelog` and `/generate-tests` each split a large PR into batches under
+`REVIEW_MAX_INPUT_TOKENS` and spend one call per batch, capped by
+`REVIEW_MAX_AI_CALLS`. `/describe` and `/changelog` additionally reserve one call
+of that cap for the step that reduces the per-batch results to a single
+description or entry, and only spend it when the PR needed more than one batch —
+so a single-batch PR still costs exactly one call. `/improve` and
+`/generate-tests` reserve nothing, because their reductions are assembled locally
+(a union of suggestions, and a union of proposed test files deduplicated by
+path). When the cap is reached before every file has been batched, the uncovered
 files are named in the partial-coverage note rather than dropped silently.
 
 ### Re-checking declines
@@ -636,10 +655,11 @@ This is still an early-stage project; the current constraints are:
 - **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
   split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
   don't fit are disclosed by name instead of silently dropped. `/improve` batches the same
-  way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call), and `/describe`
-  and `/changelog` batch up to `REVIEW_MAX_AI_CALLS - 1` calls, reserving one for the step
-  that reduces the per-batch results to a single answer. Only `/add-docs` still sends the
-  diff in a single call without batching.
+  way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call), as does
+  `/generate-tests` (its per-batch test files are unioned locally). `/describe` and
+  `/changelog` batch up to `REVIEW_MAX_AI_CALLS - 1` calls, reserving one for the step that
+  reduces the per-batch results to a single answer. Only `/add-docs` still sends the diff in
+  a single call without batching.
 - **Pure renames** — files GitHub reports as `renamed` with zero additions/deletions and
   no patch are omitted from AI review input (they have nothing to review). The summary
   overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit
