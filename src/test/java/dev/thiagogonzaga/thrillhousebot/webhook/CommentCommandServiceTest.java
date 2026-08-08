@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
+import dev.thiagogonzaga.thrillhousebot.review.PrImprovementService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
@@ -55,6 +56,7 @@ class CommentCommandServiceTest {
   @Mock private PrDescriptionGenerator descriptionGenerator;
   @Mock private ChangelogEntryGenerator changelogGenerator;
   @Mock private DocGenerationService docGenerationService;
+  @Mock private PrImprovementService improvementService;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
@@ -66,6 +68,7 @@ class CommentCommandServiceTest {
     when(authClient.getAuthHeader(anyLong())).thenReturn("token");
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.addDocsEnabled()).thenReturn(true);
+    when(reviewConfig.improveEnabled()).thenReturn(true);
     // Run submitted work inline so the async handoff is exercised synchronously in tests.
     doAnswer(
             inv -> {
@@ -89,6 +92,7 @@ class CommentCommandServiceTest {
             descriptionGenerator,
             changelogGenerator,
             docGenerationService,
+            improvementService,
             config);
   }
 
@@ -315,6 +319,58 @@ class CommentCommandServiceTest {
     verifyNoInteractions(docGenerationService);
     verifyNoInteractions(authorizer);
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void improveDelegatesToImprovementServiceWhenAuthorized() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.IMPROVE));
+
+    verify(improvementService)
+        .handle(new PrImprovementService.ImproveTask("owner", "repo", 7, "main", 12345L), "token");
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void improvePostsPausedNoticeWhenPaused() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.IMPROVE));
+
+    assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
+    verifyNoInteractions(improvementService);
+  }
+
+  @Test
+  void improveIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.IMPROVE));
+
+    verifyNoInteractions(improvementService);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(prPauseService);
+  }
+
+  @Test
+  void improveIgnoredWhenDisabled() {
+    when(reviewConfig.improveEnabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.IMPROVE));
+
+    verifyNoInteractions(improvementService);
+    verifyNoInteractions(authorizer);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void helpTextListsTheImproveCommand() {
+    service.handle(ctx(CommentCommand.HELP));
+
+    assertTrue(postedBody().contains("`/improve`"), postedBody());
   }
 
   @Test

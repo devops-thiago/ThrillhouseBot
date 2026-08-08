@@ -1,0 +1,10 @@
+{
+  "kind": "generator",
+  "sourcePr": 99,
+  "why": "Dogfood miss from PR #99 / issue #117: evaluateCiChecks appends EVERY check it walks, including the ones it classifies ciStatus = \"success\", but the caller binds the result to offendingCiChecks and buildResult downgrades APPROVE on !offendingCiChecks.isEmpty(). Producer and consumer sit in different hunks and each is locally valid; only the end-to-end trace shows that a PR with fully green CI is never approved — the inverse of the PR's stated intent (\"downgrades a would-be APPROVE to COMMENT when any offending check exists\"). The review prompt must trace the structure from producer to consumer and flag the contract mismatch.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewOrchestrator.java",
+  "keywords": ["passing", "success", "green", "non-offending", "never approve"],
+  "prTitle": "fix(review): gate the APPROVE verdict on CI status (#95)",
+  "prDescription": "- [x] 🐛 Bug fix\n\nFixes #95\n\nThrillhouseBot could post a green APPROVE review while the PR's CI was still red or pending. This change gates the APPROVE verdict on the CI status of the head commit.\n\n- Treats a check as offending when it is failing, pending, or a required check that never reported; passing/skipped/neutral checks are excluded.\n- Downgrades a would-be APPROVE to COMMENT when any offending check exists.\n- No breaking changes; when CI is fully green the verdict is unchanged."
+}

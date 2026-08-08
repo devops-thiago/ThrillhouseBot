@@ -60,7 +60,7 @@ class PrDescriptionGeneratorTest {
   private void diffReturns(String diff, int omittedFiles) {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(new FileDiff("Foo.java", "modified", 1, 0, 1, "@@ -1 +1 @@")));
-    when(diffFormatter.buildDiffStringWithStats(anyList()))
+    when(diffFormatter.buildDiffStringWithStats(anyList(), anyList()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff(diff, omittedFiles));
   }
 
@@ -192,7 +192,7 @@ class PrDescriptionGeneratorTest {
         .thenThrow(new RuntimeException("boom"));
     // SoftLoaders.files degrades the failed fetch to an empty list, which the formatter renders as
     // "(no changes detected)" — treated the same as no diff.
-    when(diffFormatter.buildDiffStringWithStats(anyList()))
+    when(diffFormatter.buildDiffStringWithStats(anyList(), anyList()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("(no changes detected)", 0));
 
     // A failed diff fetch degrades to no suggestion, not a crash.

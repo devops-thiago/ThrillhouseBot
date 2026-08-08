@@ -35,6 +35,8 @@ public enum CommentCommand {
   CHANGELOG,
   /** Generate docstrings/inline docs for changed symbols as committable suggestions. */
   ADD_DOCS,
+  /** Run a whole-PR improvement pass and post the improvements as committable suggestions. */
+  IMPROVE,
   /** Resolve the bot's outstanding finding threads on the PR. */
   RESOLVE,
   /** Silence the bot on the PR until {@link #RESUME}. */
