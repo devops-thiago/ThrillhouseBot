@@ -221,6 +221,35 @@ class TriggerDetectorTest {
   }
 
   @Test
+  void shouldNotLetAQuotedNeighborCommandStealARealOne() {
+    // /improve and /generate-tests are adjacent entries in the ordered pattern map, and /improve
+    // is matched first. Quoting either one must never divert the other's genuine invocation.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("```\n/improve\n```\n\n/generate-tests"));
+    // Padded inside the span, so this rests on inline-code stripping rather than on the slash
+    // pattern's whitespace boundary.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("run ` /improve ` some day\n\n/generate-tests"));
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("> they asked for /improve\n/generate-tests"));
+    assertEquals(
+        CommentCommand.IMPROVE, detector.detectCommand("```\n/generate-tests\n```\n\n/improve"));
+  }
+
+  @Test
+  void shouldResolveACommentCarryingBothImproveAndGenerateTestsToTheFirstEntry() {
+    // Quoted context is stripped before any pattern runs, so map order never decides a
+    // quoted-vs-genuine contest. It only decides a genuine-vs-genuine one: two real commands in
+    // one comment resolve to whichever comes first in the map. Pinned so a reorder cannot
+    // silently re-route an invocation to the other command's AI spend.
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/improve\n/generate-tests"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/generate-tests\n/improve"));
+  }
+
+  @Test
   void shouldUseConfiguredBotLogins() {
     var config = mock(ThrillhouseConfig.class);
     var github = mock(ThrillhouseConfig.GitHubConfig.class);
