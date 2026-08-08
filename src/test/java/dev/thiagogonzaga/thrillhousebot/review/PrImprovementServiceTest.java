@@ -712,6 +712,24 @@ class PrImprovementServiceTest {
   }
 
   @Test
+  void namesTheFilesLeftUncoveredWhenTheBatchBudgetRunsOut() {
+    // With batching, max-ai-calls — not max-diff-lines — is what bounds coverage on a huge PR.
+    // Covering only the first N batches and saying nothing would be the same class of bug as the
+    // line cap this replaced, just moved, so the files that never got a batch must be named.
+    when(reviewConfig.maxAiCalls()).thenReturn(1);
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    assistantReturns("{\"improvements\":[]}");
+
+    service.handle(task(), AUTH);
+
+    var summary = postedSummary();
+    assertTrue(summary.contains("partial coverage"), summary);
+    assertTrue(summary.contains("src/Other.java"), summary);
+    assertTrue(summary.contains("omitted entirely"), summary);
+  }
+
+  @Test
   void disclosesFilesTheTokenBudgetCouldNotCoverByName() {
     // Room for the small file only: the large one cannot be clipped into any batch, so it is
     // omitted by the plan — and the disclosure must now come from that, not from the line cap.
