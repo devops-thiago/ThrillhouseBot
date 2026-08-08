@@ -106,6 +106,15 @@ ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, and `/imp
 `@thrillhousebot` mentions (it replies once to say it is paused). `/resume` lifts the pause.
 `/help` and `/resolve` keep working while paused.
 
+**`/describe` and `/changelog`** — both read the whole change set rather than the first
+`REVIEW_MAX_DIFF_LINES` of it. The changed files are packed into batches that each fit
+`REVIEW_MAX_INPUT_TOKENS`, one model call per batch, and the per-batch results are then reduced
+to a single answer: `/describe` composes the partial descriptions into one coherent title and
+description, `/changelog` merges the candidate entries into one entry. That reduce step costs one
+extra model call, reserved out of `REVIEW_MAX_AI_CALLS` and spent only when the PR actually needed
+more than one batch, so a run never exceeds the same ceiling as one review. Any file the budget
+could not cover is named in a partial-coverage note under the suggestion.
+
 **`/add-docs`** — on demand, the bot reads the diff and proposes documentation comments for
 the public symbols changed in the PR, honoring the repository instructions and each file's
 language. Each suggestion is a committable `suggestion` block placed on the symbol's
@@ -265,11 +274,11 @@ will change per provider:
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_IMPROVE_ENABLED` | Allow the on-demand `/improve` command to run a whole-PR improvement pass and post committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
-| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review and `/improve` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
+| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call) and per `/improve` run (batch calls only — its summary is assembled locally); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve` run (batch calls only — its summary is assembled locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, budgeting-disabled review). Token-budgeted reviews and `/improve` ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/add-docs`, replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
 | `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
@@ -299,6 +308,15 @@ per-batch verification calls + one summary call. Set
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
 findings).
+
+The on-request commands are budgeted the same way. `/improve`, `/describe` and
+`/changelog` each split a large PR into batches under `REVIEW_MAX_INPUT_TOKENS`
+and spend one call per batch, capped by `REVIEW_MAX_AI_CALLS`. `/describe` and
+`/changelog` additionally reserve one call of that cap for the step that reduces
+the per-batch results to a single description or entry, and only spend it when
+the PR needed more than one batch — so a single-batch PR still costs exactly one
+call. When the cap is reached before every file has been batched, the uncovered
+files are named in the partial-coverage note rather than dropped silently.
 
 ### Re-checking declines
 
