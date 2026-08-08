@@ -103,6 +103,59 @@ public class SuggestionFormatter {
   }
 
   /**
+   * Builds the body of an {@code /improve} inline comment: the improvement's title (and category,
+   * when the model supplied one), its rationale, and the rewritten code as a committable suggestion
+   * block.
+   */
+  public String formatImprovementComment(
+      String title, String category, String rationale, String suggestionOld, String suggestionNew) {
+    var sb = new StringBuilder("**✨ Improvement");
+    if (title != null && !title.isBlank()) {
+      sb.append(" — ").append(title.strip());
+    }
+    sb.append("**");
+    if (category != null && !category.isBlank()) {
+      sb.append(" `").append(category.strip()).append("`");
+    }
+    sb.append("\n\n");
+    if (rationale != null && !rationale.isBlank()) {
+      sb.append(rationale.strip()).append("\n");
+    }
+    sb.append(formatSuggestionBlock(suggestionOld, suggestionNew));
+    return sb.toString();
+  }
+
+  /**
+   * Builds the copy-paste rendering of an {@code /improve} item that could not be anchored onto the
+   * diff, so no committable suggestion is possible: the same header and rationale, followed by the
+   * proposed code as a plain block to apply by hand.
+   */
+  public String formatImprovementBlock(
+      String title,
+      String category,
+      String rationale,
+      String file,
+      int line,
+      String suggestionNew) {
+    var sb = new StringBuilder("**");
+    sb.append(title == null || title.isBlank() ? "Improvement" : title.strip()).append("**");
+    if (category != null && !category.isBlank()) {
+      sb.append(" `").append(category.strip()).append("`");
+    }
+    if (file != null && !file.isBlank()) {
+      sb.append(" — `").append(file.strip()).append(":").append(line).append("`");
+    }
+    sb.append("\n");
+    if (rationale != null && !rationale.isBlank()) {
+      sb.append("\n").append(rationale.strip()).append("\n");
+    }
+    sb.append(CODE_FENCE_CLOSE)
+        .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
+        .append(CODE_FENCE_CLOSE);
+    return sb.toString();
+  }
+
+  /**
    * Italic disclaimer appended when confidence is below high, so readers know to verify before
    * acting. Empty for {@link Confidence#HIGH}.
    */

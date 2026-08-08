@@ -59,6 +59,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("/describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("/changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("/add-docs please"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/improve"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume now"));
@@ -72,6 +73,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("@thrillhousebot describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("@thrillhousebot changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("@thrillhousebot add-docs"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("@thrillhousebot improve"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("@thrillhousebot resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("@thrillhousebot pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("@thrillhousebot resume"));
@@ -148,6 +150,28 @@ class TriggerDetectorTest {
   void shouldNotDetectCommandOrMentionInsideInlineCode() {
     assertEquals(CommentCommand.NONE, detector.detectCommand("use `/review` to trigger a review"));
     assertFalse(detector.containsBotMention("ping `@thrillhousebot` here"));
+  }
+
+  @Test
+  void shouldNotDetectImproveInsideQuotedContext() {
+    // Documenting or quoting /improve must never run it.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("```\n/improve\n```"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("> they said /improve"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("run `/improve` to get suggestions"));
+    assertEquals(
+        CommentCommand.NONE,
+        detector.detectCommand("`@thrillhousebot improve` is the mention form"));
+  }
+
+  @Test
+  void shouldDetectImproveOutsideAQuotedMention() {
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("> quoting `/improve`\n/improve"));
+  }
+
+  @Test
+  void shouldNotConfuseImproveWithOtherWords() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("improve this please"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("/improvements"));
   }
 
   @Test
