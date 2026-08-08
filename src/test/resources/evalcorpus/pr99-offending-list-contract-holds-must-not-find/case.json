@@ -1,0 +1,10 @@
+{
+  "kind": "generator",
+  "sourcePr": 99,
+  "why": "Precision control for the producer→consumer contract dimension (issue #117), built from the shipped PR #99 fix: evaluateCiChecks adds an entry only when the classified status is not CI_SUCCESS, so the list the caller binds to offendingCiChecks really does hold only offending checks and the !isEmpty() gate in buildResult fires exactly when the PR says it should. Same multi-hunk producer/consumer shape as the must-find case, contract intact — the review must not manufacture a data-flow essay here.",
+  "expectation": "must-not-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewOrchestrator.java",
+  "keywords": ["producer", "non-offending", "including passing", "contract mismatch"],
+  "prTitle": "fix(review): gate the APPROVE verdict on CI status (#95)",
+  "prDescription": "- [x] 🐛 Bug fix\n\nFixes #95\n\nThrillhouseBot could post a green APPROVE review while the PR's CI was still red or pending. This change gates the APPROVE verdict on the CI status of the head commit.\n\n- Treats a check as offending when it is failing, pending, or a required check that never reported; passing/skipped/neutral checks are excluded.\n- Downgrades a would-be APPROVE to COMMENT when any offending check exists.\n- No breaking changes; when CI is fully green the verdict is unchanged."
+}
