@@ -18,8 +18,19 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -168,5 +179,104 @@ class ReviewPromptAssemblerTest {
     // Spoofed diff-fence markers in tracker prose must arrive neutralized, like other slots.
     assertFalse(section.contains("<<<DIFF_START>>>"));
     assertTrue(section.contains("<<DIFF_START>>"));
+  }
+
+  /**
+   * Path-scoped review rules (#33) reaching the model: resolution and the prompt slot exercised
+   * together, because the point of the feature is which rules the model is told apply where.
+   */
+  @Nested
+  class PathScopedInstructionsInThePrompt {
+
+    private static final RepoSettings SCOPED =
+        new RepoSettings(
+            List.of(),
+            List.of(
+                new RepoSettings.PathInstructions(
+                    "payments/**", "Money is in integer cents; flag floating-point arithmetic.")),
+            ".github/thrillhousebot.yml");
+
+    /** What a repository with no per-repo config produces — the pre-#33 content, unchanged. */
+    private static final String GLOBAL_INSTRUCTIONS_ONLY =
+        "## Project-Specific Instructions (from .github/thrillhousebot.md)\n"
+            + "The repository maintainers have provided these additional review guidelines.\n"
+            + "These take precedence over default rules where they conflict.\n"
+            + "Prefer small diffs.";
+
+    @Test
+    void scopedRulesReachTheModelForAFileUnderTheScopePath() {
+      var repoInstructions = assembleFor(SCOPED, "payments/api/Charge.java").repoInstructions();
+
+      assertTrue(repoInstructions.contains("## Path-Scoped Instructions"), repoInstructions);
+      assertTrue(repoInstructions.contains("files matching payments/**"), repoInstructions);
+      assertTrue(
+          repoInstructions.contains(
+              "Applies only to these changed files: payments/api/Charge.java"),
+          repoInstructions);
+      assertTrue(repoInstructions.contains("flag floating-point arithmetic"), repoInstructions);
+      // The global block is still there, ahead of the scoped one.
+      assertTrue(repoInstructions.contains(GLOBAL_INSTRUCTIONS_ONLY), repoInstructions);
+      assertTrue(
+          repoInstructions.indexOf("## Project-Specific Instructions")
+              < repoInstructions.indexOf("## Path-Scoped Instructions"),
+          repoInstructions);
+    }
+
+    @Test
+    void scopedRulesDoNotReachTheModelForAFileOutsideTheScopePath() {
+      var repoInstructions = assembleFor(SCOPED, "web/Landing.tsx").repoInstructions();
+
+      assertFalse(repoInstructions.contains("Path-Scoped Instructions"), repoInstructions);
+      assertFalse(repoInstructions.contains("flag floating-point arithmetic"), repoInstructions);
+      assertEquals(GLOBAL_INSTRUCTIONS_ONLY, repoInstructions);
+    }
+
+    @Test
+    void aRepositoryDeclaringNoScopesGetsExactlyTheGlobalInstructionsAsBefore() {
+      assertEquals(
+          GLOBAL_INSTRUCTIONS_ONLY,
+          assembleFor(RepoSettings.EMPTY, "payments/api/Charge.java").repoInstructions());
+    }
+
+    private static AiReviewService.PromptInputs assembleFor(
+        RepoSettings settings, String filename) {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(filename, "modified", 1, 0, 1, "@@ -1 +1 @@"));
+      var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
+      when(config.review().diagram().enabled()).thenReturn(false);
+      var labeler = mock(PrLabeler.class);
+      when(labeler.allowNewLabels()).thenReturn(false);
+      var assembler =
+          new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+      var ctx =
+          new ReviewContextLoader.ReviewContext(
+              files,
+              "diff",
+              "",
+              0,
+              List.of(),
+              List.of(),
+              List.of(),
+              true,
+              false,
+              null,
+              List.of(),
+              "",
+              new InstructionsResolver.ResolvedInstructions(
+                  "Prefer small diffs.", ".github/thrillhousebot.md"),
+              PathScopedInstructions.resolve(settings, List.of(filename)),
+              List.of(),
+              "",
+              "",
+              "",
+              files,
+              () -> new DiffLineResolver(Map.of()),
+              null);
+      var req =
+          new ReviewOrchestrator.ReviewRequest(
+              "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+      return assembler.assemble(ctx, req);
+    }
   }
 }

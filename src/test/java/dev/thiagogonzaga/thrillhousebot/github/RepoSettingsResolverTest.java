@@ -194,6 +194,166 @@ class RepoSettingsResolverTest {
     }
   }
 
+  /** Path-scoped review rules (#33): {@code review.path-instructions} under the same review map. */
+  @Nested
+  class PathInstructionsParsing {
+
+    @Test
+    void readsScopedRuleBlocksInDeclarationOrder() {
+      stubFile(
+          YML,
+          """
+          review:
+            path-instructions:
+              - path: "payments/**"
+                instructions: |
+                  Money is in integer cents; flag floating-point arithmetic.
+              - path: "**/generated/**"
+                instructions: "Style nits do not apply to generated code."
+          """);
+
+      var settings = resolve();
+
+      assertEquals(2, settings.pathInstructions().size());
+      assertEquals("payments/**", settings.pathInstructions().get(0).path());
+      assertEquals(
+          "Money is in integer cents; flag floating-point arithmetic.",
+          settings.pathInstructions().get(0).instructions());
+      assertEquals("**/generated/**", settings.pathInstructions().get(1).path());
+      assertEquals(YML, settings.source());
+    }
+
+    @Test
+    void readsScopedRulesAlongsideIgnoreGlobsFromTheSameFile() {
+      stubFile(
+          YML,
+          """
+          review:
+            ignored-files:
+              - "docs/generated/**"
+            path-instructions:
+              - path: "payments/**"
+                instructions: "Be strict here."
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("docs/generated/**"), settings.ignoredFiles());
+      assertEquals(1, settings.pathInstructions().size());
+    }
+
+    @Test
+    void skipsEntriesMissingAPathOrInstructions() {
+      stubFile(
+          YML,
+          """
+          review:
+            path-instructions:
+              - path: "payments/**"
+              - instructions: "orphaned rules"
+              - path: "  "
+                instructions: "blank glob"
+              - path: "api/**"
+                instructions: "  "
+              - path: "kept/**"
+                instructions: "Kept."
+          """);
+
+      var settings = resolve();
+
+      assertEquals(1, settings.pathInstructions().size());
+      assertEquals("kept/**", settings.pathInstructions().get(0).path());
+    }
+
+    @Test
+    void skipsEntriesWhoseFieldsAreNotScalars() {
+      stubFile(
+          YML,
+          """
+          review:
+            path-instructions:
+              - "just a string"
+              - path: ["a", "b"]
+                instructions: "list glob"
+              - path: "api/**"
+                instructions:
+                  nested: mapping
+              - path:
+                instructions: "empty glob is a YAML null, not the string 'null'"
+              - path: "kept/**"
+                instructions: "Kept."
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("kept/**"), scopedPaths(settings));
+    }
+
+    @Test
+    void capsHowManyScopesARepositoryMayDeclare() {
+      var sb = new StringBuilder("review:\n  path-instructions:\n");
+      for (var i = 0; i < RepoSettingsParser.MAX_PATH_SCOPES + 10; i++) {
+        sb.append("    - path: \"dir").append(i).append("/**\"\n");
+        sb.append("      instructions: \"rule ").append(i).append("\"\n");
+      }
+      stubFile(YML, sb.toString());
+
+      var settings = resolve();
+
+      assertEquals(RepoSettingsParser.MAX_PATH_SCOPES, settings.pathInstructions().size());
+    }
+
+    @Test
+    void dropsAnOverLongGlobOrRuleBlock() {
+      var overLongGlob = "x".repeat(RepoSettingsParser.MAX_PATTERN_LENGTH + 1);
+      var overLongRules = "y".repeat(RepoSettingsParser.MAX_SCOPE_INSTRUCTIONS_LENGTH + 1);
+      stubFile(
+          YML,
+          "review:\n"
+              + "  path-instructions:\n"
+              + "    - path: \""
+              + overLongGlob
+              + "\"\n      instructions: \"short\"\n"
+              + "    - path: \"verbose/**\"\n      instructions: \""
+              + overLongRules
+              + "\"\n"
+              + "    - path: \"kept/**\"\n      instructions: \"Kept.\"\n");
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("kept/**"), scopedPaths(settings));
+    }
+
+    @Test
+    void aWrongShapedPathInstructionsKeyLeavesTheRestOfTheConfigIntact() {
+      stubFile(
+          YML,
+          """
+          review:
+            ignored-files:
+              - "docs/generated/**"
+            path-instructions: "not a list"
+          """);
+
+      var settings = assertDoesNotThrow(RepoSettingsResolverTest.this::resolve);
+
+      assertEquals(java.util.List.of("docs/generated/**"), settings.ignoredFiles());
+      assertTrue(settings.pathInstructions().isEmpty());
+    }
+
+    @Test
+    void anExplicitlyEmptyPathInstructionsKeyIsNotAMalformedConfig() {
+      stubFile(YML, "review:\n  path-instructions:\n");
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    private java.util.List<String> scopedPaths(RepoSettings settings) {
+      return settings.pathInstructions().stream().map(RepoSettings.PathInstructions::path).toList();
+    }
+  }
+
   @Nested
   class FailSoft {
 

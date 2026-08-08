@@ -25,8 +25,8 @@ import jakarta.inject.Inject;
  * Turns a loaded {@link ReviewContextLoader.ReviewContext} into the {@link
  * AiReviewService.PromptInputs} the model is called with — fencing the diff, escaping the prose
  * slots, and assembling the trailing guidance (labels + diagram request + config-key definitions +
- * repository instructions) into the single {@code repoInstructions} slot. Extracted from {@code
- * ReviewOrchestrator} as the pure prompt-shaping transform.
+ * repository instructions, global then path-scoped) into the single {@code repoInstructions} slot.
+ * Extracted from {@code ReviewOrchestrator} as the pure prompt-shaping transform.
  */
 @ApplicationScoped
 public class ReviewPromptAssembler {
@@ -36,6 +36,16 @@ public class ReviewPromptAssembler {
       """
       The repository maintainers have provided these additional review guidelines.
       These take precedence over default rules where they conflict.
+      """;
+
+  // Guidance for the path-scoped blocks. It has to be unambiguous that a scope's rules stop at its
+  // own paths: applying one directory's rules to another is worse than having no scoped rules.
+  private static final String PATH_INSTRUCTIONS_GUIDANCE =
+      """
+      The maintainers scoped these guidelines to specific paths. Apply each block ONLY to the
+      files listed under it — never to a file outside that scope — in addition to the
+      project-wide instructions above, which still apply to every file. Where a scope and the
+      project-wide instructions conflict, the scope wins for its own files only.
       """;
 
   private final ThrillhouseConfig config;
@@ -78,7 +88,12 @@ public class ReviewPromptAssembler {
                         bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext()),
                         configKeyContextSection(ctx.configKeyContext()))),
                 heuristicFailureModesSection(ctx.diff())),
-            PromptSections.instructionsSection(ctx.instructions(), INSTRUCTIONS_GUIDANCE));
+            // Global instructions first, then the scopes that matched a file in this PR — the
+            // scoped blocks read as refinements of the project-wide rules, not replacements.
+            combineSections(
+                PromptSections.instructionsSection(ctx.instructions(), INSTRUCTIONS_GUIDANCE),
+                PromptSections.pathInstructionsSection(
+                    ctx.pathInstructions(), PATH_INSTRUCTIONS_GUIDANCE)));
     return new AiReviewService.PromptInputs(
         fencedDiff,
         PromptTemplateEscaper.escape(PromptSections.prContext(req.prTitle(), req.prDescription())),

@@ -36,13 +36,18 @@ import org.yaml.snakeyaml.LoaderOptions;
  *   ignored-files:
  *     - "docs/generated/**"
  *     - "**''/''*.snap"
+ *   path-instructions:
+ *     - path: "payments/**"
+ *       instructions: |
+ *         Money is handled in integer cents; flag any floating-point arithmetic.
  * }</pre>
  *
  * <p>The file is untrusted input from an arbitrary repository, so parsing is deliberately
  * defensive: it reads a generic tree rather than binding to a POJO (no reflection, no type
- * coercion), bounds the document with snakeyaml loader limits, caps how many patterns a repository
- * may contribute, and returns {@link RepoSettings#EMPTY} for anything it cannot make sense of. It
- * never throws — a malformed config must degrade to "no per-repo settings", never fail a review.
+ * coercion), bounds the document with snakeyaml loader limits, caps how many patterns and scoped
+ * instruction blocks a repository may contribute, and returns {@link RepoSettings#EMPTY} for
+ * anything it cannot make sense of. It never throws — a malformed config must degrade to "no
+ * per-repo settings", never fail a review.
  */
 final class RepoSettingsParser {
 
@@ -62,6 +67,12 @@ final class RepoSettingsParser {
 
   /** Ceiling on a single glob's length — a pathological pattern is dropped, not compiled. */
   static final int MAX_PATTERN_LENGTH = 512;
+
+  /** Ceiling on how many path-scoped instruction blocks one repository may declare. */
+  static final int MAX_PATH_SCOPES = 25;
+
+  /** Ceiling on one scope's prose — an over-long block is dropped rather than sent to the model. */
+  static final int MAX_SCOPE_INSTRUCTIONS_LENGTH = 4_000;
 
   private static final ObjectMapper YAML_MAPPER = new ObjectMapper(yamlFactory());
 
@@ -91,8 +102,12 @@ final class RepoSettingsParser {
         log.warn("Repository config {} is not a YAML mapping; ignoring it", source);
         return RepoSettings.EMPTY;
       }
-      var ignoredFiles = readPatterns(root.path("review").path("ignored-files"), source);
-      return ignoredFiles.isEmpty() ? RepoSettings.EMPTY : new RepoSettings(ignoredFiles, source);
+      var review = root.path("review");
+      var ignoredFiles = readPatterns(review.path("ignored-files"), source);
+      var pathInstructions = readPathInstructions(review.path("path-instructions"), source);
+      return ignoredFiles.isEmpty() && pathInstructions.isEmpty()
+          ? RepoSettings.EMPTY
+          : new RepoSettings(ignoredFiles, pathInstructions, source);
     } catch (IOException | RuntimeException e) {
       log.warn(
           "Could not parse repository config {}; continuing with the global settings only",
@@ -120,6 +135,88 @@ final class RepoSettingsParser {
         yield List.of();
       }
     };
+  }
+
+  /**
+   * Reads {@code review.path-instructions} as a sequence of {@code {path, instructions}} mappings.
+   * Every other shape — a scalar, a mapping, an entry missing either key, a non-scalar value — is
+   * skipped with a warning rather than failing the parse, so one bad entry costs only itself and a
+   * wholly malformed block costs only the path-scoped rules.
+   */
+  private static List<RepoSettings.PathInstructions> readPathInstructions(
+      JsonNode node, String source) {
+    return switch (node.getNodeType()) {
+      // A MissingNode (key absent) or NullNode (`path-instructions:` with no value) means the
+      // repository declared nothing — not a malformed config.
+      case MISSING, NULL -> List.of();
+      case ARRAY -> scopeEntries(node, source);
+      default -> {
+        log.warn(
+            "Repository config {}: review.path-instructions is not a list; ignoring it", source);
+        yield List.of();
+      }
+    };
+  }
+
+  /** The well-formed {@code {path, instructions}} entries of a sequence, capped and trimmed. */
+  private static List<RepoSettings.PathInstructions> scopeEntries(JsonNode array, String source) {
+    var scopes =
+        new ArrayList<RepoSettings.PathInstructions>(Math.min(array.size(), MAX_PATH_SCOPES));
+    for (var element : array) {
+      if (scopes.size() >= MAX_PATH_SCOPES) {
+        log.warn(
+            "Repository config {}: more than {} path-instruction scopes; using the first {}",
+            source,
+            MAX_PATH_SCOPES,
+            MAX_PATH_SCOPES);
+        break;
+      }
+      var scope = readScope(element, source);
+      if (scope != null) {
+        scopes.add(scope);
+      }
+    }
+    return List.copyOf(scopes);
+  }
+
+  /** One scope entry, or {@code null} when it is not a usable {@code {path, instructions}} pair. */
+  private static RepoSettings.PathInstructions readScope(JsonNode element, String source) {
+    var pathNode = element.path("path");
+    var instructionsNode = element.path("instructions");
+    // isNull() is checked explicitly: an empty `path:` parses to a NullNode, which is a value node
+    // whose asText() is the literal "null" — a glob nobody wrote.
+    if (!isScalar(pathNode) || !isScalar(instructionsNode)) {
+      log.warn(
+          "Repository config {}: skipping a path-instructions entry without a scalar"
+              + " 'path' and 'instructions'",
+          source);
+      return null;
+    }
+    var path = pathNode.asText().trim();
+    var instructions = instructionsNode.asText().strip();
+    if (path.isEmpty() || instructions.isEmpty()) {
+      log.warn(
+          "Repository config {}: skipping a path-instructions entry with a blank field", source);
+      return null;
+    }
+    if (path.length() > MAX_PATTERN_LENGTH) {
+      log.warn("Repository config {}: dropping an over-long path-instructions glob", source);
+      return null;
+    }
+    if (instructions.length() > MAX_SCOPE_INSTRUCTIONS_LENGTH) {
+      log.warn(
+          "Repository config {}: dropping the rules for scope {} — over {} characters",
+          source,
+          path,
+          MAX_SCOPE_INSTRUCTIONS_LENGTH);
+      return null;
+    }
+    return new RepoSettings.PathInstructions(path, instructions);
+  }
+
+  /** A present scalar — not a missing key, not an explicit YAML null, not a nested collection. */
+  private static boolean isScalar(JsonNode node) {
+    return node.isValueNode() && !node.isNull();
   }
 
   /** The scalar entries of a sequence; a nested mapping or sequence entry is not a glob. */

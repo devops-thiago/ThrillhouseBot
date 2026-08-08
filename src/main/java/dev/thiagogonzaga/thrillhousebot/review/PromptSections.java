@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import java.util.List;
 
 /**
  * Renders the untrusted-context prompt sections shared by the review path and the on-request
@@ -54,5 +55,55 @@ public final class PromptSections {
         + ")\n"
         + guidance
         + PromptTemplateEscaper.escape(instructions.content());
+  }
+
+  /** How many matched paths are listed under a scope before the rest are rolled up. */
+  private static final int MAX_LISTED_FILES = 10;
+
+  /**
+   * Pre-rendered path-scoped-instructions section: one block per scope that matched a file in this
+   * review, each naming its glob and the files it governs so the model can never carry one
+   * directory's rules over to another. Empty when no scoped rule applies.
+   *
+   * <p>The globs, paths, and maintainer prose are all repository-controlled, so every one of them
+   * is escaped and framed as data exactly like the global instructions block. The {@code guidance}
+   * string carries its own trailing newline.
+   */
+  public static String pathInstructionsSection(PathScopedInstructions scoped, String guidance) {
+    if (scoped == null || scoped.isEmpty()) {
+      return "";
+    }
+    var sb =
+        new StringBuilder("## Path-Scoped Instructions (from ")
+            .append(scoped.source())
+            .append(")\n")
+            .append(guidance);
+    var total = scoped.scopes().size();
+    for (var i = 0; i < total; i++) {
+      var scope = scoped.scopes().get(i);
+      sb.append("\n### Scope ")
+          .append(i + 1)
+          .append(" of ")
+          .append(total)
+          .append(": files matching ")
+          .append(PromptTemplateEscaper.escape(scope.glob()))
+          .append("\nApplies only to these changed files: ")
+          .append(PromptTemplateEscaper.escape(formatFiles(scope.files())))
+          .append("\nRules for those files:\n")
+          .append(PromptTemplateEscaper.escape(scope.instructions()))
+          .append('\n');
+    }
+    return sb.toString();
+  }
+
+  /**
+   * The scope's matched paths, capped so a scope covering a large PR cannot dominate the prompt.
+   */
+  private static String formatFiles(List<String> files) {
+    if (files.size() <= MAX_LISTED_FILES) {
+      return String.join(", ", files);
+    }
+    var listed = String.join(", ", files.subList(0, MAX_LISTED_FILES));
+    return listed + ", and " + (files.size() - MAX_LISTED_FILES) + " more matching this glob";
   }
 }
