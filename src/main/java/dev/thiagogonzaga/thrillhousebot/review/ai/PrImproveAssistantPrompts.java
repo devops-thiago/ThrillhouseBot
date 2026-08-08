@@ -47,12 +47,16 @@ public final class PrImproveAssistantPrompts {
             - rationale: one or two sentences on why the change is an improvement, grounded in the
               diff
             - suggestion_old: the EXACT current line(s) from the right side of the diff, verbatim,
-              no backticks
+              no backticks — copied character for character INCLUDING the leading indentation, and
+              without the diff's own leading +/space marker
             - suggestion_new: the full replacement for those exact lines, ready to commit
 
             Rules:
             - Only propose changes to code visible on the right side of the diff; never invent line
               numbers or quote code that is not present.
+            - Reproduce indentation exactly in BOTH fields. A quote that re-indents the code cannot
+              be verified against the file, so the improvement is downgraded to a copy-paste note
+              instead of a one-click commit.
             - suggestion_new must be a drop-in replacement for suggestion_old: the same leading
               whitespace, no placeholders, no "..." elisions, no surrounding code fences, and no
               commentary. Applying it alone must leave the file valid.

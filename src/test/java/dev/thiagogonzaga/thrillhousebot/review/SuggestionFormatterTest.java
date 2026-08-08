@@ -244,10 +244,17 @@ class SuggestionFormatterTest {
   void shouldRenderDocNoteFencesByteExactly() {
     var note = formatter.formatDocNote("Foo.bar()", "/** doc */");
 
+    // The blank line before the fence and the absence of one after it are the point of this
+    // assertion: the fence constant supplies both newlines itself.
     assertEquals(
-        "**📝 Documentation for `Foo.bar()`**\n"
-            + "This symbol is missing documentation. Suggested:\n"
-            + "\n```\n/** doc */\n```\n",
+        """
+        **📝 Documentation for `Foo.bar()`**
+        This symbol is missing documentation. Suggested:
+
+        ```
+        /** doc */
+        ```
+        """,
         note);
   }
 
