@@ -36,8 +36,15 @@ import java.util.Optional;
  * produced rather than recomputed here: findings raised this round, previous findings the round
  * closed, and previous findings still open. A {@code justified} status (declined by a maintainer)
  * is in none of them — it is neither newly fixed nor still open — and {@code superseded} is not
- * counted either, since a superseded finding re-posts the full summary and this comment is then
- * skipped by the caller.
+ * counted either: it is an auto-close because the targeted code left the diff, not something the
+ * round fixed. A superseded round also re-posts the full summary, and the caller skips this comment
+ * whenever that re-post lands.
+ *
+ * <p>The counts are only as good as the previous-finding statuses handed to them: issue #455
+ * records that a round returning zero findings corrupts the previous-findings context, which can
+ * both drop a real finding out of tracking and inflate the still-open count. That defect is tracked
+ * separately; the guard below limits the blast radius here, since a round whose only "movement" is
+ * a phantom carry-over renders nothing at all.
  */
 final class FollowUpDeltaSummary {
 

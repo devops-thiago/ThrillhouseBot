@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -195,6 +197,12 @@ class ReviewPublisherTest {
 
   @Test
   void followUpDeltaNeverDuplicatesTheFirstRunSummary() {
+    // A first review posts its summary and nothing else: the round leaves exactly one comment on
+    // the PR, the summary. The delta is suppressed by the first-review check on its own — hence
+    // {@code summaryPosted == false} here, so the assertion cannot be satisfied by the
+    // already-posted-a-summary branch instead. That combination is also the real failure mode:
+    // ReviewOrchestrator swallows a failed summary post and passes false, and the delta must not
+    // step in as a stand-in first summary.
     followUpSummaryEnabled(true);
     var firstReview =
         new ReviewResult(
@@ -211,9 +219,14 @@ class ReviewPublisherTest {
             List.of(),
             0);
 
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, firstReview, true));
-    verify(commentClient, never())
-        .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    assertTrue(publisher.publishSummary("auth", "o", "r", 1, firstReview, false));
+    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, firstReview, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient, times(1))
+        .createComment(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), body.capture());
+    assertEquals("summary", body.getValue().body());
   }
 
   @Test
