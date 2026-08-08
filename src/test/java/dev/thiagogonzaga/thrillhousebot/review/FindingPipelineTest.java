@@ -42,6 +42,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
@@ -113,6 +114,17 @@ class FindingPipelineTest {
 
   /** Same context with a caller-supplied changed-file list, so rename disclosure can be driven. */
   private static ReviewContextLoader.ReviewContext reviewContext(List<FileDiff> files) {
+    return reviewContext(
+        files,
+        List.of(
+            new FileDiff("a.java", "modified", 3, 0, 3, ""),
+            new FileDiff("b.java", "modified", 2, 0, 2, "")),
+        null);
+  }
+
+  /** Same context with an explicit reviewable-file set and GitHub's PR totals (may be null). */
+  private static ReviewContextLoader.ReviewContext reviewContext(
+      List<FileDiff> files, List<FileDiff> reviewableFiles, ReviewContextLoader.PrTotals prTotals) {
     return new ReviewContextLoader.ReviewContext(
         files,
         "raw legacy diff",
@@ -130,11 +142,9 @@ class FindingPipelineTest {
         List.of(),
         "",
         "",
-        List.of(
-            new FileDiff("a.java", "modified", 3, 0, 3, ""),
-            new FileDiff("b.java", "modified", 2, 0, 2, "")),
+        reviewableFiles,
         () -> new DiffLineResolver(Map.of()),
-        null);
+        prTotals);
   }
 
   private static DiffBudgetPlanner.BudgetPlan multiBatchPlan() {
@@ -273,6 +283,92 @@ class FindingPipelineTest {
         captor.getValue().changedFiles().startsWith("1 pure rename omitted from AI review"),
         captor.getValue().changedFiles());
     assertTrue(captor.getValue().changedFiles().contains("pkg/A.java → pkg/B.java"));
+  }
+
+  /** Runs the multi-call path and returns the changed-files section the summary call received. */
+  private String captureSummaryChangedFiles(
+      ReviewSession session, ReviewContextLoader.ReviewContext ctx) {
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    return captor.getValue().changedFiles();
+  }
+
+  @Test
+  void summaryOverviewStatesTheWholePrScopeForAMultiFileRefactor() {
+    // The #335 fixture: a decompose whose title/body announce the full scope, but whose summary
+    // call sees no diff — without these totals nothing tells it the change is more than one class.
+    var session = ReviewSession.create("owner/repo", 1, "Decompose the orchestrator", "sha");
+    var files =
+        List.of(
+            new FileDiff(
+                "src/main/java/app/review/Orchestrator.java", "modified", 40, 900, 940, ""),
+            new FileDiff(
+                "src/main/java/app/review/CiStatusEvaluator.java", "added", 120, 0, 120, ""),
+            new FileDiff("src/main/java/app/review/FindingPipeline.java", "added", 300, 0, 300, ""),
+            new FileDiff("src/test/java/app/review/PipelineTest.java", "added", 200, 0, 200, ""),
+            new FileDiff("README.md", "modified", 4, 2, 6, ""));
+    var overview = captureSummaryChangedFiles(session, reviewContext(files, files, null));
+
+    assertTrue(
+        overview.contains("PR scope (whole pull request): 5 files changed, +664 -902"), overview);
+    assertTrue(overview.contains("Directories touched: 3"), overview);
+    assertTrue(overview.contains("- src/main/java/app/review: 3 files (+460 -900)"), overview);
+    assertTrue(overview.contains("- src/test/java/app/review: 1 file (+200 -0)"), overview);
+    assertTrue(overview.contains("- (repository root): 1 file (+4 -2)"), overview);
+    // Ahead of the per-file rows, so clamping a long overview can only drop the tail.
+    assertTrue(
+        overview.indexOf("PR scope (whole pull request)") < overview.indexOf("README.md (modified"),
+        overview);
+  }
+
+  @Test
+  void summaryOverviewScopeUsesGitHubsAuthoritativeTotalsWhenAvailable() {
+    // Same totals the rendered Changes Overview reports (#298), so the prose cannot contradict it.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var reviewable =
+        List.of(
+            new FileDiff("a.java", "modified", 3, 0, 3, ""),
+            new FileDiff("b.java", "modified", 2, 0, 2, ""));
+    var ctx = reviewContext(List.of(), reviewable, new ReviewContextLoader.PrTotals(23, 1612, 240));
+
+    var overview = captureSummaryChangedFiles(session, ctx);
+
+    assertTrue(
+        overview.contains("PR scope (whole pull request): 23 files changed, +1612 -240"), overview);
+  }
+
+  @Test
+  void summaryOverviewScopeStaysSingularForASingleFilePr() {
+    // No regression on small single-purpose PRs: no multi-file or multi-directory language.
+    var session = ReviewSession.create("owner/repo", 1, "Fix a typo", "sha");
+    var files = List.of(new FileDiff("src/main/java/app/Tiny.java", "modified", 3, 1, 4, ""));
+    var overview = captureSummaryChangedFiles(session, reviewContext(files, files, null));
+
+    assertTrue(overview.contains("PR scope (whole pull request): 1 file changed, +3 -1"), overview);
+    assertTrue(overview.contains("Directories touched: 1"), overview);
+    assertTrue(overview.contains("- src/main/java/app: 1 file (+3 -1)"), overview);
+    assertFalse(overview.contains("files changed"), overview);
+    assertFalse(overview.contains("more directories"), overview);
+  }
+
+  @Test
+  void summaryOverviewRollsUpDirectoriesBeyondTheCap() {
+    var session = ReviewSession.create("owner/repo", 1, "Wide PR", "sha");
+    var files = new ArrayList<FileDiff>();
+    for (var i = 0; i < 12; i++) {
+      files.add(new FileDiff("pkg" + i + "/File.java", "modified", 1, 0, 1, ""));
+    }
+    var overview = captureSummaryChangedFiles(session, reviewContext(files, files, null));
+
+    assertTrue(overview.contains("Directories touched: 12"), overview);
+    assertTrue(overview.contains("- (+2 more directories)"), overview);
   }
 
   @Test
@@ -500,13 +596,26 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
-    var high = new ReviewResponse.Finding("high", "high", "a.java", 1, "H", "d", "o", "n");
-    var medium = new ReviewResponse.Finding("medium", "high", "a.java", 3, "M", "d", "o", "n");
-    var nullRisk = new ReviewResponse.Finding(null, "high", "a.java", 2, "N", "d", "o", "n");
-    var critical = new ReviewResponse.Finding("critical", "high", "b.java", 1, "C", "d", "o", "n");
+    // Descriptions long enough that one finding outweighs the changed-files overview: the budget
+    // below leaves room for exactly one, and the overview keeps its own (larger) share unclamped.
+    var desc =
+        "this description exists to make one serialized finding the dominant cost ".repeat(3);
+    var high = new ReviewResponse.Finding("high", "high", "a.java", 1, "H", desc, "o", "n");
+    var medium = new ReviewResponse.Finding("medium", "high", "a.java", 3, "M", desc, "o", "n");
+    var nullRisk = new ReviewResponse.Finding(null, "high", "a.java", 2, "N", desc, "o", "n");
+    var critical = new ReviewResponse.Finding("critical", "high", "b.java", 1, "C", desc, "o", "n");
 
     var tokenCounter = new TokenCounter();
-    var overview = "a.java (modified, +3 -0)\nb.java (modified, +2 -0)\n";
+    // The overview the pipeline will build (scope header + per-file rows), so the budget below is
+    // calibrated against the same fixed sections the production code measures.
+    var overview =
+        """
+        PR scope (whole pull request): 2 files changed, +5 -0
+        Directories touched: 1
+        - (repository root): 2 files (+5 -0)
+        a.java (modified, +3 -0)
+        b.java (modified, +2 -0)
+        """;
     var fixedSections =
         PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d" + overview;
     var criticalJson = new ObjectMapper().writeValueAsString(List.of(critical));
