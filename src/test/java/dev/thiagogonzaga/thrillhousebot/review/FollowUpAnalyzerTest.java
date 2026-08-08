@@ -1940,4 +1940,163 @@ class FollowUpAnalyzerTest {
 
     assertTrue(held.isEmpty());
   }
+
+  // --- recheckDeclines: a maintainer's decline is a claim to verify, not ground truth (#169) ---
+
+  private static final String PAUSE_FILE =
+      "src/main/java/dev/thiagogonzaga/thrillhousebot/webhook/PrPauseService.java";
+
+  private static final String RACE_TITLE =
+      "Race condition in pause() can cause a UniqueConstraint violation under concurrent webhooks";
+
+  /** The dogfood prior finding from PR #160 — correct, low confidence, "verify before acting". */
+  private static final List<ReviewResponse.Finding> RACE_PREVIOUS =
+      List.of(
+          new ReviewResponse.Finding(
+              "medium",
+              "low",
+              PAUSE_FILE,
+              60,
+              RACE_TITLE,
+              "pause() checks for an existing PausedPr and then inserts one; two deliveries can"
+                  + " both pass the check before either inserts.",
+              null,
+              null));
+
+  /**
+   * The same PR's command path: every command is handed to the shared review executor, so the
+   * "single call site, runs after the ack" premise does not serialize anything.
+   */
+  private static final String DISPATCHING_DIFF =
+      """
+      diff --git a/src/main/java/dev/thiagogonzaga/thrillhousebot/webhook/CommentCommandService.java
+      @@ -130,7 +130,9 @@ public class CommentCommandService {
+      +  private void dispatch(CommandContext ctx) {
+      +    executor.execute(() -> execute(ctx));
+      +  }
+      """;
+
+  private static List<GitHubReviewClient.PullRequestComment> raceThread(String... humanReplies) {
+    var comments = new java.util.ArrayList<GitHubReviewClient.PullRequestComment>();
+    comments.add(comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT));
+    for (var i = 0; i < humanReplies.length; i++) {
+      comments.add(comment(701L + i, 700L, PAUSE_FILE, humanReplies[i], "maintainer"));
+    }
+    return List.copyOf(comments);
+  }
+
+  private static List<ReviewResponse.PreviousFindingStatus> justified() {
+    return List.of(
+        new ReviewResponse.PreviousFindingStatus(
+            1, "justified", "maintainer says the path cannot run concurrently"));
+  }
+
+  @Test
+  void recheckShouldReopenDeclineWhoseAsyncAfterAckPremiseTheReviewedCodeContradicts() {
+    var comments =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.");
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(1, rechecked.size());
+    assertEquals(
+        "unresolved",
+        rechecked.get(0).status(),
+        "a decline the reviewed code contradicts must not be recorded justified");
+    assertTrue(
+        rechecked.get(0).note().contains("only ever called from"),
+        "the note must quote the maintainer's claim, was: " + rechecked.get(0).note());
+    assertTrue(
+        rechecked.get(0).note().contains("executor.execute(() -> execute(ctx));"),
+        "the note must quote the contradicting line, was: " + rechecked.get(0).note());
+  }
+
+  @Test
+  void recheckShouldKeepDeclineThatRestsOnStyleOrIntent() {
+    var comments =
+        raceThread("Intentional — this is the house style for command handlers. Not changing it.");
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        "justified",
+        rechecked.get(0).status(),
+        "a rebuttal that is not refutable from the code must be respected");
+  }
+
+  @Test
+  void recheckShouldDeferOnceTheMaintainerHasAnsweredTwice() {
+    var comments =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.",
+            "Still no — I looked, the executor never runs two of these for one PR.");
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        "justified",
+        rechecked.get(0).status(),
+        "a second maintainer reply answers the push-back and always wins");
+  }
+
+  @Test
+  void recheckShouldBeDisabledByConfig() {
+    var disabled = new FollowUpAnalyzer(new ObjectMapper(), false);
+    var comments =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.");
+
+    var rechecked =
+        disabled.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals("justified", rechecked.get(0).status());
+  }
+
+  @Test
+  void recheckShouldLeaveNonJustifiedStatusesAndUnmatchableInputsAlone() {
+    var unresolved =
+        List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"));
+    var comments =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.");
+
+    assertEquals(
+        unresolved,
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, unresolved, comments, BOT_ID, () -> DISPATCHING_DIFF));
+    // No thread to read the rebuttal from.
+    assertEquals(
+        "justified",
+        analyzer
+            .recheckDeclines(RACE_PREVIOUS, justified(), List.of(), BOT_ID, () -> DISPATCHING_DIFF)
+            .get(0)
+            .status());
+    // No reviewed code to check the rebuttal against.
+    assertEquals(
+        "justified",
+        analyzer
+            .recheckDeclines(RACE_PREVIOUS, justified(), comments, BOT_ID, () -> "")
+            .get(0)
+            .status());
+    // Status id outside the prior round.
+    var outOfRange =
+        List.of(new ReviewResponse.PreviousFindingStatus(9, "justified", "no such finding"));
+    assertEquals(
+        outOfRange,
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, outOfRange, comments, BOT_ID, () -> DISPATCHING_DIFF));
+    assertTrue(analyzer.recheckDeclines(RACE_PREVIOUS, null, comments, BOT_ID, null).isEmpty());
+  }
 }

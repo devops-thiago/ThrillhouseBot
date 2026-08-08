@@ -243,6 +243,7 @@ will change per provider:
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings | `true` |
+| `REVIEW_DECLINE_RECHECK_ENABLED` | Re-check a maintainer's decline against the reviewed code before a prior finding is recorded "justified" (see [Re-checking declines](#re-checking-declines)); the finding stays open for one more round only when the reviewed diff plainly contradicts the stated reason. `false` makes a maintainer reply close the finding unconditionally | `true` |
 | `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
@@ -280,6 +281,34 @@ per-batch verification calls + one summary call. Set
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
 findings).
+
+### Re-checking declines
+
+When a maintainer replies to a finding to decline it, the follow-up analysis
+records that finding as **justified** and the bot moves on. A dismissal is a
+claim, though, not ground truth — a correct finding can be closed by an
+incorrect rebuttal, and the rebuttal often names the very mechanism that makes
+the bug real ("it only runs after the webhook is acked, so there's no race" —
+on an executor that starts a thread per event).
+
+`REVIEW_DECLINE_RECHECK_ENABLED=true` (the default) therefore traces a decline's
+stated reason against the code the review actually saw. When the reviewed diff
+**plainly contradicts** that reason, the finding is kept **open for one more
+round** with a note quoting both the claim and the contradicting line, instead
+of being recorded justified. It is deliberately conservative:
+
+- Trusting the maintainer is the default. A rebuttal about house style, intent,
+  accepted risk, or priority — anything not refutable from the code — is
+  respected, as is any premise whose supporting code is not in the diff.
+- **One push-back, then defer.** The re-check only fires while the thread carries
+  a single maintainer reply; replying again always ends it, so the bot can never
+  keep re-opening the same finding round after round.
+- The re-opened finding is never re-posted as a new comment — it stays tracked in
+  *Previous Findings Status*, so nobody is asked to answer the same comment twice.
+- The override holds approval (`APPROVE` → `COMMENT`) exactly like any other
+  unresolved previous finding; it never invents a new blocking finding.
+
+Set it to `false` to make a maintainer's reply final, unconditionally.
 
 ### Blocking strictness
 

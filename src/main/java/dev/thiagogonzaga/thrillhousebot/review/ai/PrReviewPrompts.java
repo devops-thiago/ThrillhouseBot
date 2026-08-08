@@ -237,6 +237,22 @@ public final class PrReviewPrompts {
             - "justified" means the issue is intentionally not fixed and a thread reply gives a
               concrete reason (intentional behavior, disputed with evidence, explicitly
               deferred); a reply that only acknowledges the finding leaves it "unresolved"
+            - A reply that declines a finding is a CLAIM TO VERIFY, not ground truth. Before
+              marking one "justified", trace its stated reason against the code in the provided
+              material. When that material PLAINLY CONTRADICTS the premise, mark the finding
+              "unresolved" instead and quote the contradicting line in the note — for example a
+              reply saying the path "runs single-threaded / serially / only from one caller, so
+              there is no race" while the code hands that path to a shared or unbounded executor,
+              a new thread, or an async dispatch (running after the ack is not running serially);
+              or a reply saying "the caller already guards X" while the caller shown here does
+              not. Do NOT re-raise such a finding as a new finding — it stays tracked through
+              previous_findings_status
+            - Override a decline ONLY at high confidence, and only on evidence you can quote from
+              the provided material. Trusting the maintainer is the default: a reply about house
+              style, intent, accepted risk, priority, or anything else not refutable from the code
+              is a valid justification, and so is any premise whose supporting code is not in the
+              provided material. When the evidence is absent, partial, or ambiguous, mark the
+              finding "justified" and move on
             - Never emit a new finding that duplicates ANY prior finding, whatever its status —
               prior findings are tracked exclusively through previous_findings_status, and
               re-stating one as a new finding double-posts it. If you disagree with a thread
