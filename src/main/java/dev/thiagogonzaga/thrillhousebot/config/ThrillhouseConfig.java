@@ -205,6 +205,17 @@ public interface ThrillhouseConfig {
     boolean verifierEnabled();
 
     /**
+     * Whether a maintainer's decline is re-checked against the reviewed code before a prior finding
+     * is recorded "justified". When the reviewed code plainly contradicts the rebuttal's premise
+     * the finding stays open for one more round; every other decline is respected, and a second
+     * reply on the thread always ends the re-check. Turn it off to make a maintainer's reply final,
+     * unconditionally.
+     */
+    @WithDefault("true")
+    @WithName("decline-recheck-enabled")
+    boolean declineRecheckEnabled();
+
+    /**
      * How severely a finding must score before the review escalates to {@code REQUEST_CHANGES}. One
      * of {@code balanced} (default — CRITICAL/HIGH + HIGH confidence), {@code strict} (any
      * CRITICAL/HIGH regardless of confidence), or {@code lenient} (CRITICAL + HIGH confidence
