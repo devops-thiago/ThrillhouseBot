@@ -38,4 +38,18 @@ public interface ChangelogAssistant {
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,
       @V("repoInstructions") String repoInstructions);
+
+  /**
+   * Merges the per-batch candidate entries for one PR into a single CHANGELOG entry. Only used when
+   * the PR needed more than one batch: candidates drafted from different files of the same feature
+   * describe that one change in different words, which no deterministic merge can collapse.
+   */
+  @SystemMessage(ChangelogAssistantPrompts.MERGE_SYSTEM)
+  @UserMessage(ChangelogAssistantPrompts.MERGE_USER)
+  String merge(
+      @V("candidates") String candidates,
+      @V("prNumber") String prNumber,
+      @V("currentTitle") String currentTitle,
+      @V("currentDescription") String currentDescription,
+      @V("repoInstructions") String repoInstructions);
 }
