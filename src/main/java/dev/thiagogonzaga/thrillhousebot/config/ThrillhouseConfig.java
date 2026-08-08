@@ -359,6 +359,44 @@ public interface ThrillhouseConfig {
 
     @WithName("follow-up-summary")
     FollowUpSummaryConfig followUpSummary();
+
+    @WithName("large-pr-nudge")
+    LargePrNudgeConfig largePrNudge();
+  }
+
+  /**
+   * Opt-in maintainer nudge for a large pull request the review came back clean on. A big refactor
+   * that produces no inline finding is either genuinely clean or a shallow pass, and the summary
+   * alone cannot tell those apart — so when a PR is over the size thresholds below and no finding
+   * opened an inline thread, the summary comment says so and points at {@code /review} and {@code
+   * /improve}. Purely advisory: it spends no extra AI call and never changes the verdict.
+   *
+   * <p>Off by default, like every other feature that adds content to the summary comment ({@link
+   * DiagramConfig}, {@link LabelsConfig}, {@link FollowUpSummaryConfig}) — the quiet summary is the
+   * released behaviour, and a heuristic that fires on the largest PRs is the operator's call.
+   */
+  interface LargePrNudgeConfig {
+    /** Master switch — nothing is evaluated or rendered unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Changed-file count at or above which a finding-free review earns the nudge. Read from the
+     * PR-level total the summary's "Changes Overview" reports, so files the ignore globs dropped
+     * still count toward how big the change is. {@code 0} switches the file dimension off.
+     */
+    @WithName("min-files")
+    @WithDefault("20")
+    int minFiles();
+
+    /**
+     * Changed lines (additions + deletions) at or above which a finding-free review earns the nudge
+     * — a handful of files can still be a large change. Either dimension on its own triggers it.
+     * {@code 0} switches the line dimension off; with both at {@code 0} the nudge never fires.
+     */
+    @WithName("min-changed-lines")
+    @WithDefault("1000")
+    int minChangedLines();
   }
 
   /**

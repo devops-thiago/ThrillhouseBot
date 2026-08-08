@@ -277,6 +277,9 @@ will change per provider:
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. Only the first review posts the full summary; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
+| `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
+| `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
+| `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Changed lines (additions + deletions) at or above which the nudge applies; either dimension triggers it on its own. `0` switches this dimension off — with both at `0` the nudge never fires | `1000` |
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review and `/improve` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call) and per `/improve` run (batch calls only — its summary is assembled locally); files that still don't fit are reported by name as omitted | `6` |
