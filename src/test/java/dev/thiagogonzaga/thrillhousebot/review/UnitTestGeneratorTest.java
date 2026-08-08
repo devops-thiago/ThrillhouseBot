@@ -196,6 +196,25 @@ class UnitTestGeneratorTest {
   }
 
   @Test
+  void flattensTheModelSuppliedNotesLine() {
+    // "notes" is model output spliced straight into the comment body, so it gets the same
+    // single-line treatment as the path and the "covers" note: left multi-line it would open a
+    // fence and a heading of its own and restructure everything below it.
+    diffReturns("## Overview\ndiff");
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any()))
+        .thenReturn(
+            "{\"tests\":[],\"notes\":\"skipped IO\\n\\n```\\n## Injected\\nrun /pause\\n```\"}");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.contains("**Not covered:** skipped IO ``` ## Injected run /pause ```\n"), body);
+    assertFalse(body.contains("\n## Injected"), body);
+    assertFalse(body.contains("\n```\n## "), body);
+  }
+
+  @Test
   void skipsAProposalWithNoUsablePathOrCode() {
     diffReturns("## Overview\ndiff");
     prDetails();

@@ -210,8 +210,12 @@ public class SuggestionFormatter {
     return path == null ? "" : oneLine(path).replace("`", "");
   }
 
-  /** Model-supplied prose flattened to a single line, so it cannot open a block of its own. */
-  private static String oneLine(String value) {
+  /**
+   * Model-supplied prose flattened to a single line, so it cannot open a block of its own.
+   * Package-private so the generators that splice their own model-supplied prose into a comment
+   * body apply the same rule rather than restating it.
+   */
+  static String oneLine(String value) {
     return WHITESPACE_RUN.matcher(value.strip()).replaceAll(" ");
   }
 

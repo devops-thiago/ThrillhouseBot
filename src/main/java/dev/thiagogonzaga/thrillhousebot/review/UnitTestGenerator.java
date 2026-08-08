@@ -156,8 +156,13 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
     return sb.append(notesLine(response.notes())).append(FOOTER).toString();
   }
 
-  /** The model's coverage caveats as a trailing line, or empty when it flagged none. */
+  /**
+   * The model's coverage caveats as a trailing line, or empty when it flagged none. Like the path
+   * and the "covers" note, this is model output spliced into the comment body, so it is flattened
+   * to a single line — left multi-line it could open a fence or a heading of its own and
+   * restructure everything below it.
+   */
   private static String notesLine(String notes) {
-    return notes.isBlank() ? "" : "\n**Not covered:** " + notes.strip() + "\n";
+    return notes.isBlank() ? "" : "\n**Not covered:** " + SuggestionFormatter.oneLine(notes) + "\n";
   }
 }
