@@ -233,6 +233,7 @@ class ReviewOrchestratorTest {
             labeler,
             followUpAnalyzer,
             new BugFixContextResolver(commentClient),
+            new ConfigKeyContextResolver(prClient),
             sessionPersistence,
             BOT_ID,
             new ActiveModelSettings(config, "m")),
