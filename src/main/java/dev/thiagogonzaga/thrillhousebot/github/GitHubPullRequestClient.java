@@ -93,6 +93,24 @@ public interface GitHubPullRequestClient {
       @PathParam("path") String path,
       @QueryParam("ref") String ref);
 
+  /**
+   * The repository's file listing at a ref, in one call. {@code recursive=1} walks every directory
+   * so a caller can locate a file by name without probing paths; GitHub caps the response and sets
+   * {@code truncated} when it did.
+   *
+   * @param treeSha a tree SHA, commit SHA, branch or tag name
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}/git/trees/{treeSha}")
+  @Produces(MediaType.APPLICATION_JSON)
+  TreeResponse getTree(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("treeSha") String treeSha,
+      @QueryParam("recursive") String recursive);
+
   record PullRequestDetails(
       String title,
       String body,
@@ -140,4 +158,18 @@ public interface GitHubPullRequestClient {
       String content, // Base64-encoded
       String encoding, // "base64"
       long size) {}
+
+  /**
+   * One entry of a git tree listing; {@code type} is {@code blob}, {@code tree} or {@code commit}.
+   */
+  record TreeEntry(String path, String type, long size) {}
+
+  /**
+   * A git tree listing; {@code truncated} is true when GitHub dropped entries from the response.
+   */
+  record TreeResponse(String sha, List<TreeEntry> tree, boolean truncated) {
+    public TreeResponse {
+      tree = tree == null ? List.of() : List.copyOf(tree);
+    }
+  }
 }

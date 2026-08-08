@@ -37,9 +37,10 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 /**
  * Loads everything a review reads from GitHub and persistence before the AI is called — the diff,
  * base comparison, prior reviews/comments, persisted prior findings, repository instructions,
- * existing labels, and project stack — and computes the first-visible / has-context signals.
- * Extracted from {@code ReviewOrchestrator} as the read side of the pipeline; every fetch fails
- * soft exactly as before, except the PR-files fetch whose failure must reach the caller.
+ * existing labels, project stack, and the definition sites of the config keys the PR's
+ * documentation names — and computes the first-visible / has-context signals. Extracted from {@code
+ * ReviewOrchestrator} as the read side of the pipeline; every fetch fails soft exactly as before,
+ * except the PR-files fetch whose failure must reach the caller.
  *
  * <p>When token budgeting is on ({@code max-input-tokens > 0}), the legacy line-capped mega-diff
  * and base comparison are not loaded: {@link DiffBudgetPlanner} owns what the model sees and shared
@@ -60,6 +61,7 @@ public class ReviewContextLoader {
   private final PrLabeler labeler;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BugFixContextResolver bugFixContextResolver;
+  private final ConfigKeyContextResolver configKeyContextResolver;
   private final ReviewSessionPersistence sessionPersistence;
   private final BotIdentity botIdentity;
   private final ActiveModelSettings activeModel;
@@ -76,6 +78,7 @@ public class ReviewContextLoader {
       PrLabeler labeler,
       FollowUpAnalyzer followUpAnalyzer,
       BugFixContextResolver bugFixContextResolver,
+      ConfigKeyContextResolver configKeyContextResolver,
       ReviewSessionPersistence sessionPersistence,
       BotIdentity botIdentity,
       ActiveModelSettings activeModel) {
@@ -89,6 +92,7 @@ public class ReviewContextLoader {
     this.labeler = labeler;
     this.followUpAnalyzer = followUpAnalyzer;
     this.bugFixContextResolver = bugFixContextResolver;
+    this.configKeyContextResolver = configKeyContextResolver;
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
     this.activeModel = activeModel;
@@ -120,6 +124,7 @@ public class ReviewContextLoader {
       List<GitHubLabelClient.Label> repoLabels,
       String projectStack,
       String linkedIssuesContext,
+      String configKeyContext,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals) {
@@ -227,6 +232,7 @@ public class ReviewContextLoader {
     var linkedIssuesContext =
         bugFixContextResolver.loadLinkedIssueContext(
             auth, req.owner(), req.repo(), req.prDescription());
+    var configKeyContext = resolveConfigKeyContext(auth, req, reviewableFiles);
 
     return new ReviewContext(
         files,
@@ -245,6 +251,7 @@ public class ReviewContextLoader {
         repoLabels,
         projectStack,
         linkedIssuesContext,
+        configKeyContext,
         reviewableFiles,
         lineResolverSupplier,
         prTotals);
@@ -311,6 +318,30 @@ public class ReviewContextLoader {
             req.installationId(),
             "review");
     return diffFormatter.ignoreGlobs(repoSettings.ignoredFiles());
+  }
+
+  /**
+   * Definition sites for the config keys the PR's documentation/config files name, read at the PR
+   * head so a key added by this same PR resolves. Best-effort enrichment like the project stack: a
+   * failure degrades to no extra context, never a failed review.
+   */
+  String resolveConfigKeyContext(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+    var ref =
+        req.commitSha() != null && !req.commitSha().isBlank()
+            ? req.commitSha()
+            : req.defaultBranch();
+    if (ref == null || ref.isBlank()) {
+      return "";
+    }
+    try {
+      return configKeyContextResolver.resolve(auth, req.owner(), req.repo(), ref, reviewableFiles);
+    } catch (RuntimeException e) {
+      Log.warn("Config-key context resolution failed, continuing without it", e);
+      return "";
+    }
   }
 
   /** Stack context is best-effort enrichment — its failure must never fail the review. */

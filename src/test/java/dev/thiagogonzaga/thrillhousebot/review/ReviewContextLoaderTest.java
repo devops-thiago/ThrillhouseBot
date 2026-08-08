@@ -48,6 +48,7 @@ class ReviewContextLoaderTest {
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ProjectStackResolver projectStackResolver;
+  @Mock private ConfigKeyContextResolver configKeyContextResolver;
   @Mock private PrLabeler labeler;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private ReviewSessionPersistence sessionPersistence;
@@ -74,6 +75,7 @@ class ReviewContextLoaderTest {
             labeler,
             followUpAnalyzer,
             new BugFixContextResolver(commentClient),
+            configKeyContextResolver,
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel);
@@ -412,6 +414,36 @@ class ReviewContextLoaderTest {
           ctx.diff().contains("(docs/generated/api.md skipped: matches ignored pattern"),
           ctx.diff());
       assertFalse(ctx.diff().contains("+gen"), ctx.diff());
+    }
+
+    /**
+     * #108 meets #51: config-key resolution reads the post-ignore-filter file set, so a key
+     * documented only in an ignored Markdown file is never resolved. The resolver takes the
+     * reviewable list rather than the raw one precisely so it inherits every ignore rule.
+     */
+    @Test
+    void configKeyResolutionSeesOnlyFilesThatSurvivedTheIgnoreFilter() {
+      var ignoredDoc =
+          new GitHubPullRequestClient.FileDiff(
+              "docs/generated/api.md", "modified", 1, 0, 1, "@@ -1 +1 @@\n+`IGNORED_DOC_KEY`");
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              ignoredDoc);
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(new RepoSettings(List.of("docs/generated/**"), ".github/thrillhousebot.yml"));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertFalse(
+          ctx.reviewableFiles().contains(ignoredDoc),
+          () -> "an ignored doc file must not reach config-key resolution: " + ctx.files());
+      verify(configKeyContextResolver)
+          .resolve("auth", "owner", "repo", "headsha1", ctx.reviewableFiles());
     }
 
     @Test
@@ -846,6 +878,59 @@ class ReviewContextLoaderTest {
                   "owner", "repo", 1, "sha", "title", "", "base", "main", 123L, false));
 
       assertEquals("", stack);
+    }
+  }
+
+  /** #108 — config-key definitions are best-effort enrichment read at the PR head. */
+  @Nested
+  class ResolveConfigKeyContext {
+
+    private static final ReviewOrchestrator.ReviewRequest REQUEST =
+        new ReviewOrchestrator.ReviewRequest(
+            "owner", "repo", 1, "headsha", "title", "", "base", "main", 123L, false);
+
+    @Test
+    void shouldResolveAtThePrHeadSha() {
+      var files =
+          List.of(new GitHubPullRequestClient.FileDiff("README.md", "modified", 1, 0, 1, ""));
+      when(configKeyContextResolver.resolve("auth", "owner", "repo", "headsha", files))
+          .thenReturn("### definitions");
+
+      assertEquals("### definitions", loader.resolveConfigKeyContext("auth", REQUEST, files));
+    }
+
+    @Test
+    void shouldReturnEmptyWhenTheResolverThrows() {
+      when(configKeyContextResolver.resolve(any(), any(), any(), any(), any()))
+          .thenThrow(new RuntimeException("github down"));
+
+      assertEquals("", loader.resolveConfigKeyContext("auth", REQUEST, List.of()));
+    }
+
+    @Test
+    void shouldReturnEmptyWithoutResolvingWhenNoRefIsKnown() {
+      var blankRefs =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 1, "", "title", "", "base", "", 123L, false);
+      var nullRefs =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 1, null, "title", "", "base", null, 123L, false);
+
+      assertEquals("", loader.resolveConfigKeyContext("auth", blankRefs, List.of()));
+      assertEquals("", loader.resolveConfigKeyContext("auth", nullRefs, List.of()));
+      verifyNoInteractions(configKeyContextResolver);
+    }
+
+    @Test
+    void shouldFallBackToTheDefaultBranchWhenTheHeadShaIsAbsent() {
+      var noSha =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 1, null, "title", "", "base", "main", 123L, false);
+      when(configKeyContextResolver.resolve("auth", "owner", "repo", "main", List.of()))
+          .thenReturn("### from default branch");
+
+      assertEquals(
+          "### from default branch", loader.resolveConfigKeyContext("auth", noSha, List.of()));
     }
   }
 
