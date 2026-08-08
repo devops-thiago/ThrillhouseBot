@@ -143,6 +143,26 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldMatchRealKeysWithoutUnboundedBacktrackingOnAdversarialInput() {
+      // A crafted doc line: thousands of segments, well past any real key. The bounded quantifiers
+      // must return promptly and must not report the whole run as one token.
+      var adversarial = "A" + "_A".repeat(20_000) + " and `THRILLHOUSEBOT_REVIEW_CI_GATING`";
+
+      var start = System.nanoTime();
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(List.of(docDiff("README.md", adversarial)));
+      var elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+      assertTrue(
+          tokens.contains("THRILLHOUSEBOT_REVIEW_CI_GATING"),
+          () -> "the real key after the crafted run must still be found: " + tokens);
+      assertTrue(
+          tokens.stream().noneMatch(t -> t.length() > 2_000),
+          () -> "a token longer than any real config key was accepted: " + tokens);
+      assertTrue(elapsedMs < 5_000, () -> "token extraction took " + elapsedMs + "ms");
+    }
+
+    @Test
     void shouldNotMistakeFilenamesForPropertyKeys() {
       var tokens =
           ConfigKeyContextResolver.extractTokens(
@@ -161,6 +181,233 @@ class ConfigKeyContextResolverTest {
       assertFalse(ConfigKeyContextResolver.isDocumentationFile("src/main/java/App.java"));
       assertFalse(ConfigKeyContextResolver.isDocumentationFile("environment.ts"));
       assertFalse(ConfigKeyContextResolver.isDocumentationFile(null));
+      assertFalse(ConfigKeyContextResolver.isDocumentationFile("   "));
+    }
+
+    @Test
+    void shouldIgnoreThePatchFileHeaderLine() {
+      var withHeader =
+          new FileDiff(
+              "README.md",
+              "modified",
+              1,
+              0,
+              1,
+              "--- a/README.md\n+++ b/DOC_HEADER_KEY.md\n@@ -1 +1 @@\n+`REAL_DOC_KEY` matters");
+
+      assertEquals(
+          List.of("REAL_DOC_KEY"), ConfigKeyContextResolver.extractTokens(List.of(withHeader)));
+    }
+
+    @Test
+    void shouldStopScanningAfterTheDocFileCap() {
+      var files = new ArrayList<FileDiff>();
+      for (int i = 0; i < ConfigKeyContextResolver.MAX_DOC_FILES + 5; i++) {
+        files.add(docDiff("docs/page" + i + ".md", "`DOC_KEY_NUMBER_" + i + "` exists"));
+      }
+
+      var tokens = ConfigKeyContextResolver.extractTokens(files);
+
+      assertEquals(ConfigKeyContextResolver.MAX_DOC_FILES, tokens.size());
+      assertTrue(tokens.contains("DOC_KEY_NUMBER_0"), tokens::toString);
+      assertFalse(
+          tokens.contains("DOC_KEY_NUMBER_" + ConfigKeyContextResolver.MAX_DOC_FILES),
+          () -> "files past the cap must not be scanned: " + tokens);
+    }
+
+    @Test
+    void shouldStopCollectingAfterTheTokenCap() {
+      var doc = new StringBuilder();
+      for (int i = 0; i < ConfigKeyContextResolver.MAX_TOKENS + 10; i++) {
+        doc.append("`MANY_DOC_KEY_")
+            .append(i)
+            .append("` and `many.doc.key-")
+            .append(i)
+            .append("` ");
+      }
+
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(List.of(docDiff("README.md", doc.toString())));
+
+      assertEquals(ConfigKeyContextResolver.MAX_TOKENS, tokens.size());
+    }
+
+    @Test
+    void shouldStopScanningFurtherFilesOnceTheTokenCapIsReached() {
+      var doc = new StringBuilder();
+      for (int i = 0; i < ConfigKeyContextResolver.MAX_TOKENS; i++) {
+        doc.append("`FIRST_FILE_KEY_").append(i).append("` ");
+      }
+      var files =
+          List.of(
+              docDiff("README.md", doc.toString()),
+              docDiff("docs/second.md", "`SECOND_FILE_KEY_ONE` also exists"));
+
+      var tokens = ConfigKeyContextResolver.extractTokens(files);
+
+      assertEquals(ConfigKeyContextResolver.MAX_TOKENS, tokens.size());
+      assertFalse(
+          tokens.contains("SECOND_FILE_KEY_ONE"),
+          () ->
+              "the token cap must stop the file scan, not just the per-file collection: " + tokens);
+    }
+  }
+
+  /** Path classification driving which repository files are worth fetching. */
+  @Nested
+  class PathClassification {
+
+    @Test
+    void shouldRecognizeApplicationConfigResources() {
+      assertTrue(
+          ConfigKeyContextResolver.isConfigResource("src/main/resources/application.properties"));
+      assertTrue(ConfigKeyContextResolver.isConfigResource("application.yaml"));
+      assertTrue(ConfigKeyContextResolver.isConfigResource("application-prod.yml"));
+      assertFalse(ConfigKeyContextResolver.isConfigResource("application.txt"));
+      assertFalse(ConfigKeyContextResolver.isConfigResource("sonar-project.properties"));
+    }
+
+    @Test
+    void shouldRecognizeConfigSourceFilesByStemAndExtension() {
+      assertTrue(ConfigKeyContextResolver.isConfigSource("a/ThrillhouseConfig.java"));
+      assertTrue(ConfigKeyContextResolver.isConfigSource("a/AppConfiguration.kt"));
+      assertTrue(ConfigKeyContextResolver.isConfigSource("a/settings.py"));
+      assertTrue(ConfigKeyContextResolver.isConfigSource("a/env.ts"));
+      assertFalse(ConfigKeyContextResolver.isConfigSource("a/Service.java"), "wrong stem");
+      assertFalse(ConfigKeyContextResolver.isConfigSource("a/Config.md"), "wrong extension");
+      assertFalse(ConfigKeyContextResolver.isConfigSource("Makefile"), "no extension at all");
+      assertFalse(ConfigKeyContextResolver.isConfigSource(".config"), "leading dot is not a stem");
+    }
+
+    @Test
+    void shouldRecognizeTestPathsInEveryLayout() {
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/test/java/AppConfigTest.java"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("module/tests/conftest.py"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("test/settings.py"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("tests/settings.py"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/config.test.ts"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/config.spec.ts"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("src/main/resources/application.properties"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("src/latest/config.java"));
+    }
+  }
+
+  /** Line matching and snippet rendering — the parts that decide what the model actually reads. */
+  @Nested
+  class Matching {
+
+    private static final String TOKEN = ConfigKeyContextResolver.normalize("WEBHOOK_DEDUP_TTL");
+
+    @Test
+    void shouldNormalizeSeparatorsAndCaseToUpperSnake() {
+      assertEquals(
+          "THRILLHOUSEBOT_REVIEW_CI_GATING",
+          ConfigKeyContextResolver.normalize("thrillhousebot.review.ci-gating"));
+      assertEquals("A_B__C_", ConfigKeyContextResolver.normalize("a b??c/"));
+      assertEquals("", ConfigKeyContextResolver.normalize(""));
+    }
+
+    @Test
+    void shouldRequireWholeSegmentBoundariesAndKeepSearchingPastAPartialHit() {
+      // The first occurrence is glued to a preceding letter, so the search must continue.
+      assertTrue(
+          ConfigKeyContextResolver.lineDefines("XWEBHOOK_DEDUP_TTL WEBHOOK_DEDUP_TTL", TOKEN));
+      assertFalse(
+          ConfigKeyContextResolver.lineDefines("XWEBHOOK_DEDUP_TTLY only", TOKEN),
+          "a hit inside a longer word is not a definition");
+    }
+
+    @Test
+    void shouldIgnoreBlankAndAbsentLines() {
+      assertFalse(ConfigKeyContextResolver.lineDefines(null, TOKEN));
+      assertFalse(ConfigKeyContextResolver.lineDefines("   ", TOKEN));
+    }
+
+    @Test
+    void shouldNotSuffixMatchATokenTooShortToHaveAPrefix() {
+      // FOO_BAR is two segments: dropping a prefix segment would leave one, which matches far too
+      // much, so only a whole-token hit counts.
+      assertFalse(
+          ConfigKeyContextResolver.lineDefines(
+              "  @WithName(\"bar\")", ConfigKeyContextResolver.normalize("FOO_BAR")));
+      assertTrue(
+          ConfigKeyContextResolver.lineDefines(
+              "x=${FOO_BAR:1}", ConfigKeyContextResolver.normalize("FOO_BAR")));
+    }
+
+    @Test
+    void shouldMergeAdjacentMatchesIntoOneSnippetAndCapTheRest() {
+      var lines =
+          new String[] {
+            "unrelated",
+            "a.b.dedup-ttl=${WEBHOOK_DEDUP_TTL:1h}",
+            "a.b.other=${WEBHOOK_DEDUP_TTL:2h}",
+            "filler",
+            "filler",
+            "filler",
+            "c.d=${WEBHOOK_DEDUP_TTL:3h}",
+            "filler",
+            "filler",
+            "filler",
+            "e.f=${WEBHOOK_DEDUP_TTL:4h}"
+          };
+
+      var snippets = ConfigKeyContextResolver.snippetsFor("app.properties", lines, TOKEN);
+
+      assertEquals(
+          ConfigKeyContextResolver.MAX_SNIPPETS_PER_KEY,
+          snippets.size(),
+          () -> "adjacent matches share a snippet and the total is capped: " + snippets);
+      assertTrue(
+          snippets.get(0).contains("1h") && snippets.get(0).contains("2h"), snippets::toString);
+      assertTrue(snippets.get(1).contains("3h"), snippets::toString);
+    }
+
+    @Test
+    void shouldDropBlankBoundaryLinesAndTruncateAnOversizedSnippet() {
+      var huge =
+          "x=${WEBHOOK_DEDUP_TTL:"
+              + "y".repeat(ConfigKeyContextResolver.MAX_SNIPPET_CHARS * 2)
+              + "}";
+      var lines = new String[] {"   ", huge, "   "};
+
+      var snippets = ConfigKeyContextResolver.snippetsFor("app.properties", lines, TOKEN);
+
+      assertEquals(1, snippets.size());
+      var snippet = snippets.get(0);
+      assertTrue(snippet.endsWith("… (truncated)"), snippet);
+      assertTrue(
+          snippet.length() <= ConfigKeyContextResolver.MAX_SNIPPET_CHARS + 16,
+          () -> "snippet not truncated: " + snippet.length());
+      assertFalse(snippet.contains("|    \n"), () -> "blank boundary lines kept: " + snippet);
+    }
+
+    @Test
+    void shouldKeepABlankLineInsideTheWindowAndDropOnlyTheBoundaries() {
+      var lines = new String[] {"   ", "x=${WEBHOOK_DEDUP_TTL:1h}", "   ", "tail"};
+
+      var snippet = ConfigKeyContextResolver.snippetsFor("app.properties", lines, TOKEN).get(0);
+
+      assertFalse(snippet.contains("    1 |"), () -> "leading blank line kept: " + snippet);
+      assertTrue(snippet.contains("    2 |"), snippet);
+      assertTrue(
+          snippet.contains("    3 |"),
+          () -> "a blank line inside the window is structure, not padding: " + snippet);
+      assertTrue(snippet.contains("    4 | tail"), snippet);
+    }
+
+    @Test
+    void shouldNotSplitASurrogatePairWhenTruncating() {
+      var emoji = "ab😀cd";
+
+      // Limit 3 would land between the emoji's high and low surrogate; the cut backs off to 2.
+      assertEquals("ab", ConfigKeyContextResolver.truncate(emoji, 3));
+      assertEquals("ab😀", ConfigKeyContextResolver.truncate(emoji, 4));
+      assertTrue(
+          ConfigKeyContextResolver.truncate(emoji, 3)
+              .chars()
+              .noneMatch(c -> Character.isSurrogate((char) c)),
+          "truncation left an unpaired surrogate");
     }
   }
 
@@ -292,6 +539,71 @@ class ConfigKeyContextResolverTest {
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
       verify(prClient, never()).getFileContent(any(), any(), any(), any(), any(), any());
     }
+
+    @Test
+    void shouldReturnEmptyWhenTheTreeListingComesBackNull() {
+      when(prClient.getTree(any(), any(), any(), any(), any(), any())).thenReturn(null);
+
+      assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
+      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldStillResolveFromATruncatedTreeListing() {
+      when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+          .thenReturn(
+              new TreeResponse(
+                  "treesha", List.of(new TreeEntry(PROPERTIES_PATH, "blob", 4_000)), true));
+      givenFile(PROPERTIES_PATH, PROPERTIES_SOURCE);
+
+      var context = resolve(List.of(docDiff(".env.example", "#WEBHOOK_DEDUP_TTL=24h")));
+
+      assertTrue(
+          context.contains("thrillhousebot.webhook.dedup-ttl=${WEBHOOK_DEDUP_TTL:24h}"),
+          () -> "a truncated listing must still use what it did return: " + context);
+    }
+
+    @Test
+    void shouldSkipTreeEntriesWithoutAPath() {
+      when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+          .thenReturn(
+              new TreeResponse(
+                  "treesha",
+                  List.of(
+                      new TreeEntry(null, "blob", 10), new TreeEntry(PROPERTIES_PATH, "blob", 10)),
+                  false));
+      givenFile(PROPERTIES_PATH, PROPERTIES_SOURCE);
+
+      var context = resolve(List.of(docDiff(".env.example", "#WEBHOOK_DEDUP_TTL=24h")));
+
+      assertTrue(context.contains("${WEBHOOK_DEDUP_TTL:24h}"), context);
+    }
+
+    @Test
+    void shouldSkipFilesWithNoBodyBlankFilesAndAbsentResponses() {
+      givenRepository(
+          "blank/application.properties",
+          "nobody/application.properties",
+          "missing/application.properties");
+      when(prClient.getFileContent(
+              any(), any(), any(), any(), eq("nobody/application.properties"), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent("a", "a", null, "base64", 0)); // directory
+      when(prClient.getFileContent(
+              any(), any(), any(), any(), eq("missing/application.properties"), any()))
+          .thenReturn(null);
+      givenFile("blank/application.properties", "   \n  \n");
+
+      assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
+      verify(prClient, times(3)).getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+    }
+
+    @Test
+    void shouldSkipADocFileThatCarriesNoPatch() {
+      var noPatch = new FileDiff("README.md", "renamed", 0, 0, 0, null, "OLD.md");
+
+      assertEquals(List.of(), ConfigKeyContextResolver.extractTokens(List.of(noPatch)));
+    }
   }
 
   @Nested
@@ -364,6 +676,72 @@ class ConfigKeyContextResolverTest {
       assertTrue(
           context.length() <= ConfigKeyContextResolver.MAX_TOTAL_CHARS + 64,
           () -> "rendered section is not size-capped: " + context.length() + " chars");
+    }
+
+    @Test
+    void shouldStopFetchingOnceEnoughKeysHaveResolved() {
+      var documented = new StringBuilder();
+      var properties = new StringBuilder();
+      for (int i = 0; i < ConfigKeyContextResolver.MAX_KEYS_RENDERED; i++) {
+        properties
+            .append("a.b.key-")
+            .append(i)
+            .append("=${EARLY_KEY_NUMBER_")
+            .append(i)
+            .append(":v}\n");
+        documented.append("`EARLY_KEY_NUMBER_").append(i).append("` ");
+      }
+      // The first file resolves every key; the remaining candidates must never be fetched.
+      givenRepository("application.properties", "later/application.properties", CONFIG_PATH);
+      givenFile("application.properties", properties.toString());
+      givenFile("later/application.properties", properties.toString());
+      givenFile(CONFIG_PATH, CONFIG_SOURCE);
+
+      var context = resolve(List.of(docDiff("README.md", documented.toString())));
+
+      assertEquals(
+          ConfigKeyContextResolver.MAX_KEYS_RENDERED,
+          context.lines().filter(line -> line.startsWith("#### ")).count(),
+          context);
+      verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+    }
+
+    @Test
+    void shouldNotRenderMoreSnippetsPerKeyThanTheCapAcrossFiles() {
+      var body =
+          "a.b.dedup-ttl=${WEBHOOK_DEDUP_TTL:1h}\nfiller\nfiller\nfiller\nc.d=${WEBHOOK_DEDUP_TTL:2h}\n";
+      givenRepository("application.properties", "second/application.properties");
+      givenFile("application.properties", body);
+      givenFile("second/application.properties", body);
+
+      var context = resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h")));
+
+      assertEquals(
+          ConfigKeyContextResolver.MAX_SNIPPETS_PER_KEY,
+          context.lines().filter(line -> line.contains("application.properties")).count(),
+          () -> "snippets per key must be capped across files: " + context);
+      assertFalse(
+          context.contains("second/application.properties"),
+          () -> "the cap must be reached before the second file contributes: " + context);
+    }
+
+    @Test
+    void shouldStopMidFileOnceTheSnippetCapIsReached() {
+      // The first file contributes one snippet; the second offers two, so the cap is hit partway
+      // through that file rather than before it is read.
+      givenRepository("application.properties", "second/application.properties");
+      givenFile("application.properties", "only=${WEBHOOK_DEDUP_TTL:1h}\n");
+      givenFile(
+          "second/application.properties",
+          "a=${WEBHOOK_DEDUP_TTL:2h}\nf\nf\nf\nb=${WEBHOOK_DEDUP_TTL:3h}\n");
+
+      var context = resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h")));
+
+      assertTrue(context.contains("1h"), context);
+      assertTrue(context.contains("2h"), context);
+      assertFalse(
+          context.contains("3h"),
+          () -> "the third definition is past the per-key cap and must be dropped: " + context);
     }
   }
 

@@ -810,12 +810,28 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnEmptyWithoutResolvingWhenNoRefIsKnown() {
-      var noRef =
+      var blankRefs =
           new ReviewOrchestrator.ReviewRequest(
               "owner", "repo", 1, "", "title", "", "base", "", 123L, false);
+      var nullRefs =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 1, null, "title", "", "base", null, 123L, false);
 
-      assertEquals("", loader.resolveConfigKeyContext("auth", noRef, List.of()));
+      assertEquals("", loader.resolveConfigKeyContext("auth", blankRefs, List.of()));
+      assertEquals("", loader.resolveConfigKeyContext("auth", nullRefs, List.of()));
       verifyNoInteractions(configKeyContextResolver);
+    }
+
+    @Test
+    void shouldFallBackToTheDefaultBranchWhenTheHeadShaIsAbsent() {
+      var noSha =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 1, null, "title", "", "base", "main", 123L, false);
+      when(configKeyContextResolver.resolve("auth", "owner", "repo", "main", List.of()))
+          .thenReturn("### from default branch");
+
+      assertEquals(
+          "### from default branch", loader.resolveConfigKeyContext("auth", noSha, List.of()));
     }
   }
 
