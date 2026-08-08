@@ -863,6 +863,30 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldRouteGenerateTestsCommandToCommandService() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/generate-tests"))
+        .thenReturn(CommentCommand.GENERATE_TESTS);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/generate-tests")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    var ctx = org.mockito.ArgumentCaptor.forClass(CommentCommandService.CommandContext.class);
+    verify(commentCommandService).handle(ctx.capture());
+    assertEquals(CommentCommand.GENERATE_TESTS, ctx.getValue().command());
+    assertEquals(77, ctx.getValue().prNumber());
+    // New commands inherit the 👀 ack and the command service's authorization/pause gates.
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldAddEyesReactionOnReviewCommand() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
