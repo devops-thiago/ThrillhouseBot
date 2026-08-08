@@ -25,9 +25,10 @@ import org.junit.jupiter.api.Test;
  * parameter-nullability / unseen-caller guard (#107), the in-diff-test exercise gate (a green test
  * must demonstrably hit the claimed path before it can invalidate a finding — #116), the symmetric
  * exact-arithmetic / "test fails" cap (#97), the heuristic failure-mode characterization pass with
- * its verifier exemption (#123), and the summary call's whole-change-set grounding (#335). These
- * assertions are intentionally coarse — they check intent survives, not exact wording; an
- * intentional rewording should update the matching anchor.
+ * its verifier exemption (#123), the producer→consumer data-flow contract dimension (#117), and the
+ * summary call's whole-change-set grounding (#335). These assertions are intentionally coarse —
+ * they check intent survives, not exact wording; an intentional rewording should update the
+ * matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
  * tracked separately ({@code evalcorpus/}); this is the cheap deterministic guard.
@@ -329,6 +330,67 @@ class PrReviewPromptsContentTest {
         sys,
         "do not confirm it as a defect",
         "a contract-free heuristic claim must be downgraded to a verification request");
+  }
+
+  @Test
+  void generatorPromptTracesTheChangesStructureFromProducerToConsumer() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "PRODUCER → CONSUMER CONTRACT",
+        "the producer→consumer data-flow dimension must exist (#117)");
+    assertContains(
+        sys, "where it is PRODUCED", "the dimension must make the model name the producing end");
+    assertContains(
+        sys,
+        "CONSUMED (the code that gates, branches, or renders on it)",
+        "the dimension must name the consuming end");
+    assertContains(
+        sys,
+        "offending, invalid, failed, missing",
+        "check (a): a predicate-named value must hold only items satisfying that predicate");
+    assertContains(
+        sys,
+        "isEmpty()/size()/anyMatch must hold ONLY gate-worthy",
+        "check (b): a collection gated on emptiness/size must hold only gate-worthy entries");
+    assertContains(
+        sys,
+        "must match the PR title and description",
+        "check (c): the end-to-end behavior must be compared against the PR's stated intent");
+  }
+
+  @Test
+  void generatorPromptRoutesAnInvertedTraceIntoDescriptionGaps() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "AND as a summary.description_gaps entry",
+        "an end-to-end trace contradicting the stated intent must also become a description gap");
+    assertContains(
+        sys,
+        "producer→consumer trace whose end-to-end behavior is the inverse of the stated",
+        "the description_gaps field must name the inverted-trace case as one of its inputs");
+  }
+
+  @Test
+  void generatorPromptKeepsTheDataFlowDimensionFromFiringOnOrdinaryDiffs() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "producer and consumer agree, or when the consumer is not in the provided material",
+        "an intact producer/consumer contract must not become a finding");
+    assertContains(
+        sys,
+        "say nothing rather than narrating the data flow",
+        "an ordinary local change must not be turned into a data-flow essay");
+    assertContains(
+        sys,
+        "producer→consumer contract claim (dimension 9) must quote BOTH ends",
+        "the self-check must require both ends quoted before a contract claim is emitted");
+    assertContains(
+        sys,
+        "not for every local variable that crosses a hunk",
+        "the self-check must scope the claim to the structure the change is about");
   }
 
   @Test

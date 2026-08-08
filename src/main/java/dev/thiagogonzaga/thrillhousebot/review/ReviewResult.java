@@ -194,6 +194,16 @@ public record ReviewResult(
     return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
   }
 
+  /**
+   * How many previous findings this round closed as fixed. Strictly the {@code resolved} status:
+   * {@code justified} is a maintainer's decline, not a fix, and {@code superseded} is an auto-close
+   * because the targeted code left the diff — counting either as "resolved" would overstate what
+   * the round actually fixed.
+   */
+  public long resolvedPreviousCount() {
+    return previousStatuses.stream().filter(s -> "resolved".equalsIgnoreCase(s.status())).count();
+  }
+
   // A backstop-held finding may have no inline thread (its line was outside the diff when raised),
   // hence the "where one exists" qualifier.
   public static String unresolvedPreviousMessage(long unresolved) {
@@ -311,11 +321,23 @@ public record ReviewResult(
    * reads correctly appended below the content.
    */
   public static String truncationDisclosure(int omittedFiles) {
-    return omittedFiles > 0
-        ? "\n\n> ⚠️ **Large PR — partial coverage.** "
-            + omittedFilesClause(omittedFiles)
-            + ", so this covers only part of the diff."
-        : "";
+    return truncationDisclosure(omittedFiles, TruncationDetail.EMPTY);
+  }
+
+  /**
+   * Disclosure variant that names the uncovered files when a token-budget plan knows them, and
+   * separates files dropped entirely from files only partially analyzed. Mirrors {@link
+   * #truncationNotice(int, TruncationDetail)} so an on-demand command that batches under the token
+   * budget upholds the same "reported by name, never silently dropped" contract as the review
+   * banner; falls back to the numeric clause when only a count is known.
+   */
+  public static String truncationDisclosure(int omittedFiles, TruncationDetail detail) {
+    if (omittedFiles <= 0 && (detail == null || detail.isEmpty())) {
+      return "";
+    }
+    return "\n\n> ⚠️ **Large PR — partial coverage.** "
+        + coverageGapClause(omittedFiles, detail)
+        + ", so this covers only part of the diff.";
   }
 
   public int totalFindings() {

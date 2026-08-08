@@ -246,6 +246,17 @@ public interface ThrillhouseConfig {
     boolean addDocsEnabled();
 
     /**
+     * Whether the {@code /improve} command is available. When a write-access holder runs it, the
+     * model runs a whole-PR improvement pass over the diff and posts the improvements as
+     * committable suggestions. Each invocation spends the operator's AI budget, so this is the
+     * operator's kill switch; like {@code add-docs-enabled} the command is otherwise on-demand only
+     * (never automatic), which is why it ships on.
+     */
+    @WithDefault("true")
+    @WithName("improve-enabled")
+    boolean improveEnabled();
+
+    /**
      * Whether the {@code /generate-tests} command is available. When a write-access holder runs it,
      * the model proposes unit tests for the code changed in the diff and posts them as a comment to
      * copy in — nothing is committed. Each invocation spends the operator's AI budget, so this is
@@ -271,12 +282,15 @@ public interface ThrillhouseConfig {
     List<String> ignoredFiles();
 
     /**
-     * Whether a repository may extend {@link #ignoredFiles()} with globs of its own, declared under
-     * {@code review.ignored-files} in {@code .github/thrillhousebot.yml}. Per-repo patterns are
-     * additive — the effective set is always global ∪ per-repo, so a repository can take more files
-     * out of review scope but can never put back a file the deployment excludes. This is the
+     * Whether a repository may declare settings of its own in {@code .github/thrillhousebot.yml}:
+     * extra globs extending {@link #ignoredFiles()} under {@code review.ignored-files}, and review
+     * rules scoped to a path glob under {@code review.path-instructions}. Both are additive — the
+     * effective ignore set is always global ∪ per-repo, so a repository can take more files out of
+     * review scope but can never put back a file the deployment excludes, and scoped rules apply on
+     * top of the repository's global instructions, for the matching files only. This is the
      * operator's kill switch for installs that must not let a repository narrow its own review
-     * coverage; a missing or malformed file is ignored either way and never fails a review.
+     * coverage or steer its own review rules; a missing or malformed file is ignored either way and
+     * never fails a review.
      */
     @WithDefault("true")
     @WithName("repo-config-enabled")
@@ -342,6 +356,23 @@ public interface ThrillhouseConfig {
     LabelsConfig labels();
 
     DiagramConfig diagram();
+
+    @WithName("follow-up-summary")
+    FollowUpSummaryConfig followUpSummary();
+  }
+
+  /**
+   * Opt-in delta summary comment on follow-up reviews. The first review posts the full PR summary;
+   * every later pass normally carries its signal in the review itself, so a maintainer on a busy PR
+   * has to read the inline threads to see what moved. When {@link #enabled()} a follow-up pass that
+   * actually changed something also posts a short comment with the new-finding, resolved, and
+   * still-open counts. Off by default — the quiet follow-up is the released behaviour — and skipped
+   * whenever the round has no delta, so enabling it never adds a per-push comment.
+   */
+  interface FollowUpSummaryConfig {
+    /** Master switch — no delta comment is rendered or posted unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
   }
 
   /**

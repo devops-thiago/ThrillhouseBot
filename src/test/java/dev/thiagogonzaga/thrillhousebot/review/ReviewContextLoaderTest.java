@@ -402,7 +402,9 @@ class ReviewContextLoaderTest {
                   "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
-          .thenReturn(new RepoSettings(List.of("docs/generated/**"), ".github/thrillhousebot.yml"));
+          .thenReturn(
+              new RepoSettings(
+                  List.of("docs/generated/**"), List.of(), ".github/thrillhousebot.yml"));
       var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
@@ -433,7 +435,9 @@ class ReviewContextLoaderTest {
               ignoredDoc);
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
-          .thenReturn(new RepoSettings(List.of("docs/generated/**"), ".github/thrillhousebot.yml"));
+          .thenReturn(
+              new RepoSettings(
+                  List.of("docs/generated/**"), List.of(), ".github/thrillhousebot.yml"));
       var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
@@ -482,6 +486,64 @@ class ReviewContextLoaderTest {
 
       assertEquals(1, ctx.reviewableFiles().size());
       assertEquals("src/App.java", ctx.reviewableFiles().get(0).filename());
+      assertTrue(ctx.pathInstructions().isEmpty());
+    }
+
+    /**
+     * Path-scoped review rules (#33) come from the same settings read as the ignore globs, are
+     * resolved once against the post-ignore-filter file list, and are carried on the context so no
+     * later stage re-walks a glob.
+     */
+    @Test
+    void resolvesPathScopedRulesOnceAgainstTheReviewableFiles() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new GitHubPullRequestClient.FileDiff(
+                  "web/Landing.tsx", "modified", 1, 0, 1, "@@ -1 +1 @@\n+b"),
+              new GitHubPullRequestClient.FileDiff(
+                  "payments/generated/Api.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+c"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(
+              new RepoSettings(
+                  // The ignore glob wins first: a scope can never pull an ignored file back in.
+                  List.of("**/generated/**"),
+                  List.of(
+                      new RepoSettings.PathInstructions("payments/**", "Money is in cents."),
+                      new RepoSettings.PathInstructions("infra/**", "Untouched by this PR.")),
+                  ".github/thrillhousebot.yml"));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(1, ctx.pathInstructions().scopes().size());
+      var scope = ctx.pathInstructions().scopes().get(0);
+      assertEquals("payments/**", scope.glob());
+      assertEquals("Money is in cents.", scope.instructions());
+      assertEquals(List.of("payments/Charge.java"), scope.files());
+      assertEquals(".github/thrillhousebot.yml", ctx.pathInstructions().source());
+      // One settings read for the ignore globs and the scopes alike.
+      verify(repoSettingsResolver, times(1)).resolve("owner", "repo", "main", 99L);
+    }
+
+    @Test
+    void repoWithNoDeclaredScopesCarriesNoPathScopedRules() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(RepoSettings.EMPTY);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertTrue(ctx.pathInstructions().isEmpty());
     }
   }
 

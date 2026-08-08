@@ -22,8 +22,8 @@ local Ollama model, so no code has to leave your network.
   App with the [hosted installer](/ThrillhouseBot/install.html) and run the bot
   with Docker Compose.
 - **[Commands](/ThrillhouseBot/commands/)** — drive the bot from a PR:
-  `/review`, `/describe`, `/changelog`, `/add-docs`, `/generate-tests`, and
-  more.
+  `/review`, `/describe`, `/changelog`, `/add-docs`, `/improve`,
+  `/generate-tests`, and more.
 - **[Configuration](/ThrillhouseBot/configuration/)** — every environment
   variable, with defaults.
 - **[AI providers](/ThrillhouseBot/providers/)** — point the bot at the

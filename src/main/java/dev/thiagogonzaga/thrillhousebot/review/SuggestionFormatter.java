@@ -24,7 +24,14 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 public class SuggestionFormatter {
 
-  private static final String CODE_FENCE_CLOSE = "\n```\n";
+  /**
+   * A markdown code fence standing alone on its own line, with the blank-safe newline on each side.
+   * Used as BOTH the opening and the closing delimiter of a plain block — the leading newline ends
+   * whatever came before, the trailing one starts the block's first content line — so a block is
+   * written as {@code CODE_FENCE + body + CODE_FENCE}. (An opening fence that carries a language
+   * tag, like the committable {@code suggestion} block, spells itself out instead.)
+   */
+  private static final String CODE_FENCE = "\n```\n";
 
   private static final Pattern FINDING_MARKER_PATTERN =
       Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)\\s*-->");
@@ -43,7 +50,7 @@ public class SuggestionFormatter {
    */
   public String formatSuggestionBlock(String suggestionOld, String suggestionNew) {
     if (suggestionOld == null || suggestionNew == null) return "";
-    return "\n```suggestion\n" + suggestionNew.stripTrailing() + CODE_FENCE_CLOSE;
+    return "\n```suggestion\n" + suggestionNew.stripTrailing() + CODE_FENCE;
   }
 
   /**
@@ -102,9 +109,62 @@ public class SuggestionFormatter {
     }
     sb.append("**\n");
     sb.append("This symbol is missing documentation. Suggested:\n");
-    sb.append(CODE_FENCE_CLOSE)
+    sb.append(CODE_FENCE)
         .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
-        .append(CODE_FENCE_CLOSE);
+        .append(CODE_FENCE);
+    return sb.toString();
+  }
+
+  /**
+   * Builds the body of an {@code /improve} inline comment: the improvement's title (and category,
+   * when the model supplied one), its rationale, and the rewritten code as a committable suggestion
+   * block.
+   */
+  public String formatImprovementComment(
+      String title, String category, String rationale, String suggestionOld, String suggestionNew) {
+    var sb = new StringBuilder("**✨ Improvement");
+    if (title != null && !title.isBlank()) {
+      sb.append(" — ").append(title.strip());
+    }
+    sb.append("**");
+    if (category != null && !category.isBlank()) {
+      sb.append(" `").append(category.strip()).append("`");
+    }
+    sb.append("\n\n");
+    if (rationale != null && !rationale.isBlank()) {
+      sb.append(rationale.strip()).append("\n");
+    }
+    sb.append(formatSuggestionBlock(suggestionOld, suggestionNew));
+    return sb.toString();
+  }
+
+  /**
+   * Builds the copy-paste rendering of an {@code /improve} item that could not be anchored onto the
+   * diff, so no committable suggestion is possible: the same header and rationale, followed by the
+   * proposed code as a plain block to apply by hand.
+   */
+  public String formatImprovementBlock(
+      String title,
+      String category,
+      String rationale,
+      String file,
+      int line,
+      String suggestionNew) {
+    var sb = new StringBuilder("**");
+    sb.append(title == null || title.isBlank() ? "Improvement" : title.strip()).append("**");
+    if (category != null && !category.isBlank()) {
+      sb.append(" `").append(category.strip()).append("`");
+    }
+    if (file != null && !file.isBlank()) {
+      sb.append(" — `").append(file.strip()).append(":").append(line).append("`");
+    }
+    sb.append("\n");
+    if (rationale != null && !rationale.isBlank()) {
+      sb.append("\n").append(rationale.strip()).append("\n");
+    }
+    sb.append(CODE_FENCE)
+        .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
+        .append(CODE_FENCE);
     return sb.toString();
   }
 

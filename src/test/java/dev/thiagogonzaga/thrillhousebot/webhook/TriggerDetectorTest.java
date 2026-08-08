@@ -59,6 +59,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("/describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("/changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("/add-docs please"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/improve"));
     assertEquals(CommentCommand.GENERATE_TESTS, detector.detectCommand("/generate-tests"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
@@ -73,6 +74,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("@thrillhousebot describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("@thrillhousebot changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("@thrillhousebot add-docs"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("@thrillhousebot improve"));
     assertEquals(
         CommentCommand.GENERATE_TESTS,
         detector.detectCommand("@thrillhousebot generate-tests for this"));
@@ -155,6 +157,28 @@ class TriggerDetectorTest {
   }
 
   @Test
+  void shouldNotDetectImproveInsideQuotedContext() {
+    // Documenting or quoting /improve must never run it.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("```\n/improve\n```"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("> they said /improve"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("run `/improve` to get suggestions"));
+    assertEquals(
+        CommentCommand.NONE,
+        detector.detectCommand("`@thrillhousebot improve` is the mention form"));
+  }
+
+  @Test
+  void shouldDetectImproveOutsideAQuotedMention() {
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("> quoting `/improve`\n/improve"));
+  }
+
+  @Test
+  void shouldNotConfuseImproveWithOtherWords() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("improve this please"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("/improvements"));
+  }
+
+  @Test
   void shouldNotDetectGenerateTestsInsideQuotedContext() {
     // Documenting or quoting the command must never run it — it generates content and spends
     // the operator's AI budget.
@@ -170,6 +194,12 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.NONE, detector.detectCommand("> someone said /generate-tests"));
     assertEquals(
         CommentCommand.NONE, detector.detectCommand("~~~\n@thrillhousebot generate-tests\n~~~"));
+  }
+
+  @Test
+  void shouldNotConfuseGenerateTestsWithOtherWords() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("generate-tests this please"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("/generate-tests-now"));
   }
 
   @Test

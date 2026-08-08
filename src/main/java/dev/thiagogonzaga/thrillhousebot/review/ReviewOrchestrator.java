@@ -257,6 +257,9 @@ public class ReviewOrchestrator {
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
+      // Opt-in follow-up delta comment. Runs only when no summary was posted this round, and its
+      // outcome is intentionally discarded — it must not feed summaryPosted below.
+      publishFollowUpDeltaBestEffort(auth, req, result, summaryPosted);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -359,6 +362,28 @@ public class ReviewOrchestrator {
           req.repo(),
           req.prNumber());
       return false;
+    }
+  }
+
+  /**
+   * Posts the opt-in follow-up delta comment, swallowing any failure for the same reason {@link
+   * #publishSummaryBestEffort} does: it is enrichment, not the review, so a transient failure here
+   * must not abort before {@code postReview}. The result is not returned — the delta comment never
+   * stands in for the review, so it can never gate the redundant-review skips.
+   */
+  private void publishFollowUpDeltaBestEffort(
+      String auth, ReviewRequest req, ReviewResult result, boolean summaryPosted) {
+    try {
+      reviewPublisher.publishFollowUpDelta(
+          auth, req.owner(), req.repo(), req.prNumber(), result, summaryPosted);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to post the follow-up delta comment for %s/%s #%d — continuing to post the"
+              + " review",
+          req.owner(),
+          req.repo(),
+          req.prNumber());
     }
   }
 

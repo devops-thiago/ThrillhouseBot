@@ -29,14 +29,29 @@ import java.util.List;
  *
  * @param ignoredFiles extra ignore globs, unioned with (never replacing) the deployment-wide {@code
  *     thrillhousebot.review.ignored-files} list
+ * @param pathInstructions review rules scoped to a path glob, applied in addition to (never instead
+ *     of) the repository's global prose instructions
  * @param source the repo-relative path the settings were read from, or {@code "none"}
  */
-public record RepoSettings(List<String> ignoredFiles, String source) {
+public record RepoSettings(
+    List<String> ignoredFiles, List<PathInstructions> pathInstructions, String source) {
+
+  /**
+   * One block of maintainer prose scoped to the files matching {@code path}. The rules are
+   * additive: they apply to files under that glob on top of the repository's global instructions,
+   * and never to files outside it.
+   *
+   * @param path a glob in the same gitignore-style syntax as the ignore lists
+   * @param instructions the maintainer prose applied to files matching {@code path}; untrusted
+   *     content that reaches the model as data, never as instructions to it
+   */
+  public record PathInstructions(String path, String instructions) {}
 
   /** No per-repo settings — the deployment defaults apply unchanged. */
-  public static final RepoSettings EMPTY = new RepoSettings(List.of(), "none");
+  public static final RepoSettings EMPTY = new RepoSettings(List.of(), List.of(), "none");
 
   public RepoSettings {
     ignoredFiles = List.copyOf(ignoredFiles);
+    pathInstructions = List.copyOf(pathInstructions);
   }
 }

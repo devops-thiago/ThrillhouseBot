@@ -808,6 +808,7 @@ class ConfigKeyContextResolverTest {
             List.of(),
             "",
             new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
             List.of(),
             "",
             "",

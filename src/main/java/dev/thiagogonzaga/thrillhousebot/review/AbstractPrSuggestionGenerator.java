@@ -18,24 +18,38 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import io.quarkus.logging.Log;
+import java.util.List;
 import java.util.function.Supplier;
 
 /**
  * Shared loading for the on-request "suggestion from the diff" commands ({@code /describe}, {@code
- * /changelog}). Both load the same inputs — the PR diff, its current title/body, and the resolved
- * repository instructions — before handing them to their own assistant, so that fetch-and-degrade
- * logic lives here once. Every fetch fails soft: a failure degrades to empty context (or, for the
- * diff, to {@code null} so the caller posts nothing) rather than a noisy error on the PR.
+ * /changelog}, {@code /improve}). They all load the same inputs — the PR diff, its current
+ * title/body, and the resolved repository instructions — before handing them to their own
+ * assistant, so that fetch-and-degrade logic lives here once. Every fetch fails soft: a failure
+ * degrades to empty context (or, for the diff, to {@code null} so the caller posts nothing) rather
+ * than a noisy error on the PR.
  */
 public abstract class AbstractPrSuggestionGenerator {
 
   /**
    * The PR context a suggestion is generated from. {@code omittedFiles} is how many files the diff
    * line budget dropped (0 when nothing was omitted), so the caller can disclose a partial-coverage
-   * suggestion.
+   * suggestion. {@code headSha} and {@code reviewableFiles} are the head commit and the
+   * ignore-filtered files behind that diff — carried here (rather than re-fetched) for the commands
+   * that anchor their suggestions back onto the diff.
    */
   protected record Inputs(
-      String diff, String title, String body, String instructions, int omittedFiles) {}
+      String diff,
+      String title,
+      String body,
+      String instructions,
+      int omittedFiles,
+      String headSha,
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+    protected Inputs {
+      reviewableFiles = reviewableFiles == null ? List.of() : List.copyOf(reviewableFiles);
+    }
+  }
 
   private GitHubPullRequestClient prClient;
   private ReviewDiffFormatter diffFormatter;
@@ -70,7 +84,9 @@ public abstract class AbstractPrSuggestionGenerator {
       long installationId,
       String auth,
       String command) {
-    var formatted = fetchDiff(auth, owner, repo, prNumber, command);
+    var files = SoftLoaders.files(prClient, auth, owner, repo, prNumber, command);
+    var reviewable = diffFormatter.reviewableFiles(files);
+    var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
     String diff = formatted.text();
     if (diff == null || diff.isBlank() || "(no changes detected)".equals(diff)) {
       Log.debugf("No diff for %s on %s/%s #%d — posting nothing", command, owner, repo, prNumber);
@@ -79,11 +95,13 @@ public abstract class AbstractPrSuggestionGenerator {
     var details = SoftLoaders.pullRequest(prClient, auth, owner, repo, prNumber, command);
     String title = details != null && details.title() != null ? details.title() : "";
     String body = details != null && details.body() != null ? details.body() : "";
+    String headSha = details != null && details.head() != null ? details.head().sha() : null;
     String instructions =
         SoftLoaders.instructions(
                 instructionsResolver, owner, repo, defaultBranch, installationId, command)
             .content();
-    return new Inputs(diff, title, body, instructions, formatted.omittedFiles());
+    return new Inputs(
+        diff, title, body, instructions, formatted.omittedFiles(), headSha, reviewable);
   }
 
   /**
@@ -106,9 +124,8 @@ public abstract class AbstractPrSuggestionGenerator {
     }
   }
 
-  private ReviewDiffFormatter.FormattedDiff fetchDiff(
-      String auth, String owner, String repo, int prNumber, String command) {
-    var files = SoftLoaders.files(prClient, auth, owner, repo, prNumber, command);
-    return diffFormatter.buildDiffStringWithStats(files);
+  /** The formatter used to render the diff, so subclasses can reuse it for line resolution. */
+  protected ReviewDiffFormatter diffFormatter() {
+    return diffFormatter;
   }
 }

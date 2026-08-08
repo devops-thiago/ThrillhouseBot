@@ -1,0 +1,83 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewOrchestrator.java (modified, +60 -3)
+```diff
+@@ -251,11 +251,20 @@ public void review(ReviewRequest request) {
+               aiResponse, priorAiResponseJsons, inlineComments, BOT_LOGIN);
+       persistAiResponse(session, aiResponse);
+
++      List<String> requiredContexts = resolveRequiredContexts(auth, req).orElse(null);
++
++      List<ReviewResult.CiCheck> offendingCiChecks =
++          evaluateCiChecks(auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
++
+       DiffStats diffStats = DiffStats.fromFiles(diffFormatter.reviewableFiles(files));
+       var unresolvedPrevious =
+           followUpAnalyzer.unresolvedFindings(
+               previousAiResponseJson, aiResponse.previousFindingsStatus());
+-      var result = buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious);
++      var result =
++          buildResult(aiResponse, isFirstReview, diffStats, unresolvedPrevious, offendingCiChecks);
+
+       // Finalize check run before posting PR review — avoid approving then failing later
+       String conclusion = conclusionForResult(result);
+@@ -727,6 +751,11 @@ ReviewResult buildResult(
+       state = ReviewState.COMMENT;
+     }
+
++    // Gating approval verdict on CI status:
++    if (state == ReviewState.APPROVE && !offendingCiChecks.isEmpty()) {
++      state = ReviewState.COMMENT;
++    }
++
+     // The summary is generated for clean reviews too: a zero-findings result still reports the
+     // change overview and carries the celebration line inside the same comment
+     var summaryMarkdown =
+@@ -946,4 +1003,45 @@ void createReviewWithFallback(
+       reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, fallback);
+     }
+   }
++
++  /**
++   * Returns only the <em>offending</em> CI checks on {@code commitSha} — those that are pending,
++   * failing, or (when required) missing entirely. Passing checks are deliberately excluded so the
++   * caller can gate APPROVE on a non-empty result; a successful required check is recorded in
++   * {@code seen} so it is not later mistaken for a missing one.
++   */
++  List<ReviewResult.CiCheck> evaluateCiChecks(
++      String auth, String owner, String repo, String commitSha, List<String> requiredContexts) {
++    var offending = new ArrayList<ReviewResult.CiCheck>();
++    var seen = new HashSet<String>();
++
++    try {
++      for (var run : checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha)) {
++        if (isThrillhouseBotCheck(run.name(), run.app())
++            || isNotRequired(run.name(), requiredContexts)) {
++          continue;
++        }
++        seen.add(run.name());
++        String ciStatus = classifyCheckRun(run.status(), run.conclusion());
++        if (!CI_SUCCESS.equals(ciStatus)) {
++          offending.add(
++              new ReviewResult.CiCheck(run.name(), "check-run", ciStatus, run.conclusion()));
++        }
++      }
++    } catch (Exception e) {
++      Log.warnf(e, "Failed to fetch check runs for commit %s", commitSha);
++    }
++
++    addMissingRequiredChecks(requiredContexts, seen, offending);
++    return offending;
++  }
++
++  /** Required contexts that never reported are implicitly pending. */
++  private void addMissingRequiredChecks(
++      List<String> requiredContexts, Set<String> seen, List<ReviewResult.CiCheck> offending) {
++    if (requiredContexts == null) {
++      return;
++    }
++    for (String required : requiredContexts) {
++      if (!isThrillhouseBotCheck(required, null) && seen.add(required)) {
++        offending.add(new ReviewResult.CiCheck(required, "missing", CI_PENDING, null));
++      }
++    }
++  }
+```

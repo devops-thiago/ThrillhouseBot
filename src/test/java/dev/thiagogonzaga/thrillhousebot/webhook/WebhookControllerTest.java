@@ -863,6 +863,30 @@ class WebhookControllerTest {
   }
 
   @Test
+  void shouldRouteImproveCommandToCommandServiceAndAckIt() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/improve")).thenReturn(CommentCommand.IMPROVE);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/improve")
+            .getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    assertEquals(200, response.getStatus());
+
+    var ctx = org.mockito.ArgumentCaptor.forClass(CommentCommandService.CommandContext.class);
+    verify(commentCommandService).handle(ctx.capture());
+    assertEquals(CommentCommand.IMPROVE, ctx.getValue().command());
+    assertEquals(77, ctx.getValue().prNumber());
+    // The ack reaction (#315) covers /improve like every other comment command.
+    verify(ackReactionService)
+        .addEyes(12345L, "owner", "repo", 1L, AckReactionService.CommentKind.ISSUE);
+    // The command service (not the controller) does the authorization and the AI work.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
   void shouldRouteGenerateTestsCommandToCommandService() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.detectCommand("/generate-tests"))

@@ -62,7 +62,7 @@ class ChangelogEntryGeneratorTest {
   private void diffReturns(String diff, int omittedFiles) {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(new FileDiff("Foo.java", "modified", 1, 0, 1, "@@ -1 +1 @@")));
-    when(diffFormatter.buildDiffStringWithStats(anyList()))
+    when(diffFormatter.buildDiffStringWithStats(anyList(), anyList()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff(diff, omittedFiles));
   }
 
@@ -230,7 +230,7 @@ class ChangelogEntryGeneratorTest {
   void returnsNullWhenDiffFetchFails() {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("boom"));
-    when(diffFormatter.buildDiffStringWithStats(anyList()))
+    when(diffFormatter.buildDiffStringWithStats(anyList(), anyList()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("(no changes detected)", 0));
 
     assertNull(generate());
