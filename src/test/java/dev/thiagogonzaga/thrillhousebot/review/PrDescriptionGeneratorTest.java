@@ -492,6 +492,24 @@ class PrDescriptionGeneratorTest {
     verifyNoInteractions(describeAssistant);
   }
 
+  @Test
+  void staysSilentWhenEveryChangedFileIsOutOfScope() {
+    // The other half of the empty-plan branch: nothing was covered *and* nothing was omitted,
+    // because the repository ignores every changed file. That is genuinely nothing to describe, so
+    // the command posts nothing — announcing an uncoverable budget here would be a false alarm
+    // about a budget that was never the problem.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(
+            new RepoSettings(
+                List.of("src/Foo.java", "src/Other.java"),
+                List.of(),
+                ".github/thrillhousebot.yml"));
+    prWithFiles(foo(), otherFile());
+
+    assertNull(generate());
+    verifyNoInteractions(describeAssistant);
+  }
+
   /** A third file, so a max-ai-calls of 3 can be shown to buy only two batches. */
   private static FileDiff thirdFile() {
     return new FileDiff(

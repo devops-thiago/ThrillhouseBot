@@ -636,9 +636,10 @@ This is still an early-stage project; the current constraints are:
 - **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
   split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
   don't fit are disclosed by name instead of silently dropped. `/improve` batches the same
-  way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call). The other
-  on-demand commands (`/describe`, `/changelog`, `/add-docs`) still send the diff in a
-  single call without batching.
+  way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call), and `/describe`
+  and `/changelog` batch up to `REVIEW_MAX_AI_CALLS - 1` calls, reserving one for the step
+  that reduces the per-batch results to a single answer. Only `/add-docs` still sends the
+  diff in a single call without batching.
 - **Pure renames** — files GitHub reports as `renamed` with zero additions/deletions and
   no patch are omitted from AI review input (they have nothing to review). The summary
   overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit
