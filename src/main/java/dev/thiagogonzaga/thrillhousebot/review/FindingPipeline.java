@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -49,6 +50,9 @@ import java.util.stream.IntStream;
  */
 @ApplicationScoped
 public class FindingPipeline {
+
+  /** Directory rows listed in the scope header before the remainder is rolled up by count. */
+  private static final int MAX_SCOPE_DIRECTORIES = 10;
 
   private record BatchOutcome(
       int index,
@@ -551,6 +555,8 @@ public class FindingPipeline {
     if (!pureRenames.isEmpty()) {
       sb.append(ReviewDiffFormatter.formatPureRenameRollup(pureRenames));
     }
+    // Scope totals next, ahead of the per-file rows, for the same reason: clamping drops the tail.
+    sb.append(changeScopeSummary(ctx));
     var omitted = Set.copyOf(plan.omittedFiles());
     var clipped = Set.copyOf(plan.clippedFiles());
     for (var file : ctx.reviewableFiles()) {
@@ -574,6 +580,93 @@ public class FindingPipeline {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
     }
     return sb.toString();
+  }
+
+  /**
+   * PR-level scope header for the summary call: the authoritative file/line totals (GitHub's, the
+   * same numbers the rendered Changes Overview reports — #298) plus how the change is spread across
+   * directories. The summary call never sees the diff, so without these the only cue for how big
+   * the change is is a file list the input budget may have clamped — which is how a multi-file
+   * decompose got described as one extracted class (#335). Rendered as data, ahead of the per-file
+   * rows, so clamping can only take the tail.
+   */
+  private static String changeScopeSummary(ReviewContextLoader.ReviewContext ctx) {
+    var files = VerdictBuilder.overviewFiles(ctx);
+    var additions = 0;
+    var deletions = 0;
+    for (var file : files) {
+      additions += file.additions();
+      deletions += file.deletions();
+    }
+    var totals = ctx.prTotals();
+    // A non-positive file count means the totals carry nothing usable: fall back to the
+    // diff-derived counts rather than announcing a zero-file PR over a non-empty file list.
+    var authoritative = totals != null && totals.filesChanged() > 0;
+    var filesChanged = authoritative ? totals.filesChanged() : files.size();
+    if (authoritative) {
+      additions = totals.additions();
+      deletions = totals.deletions();
+    }
+    if (filesChanged <= 0) {
+      return "";
+    }
+    var sb = new StringBuilder();
+    sb.append("PR scope (whole pull request): ")
+        .append(filesChanged)
+        .append(filesChanged == 1 ? " file changed, +" : " files changed, +")
+        .append(additions)
+        .append(" -")
+        .append(deletions)
+        .append("\n");
+    appendDirectoryBreakdown(sb, files);
+    return sb.toString();
+  }
+
+  /**
+   * "directory: N files (+a -d)" rows, most files first, so a change spread over several packages
+   * cannot read as a single-file edit. Bounded so a wide PR cannot crowd out the file list.
+   */
+  private static void appendDirectoryBreakdown(
+      StringBuilder sb, List<GitHubPullRequestClient.FileDiff> files) {
+    if (files.isEmpty()) {
+      return;
+    }
+    var byDirectory = new LinkedHashMap<String, int[]>();
+    for (var file : files) {
+      var stats = byDirectory.computeIfAbsent(directoryOf(file.filename()), key -> new int[3]);
+      stats[0]++;
+      stats[1] += file.additions();
+      stats[2] += file.deletions();
+    }
+    var rows = new ArrayList<>(byDirectory.entrySet());
+    rows.sort(
+        Comparator.<Map.Entry<String, int[]>>comparingInt(e -> -e.getValue()[0])
+            .thenComparing(Map.Entry::getKey));
+    sb.append("Directories touched: ").append(byDirectory.size()).append("\n");
+    for (var row : rows.subList(0, Math.min(rows.size(), MAX_SCOPE_DIRECTORIES))) {
+      sb.append("- ")
+          .append(row.getKey())
+          .append(": ")
+          .append(row.getValue()[0])
+          .append(row.getValue()[0] == 1 ? " file (+" : " files (+")
+          .append(row.getValue()[1])
+          .append(" -")
+          .append(row.getValue()[2])
+          .append(")\n");
+    }
+    if (rows.size() > MAX_SCOPE_DIRECTORIES) {
+      sb.append("- (+").append(rows.size() - MAX_SCOPE_DIRECTORIES).append(" more directories)\n");
+    }
+  }
+
+  /**
+   * The file's parent directory, or a stable label for a path carrying no directory component —
+   * which also covers a blank one. A null path is not guarded here: the per-file loop above already
+   * dereferences the same name against an immutable set, so it could never reach this point.
+   */
+  private static String directoryOf(String path) {
+    var slash = path.lastIndexOf('/');
+    return slash <= 0 ? "(repository root)" : path.substring(0, slash);
   }
 
   /**
