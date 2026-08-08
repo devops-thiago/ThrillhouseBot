@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -156,14 +157,15 @@ final class RebuttalContradiction {
    */
   private static String assertedText(String rebuttal) {
     var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
-    var sb = new StringBuilder(withoutFences.length());
+    var kept = new ArrayList<String>();
     for (var line : withoutFences.split("\n", -1)) {
-      if (line.stripLeading().startsWith(">")) {
-        continue;
+      if (!line.stripLeading().startsWith(">")) {
+        kept.add(line);
       }
-      sb.append(line).append('\n');
     }
-    return sb.toString();
+    // Joined, not terminated: a reply that ends mid-sentence must stay unterminated, so
+    // sentenceAround's end-of-text bound is a live case rather than an unreachable guard.
+    return String.join("\n", kept);
   }
 
   /** The sentence containing {@code index}, collapsed to one line and clipped for a note. */
@@ -195,7 +197,8 @@ final class RebuttalContradiction {
    */
   private static String clip(String raw) {
     var collapsed = raw.replaceAll("\\s+", " ").strip();
-    if (!collapsed.isEmpty() && (collapsed.charAt(0) == '+' || collapsed.charAt(0) == '-')) {
+    // startsWith, not charAt, so no emptiness guard is needed for a blank quoted line.
+    if (collapsed.startsWith("+") || collapsed.startsWith("-")) {
       collapsed = collapsed.substring(1).strip();
     }
     if (collapsed.length() <= QUOTE_LIMIT) {

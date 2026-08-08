@@ -318,79 +318,94 @@ class VerdictBuilderTest {
           List.of(),
           null);
 
+  /** The dogfood PR's command path: each command is handed to the shared review executor. */
+  private static final String DISPATCHING_DIFF =
+      """
+      diff --git a/src/main/java/.../webhook/CommentCommandService.java
+      @@ -130,7 +130,9 @@ public class CommentCommandService {
+      +  private void dispatch(CommandContext ctx) {
+      +    executor.execute(() -> execute(ctx));
+      +  }
+      """;
+
+  /** The bot's finding thread plus the maintainer's single decline on it. */
+  private static final List<
+          dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment>
+      DECLINE_THREAD =
+          List.of(
+              new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment(
+                  700L,
+                  null,
+                  RACE_FILE,
+                  "**MEDIUM — " + RACE_TITLE + "**",
+                  new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse
+                      .User("thrillhousebot[bot]")),
+              new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment(
+                  701L,
+                  700L,
+                  RACE_FILE,
+                  "Not changed — pause() is only ever called from the /pause command path, which"
+                      + " runs asynchronously on the review executor after the webhook has"
+                      + " returned 200.",
+                  new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse
+                      .User("maintainer")));
+
+  private static final ReviewResponse DECLINED_PRIOR_RESPONSE =
+      new ReviewResponse(
+          List.of(),
+          List.of(
+              new ReviewResponse.PreviousFindingStatus(
+                  1, "justified", "maintainer says the path cannot run concurrently")),
+          null);
+
+  private static VerdictBuilder builderWithRealAnalyzer(PrSummaryGenerator summaryGenerator) {
+    return new VerdictBuilder(
+        summaryGenerator,
+        new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
+        BotIdentity.from(List.of("thrillhousebot[bot]")),
+        BlockingStrictness.BALANCED);
+  }
+
+  /**
+   * A follow-up context carrying the declined race finding, with {@code diff} as the legacy diff.
+   */
+  private static ReviewContextLoader.ReviewContext declinedRaceContext(String diff) {
+    return new ReviewContextLoader.ReviewContext(
+        List.of(),
+        diff,
+        "",
+        0,
+        List.of(),
+        List.of("{}"),
+        List.of(RACE_PRIOR_RESPONSE),
+        false,
+        true,
+        "{}",
+        DECLINE_THREAD,
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        List.of(),
+        "",
+        "",
+        List.of(new FileDiff(RACE_FILE, "modified", 1, 0, 1, "")),
+        () ->
+            new DiffLineResolver(
+                Map.of(RACE_FILE, "@@ -60,1 +60,1 @@\n-old\n+if (repository.find(pr) == null) {")),
+        null);
+  }
+
   @Test
   void declinedPriorFindingTheReviewedCodeContradictsStaysOpenAndHoldsApprove() {
-    var realBuilder =
-        new VerdictBuilder(
-            summaryGenerator,
-            new FollowUpAnalyzer(new com.fasterxml.jackson.databind.ObjectMapper()),
-            BotIdentity.from(List.of("thrillhousebot[bot]")),
-            BlockingStrictness.BALANCED);
-    var batchText =
-        """
-        diff --git a/src/main/java/.../webhook/CommentCommandService.java
-        @@ -130,7 +130,9 @@ public class CommentCommandService {
-        +  private void dispatch(CommandContext ctx) {
-        +    executor.execute(() -> execute(ctx));
-        +  }
-        """;
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(new DiffBudgetPlanner.DiffBatch(batchText, List.of(), 10)),
+            List.of(new DiffBudgetPlanner.DiffBatch(DISPATCHING_DIFF, List.of(), 10)),
             List.of(),
             List.of(),
             true);
-    var comments =
-        List.of(
-            new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment(
-                700L,
-                null,
-                RACE_FILE,
-                "**MEDIUM — " + RACE_TITLE + "**",
-                new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse.User(
-                    "thrillhousebot[bot]")),
-            new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment(
-                701L,
-                700L,
-                RACE_FILE,
-                "Not changed — pause() is only ever called from the /pause command path, which"
-                    + " runs asynchronously on the review executor after the webhook has returned"
-                    + " 200.",
-                new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse.User(
-                    "maintainer")));
-    var ctx =
-        new ReviewContextLoader.ReviewContext(
-            List.of(),
-            "",
-            "",
-            0,
-            List.of(),
-            List.of("{}"),
-            List.of(RACE_PRIOR_RESPONSE),
-            false,
-            true,
-            "{}",
-            comments,
-            "",
-            new InstructionsResolver.ResolvedInstructions("", ""),
-            List.of(),
-            "",
-            "",
-            List.of(new FileDiff(RACE_FILE, "modified", 1, 0, 1, "")),
-            () ->
-                new DiffLineResolver(
-                    Map.of(
-                        RACE_FILE, "@@ -60,1 +60,1 @@\n-old\n+if (repository.find(pr) == null) {")),
-            null);
-    var declined =
-        new ReviewResponse(
-            List.of(),
-            List.of(
-                new ReviewResponse.PreviousFindingStatus(
-                    1, "justified", "maintainer says the path cannot run concurrently")),
-            null);
 
-    var result = realBuilder.build(ctx, declined, CI_CLEAR, plan);
+    var result =
+        builderWithRealAnalyzer(summaryGenerator)
+            .build(declinedRaceContext(""), DECLINED_PRIOR_RESPONSE, CI_CLEAR, plan);
 
     assertEquals(1, result.unresolvedPreviousCount());
     assertEquals(ReviewState.COMMENT, result.reviewState());
@@ -398,6 +413,43 @@ class VerdictBuilderTest {
         result.previousStatuses().get(0).note().contains("executor.execute(() -> execute(ctx));"),
         "the re-opened status must name the contradiction, was: "
             + result.previousStatuses().get(0).note());
+  }
+
+  @Test
+  void declineRecheckReadsTheLegacyDiffWhenBudgetingIsDisabled() {
+    // budgeted=false: the planner holds no batches, so the legacy uncapped ctx.diff() is the only
+    // record of what the model saw and must still be the material the decline is checked against.
+    var legacyPlan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), false);
+
+    var result =
+        builderWithRealAnalyzer(summaryGenerator)
+            .build(
+                declinedRaceContext(DISPATCHING_DIFF),
+                DECLINED_PRIOR_RESPONSE,
+                CI_CLEAR,
+                legacyPlan);
+
+    assertEquals(1, result.unresolvedPreviousCount());
+    assertTrue(
+        result.previousStatuses().get(0).note().contains("executor.execute(() -> execute(ctx));"));
+  }
+
+  @Test
+  void declineRecheckFallsBackToTheLegacyDiffWhenABudgetedPlanHasNoBatches() {
+    // budgeted=true but every file overflowed the budget, so batches is empty and the concatenation
+    // would yield nothing; ctx.diff() is the fallback the re-check must use.
+    var emptyBudgetedPlan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("big.java"), List.of(), true);
+
+    var result =
+        builderWithRealAnalyzer(summaryGenerator)
+            .build(
+                declinedRaceContext(DISPATCHING_DIFF),
+                DECLINED_PRIOR_RESPONSE,
+                CI_CLEAR,
+                emptyBudgetedPlan);
+
+    assertEquals(1, result.unresolvedPreviousCount());
   }
 
   @Test

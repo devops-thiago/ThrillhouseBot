@@ -20,6 +20,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
@@ -2098,5 +2099,138 @@ class FollowUpAnalyzerTest {
         analyzer.recheckDeclines(
             RACE_PREVIOUS, outOfRange, comments, BOT_ID, () -> DISPATCHING_DIFF));
     assertTrue(analyzer.recheckDeclines(RACE_PREVIOUS, null, comments, BOT_ID, null).isEmpty());
+  }
+
+  /**
+   * Each way the re-check can find nothing to work with. Every one must hand the statuses back
+   * exactly as the model reported them — the conservative outcome — and none may reach the matcher.
+   */
+  static Stream<Arguments> recheckNoOpInputs() {
+    var thread =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.");
+    return Stream.of(
+        arguments(
+            "no statuses at all", RACE_PREVIOUS, List.of(), thread, supplier(DISPATCHING_DIFF)),
+        arguments("no prior round", null, justified(), thread, supplier(DISPATCHING_DIFF)),
+        arguments("empty prior round", List.of(), justified(), thread, supplier(DISPATCHING_DIFF)),
+        arguments(
+            "no inline comments", RACE_PREVIOUS, justified(), null, supplier(DISPATCHING_DIFF)),
+        arguments("no code supplier", RACE_PREVIOUS, justified(), thread, null),
+        arguments("supplier yields null", RACE_PREVIOUS, justified(), thread, supplier(null)),
+        arguments("supplier yields blank", RACE_PREVIOUS, justified(), thread, supplier("   \n")),
+        arguments(
+            "id below the prior round",
+            RACE_PREVIOUS,
+            List.of(new ReviewResponse.PreviousFindingStatus(0, "justified", "bad id")),
+            thread,
+            supplier(DISPATCHING_DIFF)),
+        arguments(
+            "thread cannot be located",
+            RACE_PREVIOUS,
+            justified(),
+            List.of(comment(900L, null, "src/Unrelated.java", "**LOW — something else**", BOT)),
+            supplier(DISPATCHING_DIFF)));
+  }
+
+  private static java.util.function.Supplier<String> supplier(String value) {
+    return () -> value;
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("recheckNoOpInputs")
+  void recheckShouldReturnStatusesUntouchedWhenThereIsNothingToVerify(
+      String name,
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> comments,
+      java.util.function.Supplier<String> code) {
+    assertEquals(
+        statuses,
+        analyzer.recheckDeclines(previous, statuses, comments, BOT_ID, code),
+        "the decline must survive untouched when the re-check has nothing to verify: " + name);
+  }
+
+  @Test
+  void recheckShouldOnlyRewriteTheDeclinedEntryOfAMixedStatusList() {
+    var twoFindings =
+        List.of(
+            RACE_PREVIOUS.get(0),
+            new ReviewResponse.Finding(
+                "low", "high", "src/B.java", 5, "Missing null check", "may NPE", null, null));
+    var mixed =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "justified", "cannot run concurrently"),
+            new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed in abc123"));
+    var comments =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.");
+
+    var rechecked =
+        analyzer.recheckDeclines(twoFindings, mixed, comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals("unresolved", rechecked.get(0).status());
+    assertEquals(
+        mixed.get(1),
+        rechecked.get(1),
+        "a non-declined status must pass through the re-check byte for byte");
+  }
+
+  @Test
+  void recheckShouldIgnoreBotAnonymousAndEmptyRepliesWhenCountingTheRebuttal() {
+    // Only ONE real maintainer reply is present; the bot's own follow-up, an author-less reply and
+    // the body-less ones (null, blank) must not count as a second human answer that would end the
+    // re-check.
+    var comments =
+        List.of(
+            comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+            comment(
+                701L,
+                700L,
+                PAUSE_FILE,
+                "Not changed — pause() is only ever called from the /pause command path, which"
+                    + " runs asynchronously on the review executor after the webhook has returned"
+                    + " 200.",
+                "maintainer"),
+            comment(702L, 700L, PAUSE_FILE, "Thanks, noted.", BOT),
+            new GitHubReviewClient.PullRequestComment(
+                703L, 700L, PAUSE_FILE, "anonymous reply", null),
+            comment(704L, 700L, PAUSE_FILE, "   ", "maintainer"),
+            comment(705L, 700L, PAUSE_FILE, null, "maintainer"),
+            comment(706L, 800L, PAUSE_FILE, "reply on a different thread", "maintainer"));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        "unresolved",
+        rechecked.get(0).status(),
+        "bot, author-less, body-less and other-thread replies are not the maintainer answering"
+            + " the push-back");
+  }
+
+  @Test
+  void injectedAnalyzerShouldTakeTheRecheckFlagFromConfig() {
+    var review = org.mockito.Mockito.mock(ThrillhouseConfig.ReviewConfig.class);
+    org.mockito.Mockito.when(review.declineRecheckEnabled()).thenReturn(false);
+    var config = org.mockito.Mockito.mock(ThrillhouseConfig.class);
+    org.mockito.Mockito.when(config.review()).thenReturn(review);
+    var comments =
+        raceThread(
+            "Not changed — pause() is only ever called from the /pause command path, which runs"
+                + " asynchronously on the review executor after the webhook has returned 200.");
+
+    var configured = new FollowUpAnalyzer(new ObjectMapper(), config);
+
+    assertEquals(
+        "justified",
+        configured
+            .recheckDeclines(RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF)
+            .get(0)
+            .status(),
+        "the injected constructor must honour thrillhousebot.review.decline-recheck-enabled");
   }
 }

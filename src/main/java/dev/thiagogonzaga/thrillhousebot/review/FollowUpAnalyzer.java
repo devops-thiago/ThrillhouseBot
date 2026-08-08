@@ -759,17 +759,13 @@ public class FollowUpAnalyzer {
     if (statuses == null || statuses.isEmpty()) {
       return statuses == null ? List.of() : statuses;
     }
-    if (!declineRecheckEnabled
-        || previous == null
-        || previous.isEmpty()
-        || inlineComments == null
-        || inlineComments.isEmpty()
-        || reviewedCode == null
-        || statuses.stream().noneMatch(s -> STATUS_JUSTIFIED.equalsIgnoreCase(s.status()))) {
+    if (!declineRecheckEnabled || !hasDecline(statuses)) {
       return statuses;
     }
-    String code = reviewedCode.get();
-    if (code == null || code.isBlank()) {
+    // An empty prior round and an empty comment list need no fast path of their own: the
+    // id-range check and the thread lookup below already yield "no contradiction" for both.
+    String code = reviewedCode == null ? null : reviewedCode.get();
+    if (previous == null || inlineComments == null || code == null || code.isBlank()) {
       return statuses;
     }
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
@@ -788,6 +784,11 @@ public class FollowUpAnalyzer {
               status.id(), STATUS_UNRESOLVED, contradiction.note()));
     }
     return rewritten;
+  }
+
+  /** Whether any status is a maintainer decline — the only kind this re-check looks at. */
+  private static boolean hasDecline(List<ReviewResponse.PreviousFindingStatus> statuses) {
+    return statuses.stream().anyMatch(s -> STATUS_JUSTIFIED.equalsIgnoreCase(s.status()));
   }
 
   /**

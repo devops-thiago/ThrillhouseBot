@@ -138,4 +138,106 @@ class RebuttalContradictionTest {
     assertTrue(RebuttalContradiction.find(RACE_FINDING, null, DISPATCHING_CODE).isEmpty());
     assertTrue(RebuttalContradiction.find(null, rebuttal, DISPATCHING_CODE).isEmpty());
   }
+
+  @Test
+  void shouldReadTheConcurrencySignalFromTheDescriptionWhenTheFindingHasNoTitle() {
+    var untitled =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "src/A.java",
+            7,
+            null,
+            "Two deliveries can interleave between the check and the insert — a data race.",
+            null,
+            null);
+
+    assertTrue(
+        RebuttalContradiction.find(untitled, "It runs serially.", DISPATCHING_CODE).isPresent(),
+        "a null title must not hide the concurrency signal carried by the description");
+  }
+
+  @Test
+  void shouldReadTheConcurrencySignalFromTheTitleWhenTheFindingHasNoDescription() {
+    var undescribed =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "src/A.java",
+            7,
+            "Race condition on the paused-PR insert",
+            null,
+            null,
+            null);
+
+    assertTrue(
+        RebuttalContradiction.find(undescribed, "It runs serially.", DISPATCHING_CODE).isPresent(),
+        "a null description must not hide the concurrency signal carried by the title");
+  }
+
+  @Test
+  void shouldQuoteOnlyTheClaimSentenceOfALongerReply() {
+    var rebuttal =
+        "Thanks for the flag, I dug into this one. The command path is single-threaded."
+            + " Closing it out.";
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE);
+
+    assertTrue(contradiction.isPresent());
+    assertEquals(
+        "The command path is single-threaded.",
+        contradiction.get().claim(),
+        "the quote must start after the preceding sentence, not at the top of the reply");
+  }
+
+  @Test
+  void shouldQuoteAWholeUnterminatedReplyAsTheClaim() {
+    // The claim opens the reply and the reply never ends a sentence, so the quote runs from the
+    // first character to the last with no terminator on either side.
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "single-threaded here", DISPATCHING_CODE);
+
+    assertTrue(contradiction.isPresent());
+    assertEquals("single-threaded here", contradiction.get().claim());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"!", "?", ";", ".", "\n"})
+  void shouldStopTheQuotedClaimAtEverySentenceTerminator(String terminator) {
+    var rebuttal = "Nope, it is single-threaded" + terminator + " Moving on to the next thing";
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE);
+
+    assertTrue(contradiction.isPresent());
+    assertFalse(
+        contradiction.get().claim().contains("Moving on"),
+        "the quote must stop at the terminator, was: " + contradiction.get().claim());
+  }
+
+  @Test
+  void shouldQuoteEvidenceOnTheLastLineWhenTheCodeHasNoTrailingNewline() {
+    var codeEndingOnTheDispatch =
+        "diff --git a/Worker.java\n@@ -1,2 +1,3 @@\n+    pool.submit(task);";
+
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeEndingOnTheDispatch);
+
+    assertTrue(contradiction.isPresent());
+    assertEquals("pool.submit(task);", contradiction.get().evidence());
+  }
+
+  @Test
+  void shouldStripTheDiffMarkerFromAnEvidenceLineOnEitherSide() {
+    var removedDispatch =
+        "diff --git a/Worker.java\n@@ -1,3 +1,2 @@\n-    pool.submit(task);\n+    run(task);\n";
+
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", removedDispatch);
+
+    assertTrue(contradiction.isPresent());
+    assertEquals(
+        "pool.submit(task);",
+        contradiction.get().evidence(),
+        "a leading -/+ diff marker is noise in the quote");
+  }
 }
