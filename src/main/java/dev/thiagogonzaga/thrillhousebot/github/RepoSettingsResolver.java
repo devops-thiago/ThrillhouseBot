@@ -117,10 +117,12 @@ public class RepoSettingsResolver {
       cache.put(cacheKey, new CachedSettings(settings, clock.getAsLong() + CACHE_TTL_MS));
       sweepExpiredEntries();
       log.info(
-          "Using repository config {} for {} ({} extra ignore pattern(s))",
+          "Using repository config {} for {} ({} extra ignore pattern(s), {} path-scoped rule"
+              + " block(s))",
           path,
           cacheKey,
-          settings.ignoredFiles().size());
+          settings.ignoredFiles().size(),
+          settings.pathInstructions().size());
       return settings;
     }
 
