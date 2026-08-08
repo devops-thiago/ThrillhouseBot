@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -29,8 +30,13 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullReque
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.Ref;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistantPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -74,6 +80,8 @@ class PrImprovementServiceTest {
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private PrImproveAssistant improveAssistant;
+  @Mock private RepoSettingsResolver repoSettingsResolver;
+  @Mock private ActiveModelSettings activeModel;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
@@ -88,8 +96,16 @@ class PrImprovementServiceTest {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(50);
+    lenient().when(reviewConfig.maxAiCalls()).thenReturn(6);
+    // Default: budgeting on with ample room, so existing single-batch expectations hold.
+    lenient().when(activeModel.maxInputTokens()).thenReturn(1_000_000);
+    lenient().when(activeModel.tokenSafetyMargin()).thenReturn(1.0);
+    lenient().when(activeModel.outputBufferTokens()).thenReturn(0);
     when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+    lenient()
+        .when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(RepoSettings.EMPTY);
     service = serviceWith(diffFormatter);
   }
 
@@ -103,6 +119,9 @@ class PrImprovementServiceTest {
         instructionsResolver,
         improveAssistant,
         parser,
+        repoSettingsResolver,
+        new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
+        activeModel,
         config);
   }
 
@@ -219,14 +238,18 @@ class PrImprovementServiceTest {
   }
 
   @Test
-  void appendsPartialCoverageDisclosureWhenFilesWereOmitted() {
-    var truncatingFormatter = mock(ReviewDiffFormatter.class);
+  void doesNotDiscloseTruncationForTheLineCapWhenTheBudgetCoveredEverything() {
+    // The line cap no longer decides coverage, so its omitted count must no longer drive the
+    // disclosure. A formatter reporting 48 line-omitted files, against a plan that batched every
+    // file within budget, is full coverage — claiming otherwise would be a false partial warning.
+    var lineCapReports48 = mock(ReviewDiffFormatter.class);
     var foo = foo();
-    when(truncatingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
-    when(truncatingFormatter.buildDiffStringWithStats(anyList(), anyList()))
+    when(lineCapReports48.reviewableFiles(anyList())).thenReturn(List.of(foo));
+    when(lineCapReports48.buildDiffStringWithStats(anyList(), anyList()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("## Overview\n(truncated)", 48));
-    when(truncatingFormatter.patchesByReviewableFiles(anyList()))
+    when(lineCapReports48.patchesByReviewableFiles(anyList()))
         .thenReturn(Map.of("src/Foo.java", PATCH));
+    when(lineCapReports48.formatFileSection(any(), any())).thenReturn(PATCH);
     prWithFiles(foo);
     assistantReturns(
         """
@@ -236,12 +259,11 @@ class PrImprovementServiceTest {
         "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
         """);
 
-    serviceWith(truncatingFormatter).handle(task(), AUTH);
+    serviceWith(lineCapReports48).handle(task(), AUTH);
 
     var summary = postedSummary();
-    assertTrue(summary.contains("48 file(s) were omitted"), summary);
-    assertTrue(summary.contains("partial coverage"), summary);
-    assertFalse(summary.contains("findings and verdict"), summary);
+    assertFalse(summary.contains("48 file(s) were omitted"), summary);
+    assertFalse(summary.contains("partial coverage"), summary);
   }
 
   @Test
@@ -477,9 +499,12 @@ class PrImprovementServiceTest {
 
     serviceWith(nullListFormatter).handle(task(), AUTH);
 
+    // With no reviewable files there is nothing to plan batches over, so the run reports that
+    // rather than calling the model or NPE-ing on the null list.
     verify(reviewClient, never())
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+    assertEquals(PrImprovementService.NO_CHANGES, postedSummary());
+    verifyNoInteractions(improveAssistant);
   }
 
   /**
@@ -573,5 +598,202 @@ class PrImprovementServiceTest {
     service.handle(task(), AUTH);
 
     assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Token-budgeted batching (#53 parity): /improve plans batches over the reviewable FILE LIST,
+  // so a diff longer than max-diff-lines no longer costs whole files their coverage.
+  // ---------------------------------------------------------------------------------------------
+
+  /** A second file, so the line cap has something to drop and the planner something to batch. */
+  private static final String OTHER_PATCH =
+      """
+      @@ -0,0 +1,3 @@
+      +int retries = 0;
+      +while (retries < 3) { call(); }
+      +log.info("done");""";
+
+  private static FileDiff otherFile() {
+    return new FileDiff("src/Other.java", "modified", 3, 0, 3, OTHER_PATCH);
+  }
+
+  /**
+   * A per-call input budget of exactly the shared prompt overhead plus {@code diffTokens}. Derived
+   * from the real prompts rather than hardcoded, so editing a prompt cannot silently turn these
+   * tests into no-ops by making every file overflow.
+   */
+  private static int budgetFor(int diffTokens) {
+    var overhead =
+        new TokenCounter()
+            .estimateTokens(
+                PrImproveAssistantPrompts.SYSTEM
+                    + PrSuggestionPrompts.USER
+                    + PromptTemplateEscaper.fence(" ")
+                    + "Title"
+                    + "Body"
+                    + "");
+    return overhead + diffTokens;
+  }
+
+  /** Budgeting on, with {@code diffTokens} of room per call for diff text. */
+  private void budgetWithDiffRoom(int diffTokens) {
+    when(activeModel.maxInputTokens()).thenReturn(budgetFor(diffTokens));
+    when(activeModel.tokenSafetyMargin()).thenReturn(1.0);
+    when(activeModel.outputBufferTokens()).thenReturn(0);
+  }
+
+  /** The diff text each assistant call actually received, in call order. */
+  private List<String> diffsSentToAssistant() {
+    var diff = ArgumentCaptor.forClass(String.class);
+    verify(improveAssistant, atLeastOnce()).improve(diff.capture(), any(), any(), any());
+    return diff.getAllValues();
+  }
+
+  @Test
+  void coversFilesThatTheLineCapWouldHaveDroppedEntirely() {
+    // The whole point of the command. With a line cap this small the rendered diff string keeps
+    // only the first file, so the pre-batching implementation never showed the model src/Other.java
+    // at all. Batching sizes by tokens over the file list instead, so both files are analyzed.
+    var lineCapped = new ReviewDiffFormatter(List.of(), 4);
+    budgetWithDiffRoom(4000);
+    prWithFiles(foo(), otherFile());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Other.java","line":2,"title":"Bound the retry loop",
+        "category":"error-handling","rationale":"An unbounded retry can spin forever.",
+        "suggestion_old":"while (retries < 3) { call(); }",
+        "suggestion_new":"while (retries++ < 3) { call(); }"}]}
+        """);
+
+    serviceWith(lineCapped).handle(task(), AUTH);
+
+    // The dropped file reached the model...
+    var sent = String.join("\n", diffsSentToAssistant());
+    assertTrue(sent.contains("src/Other.java"), sent);
+    assertTrue(sent.contains("while (retries < 3) { call(); }"), sent);
+    // ...and produced a real committable suggestion anchored to it.
+    var inline = capturedInlineComment();
+    assertEquals("src/Other.java", inline.path());
+    assertEquals(2, inline.line());
+    assertTrue(inline.body().contains("```suggestion"), inline.body());
+  }
+
+  @Test
+  void splitsAnOversizedChangeSetAcrossBatchesAndDedupesTheResults() {
+    // Room for roughly one file per call, so the two files land in separate batches. Both batch
+    // responses name the same line; it must be posted once, not twice.
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks a handle.",
+        "suggestion_old":"var in = Files.newInputStream(path);",
+        "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    assertTrue(diffsSentToAssistant().size() > 1, "expected more than one batch call");
+    verify(reviewClient, times(1))
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void neverSpendsMoreModelCallsThanMaxAiCalls() {
+    when(reviewConfig.maxAiCalls()).thenReturn(1);
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    assistantReturns("{\"improvements\":[]}");
+
+    service.handle(task(), AUTH);
+
+    verify(improveAssistant, times(1)).improve(any(), any(), any(), any());
+  }
+
+  @Test
+  void disclosesFilesTheTokenBudgetCouldNotCoverByName() {
+    // Room for the small file only: the large one cannot be clipped into any batch, so it is
+    // omitted by the plan — and the disclosure must now come from that, not from the line cap.
+    budgetWithDiffRoom(30);
+    var big = new FileDiff("src/Huge.java", "modified", 400, 0, 400, hugePatch());
+    prWithFiles(otherFile(), big);
+    assistantReturns("{\"improvements\":[]}");
+
+    service.handle(task(), AUTH);
+
+    var summary = postedSummary();
+    assertTrue(summary.contains("partial coverage"), summary);
+    assertTrue(summary.contains("src/Huge.java"), summary);
+  }
+
+  private static String hugePatch() {
+    var sb = new StringBuilder("@@ -0,0 +1,400 @@");
+    for (int i = 0; i < 400; i++) {
+      sb.append("\n+int aVariableWithALongDescriptiveName")
+          .append(i)
+          .append(" = compute(")
+          .append(i)
+          .append(");");
+    }
+    return sb.toString();
+  }
+
+  @Test
+  void sendsOneUncappedBatchWhenTokenBudgetingIsDisabled() {
+    // max-input-tokens=0 turns budgeting off. That must mean one call covering everything — not a
+    // regression to the line-capped string, which would drop src/Other.java again.
+    when(activeModel.maxInputTokens()).thenReturn(0);
+    var lineCapped = new ReviewDiffFormatter(List.of(), 4);
+    prWithFiles(foo(), otherFile());
+    assistantReturns("{\"improvements\":[]}");
+
+    serviceWith(lineCapped).handle(task(), AUTH);
+
+    var sent = diffsSentToAssistant();
+    assertEquals(1, sent.size());
+    assertTrue(sent.get(0).contains("src/Other.java"), sent.get(0));
+    assertTrue(sent.get(0).contains("src/Foo.java"), sent.get(0));
+  }
+
+  @Test
+  void keepsImprovementsFromTheBatchesThatSucceededWhenOneBatchFails() {
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    when(improveAssistant.improve(any(), any(), any(), any()))
+        .thenThrow(new RuntimeException("provider 503"))
+        .thenReturn(
+            """
+            {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+            "category":"error-handling","rationale":"Leaks a handle.",
+            "suggestion_old":"var in = Files.newInputStream(path);",
+            "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+            """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, times(1))
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    assertTrue(summary.contains("Partial pass"), summary);
+    assertTrue(summary.contains("could not be analyzed"), summary);
+  }
+
+  @Test
+  void leavesFilesTheRepositoryAskedTheBotToIgnoreOutOfScope() {
+    // #449: per-repo ignore patterns are additive on top of the global set. Now that the pass
+    // covers the whole PR rather than the first max-diff-lines, a repo-ignored file is no longer
+    // excluded by accident — so it has to be excluded on purpose.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(new RepoSettings(List.of("src/Other.java"), ".github/thrillhousebot.yml"));
+    budgetWithDiffRoom(4000);
+    prWithFiles(foo(), otherFile());
+    assistantReturns("{\"improvements\":[]}");
+
+    service.handle(task(), AUTH);
+
+    var sent = String.join("\n", diffsSentToAssistant());
+    assertFalse(sent.contains("src/Other.java"), sent);
+    assertTrue(sent.contains("src/Foo.java"), sent);
   }
 }

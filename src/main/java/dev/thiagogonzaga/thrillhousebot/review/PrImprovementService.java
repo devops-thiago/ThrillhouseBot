@@ -15,19 +15,25 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistantPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -74,6 +80,9 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
   private final SuggestionFormatter suggestionFormatter;
   private final PrImproveAssistant improveAssistant;
   private final ImprovementParser parser;
+  private final RepoSettingsResolver repoSettingsResolver;
+  private final DiffBudgetPlanner budgetPlanner;
+  private final ActiveModelSettings activeModel;
   private final ThrillhouseConfig config;
 
   @Inject
@@ -86,6 +95,9 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       InstructionsResolver instructionsResolver,
       PrImproveAssistant improveAssistant,
       ImprovementParser parser,
+      RepoSettingsResolver repoSettingsResolver,
+      DiffBudgetPlanner budgetPlanner,
+      ActiveModelSettings activeModel,
       ThrillhouseConfig config) {
     super(prClient, diffFormatter, instructionsResolver);
     this.reviewClient = reviewClient;
@@ -93,6 +105,9 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
     this.suggestionFormatter = suggestionFormatter;
     this.improveAssistant = improveAssistant;
     this.parser = parser;
+    this.repoSettingsResolver = repoSettingsResolver;
+    this.budgetPlanner = budgetPlanner;
+    this.activeModel = activeModel;
     this.config = config;
   }
 
@@ -123,17 +138,24 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
         postComment(auth, task, NO_CHANGES);
         return;
       }
-      var response = generate(inputs);
-      if (response == null) {
+      var plan = planBatches(task, inputs);
+      if (plan.batches().isEmpty()) {
+        postComment(auth, task, NO_CHANGES + disclosure(plan));
+        return;
+      }
+      var generated = generate(inputs, plan);
+      if (generated == null) {
         postComment(auth, task, GENERATION_FAILED);
         return;
       }
-      var outcome = post(auth, task, inputs, response);
-      postComment(auth, task, summaryMessage(outcome, inputs.omittedFiles()));
+      var outcome = post(auth, task, inputs, generated.improvements());
+      postComment(auth, task, summaryMessage(outcome, plan, generated.failedBatches()));
       Log.infof(
-          "/improve posted %d committable suggestion(s) and %d copy-paste block(s) on %s/%s #%d",
+          "/improve posted %d committable suggestion(s) and %d copy-paste block(s)"
+              + " from %d batch(es) on %s/%s #%d",
           outcome.committable(),
           outcome.copyPaste().size(),
+          plan.batches().size(),
           task.owner(),
           task.repo(),
           task.prNumber());
@@ -143,14 +165,117 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
     }
   }
 
-  /** Calls the assistant and parses its answer, or {@code null} when either step fails. */
-  private ImprovementResponse generate(Inputs inputs) {
+  /**
+   * Plans the whole-PR pass as token-budgeted batches over the reviewable files, the way the review
+   * path does since #53 — rather than one call over a line-capped diff string, which silently drops
+   * whole files from a command whose entire value is covering the change set. An explicit {@code
+   * max-input-tokens <= 0} disables budgeting and yields a single uncapped batch.
+   */
+  private DiffBudgetPlanner.BudgetPlan planBatches(ImproveTask task, Inputs inputs) {
+    var reviewable = respectPerRepoIgnores(task, inputs.reviewableFiles());
+    if (activeModel.maxInputTokens() <= 0) {
+      return budgetPlanner.plan(reviewable, 0, 1);
+    }
+    return budgetPlanner.plan(
+        reviewable, sharedPromptOverhead(inputs), budgetPlanner.perCallInputBudget(), maxBatches());
+  }
+
+  /**
+   * Re-filters the loaded file list through the repository's own ignore patterns (#449) on top of
+   * the deployment-wide ones {@code loadInputs} already applied. Per-repo patterns are strictly
+   * additive, so narrowing the already-global-filtered list yields exactly the effective set
+   * without re-fetching the diff.
+   *
+   * <p>This matters more now than it did before batching: while the pass was capped at {@code
+   * max-diff-lines}, a repo-ignored file beyond the cap was excluded by accident. Now that every
+   * file is in scope, {@code /improve} would otherwise propose committable edits to generated or
+   * vendored code a repository explicitly asked the bot to leave alone. Fails soft to the global
+   * set, like the review path.
+   */
+  private List<GitHubPullRequestClient.FileDiff> respectPerRepoIgnores(
+      ImproveTask task, List<GitHubPullRequestClient.FileDiff> globallyFiltered) {
+    var repoSettings =
+        SoftLoaders.repoSettings(
+            repoSettingsResolver,
+            task.owner(),
+            task.repo(),
+            task.defaultBranch(),
+            task.installationId(),
+            COMMAND);
+    if (repoSettings.ignoredFiles().isEmpty()) {
+      return globallyFiltered;
+    }
+    return diffFormatter()
+        .reviewableFiles(
+            globallyFiltered, diffFormatter().ignoreGlobs(repoSettings.ignoredFiles()));
+  }
+
+  /**
+   * Everything except the diff that every batch call repeats, so the planner can subtract it before
+   * sizing batches. Mirrors how {@link DiffBudgetPlanner#plan(List, AiReviewService.PromptInputs)}
+   * assembles the review path's overhead: both prompt templates, the per-call fence scaffolding,
+   * and each non-diff section — omitting any of them would let "in-budget" batches overshoot the
+   * model's real input limit.
+   */
+  private String sharedPromptOverhead(Inputs inputs) {
+    return PrImproveAssistantPrompts.SYSTEM
+        + PrSuggestionPrompts.USER
+        + PromptTemplateEscaper.fence(" ")
+        + PromptTemplateEscaper.escape(inputs.title())
+        + PromptTemplateEscaper.escape(inputs.body())
+        + PromptTemplateEscaper.escape(inputs.instructions());
+  }
+
+  /**
+   * The most model calls one {@code /improve} may spend. Unlike a review, this command makes no
+   * final summary call — its summary comment is assembled locally — so the whole {@code
+   * max-ai-calls} allowance goes to batches, and an invocation costs at most what one review costs.
+   */
+  private int maxBatches() {
+    return Math.max(1, config.review().maxAiCalls());
+  }
+
+  /** Improvements merged across batches, plus how many batch calls failed outright. */
+  private record Generated(List<ImprovementResponse.Improvement> improvements, int failedBatches) {}
+
+  /**
+   * Runs one assistant call per planned batch and merges the results. A batch that fails or returns
+   * unparseable JSON is skipped rather than failing the run — the other batches' improvements are
+   * still worth posting — and the count is disclosed. Returns {@code null} only when every batch
+   * failed, which is the case that warrants the failure notice.
+   */
+  private Generated generate(Inputs inputs, DiffBudgetPlanner.BudgetPlan plan) {
+    var merged = new ArrayList<ImprovementResponse.Improvement>();
+    var seen = new HashSet<String>();
+    int failed = 0;
+    for (var batch : plan.batches()) {
+      var response = generateOne(inputs, batch);
+      if (response == null) {
+        failed++;
+        continue;
+      }
+      for (var improvement : response.improvements()) {
+        // Two batches must never propose the same line twice: batches hold disjoint files, but a
+        // model can still quote a file it saw named in another batch's context.
+        if (improvement.isPostable() && seen.add(dedupeKey(improvement))) {
+          merged.add(improvement);
+        }
+      }
+    }
+    if (failed == plan.batches().size()) {
+      return null;
+    }
+    return new Generated(List.copyOf(merged), failed);
+  }
+
+  /** One batch's assistant call and parse, or {@code null} when either step fails. */
+  private ImprovementResponse generateOne(Inputs inputs, DiffBudgetPlanner.DiffBatch batch) {
     String raw =
         callAssistant(
             COMMAND,
             () ->
                 improveAssistant.improve(
-                    PromptTemplateEscaper.fence(inputs.diff()),
+                    PromptTemplateEscaper.fence(batch.text()),
                     PromptTemplateEscaper.escape(inputs.title()),
                     PromptTemplateEscaper.escape(inputs.body()),
                     PromptTemplateEscaper.escape(inputs.instructions())));
@@ -160,9 +285,14 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
     try {
       return parser.parse(raw);
     } catch (RuntimeException e) {
-      Log.warnf(e, "Could not parse the /improve response — posting the failure notice");
+      Log.warnf(e, "Could not parse a /improve batch response — skipping that batch");
       return null;
     }
+  }
+
+  /** Identity of a proposed change for dedupe: the same file and line is the same suggestion. */
+  private static String dedupeKey(ImprovementResponse.Improvement improvement) {
+    return improvement.file().strip() + ":" + improvement.line();
   }
 
   /**
@@ -179,7 +309,10 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
    * the per-run comment cap so a large PR can never produce an unbounded run.
    */
   private ImproveOutcome post(
-      String auth, ImproveTask task, Inputs inputs, ImprovementResponse response) {
+      String auth,
+      ImproveTask task,
+      Inputs inputs,
+      List<ImprovementResponse.Improvement> improvements) {
     var lineResolver =
         new DiffLineResolver(diffFormatter().patchesByReviewableFiles(inputs.reviewableFiles()));
     boolean canPostInline = inputs.headSha() != null && !inputs.headSha().isBlank();
@@ -192,26 +325,21 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
     int committable = 0;
     var copyPaste = new ArrayList<ImprovementResponse.Improvement>();
     int skippedByCap = 0;
-    var improvements = response.improvements();
+    // Every improvement here is already postable and deduped: generate() filters as it merges the
+    // batches, so this loop only decides inline-vs-copy-paste and enforces the cap.
     for (int i = 0; i < improvements.size(); i++) {
       if (committable + copyPaste.size() >= cap) {
-        skippedByCap =
-            (int)
-                improvements.subList(i, improvements.size()).stream()
-                    .filter(ImprovementResponse.Improvement::isPostable)
-                    .count();
+        skippedByCap = improvements.size() - i;
         Log.debugf(
             "/improve reached the %d-comment cap on %s/%s #%d — %d further improvement(s) dropped",
             cap, task.owner(), task.repo(), task.prNumber(), skippedByCap);
         break;
       }
       var improvement = improvements.get(i);
-      if (improvement.isPostable()) {
-        if (canPostInline && postInline(auth, task, inputs.headSha(), improvement, lineResolver)) {
-          committable++;
-        } else {
-          copyPaste.add(improvement);
-        }
+      if (canPostInline && postInline(auth, task, inputs.headSha(), improvement, lineResolver)) {
+        committable++;
+      } else {
+        copyPaste.add(improvement);
       }
     }
     return new ImproveOutcome(committable, List.copyOf(copyPaste), skippedByCap);
@@ -316,7 +444,8 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
    * budget dropped whole files — so improvements derived from a truncated diff are never presented
    * as if they covered the whole PR (reuses the review path's wording).
    */
-  private String summaryMessage(ImproveOutcome outcome, int omittedFiles) {
+  private String summaryMessage(
+      ImproveOutcome outcome, DiffBudgetPlanner.BudgetPlan plan, int failedBatches) {
     if (outcome.committable() == 0 && outcome.copyPaste().isEmpty()) {
       String base =
           outcome.skippedByCap() > 0
@@ -324,7 +453,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
                   + outcome.skippedByCap()
                   + "** improvement(s) were dropped. Raise the comment cap or re-run `/improve`."
               : NOTHING_TO_IMPROVE;
-      return base + ReviewResult.truncationDisclosure(omittedFiles);
+      return base + batchFailureNote(failedBatches) + disclosure(plan);
     }
     var sb = new StringBuilder("## ✨ ThrillhouseBot — suggested improvements\n\n");
     if (outcome.committable() > 0) {
@@ -362,7 +491,36 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
               " further improvement(s) were not posted because the per-run comment cap was reached"
                   + " — re-run `/improve` after addressing these.");
     }
-    return sb.append(FOOTER).append(ReviewResult.truncationDisclosure(omittedFiles)).toString();
+    return sb.append(batchFailureNote(failedBatches))
+        .append(FOOTER)
+        .append(disclosure(plan))
+        .toString();
+  }
+
+  /**
+   * The partial-coverage disclosure for a run, sourced from the token-budget plan: files that did
+   * not fit any batch and files clipped to fit one. Both are named, so a large PR says which parts
+   * of the change set the pass did not cover rather than only how many.
+   */
+  private static String disclosure(DiffBudgetPlanner.BudgetPlan plan) {
+    if (!plan.truncated()) {
+      return "";
+    }
+    return ReviewResult.truncationDisclosure(
+        plan.omittedFiles().size() + plan.clippedFiles().size(),
+        new ReviewResult.TruncationDetail(plan.omittedFiles(), plan.clippedFiles()));
+  }
+
+  /**
+   * Discloses batches whose model call failed, so a partial pass is never presented as complete.
+   */
+  private static String batchFailureNote(int failedBatches) {
+    return failedBatches > 0
+        ? "\n\n> ⚠️ **Partial pass.** "
+            + failedBatches
+            + " batch(es) of this PR could not be analyzed, so improvements for the files in them"
+            + " are missing. Re-run `/improve` to retry them."
+        : "";
   }
 
   private void postComment(String auth, ImproveTask task, String body) {
