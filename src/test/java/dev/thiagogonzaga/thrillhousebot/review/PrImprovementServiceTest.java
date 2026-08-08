@@ -34,6 +34,9 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -306,6 +309,167 @@ class PrImprovementServiceTest {
     verify(reviewClient, times(1))
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     assertTrue(postedSummary().contains("per-run comment cap"), postedSummary());
+  }
+
+  @Test
+  void reportsTheCapWhenItSwallowedEveryImprovement() {
+    // Nothing lands at all: the summary must say why rather than claim there was nothing to do.
+    when(reviewConfig.maxReviewComments()).thenReturn(0);
+    prWithFiles(foo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks.",
+        "suggestion_old":"var in = Files.newInputStream(path);",
+        "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    assertTrue(summary.contains("posted no improvements"), summary);
+    assertTrue(summary.contains("per-run comment cap was reached"), summary);
+    assertTrue(summary.contains("**1**"), summary);
+    assertNotEquals(PrImprovementService.NOTHING_TO_IMPROVE, summary);
+  }
+
+  @Test
+  void fallsBackToCopyPasteWhenThePrHasNoHeadSha() {
+    // An inline comment needs a commit to anchor to; without one the improvements must still be
+    // delivered rather than silently dropped.
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("Title", "Body", new Ref("  "), new Ref("basesha")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(foo()));
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks a handle.",
+        "suggestion_old":"var in = Files.newInputStream(path);",
+        "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    assertTrue(summary.contains("could not be pinned to the diff"), summary);
+    assertTrue(summary.contains("try (var in = Files.newInputStream(path)) {"), summary);
+  }
+
+  @Test
+  void fallsBackToCopyPasteWhenThePrDetailsCarryNoHeadRef() {
+    // A PR payload can arrive with a null head ref; that must degrade, not NPE.
+    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("Title", "Body", null, new Ref("basesha")));
+    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(foo()));
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks a handle.",
+        "suggestion_old":"var in = Files.newInputStream(path);",
+        "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  }
+
+  @ParameterizedTest(name = "a {0} rendered diff posts the no-changes notice")
+  @NullSource
+  @ValueSource(strings = {"   \n ", "(no changes detected)"})
+  void postsTheNoChangesNoticeWhenThereIsNothingToRender(String renderedDiff) {
+    var emptyFormatter = mock(ReviewDiffFormatter.class);
+    when(emptyFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo()));
+    when(emptyFormatter.buildDiffStringWithStats(anyList(), anyList()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff(renderedDiff, 0));
+    prWithFiles(foo());
+
+    serviceWith(emptyFormatter).handle(task(), AUTH);
+
+    assertEquals(PrImprovementService.NO_CHANGES, postedSummary());
+    verifyNoInteractions(improveAssistant);
+  }
+
+  @Test
+  void toleratesAFormatterThatYieldsNoReviewableFileList() {
+    // The reviewable list only drives line anchoring; a null must degrade to copy-paste, not NPE.
+    var nullListFormatter = mock(ReviewDiffFormatter.class);
+    when(nullListFormatter.reviewableFiles(anyList())).thenReturn(null);
+    when(nullListFormatter.buildDiffStringWithStats(anyList(), any()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("## Overview\ndiff", 0));
+    when(nullListFormatter.patchesByReviewableFiles(anyList())).thenReturn(Map.of());
+    prWithFiles(foo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks a handle.",
+        "suggestion_old":"var in = Files.newInputStream(path);",
+        "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    serviceWith(nullListFormatter).handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  }
+
+  @Test
+  void fallsBackToCopyPasteWhenAMultiLineReplacementCannotBeRangeAnchored() {
+    // The line exists, but the quoted block does not appear verbatim in the diff — committing a
+    // partial range would corrupt the file, so it degrades to a copy-paste block.
+    prWithFiles(foo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":3,"title":"Use an enhanced for loop",
+        "category":"readability","rationale":"Index bookkeeping adds nothing.",
+        "suggestion_old":"for (int i = 0; i < items.size(); i++) {\\n  total += items.get(i).cost();",
+        "suggestion_new":"for (var item : items) {\\n  total += item.cost();"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  }
+
+  @Test
+  void fallsBackToCopyPasteWhenTheReportedLineOnlySnapsToANeighbour() {
+    // resolveRightSideLine snaps to the nearest commentable line; for a single-line rewrite that
+    // neighbour is the wrong line, so the suggestion must not be posted against it.
+    prWithFiles(foo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":99,"title":"Rename the accumulator",
+        "category":"readability","rationale":"Ambiguous name.",
+        "suggestion_old":"int total = 0;","suggestion_new":"int valueTotal = 0;"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  }
+
+  @Test
+  void swallowsAFailureWhilePostingTheSummarySoTheWebhookPathNeverThrows() {
+    prWithFiles(foo());
+    assistantReturns("{\"improvements\":[]}");
+    doThrow(new RuntimeException("503 Service Unavailable"))
+        .when(commentClient)
+        .createComment(any(), any(), any(), any(), anyInt(), any());
+
+    assertDoesNotThrow(() -> service.handle(task(), AUTH));
   }
 
   @Test
