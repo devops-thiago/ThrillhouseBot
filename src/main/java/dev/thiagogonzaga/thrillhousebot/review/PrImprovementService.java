@@ -22,7 +22,6 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
-import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
@@ -43,13 +42,13 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * committable changes across the change set, rather than the correctness findings the review
  * pipeline produces.
  *
- * <p>Loads the diff, current title/body and repository instructions through {@link
- * AbstractPrSuggestionGenerator} (so the line budget, instructions fallback chain and fail-soft
- * degradation are the ones the other on-request commands already use), asks the {@link
- * PrImproveAssistant} for improvements, then posts each one that anchors cleanly onto the diff as
- * an inline {@code ```suggestion} block. Improvements that cannot be anchored are still surfaced as
- * copy-paste blocks in the run's summary comment, which also carries the partial-coverage
- * disclosure when the line budget dropped files.
+ * <p>Loads the diff, current title/body and repository instructions and plans the token-budgeted
+ * batches through {@link AbstractPrSuggestionGenerator} (so the coverage planning, instructions
+ * fallback chain and fail-soft degradation are the ones the other on-request commands use), asks
+ * the {@link PrImproveAssistant} for improvements once per batch, then posts each one that anchors
+ * cleanly onto the diff as an inline {@code ```suggestion} block. Improvements that cannot be
+ * anchored are still surfaced as copy-paste blocks in the run's summary comment, which also carries
+ * the partial-coverage disclosure when the token budget left files uncovered.
  *
  * <p>Authorization, the pause check and the {@code improve-enabled} kill switch are enforced by
  * {@link dev.thiagogonzaga.thrillhousebot.webhook.CommentCommandService} before this runs.
@@ -80,10 +79,6 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
   private final SuggestionFormatter suggestionFormatter;
   private final PrImproveAssistant improveAssistant;
   private final ImprovementParser parser;
-  private final RepoSettingsResolver repoSettingsResolver;
-  private final DiffBudgetPlanner budgetPlanner;
-  private final ActiveModelSettings activeModel;
-  private final ThrillhouseConfig config;
 
   @Inject
   public PrImprovementService(
@@ -99,21 +94,28 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       DiffBudgetPlanner budgetPlanner,
       ActiveModelSettings activeModel,
       ThrillhouseConfig config) {
-    super(prClient, diffFormatter, instructionsResolver);
+    super(
+        prClient,
+        diffFormatter,
+        instructionsResolver,
+        repoSettingsResolver,
+        budgetPlanner,
+        activeModel,
+        config);
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.suggestionFormatter = suggestionFormatter;
     this.improveAssistant = improveAssistant;
     this.parser = parser;
-    this.repoSettingsResolver = repoSettingsResolver;
-    this.budgetPlanner = budgetPlanner;
-    this.activeModel = activeModel;
-    this.config = config;
   }
 
   /** PR coordinates for one {@code /improve} run. */
   public record ImproveTask(
-      String owner, String repo, int prNumber, String defaultBranch, long installationId) {}
+      String owner, String repo, int prNumber, String defaultBranch, long installationId) {
+    CommandTarget target() {
+      return new CommandTarget(owner, repo, defaultBranch, installationId);
+    }
+  }
 
   /**
    * Generates and posts the improvement suggestions. Swallows every failure after logging it — this
@@ -140,8 +142,16 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       }
       // Resolved once and threaded downstream: the batches and the line map must agree on which
       // files are in scope, or an out-of-scope file could still be anchored onto.
-      var reviewable = respectPerRepoIgnores(task, inputs.reviewableFiles());
-      var plan = planBatches(reviewable, inputs);
+      var reviewable = respectPerRepoIgnores(task.target(), COMMAND, inputs.reviewableFiles());
+      // No reduce call: the summary comment is assembled locally, so the whole max-ai-calls
+      // allowance goes to batches and an invocation costs at most what one review costs.
+      var plan =
+          planBatches(
+              reviewable,
+              inputs,
+              PrImproveAssistantPrompts.system(),
+              PrSuggestionPrompts.user(),
+              0);
       if (plan.batches().isEmpty()) {
         postComment(auth, task, NO_CHANGES + disclosure(plan));
         return;
@@ -166,76 +176,6 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       Log.warnf(
           e, "Failed to handle /improve on %s/%s #%d", task.owner(), task.repo(), task.prNumber());
     }
-  }
-
-  /**
-   * Plans the whole-PR pass as token-budgeted batches over the reviewable files, the way the review
-   * path does since #53 — rather than one call over a line-capped diff string, which silently drops
-   * whole files from a command whose entire value is covering the change set. An explicit {@code
-   * max-input-tokens <= 0} disables budgeting and yields a single uncapped batch.
-   */
-  private DiffBudgetPlanner.BudgetPlan planBatches(
-      List<GitHubPullRequestClient.FileDiff> reviewable, Inputs inputs) {
-    if (activeModel.maxInputTokens() <= 0) {
-      return budgetPlanner.plan(reviewable, 0, 1);
-    }
-    return budgetPlanner.plan(
-        reviewable, sharedPromptOverhead(inputs), budgetPlanner.perCallInputBudget(), maxBatches());
-  }
-
-  /**
-   * Re-filters the loaded file list through the repository's own ignore patterns (#449) on top of
-   * the deployment-wide ones {@code loadInputs} already applied. Per-repo patterns are strictly
-   * additive, so narrowing the already-global-filtered list yields exactly the effective set
-   * without re-fetching the diff.
-   *
-   * <p>This matters more now than it did before batching: while the pass was capped at {@code
-   * max-diff-lines}, a repo-ignored file beyond the cap was excluded by accident. Now that every
-   * file is in scope, {@code /improve} would otherwise propose committable edits to generated or
-   * vendored code a repository explicitly asked the bot to leave alone. Fails soft to the global
-   * set, like the review path.
-   */
-  private List<GitHubPullRequestClient.FileDiff> respectPerRepoIgnores(
-      ImproveTask task, List<GitHubPullRequestClient.FileDiff> globallyFiltered) {
-    var repoSettings =
-        SoftLoaders.repoSettings(
-            repoSettingsResolver,
-            task.owner(),
-            task.repo(),
-            task.defaultBranch(),
-            task.installationId(),
-            COMMAND);
-    if (repoSettings.ignoredFiles().isEmpty()) {
-      return globallyFiltered;
-    }
-    return diffFormatter()
-        .reviewableFiles(
-            globallyFiltered, diffFormatter().ignoreGlobs(repoSettings.ignoredFiles()));
-  }
-
-  /**
-   * Everything except the diff that every batch call repeats, so the planner can subtract it before
-   * sizing batches. Mirrors how {@link DiffBudgetPlanner#plan(List, AiReviewService.PromptInputs)}
-   * assembles the review path's overhead: both prompt templates, the per-call fence scaffolding,
-   * and each non-diff section — omitting any of them would let "in-budget" batches overshoot the
-   * model's real input limit.
-   */
-  private String sharedPromptOverhead(Inputs inputs) {
-    return PrImproveAssistantPrompts.SYSTEM
-        + PrSuggestionPrompts.USER
-        + PromptTemplateEscaper.fence(" ")
-        + PromptTemplateEscaper.escape(inputs.title())
-        + PromptTemplateEscaper.escape(inputs.body())
-        + PromptTemplateEscaper.escape(inputs.instructions());
-  }
-
-  /**
-   * The most model calls one {@code /improve} may spend. Unlike a review, this command makes no
-   * final summary call — its summary comment is assembled locally — so the whole {@code
-   * max-ai-calls} allowance goes to batches, and an invocation costs at most what one review costs.
-   */
-  private int maxBatches() {
-    return Math.max(1, config.review().maxAiCalls());
   }
 
   /** Improvements merged across batches, plus how many batch calls failed outright. */
@@ -329,7 +269,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
           "/improve has no head SHA for %s/%s #%d — falling back to copy-paste blocks",
           task.owner(), task.repo(), task.prNumber());
     }
-    int cap = config.review().maxReviewComments();
+    int cap = config().review().maxReviewComments();
     int committable = 0;
     var copyPaste = new ArrayList<ImprovementResponse.Improvement>();
     int skippedByCap = 0;
@@ -448,9 +388,9 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
 
   /**
    * The summary comment for a completed run: the committable count, a copy-paste section for the
-   * improvements that could not be anchored, and the partial-coverage disclosure when the diff line
-   * budget dropped whole files — so improvements derived from a truncated diff are never presented
-   * as if they covered the whole PR (reuses the review path's wording).
+   * improvements that could not be anchored, and the partial-coverage disclosure when the token
+   * budget left whole files uncovered — so improvements derived from part of the change set are
+   * never presented as if they covered the whole PR (reuses the review path's wording).
    */
   private String summaryMessage(
       ImproveOutcome outcome, DiffBudgetPlanner.BudgetPlan plan, int failedBatches) {
@@ -505,30 +445,10 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
         .toString();
   }
 
-  /**
-   * The partial-coverage disclosure for a run, sourced from the token-budget plan: files that did
-   * not fit any batch and files clipped to fit one. Both are named, so a large PR says which parts
-   * of the change set the pass did not cover rather than only how many.
-   */
-  private static String disclosure(DiffBudgetPlanner.BudgetPlan plan) {
-    if (!plan.truncated()) {
-      return "";
-    }
-    return ReviewResult.truncationDisclosure(
-        plan.omittedFiles().size() + plan.clippedFiles().size(),
-        new ReviewResult.TruncationDetail(plan.omittedFiles(), plan.clippedFiles()));
-  }
-
-  /**
-   * Discloses batches whose model call failed, so a partial pass is never presented as complete.
-   */
+  /** Discloses batches whose model call failed, in {@code /improve}'s own terms. */
   private static String batchFailureNote(int failedBatches) {
-    return failedBatches > 0
-        ? "\n\n> ⚠️ **Partial pass.** "
-            + failedBatches
-            + " batch(es) of this PR could not be analyzed, so improvements for the files in them"
-            + " are missing. Re-run `/improve` to retry them."
-        : "";
+    return batchFailureNote(
+        failedBatches, COMMAND, "improvements for the files in them are missing.");
   }
 
   private void postComment(String auth, ImproveTask task, String body) {
