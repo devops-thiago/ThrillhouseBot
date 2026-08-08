@@ -130,6 +130,7 @@ class FindingPipelineTest {
         List.of(),
         "",
         "",
+        "",
         List.of(
             new FileDiff("a.java", "modified", 3, 0, 3, ""),
             new FileDiff("b.java", "modified", 2, 0, 2, "")),

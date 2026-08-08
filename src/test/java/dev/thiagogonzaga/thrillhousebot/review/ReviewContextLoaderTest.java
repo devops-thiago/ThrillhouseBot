@@ -47,6 +47,7 @@ class ReviewContextLoaderTest {
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private ProjectStackResolver projectStackResolver;
+  @Mock private ConfigKeyContextResolver configKeyContextResolver;
   @Mock private PrLabeler labeler;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private ReviewSessionPersistence sessionPersistence;
@@ -72,6 +73,7 @@ class ReviewContextLoaderTest {
             labeler,
             followUpAnalyzer,
             new BugFixContextResolver(commentClient),
+            configKeyContextResolver,
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel);
@@ -777,6 +779,43 @@ class ReviewContextLoaderTest {
                   "owner", "repo", 1, "sha", "title", "", "base", "main", 123L, false));
 
       assertEquals("", stack);
+    }
+  }
+
+  /** #108 — config-key definitions are best-effort enrichment read at the PR head. */
+  @Nested
+  class ResolveConfigKeyContext {
+
+    private static final ReviewOrchestrator.ReviewRequest REQUEST =
+        new ReviewOrchestrator.ReviewRequest(
+            "owner", "repo", 1, "headsha", "title", "", "base", "main", 123L, false);
+
+    @Test
+    void shouldResolveAtThePrHeadSha() {
+      var files =
+          List.of(new GitHubPullRequestClient.FileDiff("README.md", "modified", 1, 0, 1, ""));
+      when(configKeyContextResolver.resolve("auth", "owner", "repo", "headsha", files))
+          .thenReturn("### definitions");
+
+      assertEquals("### definitions", loader.resolveConfigKeyContext("auth", REQUEST, files));
+    }
+
+    @Test
+    void shouldReturnEmptyWhenTheResolverThrows() {
+      when(configKeyContextResolver.resolve(any(), any(), any(), any(), any()))
+          .thenThrow(new RuntimeException("github down"));
+
+      assertEquals("", loader.resolveConfigKeyContext("auth", REQUEST, List.of()));
+    }
+
+    @Test
+    void shouldReturnEmptyWithoutResolvingWhenNoRefIsKnown() {
+      var noRef =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 1, "", "title", "", "base", "", 123L, false);
+
+      assertEquals("", loader.resolveConfigKeyContext("auth", noRef, List.of()));
+      verifyNoInteractions(configKeyContextResolver);
     }
   }
 
