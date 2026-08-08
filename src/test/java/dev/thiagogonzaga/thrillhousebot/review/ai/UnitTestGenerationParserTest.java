@@ -74,11 +74,13 @@ class UnitTestGenerationParserTest {
             """
             {"tests":[null,
                       {"path":" ","language":"java","covers":"c","code":"x"},
+                      {"path":null,"language":"java","covers":"c","code":"x"},
                       {"path":"t/FooTest.java","language":"java","covers":"c","code":"  "},
+                      {"path":"t/QuxTest.java","language":"java","covers":"c"},
                       {"path":"t/BarTest.java","language":"java","covers":"c","code":"x"}]}
             """);
 
-    assertEquals(3, response.tests().size());
+    assertEquals(5, response.tests().size());
     assertEquals(1, response.postableTests().size());
     assertEquals("t/BarTest.java", response.postableTests().getFirst().path());
   }

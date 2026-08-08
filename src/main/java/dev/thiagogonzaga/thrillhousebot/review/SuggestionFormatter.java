@@ -32,6 +32,9 @@ public class SuggestionFormatter {
   /** What a code-fence info string may look like — a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG_PATTERN = Pattern.compile("[a-z0-9+#._-]{1,20}");
 
+  /** Any whitespace run, including the line breaks that would restructure a rendered comment. */
+  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
   /**
    * Wraps suggestion_old and suggestion_new in a GitHub suggestion block.
    *
@@ -116,12 +119,14 @@ public class SuggestionFormatter {
    * path it belongs at, rather than being forced into the inline-suggestion shape.
    *
    * <p>The fence is widened past the longest backtick run in the source, so a test that itself
-   * contains a fenced block cannot break out of the comment.
+   * contains a fenced block cannot break out of the comment. The path and the "covers" note are
+   * flattened to a single line for the same reason: every field here is model output, and a diff
+   * that prompt-injects the model must not be able to restructure the bot's comment.
    */
   public String formatGeneratedTestFile(String path, String language, String covers, String code) {
-    var sb = new StringBuilder("### `").append(path == null ? "" : path.strip()).append("`\n");
+    var sb = new StringBuilder("### `").append(headingPath(path)).append("`\n");
     if (covers != null && !covers.isBlank()) {
-      sb.append(covers.strip()).append('\n');
+      sb.append(oneLine(covers)).append('\n');
     }
     var body = code == null ? "" : code.stripTrailing();
     var fence = fenceFor(body);
@@ -134,6 +139,20 @@ public class SuggestionFormatter {
         .append(fence)
         .append('\n')
         .toString();
+  }
+
+  /**
+   * The model-supplied target path as the heading's inline-code span: one line, with its backticks
+   * removed, so a path the model invented cannot close the span and inject markdown into the
+   * comment.
+   */
+  private static String headingPath(String path) {
+    return path == null ? "" : oneLine(path).replace("`", "");
+  }
+
+  /** Model-supplied prose flattened to a single line, so it cannot open a block of its own. */
+  private static String oneLine(String value) {
+    return WHITESPACE_RUN.matcher(value.strip()).replaceAll(" ");
   }
 
   /**

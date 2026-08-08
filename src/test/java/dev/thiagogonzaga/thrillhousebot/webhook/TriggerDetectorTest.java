@@ -156,10 +156,17 @@ class TriggerDetectorTest {
 
   @Test
   void shouldNotDetectGenerateTestsInsideQuotedContext() {
-    // Documenting or quoting the command must never run it.
+    // Documenting or quoting the command must never run it — it generates content and spends
+    // the operator's AI budget.
     assertEquals(CommentCommand.NONE, detector.detectCommand("```\n/generate-tests\n```"));
     assertEquals(
         CommentCommand.NONE, detector.detectCommand("run `/generate-tests` to propose tests"));
+    // Padded inside the backticks, the slash form satisfies the whitespace boundary on its own,
+    // so this case rests on inline-code stripping rather than on the pattern.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("run ` /generate-tests ` for tests"));
+    // Same for the mention form, which has no leading-slash boundary to fall back on.
+    assertEquals(
+        CommentCommand.NONE, detector.detectCommand("run `@thrillhousebot generate-tests` please"));
     assertEquals(CommentCommand.NONE, detector.detectCommand("> someone said /generate-tests"));
     assertEquals(
         CommentCommand.NONE, detector.detectCommand("~~~\n@thrillhousebot generate-tests\n~~~"));
@@ -169,6 +176,18 @@ class TriggerDetectorTest {
   void shouldStillDetectRealCommandAlongsideQuotedOne() {
     // A genuine command outside the quoted block still fires.
     assertEquals(CommentCommand.REVIEW, detector.detectCommand("> quoting a /pause\n/review"));
+  }
+
+  @Test
+  void shouldStillDetectGenerateTestsAlongsideAQuotedOne() {
+    // A genuine invocation next to a quoted one still fires.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("```\n/generate-tests\n```\n\n/generate-tests"));
+    // A higher-precedence command that appears only inside a quote must not win over the real one.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("> please run /review first\n/generate-tests"));
   }
 
   @Test

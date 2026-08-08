@@ -214,4 +214,24 @@ class SuggestionFormatterTest {
     assertTrue(block.startsWith("### ``\n"), block);
     assertFalse(block.contains("null"), block);
   }
+
+  @Test
+  void shouldKeepAModelSuppliedPathInsideItsHeadingCodeSpan() {
+    // Every field here is model output; a prompt-injected diff must not restructure the comment.
+    var block =
+        formatter.formatGeneratedTestFile(
+            "t/FooTest.java`\n\n## Injected\n```", "java", null, "code");
+
+    assertTrue(block.startsWith("### `t/FooTest.java ## Injected `\n"), block);
+    assertFalse(block.contains("\n## Injected"), block);
+  }
+
+  @Test
+  void shouldFlattenAMultiLineCoversNote() {
+    var block =
+        formatter.formatGeneratedTestFile("t/FooTest.java", "java", "covers\n```\nboom", "code");
+
+    assertTrue(block.contains("covers ``` boom\n"), block);
+    assertTrue(block.contains("```java\ncode\n```"), block);
+  }
 }

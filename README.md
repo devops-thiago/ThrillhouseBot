@@ -102,8 +102,9 @@ the repository (or to be named in
 AI budget.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
-ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, and `/generate-tests`, and does not answer
-`@thrillhousebot` mentions (it replies once to say it is paused). `/resume` lifts the pause.
+ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs` and `/generate-tests`,
+and does not answer `@thrillhousebot` mentions (it replies once to say it is paused).
+`/resume` lifts the pause.
 `/help` and `/resolve` keep working while paused.
 
 **`/add-docs`** — on demand, the bot reads the diff and proposes documentation comments for
@@ -587,8 +588,8 @@ This is still an early-stage project; the current constraints are:
 - **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
   split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
   don't fit are disclosed by name instead of silently dropped. The on-demand commands
-  (`/describe`, `/changelog`, `/add-docs`, `/generate-tests`) still send the diff in a single call without
-  batching.
+  (`/describe`, `/changelog`, `/add-docs`, `/generate-tests`) still send the diff in a
+  single call without batching.
 - **Pure renames** — files GitHub reports as `renamed` with zero additions/deletions and
   no patch are omitted from AI review input (they have nothing to review). The summary
   overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit
