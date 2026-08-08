@@ -422,13 +422,14 @@ Place a `.github/thrillhousebot.md` file in any repo to customize the review:
 
 Fallback chain: `.github/thrillhousebot.md` → `.github/copilot-instructions.md` → `CLAUDE.md` → `AGENTS.md` → `AGENT.md`
 
+<!-- docs:repository-configuration:start -->
 ## Repository configuration
 
-The instructions file above is prose for the model. Structured settings live in a
-separate, optional `.github/thrillhousebot.yml` (`.github/thrillhousebot.yaml` also
-works) — kept apart on purpose, because the instructions fallback chain may land on
-a file owned by another tool, and its whole content is fed to the model as untrusted
-prose:
+The instructions file (`.github/thrillhousebot.md`) is prose for the model.
+Structured settings live in a separate, optional `.github/thrillhousebot.yml`
+(`.github/thrillhousebot.yaml` also works) — kept apart on purpose, because the
+instructions fallback chain may land on a file owned by another tool, and its whole
+content is fed to the model as untrusted prose:
 
 ```yaml
 review:
@@ -453,6 +454,7 @@ unexpected shape, or an uncompilable glob is logged and skipped, leaving the glo
 list in force — it never fails a review. Operators who do not want repositories
 adjusting their own review scope can turn the whole mechanism off with
 `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`.
+<!-- docs:repository-configuration:end -->
 
 <!-- docs:pr-labels:start -->
 ## PR labels

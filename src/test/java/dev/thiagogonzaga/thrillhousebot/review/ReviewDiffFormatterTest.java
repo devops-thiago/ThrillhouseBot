@@ -211,6 +211,32 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
+    void aRepoListOfOnlyInvalidPatternsFallsBackToExactlyTheGlobalSet() {
+      var files = List.of(lockFile, fixture, source);
+
+      var globs =
+          assertDoesNotThrow(() -> formatter.ignoreGlobs(List.of("[unclosed", "{also[bad")));
+
+      // Nothing compiled, so the union contributes nothing and global-only behaviour remains:
+      // the lockfile is still dropped and the fixture is still reviewed.
+      assertEquals(formatter.reviewableFiles(files), formatter.reviewableFiles(files, globs));
+      var reviewable = formatter.reviewableFiles(files, globs);
+      assertEquals(2, reviewable.size());
+      assertEquals("test/fixtures/big.json", reviewable.get(0).filename());
+      assertEquals("src/Main.java", reviewable.get(1).filename());
+    }
+
+    @Test
+    void aNullIgnoreSetFallsBackToTheGlobalList() {
+      var reviewable = formatter.reviewableFiles(List.of(lockFile, fixture, source), null);
+
+      // Not "everything is reviewable": the global lockfile glob must still be applied.
+      assertEquals(2, reviewable.size());
+      assertEquals("test/fixtures/big.json", reviewable.get(0).filename());
+      assertEquals("src/Main.java", reviewable.get(1).filename());
+    }
+
+    @Test
     void perRepoPatternsAlsoScopeTheBaseComparison() {
       var globs = formatter.ignoreGlobs(List.of("test/fixtures/**"));
       var comparison = new GitHubPullRequestClient.CompareResponse(1, List.of(fixture, source));

@@ -105,7 +105,6 @@ class RepoSettingsResolverTest {
 
       assertEquals(java.util.List.of("docs/generated/**", "**/*.snap"), settings.ignoredFiles());
       assertEquals(YML, settings.source());
-      assertTrue(settings.isPresent());
     }
 
     @Test
@@ -167,6 +166,32 @@ class RepoSettingsResolverTest {
 
       assertEquals(java.util.List.of("kept/**"), settings.ignoredFiles());
     }
+
+    @Test
+    void ignoresAnExplicitlyEmptyIgnoredFilesKey() {
+      // `ignored-files:` with no value parses to a NullNode, not a missing node.
+      stubFile(YML, "review:\n  ignored-files:\n");
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void skipsNonScalarEntriesInsideTheList() {
+      stubFile(
+          YML,
+          """
+          review:
+            ignored-files:
+              - "kept/**"
+              - nested: mapping
+              - ["a", "b"]
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("kept/**"), settings.ignoredFiles());
+    }
   }
 
   @Nested
@@ -194,6 +219,38 @@ class RepoSettingsResolverTest {
       stubFile(YML, "- just\n- a\n- list\n");
 
       assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void blankConfigFileDegradesToEmpty() {
+      stubFile(YML, "   \n\n");
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void commentOnlyConfigFileDegradesToEmpty() {
+      // Parses to a missing root — no mapping, so nothing to read.
+      stubFile(YML, "# nothing configured yet\n");
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void nullFileContentIsTreatedAsAbsentAndFallsThroughTheChain() {
+      // The contents endpoint can answer without an inline payload (e.g. an over-size blob);
+      // decoding null would NPE, so it must be handled as "nothing readable here".
+      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent("thrillhousebot.yml", YML, null, "none", 0));
+      stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
+
+      var settings = assertDoesNotThrow(RepoSettingsResolverTest.this::resolve);
+
+      assertEquals(java.util.List.of("from-yaml/**"), settings.ignoredFiles());
+      assertEquals(YAML, settings.source());
     }
 
     @Test
@@ -229,6 +286,55 @@ class RepoSettingsResolverTest {
       assertEquals(RepoSettings.EMPTY, resolve());
       verifyNoInteractions(prClient);
       verifyNoInteractions(authClient);
+    }
+  }
+
+  /**
+   * Direct contract tests for the parsing seam {@link RepoSettingsParser}, which #33 will reuse for
+   * its own settings: it must answer {@link RepoSettings#EMPTY} for any input rather than throw.
+   */
+  @Nested
+  class ParserContract {
+
+    @Test
+    void nullInputYieldsEmptyRatherThanThrowing() {
+      assertEquals(
+          RepoSettings.EMPTY, assertDoesNotThrow(() -> RepoSettingsParser.parse(null, YML)));
+    }
+
+    @Test
+    void aReadableFileWithNoUsableSettingsIsAttributedToNoSource() {
+      // EMPTY carries source "none": only a config that actually yielded settings names its file.
+      assertEquals("none", RepoSettingsParser.parse("review: {}\n", YML).source());
+    }
+  }
+
+  /** The {@code @Inject} constructor CDI actually uses, which the other tests bypass. */
+  @Nested
+  class InjectionConstructor {
+
+    @Test
+    void wiresConfigAndClientsAndResolvesWithTheSystemClock() {
+      stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
+
+      var settings =
+          new RepoSettingsResolver(config, authClient, prClient)
+              .resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+      assertEquals(java.util.List.of("gen/**"), settings.ignoredFiles());
+      assertEquals(YML, settings.source());
+    }
+
+    @Test
+    void readsTheEnabledFlagFromConfig() {
+      when(reviewConfig.repoConfigEnabled()).thenReturn(false);
+
+      var settings =
+          new RepoSettingsResolver(config, authClient, prClient)
+              .resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+      assertEquals(RepoSettings.EMPTY, settings);
+      verifyNoInteractions(prClient);
     }
   }
 

@@ -134,10 +134,19 @@ public class RepoSettingsResolver {
   }
 
   /**
-   * Fetches and parses one candidate path. Returns {@code null} when the file is absent or could
-   * not be read — the caller then tries the next name in the chain. A file that exists but is
-   * malformed parses to {@link RepoSettings#EMPTY}, which is a real (cacheable) answer: the
-   * repository has spoken, it just said nothing usable.
+   * Fetches and parses one candidate path. The two outcomes are deliberately different:
+   *
+   * <ul>
+   *   <li>{@code null} — nothing readable came back at all: the file is absent (404), the request
+   *       failed, or the payload could not be decoded into text. The caller moves on to the next
+   *       name in the chain, because a second candidate may still hold a usable config.
+   *   <li>{@link RepoSettings#EMPTY} — the file was read, and the parse found no usable settings
+   *       (malformed YAML, wrong shape, no {@code review.ignored-files}). That is a real, cacheable
+   *       answer that ends the chain: the repository has spoken, it just said nothing usable.
+   * </ul>
+   *
+   * <p>Either way the effective result is the global list, so the distinction only decides how many
+   * candidates are tried — never whether a review proceeds.
    */
   private RepoSettings fetchAndParse(
       String auth, String owner, String repo, String defaultBranch, String path) {

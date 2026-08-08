@@ -39,9 +39,4 @@ public record RepoSettings(List<String> ignoredFiles, String source) {
   public RepoSettings {
     ignoredFiles = List.copyOf(ignoredFiles);
   }
-
-  /** Whether a config file was found and yielded at least one setting. */
-  public boolean isPresent() {
-    return !ignoredFiles.isEmpty();
-  }
 }

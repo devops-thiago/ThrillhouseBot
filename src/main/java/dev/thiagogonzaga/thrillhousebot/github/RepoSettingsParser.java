@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -84,8 +85,9 @@ final class RepoSettingsParser {
       return RepoSettings.EMPTY;
     }
     try {
-      var root = YAML_MAPPER.readTree(yaml);
-      if (root == null || !root.isObject()) {
+      // Pattern match rather than isObject(): one test rejects a scalar or sequence document
+      // (which carries no settings) and a null/missing root alike.
+      if (!(YAML_MAPPER.readTree(yaml) instanceof ObjectNode root)) {
         log.warn("Repository config {} is not a YAML mapping; ignoring it", source);
         return RepoSettings.EMPTY;
       }
@@ -106,30 +108,37 @@ final class RepoSettingsParser {
    * written as an environment variable. Anything else is ignored.
    */
   private static List<String> readPatterns(JsonNode node, String source) {
-    if (node == null || node.isMissingNode() || node.isNull()) {
-      return List.of();
-    }
-    var raw = new ArrayList<String>();
-    if (node.isArray()) {
-      for (var element : node) {
-        if (element.isValueNode()) {
-          raw.add(element.asText());
-        }
+    return switch (node.getNodeType()) {
+      // path() yields a MissingNode when the key is absent, and `ignored-files:` with no value
+      // yields a NullNode. Both mean the repository declared nothing — not a malformed config.
+      case MISSING, NULL -> List.of();
+      case ARRAY -> sanitize(scalarEntries(node), source);
+      // A lone scalar is split on commas, matching how the global key is written as an env var.
+      case STRING -> sanitize(List.of(node.asText().split(",")), source);
+      default -> {
+        log.warn("Repository config {}: review.ignored-files is not a list; ignoring it", source);
+        yield List.of();
       }
-    } else if (node.isValueNode()) {
-      raw.addAll(List.of(node.asText().split(",")));
-    } else {
-      log.warn("Repository config {}: review.ignored-files is not a list; ignoring it", source);
-      return List.of();
+    };
+  }
+
+  /** The scalar entries of a sequence; a nested mapping or sequence entry is not a glob. */
+  private static List<String> scalarEntries(JsonNode array) {
+    var raw = new ArrayList<String>(array.size());
+    for (var element : array) {
+      if (element.isValueNode()) {
+        raw.add(element.asText());
+      }
     }
-    return sanitize(raw, source);
+    return raw;
   }
 
   /** Trims, drops blank/oversized entries, and caps the total a repository may contribute. */
   private static List<String> sanitize(List<String> raw, String source) {
     var patterns = new ArrayList<String>(Math.min(raw.size(), MAX_PATTERNS));
     for (String value : raw) {
-      var pattern = value == null ? "" : value.trim();
+      // Never null: entries come from asText() (empty string at worst) or String.split.
+      var pattern = value.trim();
       if (pattern.isEmpty()) {
         continue;
       }
