@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -193,11 +194,10 @@ public class ConfigKeyContextResolver {
       if (scanned >= MAX_DOC_FILES || tokens.size() >= MAX_TOKENS) {
         break;
       }
-      if (!isDocumentationFile(file.filename()) || file.patch() == null) {
-        continue;
+      if (isDocumentationFile(file.filename()) && file.patch() != null) {
+        scanned++;
+        collectTokens(addedLines(file.patch()), tokens);
       }
-      scanned++;
-      collectTokens(addedLines(file.patch()), tokens);
     }
     return List.copyOf(tokens);
   }
@@ -261,13 +261,8 @@ public class ConfigKeyContextResolver {
     }
     var resources = new ArrayList<String>();
     var sources = new ArrayList<String>();
-    // A null entry is impossible: TreeResponse copies the list with List.copyOf, which rejects
-    // null elements before this loop ever runs. A null path inside an entry is still possible.
     for (var entry : entries) {
-      if (!"blob".equals(entry.type()) || entry.path() == null) {
-        continue;
-      }
-      if (entry.size() > MAX_CANDIDATE_BYTES || isTestPath(entry.path())) {
+      if (!isWorthReading(entry)) {
         continue;
       }
       if (isConfigResource(entry.path())) {
@@ -298,6 +293,19 @@ public class ConfigKeyContextResolver {
       }
     }
     return slashes;
+  }
+
+  /**
+   * Whether a tree entry is a file this resolver would ever spend a fetch on: a blob with a path,
+   * small enough to be a config file, and not a test source. A null entry is impossible here —
+   * {@code TreeResponse} copies the list with {@code List.copyOf}, which rejects null elements
+   * before the walk begins — but a null path inside an entry is not.
+   */
+  static boolean isWorthReading(GitHubPullRequestClient.TreeEntry entry) {
+    return "blob".equals(entry.type())
+        && entry.path() != null
+        && entry.size() <= MAX_CANDIDATE_BYTES
+        && !isTestPath(entry.path());
   }
 
   /** An {@code application*.properties/yaml/yml} configuration resource. */
@@ -348,10 +356,7 @@ public class ConfigKeyContextResolver {
       String ref,
       List<String> candidates,
       List<String> tokens) {
-    var normalized = new LinkedHashMap<String, String>();
-    for (var token : tokens) {
-      normalized.put(token, normalize(token));
-    }
+    var normalized = normalizedByToken(tokens);
     var found = new LinkedHashMap<String, List<String>>();
     var fetched = 0;
     for (var path : candidates) {
@@ -359,29 +364,44 @@ public class ConfigKeyContextResolver {
         break;
       }
       var content = fetchContent(auth, owner, repo, path, ref);
-      if (content == null) {
-        continue;
+      if (content != null) {
+        fetched++;
+        absorbFile(path, content.split("\n", -1), normalized, found);
       }
-      fetched++;
-      var lines = content.split("\n", -1);
-      for (var entry : normalized.entrySet()) {
-        var snippets = found.computeIfAbsent(entry.getKey(), unused -> new ArrayList<>());
-        if (snippets.size() >= MAX_SNIPPETS_PER_KEY) {
-          continue;
-        }
-        for (var snippet : snippetsFor(path, lines, entry.getValue())) {
-          if (snippets.size() >= MAX_SNIPPETS_PER_KEY) {
-            break;
-          }
-          snippets.add(snippet);
-        }
-      }
-      found.values().removeIf(List::isEmpty);
     }
     return found.entrySet().stream()
         .limit(MAX_KEYS_RENDERED)
         .map(entry -> new KeyDefinition(entry.getKey(), entry.getValue()))
         .toList();
+  }
+
+  /** Each token paired with its normalized form, computed once for the whole walk. */
+  private static Map<String, String> normalizedByToken(List<String> tokens) {
+    var normalized = new LinkedHashMap<String, String>();
+    for (var token : tokens) {
+      normalized.put(token, normalize(token));
+    }
+    return normalized;
+  }
+
+  /**
+   * Adds one file's definition sites to {@code found}, taking only as many snippets per token as
+   * that token still has room for. Keys the file says nothing about are left out entirely, so
+   * {@code found.size()} stays an accurate count of how many keys are actually resolved.
+   */
+  private static void absorbFile(
+      String path,
+      String[] lines,
+      Map<String, String> normalized,
+      Map<String, List<String>> found) {
+    for (var entry : normalized.entrySet()) {
+      var snippets = found.computeIfAbsent(entry.getKey(), unused -> new ArrayList<>());
+      var room = MAX_SNIPPETS_PER_KEY - snippets.size();
+      if (room > 0) {
+        snippetsFor(path, lines, entry.getValue()).stream().limit(room).forEach(snippets::add);
+      }
+    }
+    found.values().removeIf(List::isEmpty);
   }
 
   /** A repository file's decoded text, or {@code null} when it cannot be read. */
@@ -405,17 +425,14 @@ public class ConfigKeyContextResolver {
     var snippets = new ArrayList<String>();
     var lastRendered = -1;
     for (var i = 0; i < lines.length && snippets.size() < MAX_SNIPPETS_PER_KEY; i++) {
-      if (!lineDefines(lines[i], normalizedToken)) {
-        continue;
-      }
       var from = Math.max(0, i - CONTEXT_LINES_BEFORE);
-      var to = Math.min(lines.length - 1, i + CONTEXT_LINES_AFTER);
-      if (from <= lastRendered) {
-        // Adjacent matches (a property and its override on consecutive lines) share one snippet.
-        continue;
+      // from > lastRendered skips a match the previous window already shows: adjacent matches (a
+      // property and its override on consecutive lines) share one snippet rather than repeating it.
+      if (lineDefines(lines[i], normalizedToken) && from > lastRendered) {
+        var to = Math.min(lines.length - 1, i + CONTEXT_LINES_AFTER);
+        snippets.add(renderSnippet(path, lines, from, to));
+        lastRendered = to;
       }
-      snippets.add(renderSnippet(path, lines, from, to));
-      lastRendered = to;
     }
     return snippets;
   }
@@ -481,13 +498,20 @@ public class ConfigKeyContextResolver {
   static String normalize(String value) {
     var out = new StringBuilder(value.length());
     for (var i = 0; i < value.length(); i++) {
-      var c = value.charAt(i);
-      out.append(
-          (c >= 'a' && c <= 'z')
-              ? (char) (c - 32)
-              : ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) ? c : '_');
+      out.append(normalizeChar(value.charAt(i)));
     }
     return out.toString();
+  }
+
+  /** Uppercase for a letter, the digit itself for a digit, {@code _} for anything else. */
+  private static char normalizeChar(char c) {
+    if (c >= 'a' && c <= 'z') {
+      return (char) (c - ('a' - 'A'));
+    }
+    if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+      return c;
+    }
+    return '_';
   }
 
   /**
