@@ -47,7 +47,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
-- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
@@ -91,6 +91,7 @@ not a reaction.
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
+| `/improve` | Run a whole-PR improvement pass over the diff and post the improvements as committable suggestions (with copy-paste blocks for the ones that can't be pinned to the diff) | write |
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
@@ -101,7 +102,7 @@ the repository (or to be named in
 AI budget.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
-ignores `/review`, `/summary`, `/describe`, `/changelog`, and `/add-docs`, and does not answer
+ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, and `/improve`, and does not answer
 `@thrillhousebot` mentions (it replies once to say it is paused). `/resume` lifts the pause.
 `/help` and `/resolve` keep working while paused.
 
@@ -112,6 +113,20 @@ declaration (spanning the whole signature when it wraps), so it only inserts doc
 rewriting code. When a multi-line declaration can't be pinned to a single diff hunk, the bot
 posts a note with the drafted docs to add manually instead of a committable suggestion. It
 spends AI budget per run; operators can turn it off with `REVIEW_ADD_DOCS_ENABLED=false`.
+
+**`/improve`** — on demand, the bot runs an improvement pass over the whole PR and proposes
+concrete changes the author can commit: clearer naming, dead or duplicated code, simpler
+control flow, missing error handling, avoidable work in loops, and gaps in the tests covering
+the change. It is deliberately separate from `/review`: `/review` looks for defects,
+`/improve` proposes better code even when nothing is broken. Like a review, the pass is
+token-budgeted rather than line-capped: the changed files are packed into batches that each fit
+`REVIEW_MAX_INPUT_TOKENS`, one model call per batch, so a long diff only loses coverage once it
+exceeds the whole budget. Each improvement whose quoted code anchors onto the diff is posted as
+an inline committable `suggestion` block on the lines it replaces; the rest are listed as
+copy-paste blocks in the run's summary comment, together with a partial-coverage note naming
+any file the budget could not cover. Nothing is ever committed for you. It spends AI budget per
+run — at most `REVIEW_MAX_AI_CALLS` model calls, the same ceiling as one review — and operators
+can turn it off with `REVIEW_IMPROVE_ENABLED=false`.
 <!-- docs:commands:end -->
 
 ## Quick start
@@ -248,12 +263,13 @@ will change per provider:
 | `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
+| `REVIEW_IMPROVE_ENABLED` | Allow the on-demand `/improve` command to run a whole-PR improvement pass and post committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
-| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
+| `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review and `/improve` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call) and per `/improve` run (batch calls only — its summary is assembled locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, budgeting-disabled review). Token-budgeted reviews ignore it (planner owns coverage by tokens); `0` disables the cap | `5000` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/describe`, `/changelog`, `/add-docs`, replies, budgeting-disabled review). Token-budgeted reviews and `/improve` ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
 | `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
@@ -576,9 +592,10 @@ This is still an early-stage project; the current constraints are:
 - **GitHub only** — no GitLab or Bitbucket integration.
 - **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
   split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
-  don't fit are disclosed by name instead of silently dropped. The on-demand commands
-  (`/describe`, `/changelog`, `/add-docs`) still send the diff in a single call without
-  batching.
+  don't fit are disclosed by name instead of silently dropped. `/improve` batches the same
+  way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call). The other
+  on-demand commands (`/describe`, `/changelog`, `/add-docs`) still send the diff in a
+  single call without batching.
 - **Pure renames** — files GitHub reports as `renamed` with zero additions/deletions and
   no patch are omitted from AI review input (they have nothing to review). The summary
   overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit

@@ -177,4 +177,98 @@ class SuggestionFormatterTest {
     // A null draft renders an empty block rather than the literal "null".
     assertFalse(blank.contains("null"), blank);
   }
+
+  @Test
+  void shouldFormatImprovementCommentAsACommittableSuggestion() {
+    var body =
+        formatter.formatImprovementComment(
+            "  Close the stream  ",
+            " error-handling ",
+            "  The stream leaks when read() throws.  ",
+            "var in = open();",
+            "try (var in = open()) {");
+
+    assertTrue(body.contains("**✨ Improvement — Close the stream**"), body);
+    assertTrue(body.contains("`error-handling`"), body);
+    assertTrue(body.contains("The stream leaks when read() throws."), body);
+    assertTrue(body.contains("```suggestion"), body);
+    assertTrue(body.contains("try (var in = open()) {"), body);
+  }
+
+  @Test
+  void shouldFormatImprovementCommentWhenTitleCategoryAndRationaleAreMissing() {
+    var nulls = formatter.formatImprovementComment(null, null, null, "old", "new");
+    var blanks = formatter.formatImprovementComment("  ", " ", " \n ", "old", "new");
+
+    for (var body : new String[] {nulls, blanks}) {
+      // The header degrades to the bare label rather than rendering "null" or an empty backtick
+      // pair, and the committable suggestion is still emitted.
+      assertTrue(body.startsWith("**✨ Improvement**"), body);
+      assertFalse(body.contains("—"), body);
+      assertFalse(body.contains("``` `"), body);
+      assertFalse(body.contains("null"), body);
+      assertTrue(body.contains("```suggestion"), body);
+    }
+  }
+
+  @Test
+  void shouldFormatImprovementBlockAsCopyPasteWithoutASuggestion() {
+    var block =
+        formatter.formatImprovementBlock(
+            " Extract the retry loop ",
+            " maintainability ",
+            " Duplicated in three call sites. ",
+            " src/Foo.java ",
+            80,
+            "retryPolicy.run(this::call);\n");
+
+    assertTrue(block.startsWith("**Extract the retry loop**"), block);
+    assertTrue(block.contains("`maintainability`"), block);
+    assertTrue(block.contains("`src/Foo.java:80`"), block);
+    assertTrue(block.contains("Duplicated in three call sites."), block);
+    assertTrue(block.contains("retryPolicy.run(this::call);"), block);
+    // Copy-paste only — it must never render as a committable suggestion.
+    assertFalse(block.contains("```suggestion"), block);
+  }
+
+  @Test
+  void shouldRenderImprovementBlockFencesByteExactly() {
+    // Locks the exact fenced-block bytes: the fence constant carries the newline on each side, so
+    // the block must open and close on their own lines with no blank line inside it.
+    var block = formatter.formatImprovementBlock("T", null, null, null, 0, "line one\nline two");
+
+    assertEquals("**T**\n\n```\nline one\nline two\n```\n", block);
+  }
+
+  @Test
+  void shouldRenderDocNoteFencesByteExactly() {
+    var note = formatter.formatDocNote("Foo.bar()", "/** doc */");
+
+    // The blank line before the fence and the absence of one after it are the point of this
+    // assertion: the fence constant supplies both newlines itself.
+    assertEquals(
+        """
+        **📝 Documentation for `Foo.bar()`**
+        This symbol is missing documentation. Suggested:
+
+        ```
+        /** doc */
+        ```
+        """,
+        note);
+  }
+
+  @Test
+  void shouldFormatImprovementBlockWhenEveryOptionalFieldIsMissing() {
+    var nulls = formatter.formatImprovementBlock(null, null, null, null, 0, null);
+    var blanks = formatter.formatImprovementBlock(" ", "  ", " \n ", "  ", 0, "code");
+
+    assertTrue(nulls.startsWith("**Improvement**"), nulls);
+    assertTrue(blanks.startsWith("**Improvement**"), blanks);
+    for (var block : new String[] {nulls, blanks}) {
+      assertFalse(block.contains("null"), block);
+      assertFalse(block.contains(":0`"), block);
+      assertFalse(block.contains("—"), block);
+    }
+  }
 }

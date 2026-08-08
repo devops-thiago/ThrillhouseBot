@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
+import dev.thiagogonzaga.thrillhousebot.review.PrImprovementService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
@@ -38,9 +39,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Executes the comment commands beyond {@code /review} — {@code /help}, {@code /summary}, {@code
- * /describe}, {@code /changelog}, {@code /add-docs}, {@code /resolve}, {@code /pause}, {@code
- * /resume}. Work runs on the shared review executor so the webhook 200-ack thread is never blocked
- * by GitHub API calls.
+ * /describe}, {@code /changelog}, {@code /add-docs}, {@code /improve}, {@code /resolve}, {@code
+ * /pause}, {@code /resume}. Work runs on the shared review executor so the webhook 200-ack thread
+ * is never blocked by GitHub API calls.
  */
 @ApplicationScoped
 public class CommentCommandService {
@@ -64,6 +65,7 @@ public class CommentCommandService {
       | `/describe` | Suggest an improved PR title and description from the diff |
       | `/changelog` | Draft a CHANGELOG entry for this PR from the diff |
       | `/add-docs` | Suggest docstrings for the symbols changed in this PR |
+      | `/improve` | Suggest committable improvements across the whole PR |
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
       | `/resume` | Re-enable the bot on a paused PR |
@@ -85,6 +87,7 @@ public class CommentCommandService {
   private final PrDescriptionGenerator descriptionGenerator;
   private final ChangelogEntryGenerator changelogGenerator;
   private final DocGenerationService docGenerationService;
+  private final PrImprovementService improvementService;
   private final ThrillhouseConfig config;
 
   @Inject
@@ -102,6 +105,7 @@ public class CommentCommandService {
       PrDescriptionGenerator descriptionGenerator,
       ChangelogEntryGenerator changelogGenerator,
       DocGenerationService docGenerationService,
+      PrImprovementService improvementService,
       ThrillhouseConfig config) {
     this.executor = executor;
     this.authClient = authClient;
@@ -116,6 +120,7 @@ public class CommentCommandService {
     this.descriptionGenerator = descriptionGenerator;
     this.changelogGenerator = changelogGenerator;
     this.docGenerationService = docGenerationService;
+    this.improvementService = improvementService;
     this.config = config;
   }
 
@@ -158,6 +163,7 @@ public class CommentCommandService {
         case DESCRIBE -> handleDescribe(ctx, auth);
         case CHANGELOG -> handleChangelog(ctx, auth);
         case ADD_DOCS -> handleAddDocs(ctx, auth);
+        case IMPROVE -> handleImprove(ctx, auth);
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
         case RESUME -> handleResume(ctx, auth);
@@ -293,6 +299,31 @@ public class CommentCommandService {
     docGenerationService.handle(
         new DocGenerationService.DocTask(
             ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.defaultBranch(), ctx.installationId()));
+  }
+
+  private void handleImprove(CommandContext ctx, String auth) {
+    if (!config.review().improveEnabled()) {
+      log.info("Ignoring /improve on PR #{} — the command is disabled", num(ctx));
+      return;
+    }
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized /improve from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+      postComment(auth, ctx, PAUSED_NOTICE);
+      return;
+    }
+    log.info(
+        "Generating improvements for {}/{} #{} (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    improvementService.handle(
+        new PrImprovementService.ImproveTask(
+            ctx.owner(), ctx.repo(), ctx.prNumber(), ctx.defaultBranch(), ctx.installationId()),
+        auth);
   }
 
   private void handleResolve(CommandContext ctx, String auth) {

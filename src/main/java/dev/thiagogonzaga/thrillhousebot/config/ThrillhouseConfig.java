@@ -246,6 +246,17 @@ public interface ThrillhouseConfig {
     boolean addDocsEnabled();
 
     /**
+     * Whether the {@code /improve} command is available. When a write-access holder runs it, the
+     * model runs a whole-PR improvement pass over the diff and posts the improvements as
+     * committable suggestions. Each invocation spends the operator's AI budget, so this is the
+     * operator's kill switch; like {@code add-docs-enabled} the command is otherwise on-demand only
+     * (never automatic), which is why it ships on.
+     */
+    @WithDefault("true")
+    @WithName("improve-enabled")
+    boolean improveEnabled();
+
+    /**
      * Glob patterns for files excluded from review scope. Defaults cover lockfiles, minified
      * bundles, sourcemaps, protobuf-generated code, and build/vendor output dirs across common
      * ecosystems — generated or vendored artifacts only, never handwritten source. Overridable per

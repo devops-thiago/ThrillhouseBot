@@ -311,11 +311,23 @@ public record ReviewResult(
    * content.
    */
   public static String truncationDisclosure(int omittedFiles) {
-    return omittedFiles > 0
-        ? "\n\n> ⚠️ **Large PR — partial coverage.** "
-            + omittedFilesClause(omittedFiles)
-            + ", so this covers only part of the diff."
-        : "";
+    return truncationDisclosure(omittedFiles, TruncationDetail.EMPTY);
+  }
+
+  /**
+   * Disclosure variant that names the uncovered files when a token-budget plan knows them, and
+   * separates files dropped entirely from files only partially analyzed. Mirrors {@link
+   * #truncationNotice(int, TruncationDetail)} so an on-demand command that batches under the token
+   * budget upholds the same "reported by name, never silently dropped" contract as the review
+   * banner; falls back to the numeric clause when only a count is known.
+   */
+  public static String truncationDisclosure(int omittedFiles, TruncationDetail detail) {
+    if (omittedFiles <= 0 && (detail == null || detail.isEmpty())) {
+      return "";
+    }
+    return "\n\n> ⚠️ **Large PR — partial coverage.** "
+        + coverageGapClause(omittedFiles, detail)
+        + ", so this covers only part of the diff.";
   }
 
   public int totalFindings() {
