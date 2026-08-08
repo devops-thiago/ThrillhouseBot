@@ -117,6 +117,49 @@ public class ReviewPublisher {
   }
 
   /**
+   * Posts the opt-in follow-up delta comment — the short "what moved since the last pass" note
+   * described by {@link FollowUpDeltaSummary}. Independent of {@link #publishSummary}: it never
+   * runs on a first review, and never on a round that did post a summary comment, so the two can
+   * not both land on the same review and the first-run summary is never duplicated.
+   *
+   * <p>Its outcome deliberately does <em>not</em> feed the {@code summaryPosted} flag {@link
+   * #postReview} keys its redundant-review skips on. That flag means "the PR already carries this
+   * round's verdict in a comment"; a delta comment carries counts, not a verdict, so letting it
+   * suppress the review would leave a clean follow-up with no stated outcome at all.
+   *
+   * @param summaryPosted whether {@link #publishSummary} created or refreshed a summary comment on
+   *     this round — when it did, this comment is skipped rather than posted beside it
+   * @return {@code true} when the delta comment was created; {@code false} when the feature is off,
+   *     the review is a first review, a summary was posted, or the round has no delta to report
+   */
+  boolean publishFollowUpDelta(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      ReviewResult result,
+      boolean summaryPosted) {
+    if (!config.review().followUpSummary().enabled() || result.isFirstReview() || summaryPosted) {
+      return false;
+    }
+    var body = FollowUpDeltaSummary.render(result);
+    if (body.isEmpty()) {
+      Log.debugf(
+          "No delta to report for %s/%s #%d — skipping the follow-up summary comment",
+          owner, repo, prNumber);
+      return false;
+    }
+    commentClient.createComment(
+        auth,
+        ACCEPT,
+        owner,
+        repo,
+        prNumber,
+        new GitHubCommentClient.CreateCommentRequest(body.get()));
+    return true;
+  }
+
+  /**
    * Replaces the stale summary with the regenerated one after a finding was superseded: edits the
    * bot's newest existing summary comment in place, so the PR never shows the outdated summary
    * (describing removed code) next to the fresh one. Creates a new comment only when no summary

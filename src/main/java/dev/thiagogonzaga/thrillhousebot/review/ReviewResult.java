@@ -194,6 +194,16 @@ public record ReviewResult(
     return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
   }
 
+  /**
+   * How many previous findings this round closed as fixed. Strictly the {@code resolved} status:
+   * {@code justified} is a maintainer's decline, not a fix, and {@code superseded} is an auto-close
+   * because the targeted code left the diff — counting either as "resolved" would overstate what
+   * the round actually fixed.
+   */
+  public long resolvedPreviousCount() {
+    return previousStatuses.stream().filter(s -> "resolved".equalsIgnoreCase(s.status())).count();
+  }
+
   // A backstop-held finding may have no inline thread (its line was outside the diff when raised),
   // hence the "where one exists" qualifier.
   public static String unresolvedPreviousMessage(long unresolved) {
