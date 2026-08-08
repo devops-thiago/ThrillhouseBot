@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.review.PrImprovementService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewContextLoader;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
+import dev.thiagogonzaga.thrillhousebot.review.UnitTestGenerator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -57,6 +58,7 @@ class CommentCommandServiceTest {
   @Mock private ChangelogEntryGenerator changelogGenerator;
   @Mock private DocGenerationService docGenerationService;
   @Mock private PrImprovementService improvementService;
+  @Mock private UnitTestGenerator testGenerator;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
@@ -69,6 +71,7 @@ class CommentCommandServiceTest {
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.addDocsEnabled()).thenReturn(true);
     when(reviewConfig.improveEnabled()).thenReturn(true);
+    when(reviewConfig.generateTestsEnabled()).thenReturn(true);
     // Run submitted work inline so the async handoff is exercised synchronously in tests.
     doAnswer(
             inv -> {
@@ -93,6 +96,7 @@ class CommentCommandServiceTest {
             changelogGenerator,
             docGenerationService,
             improvementService,
+            testGenerator,
             config);
   }
 
@@ -371,6 +375,69 @@ class CommentCommandServiceTest {
     service.handle(ctx(CommentCommand.HELP));
 
     assertTrue(postedBody().contains("`/improve`"), postedBody());
+  }
+
+  @Test
+  void generateTestsPostsTheGeneratedSuggestion() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(testGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn("## suggested unit tests");
+
+    service.handle(ctx(CommentCommand.GENERATE_TESTS));
+
+    assertEquals("## suggested unit tests", postedBody());
+  }
+
+  @Test
+  void generateTestsPostsNothingWhenGeneratorReturnsNull() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(testGenerator.generate("owner", "repo", 7, "main", 12345L, "token")).thenReturn(null);
+
+    service.handle(ctx(CommentCommand.GENERATE_TESTS));
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void generateTestsPostsPausedNoticeWhenPaused() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.GENERATE_TESTS));
+
+    assertEquals(CommentCommandService.PAUSED_NOTICE, postedBody());
+    verifyNoInteractions(testGenerator);
+  }
+
+  @Test
+  void generateTestsIgnoredWhenUnauthorized() {
+    authorize(false);
+
+    service.handle(ctx(CommentCommand.GENERATE_TESTS));
+
+    verifyNoInteractions(testGenerator);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(prPauseService);
+  }
+
+  @Test
+  void generateTestsIgnoredWhenDisabled() {
+    when(reviewConfig.generateTestsEnabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.GENERATE_TESTS));
+
+    verifyNoInteractions(testGenerator);
+    verifyNoInteractions(authorizer);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void helpListsTheGenerateTestsCommand() {
+    service.handle(ctx(CommentCommand.HELP));
+
+    assertTrue(postedBody().contains("`/generate-tests`"));
   }
 
   @Test

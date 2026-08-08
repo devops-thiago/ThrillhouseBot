@@ -60,6 +60,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("/changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("/add-docs please"));
     assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/improve"));
+    assertEquals(CommentCommand.GENERATE_TESTS, detector.detectCommand("/generate-tests"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume now"));
@@ -74,6 +75,9 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("@thrillhousebot changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("@thrillhousebot add-docs"));
     assertEquals(CommentCommand.IMPROVE, detector.detectCommand("@thrillhousebot improve"));
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("@thrillhousebot generate-tests for this"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("@thrillhousebot resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("@thrillhousebot pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("@thrillhousebot resume"));
@@ -175,9 +179,74 @@ class TriggerDetectorTest {
   }
 
   @Test
+  void shouldNotDetectGenerateTestsInsideQuotedContext() {
+    // Documenting or quoting the command must never run it — it generates content and spends
+    // the operator's AI budget.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("```\n/generate-tests\n```"));
+    assertEquals(
+        CommentCommand.NONE, detector.detectCommand("run `/generate-tests` to propose tests"));
+    // Padded inside the backticks, the slash form satisfies the whitespace boundary on its own,
+    // so this case rests on inline-code stripping rather than on the pattern.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("run ` /generate-tests ` for tests"));
+    // Same for the mention form, which has no leading-slash boundary to fall back on.
+    assertEquals(
+        CommentCommand.NONE, detector.detectCommand("run `@thrillhousebot generate-tests` please"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("> someone said /generate-tests"));
+    assertEquals(
+        CommentCommand.NONE, detector.detectCommand("~~~\n@thrillhousebot generate-tests\n~~~"));
+  }
+
+  @Test
+  void shouldNotConfuseGenerateTestsWithOtherWords() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("generate-tests this please"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("/generate-tests-now"));
+  }
+
+  @Test
   void shouldStillDetectRealCommandAlongsideQuotedOne() {
     // A genuine command outside the quoted block still fires.
     assertEquals(CommentCommand.REVIEW, detector.detectCommand("> quoting a /pause\n/review"));
+  }
+
+  @Test
+  void shouldStillDetectGenerateTestsAlongsideAQuotedOne() {
+    // A genuine invocation next to a quoted one still fires.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("```\n/generate-tests\n```\n\n/generate-tests"));
+    // A higher-precedence command that appears only inside a quote must not win over the real one.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("> please run /review first\n/generate-tests"));
+  }
+
+  @Test
+  void shouldNotLetAQuotedNeighborCommandStealARealOne() {
+    // /improve and /generate-tests are adjacent entries in the ordered pattern map, and /improve
+    // is matched first. Quoting either one must never divert the other's genuine invocation.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("```\n/improve\n```\n\n/generate-tests"));
+    // Padded inside the span, so this rests on inline-code stripping rather than on the slash
+    // pattern's whitespace boundary.
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("run ` /improve ` some day\n\n/generate-tests"));
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("> they asked for /improve\n/generate-tests"));
+    assertEquals(
+        CommentCommand.IMPROVE, detector.detectCommand("```\n/generate-tests\n```\n\n/improve"));
+  }
+
+  @Test
+  void shouldResolveACommentCarryingBothImproveAndGenerateTestsToTheFirstEntry() {
+    // Quoted context is stripped before any pattern runs, so map order never decides a
+    // quoted-vs-genuine contest. It only decides a genuine-vs-genuine one: two real commands in
+    // one comment resolve to whichever comes first in the map. Pinned so a reorder cannot
+    // silently re-route an invocation to the other command's AI spend.
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/improve\n/generate-tests"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("/generate-tests\n/improve"));
   }
 
   @Test

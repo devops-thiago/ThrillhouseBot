@@ -257,6 +257,16 @@ public interface ThrillhouseConfig {
     boolean improveEnabled();
 
     /**
+     * Whether the {@code /generate-tests} command is available. When a write-access holder runs it,
+     * the model proposes unit tests for the code changed in the diff and posts them as a comment to
+     * copy in — nothing is committed. Each invocation spends the operator's AI budget, so this is
+     * the operator's kill switch; the command is otherwise on-demand only (never automatic).
+     */
+    @WithDefault("true")
+    @WithName("generate-tests-enabled")
+    boolean generateTestsEnabled();
+
+    /**
      * Glob patterns for files excluded from review scope. Defaults cover lockfiles, minified
      * bundles, sourcemaps, protobuf-generated code, and build/vendor output dirs across common
      * ecosystems — generated or vendored artifacts only, never handwritten source. Overridable per

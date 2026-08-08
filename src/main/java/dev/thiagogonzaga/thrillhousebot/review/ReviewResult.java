@@ -314,11 +314,11 @@ public record ReviewResult(
 
   /**
    * Partial-coverage disclosure appended to an on-demand command's comment ({@code /describe},
-   * {@code /changelog}, {@code /add-docs}) when the diff was truncated, or an empty string when
-   * nothing was omitted. Shares the omitted-file clause with {@link #truncationNotice(int)} but
-   * drops that banner's review-specific "findings and verdict" framing — a suggested description,
-   * changelog entry, or doc suggestion has neither — and reads correctly appended below the
-   * content.
+   * {@code /changelog}, {@code /add-docs}, {@code /generate-tests}) when the diff was truncated, or
+   * an empty string when nothing was omitted. Shares the omitted-file clause with {@link
+   * #truncationNotice(int)} but drops that banner's review-specific "findings and verdict" framing
+   * — a suggested description, changelog entry, doc suggestion, or proposed test has neither — and
+   * reads correctly appended below the content.
    */
   public static String truncationDisclosure(int omittedFiles) {
     return truncationDisclosure(omittedFiles, TruncationDetail.EMPTY);
