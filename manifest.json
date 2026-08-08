@@ -19,7 +19,7 @@
   "default_permissions": {
     "checks": "write",
     "pull_requests": "write",
-    "contents": "read",
+    "contents": "write",
     "issues": "write",
     "actions": "read",
     "statuses": "read"

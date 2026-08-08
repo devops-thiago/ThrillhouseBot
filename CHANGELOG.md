@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Agentic `/fix` command that opens a PR with the change** (opt-in, off by default): replying `/fix` on a review finding thread makes the bot draft the fix — across multiple files when the finding requires it — apply it as verbatim search/replace edits against the PR's current files, commit it to a bot-owned `thrillhousebot/fix-*` branch via the Git Data API, and open a clearly attributed PR targeting the reviewed PR's branch (merging the fix PR updates the original PR; a human always merges). Gated on `REVIEW_FIX_ENABLED=true`, the same write-access authorization as a manual `/review`, and the pause state; requires the GitHub App to hold `contents: write`. Fixes are all-or-nothing — an edit that no longer matches the files (e.g. after a new push) abandons the run with a thread reply instead of committing a partial change — capped at `REVIEW_FIX_MAX_EDITED_FILES` files (default 10), and unsupported on fork PRs. The fix PR and commit name the requesting user, link the finding thread, and carry an AI-generated disclaimer, keeping the project's "AI review is advisory" stance
+
 ## [0.5.0] — 2026-07-26
 
 Review precision: confidence now decides where a finding lands, newly-added parsers and regexes are stress-tested for their own failure modes, and several classes of false positive are guarded at both the generator and the verifier. Operators gain configurable CI-gating and blocking strictness, structured skip reasons, and per-model generation parameters.

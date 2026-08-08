@@ -57,6 +57,7 @@ class CommentCommandServiceTest {
   @Mock private DocGenerationService docGenerationService;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
+  @Mock private ThrillhouseConfig.FixConfig fixConfig;
 
   private CommentCommandService service;
 
@@ -315,6 +316,44 @@ class CommentCommandServiceTest {
     verifyNoInteractions(docGenerationService);
     verifyNoInteractions(authorizer);
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void fixAsPrCommentPostsUsagePointerWhenEnabledAndAuthorized() {
+    authorize(true);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.FIX));
+
+    assertEquals(CommentCommandService.FIX_USAGE, postedBody());
+  }
+
+  @Test
+  void fixIgnoredWhenDisabled() {
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.FIX));
+
+    verifyNoInteractions(authorizer);
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void fixIgnoredWhenUnauthorized() {
+    authorize(false);
+    when(reviewConfig.fix()).thenReturn(fixConfig);
+    when(fixConfig.enabled()).thenReturn(true);
+
+    service.handle(ctx(CommentCommand.FIX));
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void helpTextListsFixCommand() {
+    assertTrue(CommentCommandService.HELP_TEXT.contains("`/fix`"));
   }
 
   @Test

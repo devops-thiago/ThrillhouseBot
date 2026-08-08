@@ -59,6 +59,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("/describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("/changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("/add-docs please"));
+    assertEquals(CommentCommand.FIX, detector.detectCommand("/fix"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume now"));
@@ -72,6 +73,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("@thrillhousebot describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("@thrillhousebot changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("@thrillhousebot add-docs"));
+    assertEquals(CommentCommand.FIX, detector.detectCommand("@thrillhousebot fix"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("@thrillhousebot resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("@thrillhousebot pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("@thrillhousebot resume"));
@@ -83,6 +85,14 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.REVIEW, detector.detectCommand("/review"));
+  }
+
+  @Test
+  void shouldNotMatchFixInsideAnotherWord() {
+    // "/fix" needs its own token: a path segment or a word like "prefix" must not trigger it.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("see src/fixtures/data.json"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("the prefix looks wrong"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("/fixup this"));
   }
 
   @Test

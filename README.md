@@ -90,6 +90,7 @@ not a reaction.
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
+| `/fix` | Reply on a finding thread: draft the fix across the relevant files, commit it to a `thrillhousebot/*` branch, and open a PR targeting the reviewed PR's branch. Opt-in (`REVIEW_FIX_ENABLED=true`) and off by default | write |
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
@@ -100,7 +101,7 @@ the repository (or to be named in
 AI budget.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
-ignores `/review`, `/summary`, `/describe`, `/changelog`, and `/add-docs`, and does not answer
+ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, and `/fix`, and does not answer
 `@thrillhousebot` mentions (it replies once to say it is paused). `/resume` lifts the pause.
 `/help` and `/resolve` keep working while paused.
 
@@ -111,6 +112,20 @@ declaration (spanning the whole signature when it wraps), so it only inserts doc
 rewriting code. When a multi-line declaration can't be pinned to a single diff hunk, the bot
 posts a note with the drafted docs to add manually instead of a committable suggestion. It
 spends AI budget per run; operators can turn it off with `REVIEW_ADD_DOCS_ENABLED=false`.
+
+**`/fix`** (opt-in, off by default) — replied on a review finding thread, the bot drafts the
+change that resolves that finding — across multiple files when needed — commits it to a
+bot-owned `thrillhousebot/fix-*` branch, and opens a pull request **targeting the reviewed
+PR's branch**, so merging the fix PR updates the original PR. The fix PR and its commit are
+clearly attributed to the bot, name the requesting user, link the finding thread, and carry
+an AI-generated disclaimer; nothing ever lands without a human merging it, keeping the
+[advisory stance](#responsible-use-and-security). Fixes are all-or-nothing (a fix whose
+edits no longer match the files — e.g. after a new push — is abandoned with a reply, never
+partially applied), capped at `REVIEW_FIX_MAX_EDITED_FILES` files, and unavailable on fork
+PRs (the bot can only push branches to the repository it is installed on). Enabling it
+requires the GitHub App to hold the **contents: write** permission and
+`REVIEW_FIX_ENABLED=true`. Each run spends AI budget and is restricted to the same
+write-access holders as `/review`.
 <!-- docs:commands:end -->
 
 ## Quick start
@@ -203,7 +218,7 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 |---|---|
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
-| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit Statuses: Read |
+| Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: R/W (write only used by the opt-in `/fix`; Read suffices otherwise), Issues: R/W, Actions: Read, Commit Statuses: Read |
 | Subscribe to Events | Pull Request, Issue comment, Pull request review comment |
 | Identifying & authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
@@ -247,6 +262,8 @@ will change per provider:
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
+| `REVIEW_FIX_ENABLED` | Allow the opt-in `/fix` command on finding threads: the bot commits a proposed fix to a `thrillhousebot/*` branch and opens a PR targeting the reviewed PR's branch (requires the App to hold **contents: write**) | `false` |
+| `REVIEW_FIX_MAX_EDITED_FILES` | Cap on how many files one `/fix` may edit or create; a broader fix is rejected with a reply instead of partially applied | `10` |
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call); files that still don't fit are reported by name as omitted | `6` |
@@ -494,6 +511,12 @@ base-branch, and rate-window gates (but not `/pause`).
 AI review is advisory. The model can be wrong in both directions: it raises
 false positives and misses real bugs. Treat its findings as suggestions and
 confirm them yourself before acting.
+
+The opt-in `/fix` command is held to the same stance: it is off by default, only
+runs when a write-access holder explicitly requests it on a specific finding, only
+writes to bot-owned `thrillhousebot/*` branches, and delivers its change as a
+clearly attributed pull request that a human reviews and merges — the bot never
+pushes to your branches or merges anything itself.
 
 Pull request diffs are sent to whatever endpoint you configure, so use an HTTPS
 endpoint with an API key, and read the provider's data-retention policy before
