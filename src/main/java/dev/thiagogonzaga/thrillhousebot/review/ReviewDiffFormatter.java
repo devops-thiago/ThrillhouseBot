@@ -42,7 +42,57 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class ReviewDiffFormatter {
 
-  private record GlobMatcher(PathMatcher primary, PathMatcher suffix) {}
+  record GlobMatcher(PathMatcher primary, PathMatcher suffix) {}
+
+  /**
+   * A compiled set of ignore globs — the single glob-matching implementation in the codebase. The
+   * deployment-wide {@code thrillhousebot.review.ignored-files} list and the extra patterns a
+   * repository declares for itself are both compiled and matched through here, so a repository can
+   * never end up with different matching semantics than the global default.
+   */
+  record IgnoreGlobs(List<GlobMatcher> matchers) {
+
+    static final IgnoreGlobs NONE = new IgnoreGlobs(List.of());
+
+    IgnoreGlobs {
+      matchers = List.copyOf(matchers);
+    }
+
+    static IgnoreGlobs compile(List<String> patterns) {
+      var compiled = compileGlobMatchers(patterns);
+      return compiled.isEmpty() ? NONE : new IgnoreGlobs(compiled);
+    }
+
+    /**
+     * Global ∪ per-repo. Per-repo patterns are strictly additive: the union can only ever take more
+     * files out of review scope, never put back a file the global list excludes.
+     */
+    IgnoreGlobs union(IgnoreGlobs other) {
+      if (other.matchers.isEmpty()) {
+        return this;
+      }
+      if (matchers.isEmpty()) {
+        return other;
+      }
+      var merged = new ArrayList<GlobMatcher>(matchers.size() + other.matchers.size());
+      merged.addAll(matchers);
+      merged.addAll(other.matchers);
+      return new IgnoreGlobs(merged);
+    }
+
+    boolean matches(String filename) {
+      if (filename == null || filename.isBlank() || matchers.isEmpty()) {
+        return false;
+      }
+      Path path = Path.of(filename.replace('\\', '/'));
+      for (GlobMatcher matcher : matchers) {
+        if (matcher.primary().matches(path) || matchesSuffix(matcher.suffix(), path)) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
 
   /** A formatted diff plus the number of files the line budget dropped (0 when nothing omitted). */
   record FormattedDiff(String text, int omittedFiles) {
@@ -51,7 +101,7 @@ public class ReviewDiffFormatter {
     }
   }
 
-  private final List<GlobMatcher> globMatchers;
+  private final IgnoreGlobs globalGlobs;
   private final int maxDiffLines;
 
   @Inject
@@ -61,8 +111,24 @@ public class ReviewDiffFormatter {
 
   /** Visible for tests. */
   ReviewDiffFormatter(List<String> ignoredPatterns, int maxDiffLines) {
-    this.globMatchers = compileGlobMatchers(ignoredPatterns);
+    this.globalGlobs = IgnoreGlobs.compile(ignoredPatterns);
     this.maxDiffLines = maxDiffLines;
+  }
+
+  /**
+   * The ignore set for one operation: the global {@code review.ignored-files} list unioned with the
+   * extra globs the repository declared for itself. Compile it once per review and hand the result
+   * to {@link #reviewableFiles(List, IgnoreGlobs)} so the globs stay walked a single time.
+   *
+   * <p>An unparseable or empty per-repo list degrades to the global set — a repository can never
+   * shrink or replace the deployment default, and a bad pattern in its list is dropped by {@link
+   * #compileGlobMatchers} rather than failing the review.
+   */
+  IgnoreGlobs ignoreGlobs(List<String> perRepoPatterns) {
+    if (perRepoPatterns == null || perRepoPatterns.isEmpty()) {
+      return globalGlobs;
+    }
+    return globalGlobs.union(IgnoreGlobs.compile(perRepoPatterns));
   }
 
   private static List<GlobMatcher> compileGlobMatchers(List<String> patterns) {
@@ -83,23 +149,14 @@ public class ReviewDiffFormatter {
                 : null;
         matchers.add(new GlobMatcher(primary, suffix));
       } catch (InvalidPathException | PatternSyntaxException e) {
-        Log.warnf(e, "Ignoring invalid review.ignored-files pattern: %s", pattern);
+        Log.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
       }
     }
     return List.copyOf(matchers);
   }
 
   boolean isIgnored(String filename) {
-    if (filename == null || filename.isBlank() || globMatchers.isEmpty()) {
-      return false;
-    }
-    Path path = Path.of(filename.replace('\\', '/'));
-    for (GlobMatcher matcher : globMatchers) {
-      if (matcher.primary().matches(path) || matchesSuffix(matcher.suffix(), path)) {
-        return true;
-      }
-    }
-    return false;
+    return globalGlobs.matches(filename);
   }
 
   /** Matches `**`-prefixed patterns against the file name and every sub-path of the file. */
@@ -178,14 +235,27 @@ public class ReviewDiffFormatter {
     return sb.toString();
   }
 
-  /** Files that are included in AI review scope (non-ignored, non–pure-rename). */
+  /**
+   * Files that are included in AI review scope (non-ignored, non–pure-rename), using the global
+   * ignore list only.
+   */
   List<GitHubPullRequestClient.FileDiff> reviewableFiles(
       List<GitHubPullRequestClient.FileDiff> files) {
+    return reviewableFiles(files, globalGlobs);
+  }
+
+  /**
+   * Same, but scoped by an explicit ignore set — normally {@link #ignoreGlobs(List)} applied to the
+   * patterns the repository declared, so its own globs are honored on top of the global list.
+   */
+  List<GitHubPullRequestClient.FileDiff> reviewableFiles(
+      List<GitHubPullRequestClient.FileDiff> files, IgnoreGlobs globs) {
     if (files == null || files.isEmpty()) {
       return List.of();
     }
+    var effective = globs == null ? globalGlobs : globs;
     return files.stream()
-        .filter(f -> !isIgnored(f.filename()))
+        .filter(f -> !effective.matches(f.filename()))
         .filter(f -> !isPureRename(f))
         .toList();
   }
@@ -341,6 +411,19 @@ public class ReviewDiffFormatter {
       String base,
       String head,
       boolean applyLineBudget) {
+    return buildBaseComparisonWithStats(comparison, base, head, applyLineBudget, globalGlobs);
+  }
+
+  /**
+   * Same, but scoped by an explicit ignore set so the base comparison hides exactly what the PR
+   * diff hides for this repository (global ∪ per-repo).
+   */
+  FormattedDiff buildBaseComparisonWithStats(
+      GitHubPullRequestClient.CompareResponse comparison,
+      String base,
+      String head,
+      boolean applyLineBudget,
+      IgnoreGlobs globs) {
     if (comparison.files().isEmpty()) {
       return new FormattedDiff(
           "(no changes between " + base.substring(0, 7) + " and " + head.substring(0, 7) + ")", 0);
@@ -355,7 +438,10 @@ public class ReviewDiffFormatter {
                     base.substring(0, 7), head.substring(0, 7), comparison.totalCommits()))
             .toString();
     return formatWithLineBudget(
-        header, withPatch, namesOf(reviewableFiles(withPatch)), applyLineBudget ? maxDiffLines : 0);
+        header,
+        withPatch,
+        namesOf(reviewableFiles(withPatch, globs)),
+        applyLineBudget ? maxDiffLines : 0);
   }
 
   /**

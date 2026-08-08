@@ -24,9 +24,10 @@ import org.junit.jupiter.api.Test;
  * config/IaC severity recalibration (so declarative findings are not suppressed), the
  * parameter-nullability / unseen-caller guard (#107), the in-diff-test exercise gate (a green test
  * must demonstrably hit the claimed path before it can invalidate a finding — #116), the symmetric
- * exact-arithmetic / "test fails" cap (#97), and the heuristic failure-mode characterization pass
- * with its verifier exemption (#123). These assertions are intentionally coarse — they check intent
- * survives, not exact wording; an intentional rewording should update the matching anchor.
+ * exact-arithmetic / "test fails" cap (#97), the heuristic failure-mode characterization pass with
+ * its verifier exemption (#123), and the summary call's whole-change-set grounding (#335). These
+ * assertions are intentionally coarse — they check intent survives, not exact wording; an
+ * intentional rewording should update the matching anchor.
  *
  * <p>The automated LLM eval that checks the model actually <em>acts</em> on this guidance is
  * tracked separately ({@code evalcorpus/}); this is the cheap deterministic guard.
@@ -360,5 +361,57 @@ class PrReviewPromptsContentTest {
         req,
         "participant O as ReviewOrchestrator",
         "the diagram prompt must include a correct sequence-diagram example");
+  }
+
+  @Test
+  void summaryPromptGroundsThePurposeInTheWholeChangeSet() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "what the WHOLE change set does",
+        "pr_purpose must be scoped to the whole change set, not one file (#335)");
+    assertContains(
+        sys,
+        "PR title and description (the author's stated intent)",
+        "pr_purpose must be grounded in the PR title/description");
+    assertContains(
+        sys,
+        "PR scope totals and the changed-file list",
+        "pr_purpose must be grounded in the authoritative scope totals");
+    assertContains(
+        sys,
+        "extracted class, one file, or the one component that happens to carry findings",
+        "the summary must not present one extracted class as the whole PR (#335)");
+  }
+
+  @Test
+  void summaryPromptRejectsASummaryNarrowerThanThePrScope() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "scope is narrower than the stated PR scope is wrong",
+        "a summary whose scope is a subset of the diff's must be called out as wrong (#335)");
+    assertContains(
+        sys,
+        "never that the change was small or touched one file",
+        "zero findings must not be read as a small change");
+    assertContains(
+        sys,
+        "whose scope is narrower than the change itself",
+        "description_gaps must cover a description that covers only part of the change (#335)");
+  }
+
+  @Test
+  void summaryUserPromptFramesTheFileListAsAuthoritativeScope() {
+    String user = PrReviewPrompts.SUMMARY_USER;
+    assertContains(
+        user,
+        "## PR scope and changed files (computed from the diff — authoritative)",
+        "the summary user prompt must present the scope block as authoritative");
+    assertContains(
+        user,
+        "account for all of it",
+        "the summary user prompt must require the purpose to cover every listed entry");
+    assertContains(user, "{{changedFiles}}", "the changed-files slot must survive the rewording");
   }
 }
