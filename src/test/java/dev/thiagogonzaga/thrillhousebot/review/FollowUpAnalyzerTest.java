@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
@@ -25,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -2134,7 +2137,7 @@ class FollowUpAnalyzerTest {
             supplier(DISPATCHING_DIFF)));
   }
 
-  private static java.util.function.Supplier<String> supplier(String value) {
+  private static Supplier<String> supplier(String value) {
     return () -> value;
   }
 
@@ -2145,7 +2148,7 @@ class FollowUpAnalyzerTest {
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubReviewClient.PullRequestComment> comments,
-      java.util.function.Supplier<String> code) {
+      Supplier<String> code) {
     assertEquals(
         statuses,
         analyzer.recheckDeclines(previous, statuses, comments, BOT_ID, code),
@@ -2214,10 +2217,10 @@ class FollowUpAnalyzerTest {
 
   @Test
   void injectedAnalyzerShouldTakeTheRecheckFlagFromConfig() {
-    var review = org.mockito.Mockito.mock(ThrillhouseConfig.ReviewConfig.class);
-    org.mockito.Mockito.when(review.declineRecheckEnabled()).thenReturn(false);
-    var config = org.mockito.Mockito.mock(ThrillhouseConfig.class);
-    org.mockito.Mockito.when(config.review()).thenReturn(review);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(review.declineRecheckEnabled()).thenReturn(false);
+    var config = mock(ThrillhouseConfig.class);
+    when(config.review()).thenReturn(review);
     var comments =
         raceThread(
             "Not changed — pause() is only ever called from the /pause command path, which runs"

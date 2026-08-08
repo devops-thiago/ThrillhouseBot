@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,9 +40,9 @@ import java.util.regex.Pattern;
  *   <li>the prior finding is about concurrency ({@link #CONCURRENCY_FINDING}) — a race, a
  *       check-then-act, thread-safety, atomicity;
  *   <li>the maintainer's reply asserts that concurrency is impossible ({@link
- *       #NO_CONCURRENCY_CLAIM}) — "single-threaded", "runs serially", "only ever called from …";
- *   <li>the reviewed code contains a concurrent-dispatch construct ({@link #CONCURRENT_DISPATCH}) —
- *       an unbounded/pooled executor, {@code executor.submit/execute}, {@code CompletableFuture
+ *       #NO_CONCURRENCY_CLAIMS}) — "single-threaded", "runs serially", "only ever called from …";
+ *   <li>the reviewed code contains a concurrent-dispatch construct ({@link #CONCURRENT_DISPATCHES})
+ *       — an unbounded/pooled executor, {@code executor.submit/execute}, {@code CompletableFuture
  *       .runAsync}, {@code new Thread(...)}, {@code @Async}, {@code parallelStream()}.
  * </ol>
  *
@@ -72,34 +73,69 @@ final class RebuttalContradiction {
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * The maintainer asserting that the flagged path cannot run concurrently. "Only ever called from
-   * X" belongs here: a single call site is the usual way a decline argues away a race, and it is
-   * exactly the premise an asynchronous dispatch at that single call site refutes.
+   * The ways a maintainer asserts the flagged path cannot run concurrently, one small pattern per
+   * argument rather than a single mega-alternation. Kept separate on purpose: this matcher decides
+   * when the bot is allowed to overrule a human, so each argument has to be readable and testable
+   * on its own, and every quantifier is bounded because the input is untrusted reply prose.
+   *
+   * <p>"Only ever called from X" is one of them: a single call site is the usual way a decline
+   * argues a race away, and it is exactly the premise an asynchronous dispatch at that call site
+   * refutes.
    */
-  private static final Pattern NO_CONCURRENCY_CLAIM =
-      Pattern.compile(
-          "single[- ]threaded|\\bsingle thread\\b|runs? serially|executed? serially|serialized"
-              + "|sequentially|one at a time|never (?:runs?|executes?|happens) concurrently"
-              + "|(?:cannot|can't|can not|never) (?:run|be|happen|occur)s? concurrent(?:ly)?"
-              + "|no concurrency|not concurrent|there is no race|no race|isn'?t a race"
-              + "|not a race|only ever (?:called|invoked|triggered|reached) from"
-              + "|only (?:called|invoked|triggered|reached) from|the only caller",
-          Pattern.CASE_INSENSITIVE);
+  private static final List<Pattern> NO_CONCURRENCY_CLAIMS =
+      List.of(
+          // "the handler is single-threaded"
+          ci("single[- ]threaded|\\bsingle thread\\b"),
+          // "they run serially / one at a time"
+          ci("(?:runs?|executed?) serially|serialized|sequentially|one at a time"),
+          // "it cannot run concurrently"
+          ci("(?:can ?not|can'?t) (?:run|be|happen|occur|execute)s? concurrent(?:ly)?"),
+          // "it never runs concurrently"
+          ci("never (?:run|be|happen|occur|execute)s? concurrent(?:ly)?"),
+          // "there is no race here"
+          ci("no concurrency|not concurrent|no race|(?:isn'?t|not) a race"),
+          // "it is only ever called from one place"
+          ci("only (?:ever )?(?:called|invoked|triggered|reached) from|the only caller"));
 
   /**
-   * Code that dispatches work concurrently. A single call site that hands the work to any of these
-   * does not serialize it: two events each dispatch, and both run.
+   * Code that dispatches work concurrently, again one small pattern per construct. A single call
+   * site that hands the work to any of these does not serialize it: two events each dispatch, and
+   * both run.
    */
-  private static final Pattern CONCURRENT_DISPATCH =
-      Pattern.compile(
-          "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newWorkStealingPool"
-              + "|newFixedThreadPool\\s*\\(\\s*(?!1\\s*\\))|newScheduledThreadPool"
-              + "|\\.submit\\s*\\(|\\.execute\\s*\\(|CompletableFuture\\s*\\.\\s*(?:runAsync|supplyAsync)"
-              + "|new\\s+Thread\\s*\\(|@Async\\b|\\.parallelStream\\s*\\(");
+  private static final List<Pattern> CONCURRENT_DISPATCHES =
+      List.of(
+          // an unbounded or pooled executor
+          Pattern.compile(
+              "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newScheduledThreadPool"
+                  + "|newWorkStealingPool"),
+          // a fixed pool of more than one thread
+          Pattern.compile("newFixedThreadPool\\s{0,16}\\(\\s{0,16}(?!1\\s{0,16}\\))"),
+          // handing the work to an executor
+          Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
+          // an asynchronous future
+          Pattern.compile("CompletableFuture\\s{0,16}\\.\\s{0,16}(?:runAsync|supplyAsync)"),
+          // a raw thread, an async annotation, or a parallel stream
+          Pattern.compile(
+              "new\\s{1,16}Thread\\s{0,16}\\(|@Async\\b|\\.parallelStream\\s{0,16}\\("));
 
-  /** Fenced code blocks in a markdown reply — quoted material, never the maintainer's assertion. */
+  /**
+   * Fenced code blocks in a markdown reply — quoted material, never the maintainer's assertion. The
+   * body is bounded: an unbounded lazy match would rescan from every opening fence in a reply that
+   * never closes one.
+   */
   private static final Pattern FENCED_BLOCK =
-      Pattern.compile("```.*?```", Pattern.DOTALL | Pattern.MULTILINE);
+      Pattern.compile("```.{0,10000}?```", Pattern.DOTALL | Pattern.MULTILINE);
+
+  /**
+   * Replies longer than this are not analyzed at all. It keeps the markdown-stripping scan over
+   * untrusted prose bounded, and skipping is the conservative outcome: an unread reply keeps its
+   * decline.
+   */
+  private static final int MAX_REBUTTAL_CHARS = 20_000;
+
+  private static Pattern ci(String regex) {
+    return Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
+  }
 
   private RebuttalContradiction() {}
 
@@ -113,21 +149,41 @@ final class RebuttalContradiction {
     if (finding == null || rebuttal == null || reviewedCode == null || reviewedCode.isBlank()) {
       return Optional.empty();
     }
+    if (rebuttal.length() > MAX_REBUTTAL_CHARS) {
+      return Optional.empty();
+    }
     if (!CONCURRENCY_FINDING.matcher(findingText(finding)).find()) {
       return Optional.empty();
     }
-    Matcher claim = NO_CONCURRENCY_CLAIM.matcher(assertedText(rebuttal));
-    if (!claim.find()) {
+    var asserted = assertedText(rebuttal);
+    Matcher claim = earliestMatch(NO_CONCURRENCY_CLAIMS, asserted);
+    if (claim == null) {
       return Optional.empty();
     }
-    Matcher evidence = CONCURRENT_DISPATCH.matcher(reviewedCode);
-    if (!evidence.find()) {
+    Matcher evidence = earliestMatch(CONCURRENT_DISPATCHES, reviewedCode);
+    if (evidence == null) {
       return Optional.empty();
     }
     return Optional.of(
         new Contradiction(
-            sentenceAround(assertedText(rebuttal), claim.start()),
-            lineAround(reviewedCode, evidence.start())));
+            sentenceAround(asserted, claim.start()), lineAround(reviewedCode, evidence.start())));
+  }
+
+  /**
+   * The leftmost match of any pattern in {@code patterns}, or {@code null} when none matches. Every
+   * pattern is tried and the earliest wins, so splitting one alternation into several keeps the
+   * leftmost-match semantics the single pattern had and leaves the result independent of list
+   * order.
+   */
+  private static Matcher earliestMatch(List<Pattern> patterns, String text) {
+    Matcher earliest = null;
+    for (var pattern : patterns) {
+      var candidate = pattern.matcher(text);
+      if (candidate.find() && (earliest == null || candidate.start() < earliest.start())) {
+        earliest = candidate;
+      }
+    }
+    return earliest;
   }
 
   /** The quoted claim and the quoted code line that refutes it, both already trimmed for a note. */

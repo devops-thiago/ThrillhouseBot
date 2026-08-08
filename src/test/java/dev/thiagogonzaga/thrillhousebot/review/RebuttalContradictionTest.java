@@ -89,6 +89,105 @@ class RebuttalContradictionTest {
         "style / intent / accepted-risk rebuttals must keep the decline");
   }
 
+  /** One phrasing per "concurrency is impossible" argument the matcher recognises. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The handler is single-threaded.",
+        "There is a single thread doing this.",
+        "They run serially.",
+        "The commands are executed serially.",
+        "Access is serialized by the caller.",
+        "These are processed sequentially.",
+        "They happen one at a time.",
+        "It cannot run concurrently.",
+        "Two of them can't be concurrent.",
+        "This never executes concurrently.",
+        "There is no concurrency on this path.",
+        "The path is not concurrent.",
+        "There is no race here.",
+        "That isn't a race.",
+        "That is not a race, really.",
+        "pause() is only ever called from the command path.",
+        "It is only invoked from the webhook path.",
+        "The command path is the only caller.",
+      })
+  void shouldRecogniseEverySerializationArgument(String rebuttal) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isPresent(),
+        "this is a 'concurrency is impossible' claim and the code refutes it: " + rebuttal);
+  }
+
+  /** One snippet per concurrent-dispatch construct the matcher accepts as refuting evidence. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var pool = Executors.newVirtualThreadPerTaskExecutor();",
+        "+    var pool = Executors.newCachedThreadPool();",
+        "+    var pool = Executors.newScheduledThreadPool(2);",
+        "+    var pool = Executors.newWorkStealingPool();",
+        "+    var pool = Executors.newFixedThreadPool(8);",
+        "+    executor.submit(() -> run(ctx));",
+        "+    executor.execute(() -> run(ctx));",
+        "+    CompletableFuture.runAsync(() -> run(ctx));",
+        "+    CompletableFuture.supplyAsync(() -> load(ctx));",
+        "+    new Thread(() -> run(ctx)).start();",
+        "+  @Async",
+        "+    items.parallelStream().forEach(this::handle);",
+      })
+  void shouldRecogniseEveryConcurrentDispatchConstruct(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "this construct dispatches concurrently: " + codeLine);
+  }
+
+  @Test
+  void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch() {
+    var oneThread = "+    var pool = Executors.newFixedThreadPool(1);\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", oneThread).isEmpty(),
+        "a one-thread pool genuinely serializes, so it does not refute the decline");
+  }
+
+  @Test
+  void shouldSkipARebuttalTooLargeToAnalyze() {
+    var huge = "It is single-threaded. ".repeat(2000);
+
+    assertTrue(huge.length() > 20_000, "the fixture must exceed the analysis cap");
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, huge, DISPATCHING_CODE).isEmpty(),
+        "an unread reply keeps its decline — skipping is the conservative outcome");
+  }
+
+  @Test
+  void shouldQuoteTheEarliestClaimWhicheverArgumentItBelongsTo() {
+    // Two claims in two different sentences. "only ever called from" is declared LAST but appears
+    // FIRST; "no race" is declared earlier but appears later. The quote must follow position in the
+    // reply, not the order the patterns happen to be declared in — otherwise splitting the original
+    // single alternation would have silently changed which sentence gets quoted back at the
+    // maintainer.
+    var rebuttal = "It is only ever called from the command path. Anyway there is no race.";
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE);
+
+    assertTrue(contradiction.isPresent());
+    assertEquals(
+        "It is only ever called from the command path.",
+        contradiction.get().claim(),
+        "the earliest claim in the reply wins, regardless of which pattern matched it");
+
+    // The mirror image: now the FIRST-declared argument is also the one appearing first, so the
+    // later match must be rejected rather than overwrite it. Both directions together pin the
+    // quote to position alone.
+    var mirrored =
+        RebuttalContradiction.find(
+            RACE_FINDING, "It is single-threaded. Anyway there is no race.", DISPATCHING_CODE);
+
+    assertTrue(mirrored.isPresent());
+    assertEquals("It is single-threaded.", mirrored.get().claim());
+  }
+
   @Test
   void shouldRespectDeclineWhenTheCodeShowsNoConcurrentDispatch() {
     var rebuttal = "pause() is only ever called from the /pause command path — single-threaded.";
