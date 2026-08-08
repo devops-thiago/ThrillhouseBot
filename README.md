@@ -52,7 +52,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
-- Lets each repository add its own ignore globs in `.github/thrillhousebot.yml`, unioned with the deployment default
+- Lets each repository add its own ignore globs in `.github/thrillhousebot.yml`, unioned with the deployment default, and scope extra review rules to a path glob
 - Compiles ahead-of-time with GraalVM/Mandrel, so it starts fast and stays small
 <!-- docs:features:end -->
 
@@ -276,7 +276,7 @@ will change per provider:
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per AI streaming attempt; keep it >= `AI_TIMEOUT` so timed-out attempts don't leave orphaned provider streams | `300` |
 | `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repo-relative path of the per-repo instructions file read on each review | `.github/thrillhousebot.md` |
 | `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs excluded from review — lockfiles, generated code, build output. `*` does not cross `/`; use `**` to span directories. Replaces (not extends) the default list, so re-include the defaults you still want | `**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**` |
-| `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Let each repository extend the ignore list with globs of its own from `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)). Per-repo globs are additive; set `false` to make the deployment list the only one that counts | `true` |
+| `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Let each repository extend the ignore list with globs of its own, and scope review rules to a path, from `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)). Both are additive; set `false` to make the deployment list and the global instructions the only ones that count | `true` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |
@@ -483,6 +483,16 @@ review:
     - "docs/generated/**"
     - "**/*.snap"
     - "testdata/**"
+
+  # Review rules for one path only, on top of the prose in .github/thrillhousebot.md
+  # (which keeps applying everywhere).
+  path-instructions:
+    - path: "payments/**"
+      instructions: |
+        Money is handled in integer cents; flag any floating-point arithmetic.
+        Every state change must be idempotent under retry.
+    - path: "**/generated/**"
+      instructions: "Generated code: style and naming findings do not apply."
 ```
 
 **Precedence: the effective ignore list is the union of both — global ∪ per-repo.**
@@ -493,12 +503,26 @@ file the deployment excludes, and a repository that ships no config file gets th
 global list exactly as before. Globs use the same gitignore-style syntax as the
 global key (`*` does not cross `/`; use `**` to span directories).
 
+**Precedence: the review rules for a file are the global instructions plus every
+matching path scope.** The prose in `.github/thrillhousebot.md` (or whichever file the
+fallback chain lands on) applies to every file exactly as before. On top of that, each
+`path-instructions` scope whose glob matches a changed file contributes its rules *for
+that file only* — the model is shown each scope alongside the files it governs, so
+`payments/` strictness is never carried over to generated code. Scopes are additive and
+may overlap: a file matching two scopes gets both, in declaration order, and where a
+scope and the global instructions conflict, the scope wins for its own files. A scope
+matching nothing in the pull request is not sent at all, and a file the ignore list
+already excluded is never scoped — ignore rules run first. Path globs use the same
+syntax and the same matcher as `ignored-files`.
+
 The file is read from the repository's default branch on each review and cached for
 five minutes. Everything about it fails soft: a missing file, invalid YAML, an
-unexpected shape, or an uncompilable glob is logged and skipped, leaving the global
-list in force — it never fails a review. Operators who do not want repositories
-adjusting their own review scope can turn the whole mechanism off with
-`THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`.
+unexpected shape, an uncompilable glob, or a malformed `path-instructions` entry is
+logged and skipped, leaving the global ignore list and the global instructions in force
+— it never fails a review. A repository may declare at most 25 scopes, each with at most
+4000 characters of rules; the rest is dropped with a warning. Operators who do not want
+repositories adjusting their own review scope or rules can turn the whole mechanism off
+with `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`.
 <!-- docs:repository-configuration:end -->
 
 <!-- docs:pr-labels:start -->
