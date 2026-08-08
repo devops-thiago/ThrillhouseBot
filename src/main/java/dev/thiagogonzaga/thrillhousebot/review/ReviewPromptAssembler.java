@@ -40,12 +40,15 @@ public class ReviewPromptAssembler {
 
   // Guidance for the path-scoped blocks. It has to be unambiguous that a scope's rules stop at its
   // own paths: applying one directory's rules to another is worse than having no scoped rules.
+  // The glob — not the file list, which is abbreviated on a large PR — is what defines a scope.
   private static final String PATH_INSTRUCTIONS_GUIDANCE =
       """
-      The maintainers scoped these guidelines to specific paths. Apply each block ONLY to the
-      files listed under it — never to a file outside that scope — in addition to the
-      project-wide instructions above, which still apply to every file. Where a scope and the
-      project-wide instructions conflict, the scope wins for its own files only.
+      The maintainers scoped these guidelines to specific paths. Apply each block ONLY to files
+      matching that block's glob — never to a file outside it — in addition to the project-wide
+      instructions above, which still apply to every file. The files listed under a block are the
+      ones this pull request changes under that glob, and that list may be abbreviated; the glob
+      is what decides. Where a scope and the project-wide instructions conflict, the scope wins
+      for its own files only.
       """;
 
   private final ThrillhouseConfig config;

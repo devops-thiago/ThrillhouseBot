@@ -65,6 +65,11 @@ public final class PromptSections {
    * review, each naming its glob and the files it governs so the model can never carry one
    * directory's rules over to another. Empty when no scoped rule applies.
    *
+   * <p>The glob heads each block and is what the guidance tells the model to scope by; the file
+   * list underneath is the changed files it covers, and {@link #formatFiles} may abbreviate it on a
+   * large pull request. Naming the glob rather than only the paths is what keeps an abbreviated
+   * list from quietly narrowing a scope to its first few files.
+   *
    * <p>The globs, paths, and maintainer prose are all repository-controlled, so every one of them
    * is escaped and framed as data exactly like the global instructions block. The {@code guidance}
    * string carries its own trailing newline.
@@ -87,7 +92,7 @@ public final class PromptSections {
           .append(total)
           .append(": files matching ")
           .append(PromptTemplateEscaper.escape(scope.glob()))
-          .append("\nApplies only to these changed files: ")
+          .append("\nChanged files in this pull request under that glob: ")
           .append(PromptTemplateEscaper.escape(formatFiles(scope.files())))
           .append("\nRules for those files:\n")
           .append(PromptTemplateEscaper.escape(scope.instructions()))

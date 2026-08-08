@@ -253,6 +253,9 @@ class RepoSettingsResolverTest {
               - instructions: "orphaned rules"
               - path: "  "
                 instructions: "blank glob"
+              # A key written with no value at all is an empty string, not a YAML null.
+              - path:
+                instructions: "valueless glob"
               - path: "api/**"
                 instructions: "  "
               - path: "kept/**"
@@ -278,8 +281,9 @@ class RepoSettingsResolverTest {
               - path: "api/**"
                 instructions:
                   nested: mapping
-              - path:
-                instructions: "empty glob is a YAML null, not the string 'null'"
+              # An explicit null reads back as the literal string "null" — a glob nobody wrote.
+              - path: null
+                instructions: "explicit null glob"
               - path: "kept/**"
                 instructions: "Kept."
           """);

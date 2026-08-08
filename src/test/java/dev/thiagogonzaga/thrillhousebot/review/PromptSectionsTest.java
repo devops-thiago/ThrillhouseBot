@@ -104,12 +104,12 @@ class PromptSectionsTest {
           Apply each block only to its own files.
 
           ### Scope 1 of 2: files matching payments/**
-          Applies only to these changed files: payments/Charge.java
+          Changed files in this pull request under that glob: payments/Charge.java
           Rules for those files:
           Money is in cents.
 
           ### Scope 2 of 2: files matching gen/**
-          Applies only to these changed files: gen/Api.java
+          Changed files in this pull request under that glob: gen/Api.java
           Rules for those files:
           Relaxed.
           """,
@@ -146,6 +146,9 @@ class PromptSectionsTest {
 
       assertTrue(section.contains("payments/File9.java, and 3 more matching this glob"), section);
       assertFalse(section.contains("payments/File10.java"), section);
+      // The glob still heads the block, so an abbreviated list cannot narrow the scope to the
+      // paths that happened to fit.
+      assertTrue(section.contains("### Scope 1 of 1: files matching payments/**"), section);
     }
 
     @Test

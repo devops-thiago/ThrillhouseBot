@@ -211,7 +211,11 @@ class ReviewPromptAssemblerTest {
       assertTrue(repoInstructions.contains("files matching payments/**"), repoInstructions);
       assertTrue(
           repoInstructions.contains(
-              "Applies only to these changed files: payments/api/Charge.java"),
+              "Changed files in this pull request under that glob: payments/api/Charge.java"),
+          repoInstructions);
+      // The guidance must scope by the glob, not by the (possibly abbreviated) file list.
+      assertTrue(
+          repoInstructions.contains("Apply each block ONLY to files\nmatching that block's glob"),
           repoInstructions);
       assertTrue(repoInstructions.contains("flag floating-point arithmetic"), repoInstructions);
       // The global block is still there, ahead of the scoped one.

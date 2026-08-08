@@ -183,8 +183,10 @@ final class RepoSettingsParser {
   private static RepoSettings.PathInstructions readScope(JsonNode element, String source) {
     var pathNode = element.path("path");
     var instructionsNode = element.path("instructions");
-    // isNull() is checked explicitly: an empty `path:` parses to a NullNode, which is a value node
-    // whose asText() is the literal "null" — a glob nobody wrote.
+    // Two shapes of "no value" have to be told apart. A key written out with nothing after it
+    // (`path:`) reaches us as an empty string and is caught by the blank check below; an explicit
+    // `path: null` (or `path: ~`) is a NullNode, whose asText() is the literal "null" — a glob
+    // nobody wrote — so isScalar() rejects it before it can be trimmed into a usable pattern.
     if (!isScalar(pathNode) || !isScalar(instructionsNode)) {
       log.warn(
           "Repository config {}: skipping a path-instructions entry without a scalar"
@@ -214,7 +216,10 @@ final class RepoSettingsParser {
     return new RepoSettings.PathInstructions(path, instructions);
   }
 
-  /** A present scalar — not a missing key, not an explicit YAML null, not a nested collection. */
+  /**
+   * A usable scalar — not an absent key ({@code MissingNode} is not a value node), not an explicit
+   * YAML null, not a nested sequence or mapping.
+   */
   private static boolean isScalar(JsonNode node) {
     return node.isValueNode() && !node.isNull();
   }
