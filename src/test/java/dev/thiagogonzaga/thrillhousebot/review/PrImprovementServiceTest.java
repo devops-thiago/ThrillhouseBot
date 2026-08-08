@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -32,9 +33,12 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
@@ -53,6 +57,17 @@ class PrImprovementServiceTest {
       +int total = 0;
       +for (int i = 0; i < items.size(); i++) {
       +  total += items.get(i).value();""";
+
+  /**
+   * A patch whose code is indented, so a quote that drops the indentation is distinguishable from
+   * one that reproduces it. Line 2 carries trailing whitespace (kept with {@code \s}, which text
+   * blocks would otherwise strip) so the insignificant-trailing-space case is exercised too.
+   */
+  private static final String INDENTED_PATCH =
+      """
+      @@ -0,0 +1,2 @@
+      +    var in = Files.newInputStream(path);
+      +    int total = 0;  \s""";
 
   @Mock private GitHubPullRequestClient prClient;
   @Mock private GitHubReviewClient reviewClient;
@@ -104,6 +119,10 @@ class PrImprovementServiceTest {
 
   private static FileDiff foo() {
     return new FileDiff("src/Foo.java", "modified", 4, 0, 4, PATCH);
+  }
+
+  private static FileDiff indentedFoo() {
+    return new FileDiff("src/Foo.java", "modified", 2, 0, 2, INDENTED_PATCH);
   }
 
   private void assistantReturns(String json) {
@@ -197,27 +216,6 @@ class PrImprovementServiceTest {
     assertTrue(summary.contains("Extract the retry loop"), summary);
     assertTrue(summary.contains("retryPolicy.run(this::call);"), summary);
     assertTrue(summary.contains("src/Other.java:80"), summary);
-  }
-
-  @Test
-  void doesNotRewriteALineWhoseQuotedCodeDoesNotMatchTheDiff() {
-    // A stale or invented quote would rewrite the wrong line on commit, so it degrades to a
-    // copy-paste block instead of a committable suggestion.
-    prWithFiles(foo());
-    assistantReturns(
-        """
-        {"improvements":[{"file":"src/Foo.java","line":2,
-        "title":"Rename the accumulator","category":"readability",
-        "rationale":"total is ambiguous.",
-        "suggestion_old":"int sum = 0;",
-        "suggestion_new":"int valueTotal = 0;"}]}
-        """);
-
-    service.handle(task(), AUTH);
-
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
   }
 
   @Test
@@ -336,6 +334,68 @@ class PrImprovementServiceTest {
   }
 
   @Test
+  void anchorsAQuoteThatReproducesTheLeadingIndentation() {
+    prWithFiles(indentedFoo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks a handle.",
+        "suggestion_old":"    var in = Files.newInputStream(path);",
+        "suggestion_new":"    try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    var inline = capturedInlineComment();
+    assertEquals(1, inline.line());
+    assertTrue(inline.body().contains("```suggestion"), inline.body());
+    assertTrue(
+        inline.body().contains("    try (var in = Files.newInputStream(path)) {"), inline.body());
+  }
+
+  @Test
+  void doesNotRewriteALineWhoseQuoteDropsTheLeadingIndentation() {
+    // Committing a suggestion replaces the line with suggestion_new verbatim. A model that
+    // re-indented the code it quoted has re-indented its replacement too, so applying it would
+    // silently reflow the line — refuse to anchor and hand the author a copy-paste block instead.
+    prWithFiles(indentedFoo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
+        "category":"error-handling","rationale":"Leaks a handle.",
+        "suggestion_old":"var in = Files.newInputStream(path);",
+        "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    assertTrue(summary.contains("could not be pinned to the diff"), summary);
+    assertTrue(summary.contains("try (var in = Files.newInputStream(path)) {"), summary);
+  }
+
+  @Test
+  void anchorsDespiteInsignificantTrailingWhitespaceInTheDiff() {
+    // Trailing whitespace is invisible and formatters strip it, so it must not block anchoring.
+    prWithFiles(indentedFoo());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Foo.java","line":2,"title":"Rename the accumulator",
+        "category":"readability","rationale":"total is ambiguous.",
+        "suggestion_old":"    int total = 0;",
+        "suggestion_new":"    int valueTotal = 0;"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    var inline = capturedInlineComment();
+    assertEquals(2, inline.line());
+    assertTrue(inline.body().contains("```suggestion"), inline.body());
+  }
+
+  @Test
   void fallsBackToCopyPasteWhenThePrHasNoHeadSha() {
     // An inline comment needs a commit to anchor to; without one the improvements must still be
     // delivered rather than silently dropped.
@@ -422,43 +482,51 @@ class PrImprovementServiceTest {
     assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
   }
 
-  @Test
-  void fallsBackToCopyPasteWhenAMultiLineReplacementCannotBeRangeAnchored() {
-    // The line exists, but the quoted block does not appear verbatim in the diff — committing a
-    // partial range would corrupt the file, so it degrades to a copy-paste block.
-    prWithFiles(foo());
-    assistantReturns(
-        """
-        {"improvements":[{"file":"src/Foo.java","line":3,"title":"Use an enhanced for loop",
-        "category":"readability","rationale":"Index bookkeeping adds nothing.",
-        "suggestion_old":"for (int i = 0; i < items.size(); i++) {\\n  total += items.get(i).cost();",
-        "suggestion_new":"for (var item : items) {\\n  total += item.cost();"}]}
-        """);
-
-    service.handle(task(), AUTH);
-
-    verify(reviewClient, never())
-        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  /**
+   * Every way a postable improvement can fail to anchor onto the diff. Each must refuse the
+   * committable suggestion — a wrong-line or wrong-content commit is worse than no commit — and
+   * hand the improvement to the author as a copy-paste block instead.
+   */
+  static Stream<Arguments> unanchorable() {
+    return Stream.of(
+        arguments(
+            "a stale or invented quote for a line that is in the diff",
+            """
+            {"improvements":[{"file":"src/Foo.java","line":2,
+            "title":"Rename the accumulator","category":"readability",
+            "rationale":"total is ambiguous.",
+            "suggestion_old":"int sum = 0;",
+            "suggestion_new":"int valueTotal = 0;"}]}
+            """),
+        arguments(
+            "a multi-line block whose range cannot be resolved verbatim",
+            """
+            {"improvements":[{"file":"src/Foo.java","line":3,"title":"Use an enhanced for loop",
+            "category":"readability","rationale":"Index bookkeeping adds nothing.",
+            "suggestion_old":"for (int i = 0; i < items.size(); i++) {\\n  total += items.get(i).cost();",
+            "suggestion_new":"for (var item : items) {\\n  total += item.cost();"}]}
+            """),
+        arguments(
+            "a reported line that only snaps to a neighbouring line",
+            """
+            {"improvements":[{"file":"src/Foo.java","line":99,"title":"Rename the accumulator",
+            "category":"readability","rationale":"Ambiguous name.",
+            "suggestion_old":"int total = 0;","suggestion_new":"int valueTotal = 0;"}]}
+            """));
   }
 
-  @Test
-  void fallsBackToCopyPasteWhenTheReportedLineOnlySnapsToANeighbour() {
-    // resolveRightSideLine snaps to the nearest commentable line; for a single-line rewrite that
-    // neighbour is the wrong line, so the suggestion must not be posted against it.
+  @ParameterizedTest(name = "{0} falls back to a copy-paste block")
+  @MethodSource("unanchorable")
+  void fallsBackToCopyPasteWhenTheImprovementCannotBeAnchoredOntoTheDiff(
+      String label, String response) {
     prWithFiles(foo());
-    assistantReturns(
-        """
-        {"improvements":[{"file":"src/Foo.java","line":99,"title":"Rename the accumulator",
-        "category":"readability","rationale":"Ambiguous name.",
-        "suggestion_old":"int total = 0;","suggestion_new":"int valueTotal = 0;"}]}
-        """);
+    assistantReturns(response);
 
     service.handle(task(), AUTH);
 
     verify(reviewClient, never())
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+    assertTrue(postedSummary().contains("could not be pinned to the diff"), label);
   }
 
   @Test

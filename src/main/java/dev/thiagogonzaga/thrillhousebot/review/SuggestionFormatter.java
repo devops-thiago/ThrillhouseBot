@@ -24,7 +24,14 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 public class SuggestionFormatter {
 
-  private static final String CODE_FENCE_CLOSE = "\n```\n";
+  /**
+   * A markdown code fence standing alone on its own line, with the blank-safe newline on each side.
+   * Used as BOTH the opening and the closing delimiter of a plain block — the leading newline ends
+   * whatever came before, the trailing one starts the block's first content line — so a block is
+   * written as {@code CODE_FENCE + body + CODE_FENCE}. (An opening fence that carries a language
+   * tag, like the committable {@code suggestion} block, spells itself out instead.)
+   */
+  private static final String CODE_FENCE = "\n```\n";
 
   private static final Pattern FINDING_MARKER_PATTERN =
       Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)\\s*-->");
@@ -37,7 +44,7 @@ public class SuggestionFormatter {
    */
   public String formatSuggestionBlock(String suggestionOld, String suggestionNew) {
     if (suggestionOld == null || suggestionNew == null) return "";
-    return "\n```suggestion\n" + suggestionNew.stripTrailing() + CODE_FENCE_CLOSE;
+    return "\n```suggestion\n" + suggestionNew.stripTrailing() + CODE_FENCE;
   }
 
   /**
@@ -96,9 +103,9 @@ public class SuggestionFormatter {
     }
     sb.append("**\n");
     sb.append("This symbol is missing documentation. Suggested:\n");
-    sb.append(CODE_FENCE_CLOSE)
+    sb.append(CODE_FENCE)
         .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
-        .append(CODE_FENCE_CLOSE);
+        .append(CODE_FENCE);
     return sb.toString();
   }
 
@@ -149,9 +156,9 @@ public class SuggestionFormatter {
     if (rationale != null && !rationale.isBlank()) {
       sb.append("\n").append(rationale.strip()).append("\n");
     }
-    sb.append(CODE_FENCE_CLOSE)
+    sb.append(CODE_FENCE)
         .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
-        .append(CODE_FENCE_CLOSE);
+        .append(CODE_FENCE);
     return sb.toString();
   }
 

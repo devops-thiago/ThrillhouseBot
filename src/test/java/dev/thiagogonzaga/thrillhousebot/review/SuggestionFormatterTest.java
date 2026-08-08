@@ -232,6 +232,26 @@ class SuggestionFormatterTest {
   }
 
   @Test
+  void shouldRenderImprovementBlockFencesByteExactly() {
+    // Locks the exact fenced-block bytes: the fence constant carries the newline on each side, so
+    // the block must open and close on their own lines with no blank line inside it.
+    var block = formatter.formatImprovementBlock("T", null, null, null, 0, "line one\nline two");
+
+    assertEquals("**T**\n\n```\nline one\nline two\n```\n", block);
+  }
+
+  @Test
+  void shouldRenderDocNoteFencesByteExactly() {
+    var note = formatter.formatDocNote("Foo.bar()", "/** doc */");
+
+    assertEquals(
+        "**📝 Documentation for `Foo.bar()`**\n"
+            + "This symbol is missing documentation. Suggested:\n"
+            + "\n```\n/** doc */\n```\n",
+        note);
+  }
+
+  @Test
   void shouldFormatImprovementBlockWhenEveryOptionalFieldIsMissing() {
     var nulls = formatter.formatImprovementBlock(null, null, null, null, 0, null);
     var blanks = formatter.formatImprovementBlock(" ", "  ", " \n ", "  ", 0, "code");

@@ -62,8 +62,12 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       "✨ ThrillhouseBot has no improvements to suggest for the changes in this PR.";
 
   private static final String FOOTER =
-      "\n\n---\n*Nothing was committed — review each suggestion and commit the ones you want."
-          + " Re-run with `/improve`.*";
+      """
+
+
+      ---
+      *Nothing was committed — review each suggestion and commit the ones you want. \
+      Re-run with `/improve`.*""";
 
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
@@ -202,13 +206,12 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
         break;
       }
       var improvement = improvements.get(i);
-      if (!improvement.isPostable()) {
-        continue;
-      }
-      if (canPostInline && postInline(auth, task, inputs.headSha(), improvement, lineResolver)) {
-        committable++;
-      } else {
-        copyPaste.add(improvement);
+      if (improvement.isPostable()) {
+        if (canPostInline && postInline(auth, task, inputs.headSha(), improvement, lineResolver)) {
+          committable++;
+        } else {
+          copyPaste.add(improvement);
+        }
       }
     }
     return new ImproveOutcome(committable, List.copyOf(copyPaste), skippedByCap);
@@ -285,15 +288,26 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
   }
 
   /**
-   * Whether the improvement's {@code suggestion_old} is the text actually on that line of the diff.
-   * Unknown line text (the resolver has no exact record) is treated as a match — the exact-line
-   * anchoring already ran — so a resolver gap degrades to the {@code /add-docs} behavior instead of
-   * dropping every suggestion.
+   * Whether the improvement's {@code suggestion_old} is the text actually on that line of the diff,
+   * <em>including its leading indentation</em>.
+   *
+   * <p>Indentation is part of the match on purpose. Committing a suggestion replaces the anchored
+   * line with {@code suggestion_new} verbatim, so a model that re-indented the code it quoted has
+   * almost certainly re-indented the replacement too — and committing that would silently reflow
+   * the line, or in an indentation-sensitive language change what the code means. A quote that does
+   * not reproduce the line exactly is therefore treated as unanchorable, and the improvement
+   * degrades to a copy-paste block a human applies deliberately. Only trailing whitespace is
+   * tolerated: it is invisible, and formatters strip it anyway.
+   *
+   * <p>Unknown line text fails closed for the same reason — an unverifiable line must not be
+   * rewritten on the author's behalf. The resolver records text for every line it resolves, so that
+   * is a guard against future divergence rather than a path taken today.
    */
   private static boolean quotesCurrentLine(
       DiffLineResolver lineResolver, ImprovementResponse.Improvement improvement) {
     String current = lineResolver.getLineText(improvement.file(), improvement.line());
-    return current == null || current.strip().equals(improvement.suggestionOld().strip());
+    return current != null
+        && current.stripTrailing().equals(improvement.suggestionOld().stripTrailing());
   }
 
   /**
@@ -324,8 +338,10 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       sb.append("\n\n<details>\n<summary>")
           .append(outcome.copyPaste().size())
           .append(
-              " improvement(s) that could not be pinned to the diff — copy these in manually"
-                  + "</summary>\n\n");
+              """
+               improvement(s) that could not be pinned to the diff — copy these in manually</summary>
+
+              """);
       for (var improvement : outcome.copyPaste()) {
         sb.append(
                 suggestionFormatter.formatImprovementBlock(
