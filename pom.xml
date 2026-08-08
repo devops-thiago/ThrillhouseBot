@@ -22,6 +22,8 @@
         <quarkus-langchain4j.version>1.12.0</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
+        <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
+        <prometheus-metrics.version>1.8.0</prometheus-metrics.version>
         <jackson-bom.version>2.22.1</jackson-bom.version>
         <skipITs>true</skipITs>
         <!-- JUnit tag filters for surefire; the eval profile flips them to run PromptEvalTest -->
@@ -140,6 +142,24 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-opentelemetry</artifactId>
+        </dependency>
+        <!-- Prometheus scrape endpoint (/metrics) backed by the same OTel metrics as OTLP.
+             The exporter declares its prometheus-metrics deps runtime-scoped, so the two
+             artifacts our code compiles against are pulled in explicitly at the exporter's
+             own version (see its pom when bumping). -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>prometheus-metrics-model</artifactId>
+            <version>${prometheus-metrics.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>prometheus-metrics-exposition-textformats</artifactId>
+            <version>${prometheus-metrics.version}</version>
         </dependency>
 
         <!-- WebSockets -->

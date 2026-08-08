@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Prometheus metrics endpoint**: the metrics exported over OTLP — token usage, latency, AI cost, and the new `thrillhouse.reviews.total` finished-reviews-by-outcome counter — are also served in Prometheus text format at `GET /metrics` on the main HTTP port, so self-hosters can scrape directly without an OTLP collector. On by default; the endpoint is unauthenticated, so shield it at the proxy/firewall or disable it with `PROMETHEUS_METRICS_ENABLED=false` (scrapes then return `404`; OTLP export is unaffected)
+
 ## [0.5.0] — 2026-07-26
 
 Review precision: confidence now decides where a finding lands, newly-added parsers and regexes are stress-tested for their own failure modes, and several classes of false positive are guarded at both the generator and the verifier. Operators gain configurable CI-gating and blocking strictness, structured skip reasons, and per-model generation parameters.

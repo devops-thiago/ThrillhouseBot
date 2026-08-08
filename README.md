@@ -49,7 +49,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
-- OpenTelemetry traces, token histograms, cost counters, and latency metrics
+- OpenTelemetry traces, token histograms, cost counters, and latency and review-outcome metrics — exported via OTLP and scrapeable in Prometheus format at `/metrics`
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
 - Compiles ahead-of-time with GraalVM/Mandrel, so it starts fast and stays small
@@ -268,6 +268,8 @@ will change per provider:
 | `HTTP_CONNECT_TIMEOUT` | Outbound HTTP connect timeout (GitHub API, OAuth) | `10s` |
 | `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
 | `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive interval in ms; `0` or negative disables it (and stale replay-buffer eviction) | `25000` |
+| `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint traces and metrics are exported to | `http://localhost:4317` |
+| `PROMETHEUS_METRICS_ENABLED` | Serve the same metrics in Prometheus text format at `GET /metrics` on the main HTTP port; the endpoint is unauthenticated, so disable or shield it on internet-facing deployments | `true` |
 
 ### AI call budget
 
@@ -444,7 +446,8 @@ Labelling is best-effort — a failure here never blocks or fails the review.
 
 ## Observability
 
-All telemetry is exported via OTLP:
+All telemetry is exported via OTLP (`OTEL_EXPORTER_ENDPOINT`, default
+`http://localhost:4317`):
 
 | Signal | Metric |
 |---|---|
@@ -453,11 +456,33 @@ All telemetry is exported via OTLP:
 | `gen_ai.client.operation.duration` | Histogram: latency in seconds |
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |
 | `thrillhouse.review.skips` | Counter: automatic reviews skipped, tagged with `reason` and `repository` |
+| `thrillhouse.reviews.total` | Counter: finished reviews by `outcome` (`completed`/`failed`) |
 
 Spans and metrics are tagged with `gen_ai.provider.name`, derived from `AI_BASE_URL`
 (e.g. `deepseek`, `openai`, `groq`, `openrouter`). Loopback and unrecognized endpoints
 report `unknown`; set `AI_PROVIDER` to label them (e.g. a local `ollama` or `vllm` server,
 a proxy, or a self-hosted gateway).
+
+### Prometheus
+
+The same metrics are also served in Prometheus text format at `GET /metrics` on
+the main HTTP port — no OTLP collector needed:
+
+```yaml
+scrape_configs:
+  - job_name: thrillhousebot
+    static_configs:
+      - targets: ["your-bot-host:8080"]
+```
+
+Metric names follow the Prometheus conversion of the OTel names above (e.g.
+`thrillhouse_ai_cost_total`, `gen_ai_client_token_usage`,
+`thrillhouse_reviews_total`).
+
+The endpoint is unauthenticated and reveals model names, token counts, and
+spend. On an internet-facing deployment, restrict `/metrics` at your reverse
+proxy or firewall, or disable it with `PROMETHEUS_METRICS_ENABLED=false`
+(scrapes then return `404`; OTLP export is unaffected).
 
 ## Troubleshooting
 
