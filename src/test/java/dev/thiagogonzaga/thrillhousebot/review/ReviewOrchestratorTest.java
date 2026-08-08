@@ -76,6 +76,7 @@ class ReviewOrchestratorTest {
   @Mock private ReviewThreadService reviewThreadService;
 
   @Mock private InstructionsResolver instructionsResolver;
+  @Mock private RepoSettingsResolver repoSettingsResolver;
 
   @Mock private ProjectStackResolver projectStackResolver;
 
@@ -226,6 +227,7 @@ class ReviewOrchestratorTest {
             reviewClient,
             commentClient,
             instructionsResolver,
+            repoSettingsResolver,
             projectStackResolver,
             diffFormatter,
             labeler,

@@ -125,6 +125,15 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-rest-client-jackson</artifactId>
         </dependency>
+        <!--
+            YAML reading for a repository's own .github/thrillhousebot.yml. Already on the
+            classpath transitively (via quarkus-smallrye-openapi) and version-managed by the
+            jackson-bom import above; declared explicitly because it is now used directly.
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
