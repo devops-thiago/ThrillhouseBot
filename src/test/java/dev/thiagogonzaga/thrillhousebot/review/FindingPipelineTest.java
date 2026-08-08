@@ -359,6 +359,64 @@ class FindingPipelineTest {
   }
 
   @Test
+  void summaryOverviewScopeFallsBackToDiffCountsWhenPrTotalsAreEmpty() {
+    // A zero file count means the totals carry nothing usable; announcing a zero-file PR over a
+    // non-empty file list would contradict the very list printed below it.
+    var session = ReviewSession.create("owner/repo", 1, "Totals unavailable", "sha");
+    var reviewable =
+        List.of(
+            new FileDiff("a.java", "modified", 3, 0, 3, ""),
+            new FileDiff("b.java", "modified", 2, 0, 2, ""));
+    var ctx = reviewContext(List.of(), reviewable, new ReviewContextLoader.PrTotals(0, 0, 0));
+
+    var overview = captureSummaryChangedFiles(session, ctx);
+
+    assertTrue(
+        overview.contains("PR scope (whole pull request): 2 files changed, +5 -0"), overview);
+  }
+
+  @Test
+  void summaryOverviewOmitsTheScopeBlockWhenNothingIsInTheChangeSet() {
+    // Nothing reviewable and no PR totals: emit no scope header at all rather than "0 files".
+    var session = ReviewSession.create("owner/repo", 1, "Everything ignored", "sha");
+
+    var overview = captureSummaryChangedFiles(session, reviewContext(List.of(), List.of(), null));
+
+    assertEquals("", overview);
+  }
+
+  @Test
+  void summaryOverviewScopeKeepsTotalsWhenNoFileSurvivesTheIgnoreGlob() {
+    // GitHub still reports the PR's real size when the ignore-glob drops every changed file, so
+    // the header stands on its own — with no directory breakdown, which would have to be empty.
+    var session = ReviewSession.create("owner/repo", 1, "All ignored", "sha");
+    var ctx = reviewContext(List.of(), List.of(), new ReviewContextLoader.PrTotals(23, 1612, 240));
+
+    var overview = captureSummaryChangedFiles(session, ctx);
+
+    assertEquals("PR scope (whole pull request): 23 files changed, +1612 -240\n", overview);
+  }
+
+  @Test
+  void summaryOverviewScopeBucketsAPathWithNoDirectoryAtTheRoot() {
+    // A name carrying no directory component — a blank one included — buckets at the root instead
+    // of opening a directory row named after it.
+    var session = ReviewSession.create("owner/repo", 1, "Odd payload", "sha");
+    var files =
+        List.of(
+            new FileDiff("  ", "modified", 2, 0, 2, ""),
+            new FileDiff("src/app/A.java", "modified", 4, 1, 5, ""));
+
+    var overview = captureSummaryChangedFiles(session, reviewContext(files, files, null));
+
+    assertTrue(
+        overview.contains("PR scope (whole pull request): 2 files changed, +6 -1"), overview);
+    assertTrue(overview.contains("Directories touched: 2"), overview);
+    assertTrue(overview.contains("- (repository root): 1 file (+2 -0)"), overview);
+    assertTrue(overview.contains("- src/app: 1 file (+4 -1)"), overview);
+  }
+
+  @Test
   void summaryOverviewRollsUpDirectoriesBeyondTheCap() {
     var session = ReviewSession.create("owner/repo", 1, "Wide PR", "sha");
     var files = new ArrayList<FileDiff>();

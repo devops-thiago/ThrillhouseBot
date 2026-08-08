@@ -599,12 +599,15 @@ public class FindingPipeline {
       deletions += file.deletions();
     }
     var totals = ctx.prTotals();
-    var filesChanged = totals != null ? totals.filesChanged() : files.size();
-    if (totals != null) {
+    // A non-positive file count means the totals carry nothing usable: fall back to the
+    // diff-derived counts rather than announcing a zero-file PR over a non-empty file list.
+    var authoritative = totals != null && totals.filesChanged() > 0;
+    var filesChanged = authoritative ? totals.filesChanged() : files.size();
+    if (authoritative) {
       additions = totals.additions();
       deletions = totals.deletions();
     }
-    if (filesChanged <= 0 && files.isEmpty()) {
+    if (filesChanged <= 0) {
       return "";
     }
     var sb = new StringBuilder();
@@ -656,11 +659,12 @@ public class FindingPipeline {
     }
   }
 
-  /** The file's parent directory, or a stable label for files at the repository root. */
+  /**
+   * The file's parent directory, or a stable label for a path carrying no directory component —
+   * which also covers a blank one. A null path is not guarded here: the per-file loop above already
+   * dereferences the same name against an immutable set, so it could never reach this point.
+   */
   private static String directoryOf(String path) {
-    if (path == null || path.isBlank()) {
-      return "(repository root)";
-    }
     var slash = path.lastIndexOf('/');
     return slash <= 0 ? "(repository root)" : path.substring(0, slash);
   }
