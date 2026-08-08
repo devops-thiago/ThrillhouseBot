@@ -150,8 +150,8 @@ class PrDescriptionGeneratorTest {
     var overhead =
         new TokenCounter()
             .estimateTokens(
-                PrDescribeAssistantPrompts.system()
-                    + PrSuggestionPrompts.user()
+                PrDescribeAssistantPrompts.systemPrompt()
+                    + PrSuggestionPrompts.userPrompt()
                     + PromptTemplateEscaper.fence(" ")
                     + "Title"
                     + "Body"

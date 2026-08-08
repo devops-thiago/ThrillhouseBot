@@ -131,8 +131,8 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
         planBatches(
             reviewable,
             inputs,
-            PrDescribeAssistantPrompts.system(),
-            PrSuggestionPrompts.user(),
+            PrDescribeAssistantPrompts.systemPrompt(),
+            PrSuggestionPrompts.userPrompt(),
             SYNTHESIS_CALLS);
     if (plan.batches().isEmpty()) {
       Log.debugf("No file of %s/%s #%d fit a /describe batch", owner, repo, prNumber);

@@ -151,7 +151,7 @@ public final class ChangelogAssistantPrompts {
    * that sized its own overhead carried a second multi-kilobyte copy of the prompt (SpotBugs {@code
    * HSC_HUGE_SHARED_STRING_CONSTANT}). The annotations still need the constant; nothing else does.
    */
-  public static String system() {
+  public static String systemPrompt() {
     return SYSTEM;
   }
 

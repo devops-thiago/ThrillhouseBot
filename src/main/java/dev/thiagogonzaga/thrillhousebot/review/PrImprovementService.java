@@ -149,8 +149,8 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
           planBatches(
               reviewable,
               inputs,
-              PrImproveAssistantPrompts.system(),
-              PrSuggestionPrompts.user(),
+              PrImproveAssistantPrompts.systemPrompt(),
+              PrSuggestionPrompts.userPrompt(),
               0);
       if (plan.batches().isEmpty()) {
         postComment(auth, task, NO_CHANGES + disclosure(plan));

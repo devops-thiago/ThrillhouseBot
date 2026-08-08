@@ -50,10 +50,10 @@ public final class PrSuggestionPrompts {
 
   /**
    * The user-message template as a runtime value, for callers that only need to <em>size</em> it.
-   * See {@link PrDescribeAssistantPrompts#system()} for why sizing callers avoid referencing the
-   * constant directly.
+   * See {@link PrDescribeAssistantPrompts#systemPrompt()} for why sizing callers avoid referencing
+   * the constant directly.
    */
-  public static String user() {
+  public static String userPrompt() {
     return USER;
   }
 

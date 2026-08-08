@@ -142,8 +142,8 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
         planBatches(
             reviewable,
             inputs,
-            ChangelogAssistantPrompts.system(),
-            PrSuggestionPrompts.user(),
+            ChangelogAssistantPrompts.systemPrompt(),
+            PrSuggestionPrompts.userPrompt(),
             MERGE_CALLS);
     if (plan.batches().isEmpty()) {
       Log.debugf("No file of %s/%s #%d fit a /changelog batch", owner, repo, prNumber);

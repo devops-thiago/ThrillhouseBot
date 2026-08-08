@@ -150,8 +150,8 @@ class ChangelogEntryGeneratorTest {
     var overhead =
         new TokenCounter()
             .estimateTokens(
-                ChangelogAssistantPrompts.system()
-                    + PrSuggestionPrompts.user()
+                ChangelogAssistantPrompts.systemPrompt()
+                    + PrSuggestionPrompts.userPrompt()
                     + PromptTemplateEscaper.fence(" ")
                     + "Title"
                     + "Body"
