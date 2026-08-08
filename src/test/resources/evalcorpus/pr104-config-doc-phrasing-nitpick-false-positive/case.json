@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 104,
+  "why": "Negative control for the #109 carve-out, over the same PR #104 doc diff. The config-key documentation-completeness class is deliberately narrow: only an omitted value type, list/separator, unit, allowed value or default is reportable. This candidate names none of them — it argues about wording and row ordering — so it is the documentation phrasing nitpick the low-severity exclusion has always dropped, and it must stay rejected. If widening the prompt for the true-positive case above lets this one through, the carve-out has reopened the nitpick door #109 promised not to.",
+  "expectedVerdicts": ["rejected"],
+  "finding": {
+    "risk": "low",
+    "confidence": "medium",
+    "file": "README.md",
+    "line": 159,
+    "title": "README wording for the manual-trigger allowlist does not match the property name",
+    "description": "The added row describes the key as an 'Allowlist of logins permitted to trigger manual `/review` without repo access', while the underlying property is named `manual-trigger-allowed-logins` and the accessor is `manualTriggerAllowedLogins`. Using 'allowed logins' in the table would match the implementation's vocabulary and read more consistently with the neighbouring rows. The row is also placed after `WEBHOOK_DEDUP_TTL` rather than in alphabetical order with the other `THRILLHOUSEBOT_*` entries.",
+    "suggestion_old": "| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |",
+    "suggestion_new": "| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Allowed logins permitted to trigger manual `/review` without repo access | _(empty)_ |"
+  }
+}
