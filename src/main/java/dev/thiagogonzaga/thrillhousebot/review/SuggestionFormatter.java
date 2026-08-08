@@ -29,6 +29,9 @@ public class SuggestionFormatter {
   private static final Pattern FINDING_MARKER_PATTERN =
       Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)\\s*-->");
 
+  /** What a code-fence info string may look like — a language tag, nothing else. */
+  private static final Pattern LANGUAGE_TAG_PATTERN = Pattern.compile("[a-z0-9+#._-]{1,20}");
+
   /**
    * Wraps suggestion_old and suggestion_new in a GitHub suggestion block.
    *
@@ -100,6 +103,64 @@ public class SuggestionFormatter {
         .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
         .append(CODE_FENCE_CLOSE);
     return sb.toString();
+  }
+
+  /**
+   * Builds one proposed-test section of the {@code /generate-tests} comment: the target path as a
+   * heading, the one-line "covers" note when the model supplied one, and the test source as a code
+   * block tagged with its language.
+   *
+   * <p>A generated test is normally a whole new file, which has no line in the diff for GitHub to
+   * anchor a committable {@code suggestion} block to — those only render inside an inline review
+   * comment on a diff line. So the source is presented as a copy-paste block headed by the exact
+   * path it belongs at, rather than being forced into the inline-suggestion shape.
+   *
+   * <p>The fence is widened past the longest backtick run in the source, so a test that itself
+   * contains a fenced block cannot break out of the comment.
+   */
+  public String formatGeneratedTestFile(String path, String language, String covers, String code) {
+    var sb = new StringBuilder("### `").append(path == null ? "" : path.strip()).append("`\n");
+    if (covers != null && !covers.isBlank()) {
+      sb.append(covers.strip()).append('\n');
+    }
+    var body = code == null ? "" : code.stripTrailing();
+    var fence = fenceFor(body);
+    return sb.append('\n')
+        .append(fence)
+        .append(languageTag(language))
+        .append('\n')
+        .append(body)
+        .append('\n')
+        .append(fence)
+        .append('\n')
+        .toString();
+  }
+
+  /**
+   * A code fence at least one backtick longer than the longest backtick run in {@code code} (never
+   * shorter than the usual three), so fenced content inside the block cannot close it early.
+   */
+  private static String fenceFor(String code) {
+    int longest = 0;
+    int run = 0;
+    for (int i = 0; i < code.length(); i++) {
+      run = code.charAt(i) == '`' ? run + 1 : 0;
+      longest = Math.max(longest, run);
+    }
+    return "`".repeat(Math.max(3, longest + 1));
+  }
+
+  /**
+   * The model-supplied language as a code-fence info string, or empty when it is missing or carries
+   * anything but the characters a language tag is made of — the info string shares the fence line,
+   * so arbitrary text there would corrupt the block.
+   */
+  private static String languageTag(String language) {
+    if (language == null) {
+      return "";
+    }
+    var tag = language.strip().toLowerCase(Locale.ROOT);
+    return LANGUAGE_TAG_PATTERN.matcher(tag).matches() ? tag : "";
   }
 
   /**

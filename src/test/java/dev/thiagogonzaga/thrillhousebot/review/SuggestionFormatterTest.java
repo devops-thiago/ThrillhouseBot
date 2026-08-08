@@ -177,4 +177,41 @@ class SuggestionFormatterTest {
     // A null draft renders an empty block rather than the literal "null".
     assertFalse(blank.contains("null"), blank);
   }
+
+  @Test
+  void shouldFormatGeneratedTestFileAsAPathHeadedCodeBlock() {
+    var block =
+        formatter.formatGeneratedTestFile(
+            " src/test/java/FooTest.java ", "Java", " covers the null branch ", "class FooTest {}");
+
+    assertTrue(block.startsWith("### `src/test/java/FooTest.java`\n"), block);
+    assertTrue(block.contains("covers the null branch\n"), block);
+    assertTrue(block.contains("```java\nclass FooTest {}\n```"), block);
+    // A new file has no diff line to anchor a committable suggestion to.
+    assertFalse(block.contains("```suggestion"), block);
+  }
+
+  @Test
+  void shouldWidenTheFencePastBacktickRunsInTheTestSource() {
+    var block = formatter.formatGeneratedTestFile("t/FooTest.java", "java", null, "a ``` b ```` c");
+
+    assertTrue(block.contains("`````java\n"), block);
+    assertTrue(block.endsWith("`````\n"), block);
+  }
+
+  @Test
+  void shouldOmitAnUnusableLanguageTag() {
+    for (var language : new String[] {null, "  ", "java\nnot a tag", "a".repeat(21)}) {
+      var block = formatter.formatGeneratedTestFile("t/FooTest.java", language, null, "code");
+      assertTrue(block.contains("```\ncode\n```"), block);
+    }
+  }
+
+  @Test
+  void shouldTolerateAMissingPathCoversAndCode() {
+    var block = formatter.formatGeneratedTestFile(null, "java", "  ", null);
+
+    assertTrue(block.startsWith("### ``\n"), block);
+    assertFalse(block.contains("null"), block);
+  }
 }

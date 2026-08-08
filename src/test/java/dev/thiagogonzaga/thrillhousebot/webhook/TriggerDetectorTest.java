@@ -59,6 +59,7 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("/describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("/changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("/add-docs please"));
+    assertEquals(CommentCommand.GENERATE_TESTS, detector.detectCommand("/generate-tests"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("/resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("hey /pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume now"));
@@ -72,6 +73,9 @@ class TriggerDetectorTest {
     assertEquals(CommentCommand.DESCRIBE, detector.detectCommand("@thrillhousebot describe"));
     assertEquals(CommentCommand.CHANGELOG, detector.detectCommand("@thrillhousebot changelog"));
     assertEquals(CommentCommand.ADD_DOCS, detector.detectCommand("@thrillhousebot add-docs"));
+    assertEquals(
+        CommentCommand.GENERATE_TESTS,
+        detector.detectCommand("@thrillhousebot generate-tests for this"));
     assertEquals(CommentCommand.RESOLVE, detector.detectCommand("@thrillhousebot resolve"));
     assertEquals(CommentCommand.PAUSE, detector.detectCommand("@thrillhousebot pause"));
     assertEquals(CommentCommand.RESUME, detector.detectCommand("@thrillhousebot resume"));
@@ -148,6 +152,17 @@ class TriggerDetectorTest {
   void shouldNotDetectCommandOrMentionInsideInlineCode() {
     assertEquals(CommentCommand.NONE, detector.detectCommand("use `/review` to trigger a review"));
     assertFalse(detector.containsBotMention("ping `@thrillhousebot` here"));
+  }
+
+  @Test
+  void shouldNotDetectGenerateTestsInsideQuotedContext() {
+    // Documenting or quoting the command must never run it.
+    assertEquals(CommentCommand.NONE, detector.detectCommand("```\n/generate-tests\n```"));
+    assertEquals(
+        CommentCommand.NONE, detector.detectCommand("run `/generate-tests` to propose tests"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("> someone said /generate-tests"));
+    assertEquals(
+        CommentCommand.NONE, detector.detectCommand("~~~\n@thrillhousebot generate-tests\n~~~"));
   }
 
   @Test
