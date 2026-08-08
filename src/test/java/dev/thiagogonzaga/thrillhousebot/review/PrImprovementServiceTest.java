@@ -803,7 +803,8 @@ class PrImprovementServiceTest {
     // covers the whole PR rather than the first max-diff-lines, a repo-ignored file is no longer
     // excluded by accident — so it has to be excluded on purpose.
     when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
-        .thenReturn(new RepoSettings(List.of("src/Other.java"), ".github/thrillhousebot.yml"));
+        .thenReturn(
+            new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
     budgetWithDiffRoom(4000);
     prWithFiles(foo(), otherFile());
     assistantReturns("{\"improvements\":[]}");
@@ -891,7 +892,8 @@ class PrImprovementServiceTest {
     // to anchor onto one either: the line map is built from the same effective file list the
     // batches are planned over, so #449's exclusion holds all the way to the committable comment.
     when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
-        .thenReturn(new RepoSettings(List.of("src/Other.java"), ".github/thrillhousebot.yml"));
+        .thenReturn(
+            new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
     prWithFiles(foo(), otherFile());
     assistantReturns(
         """
