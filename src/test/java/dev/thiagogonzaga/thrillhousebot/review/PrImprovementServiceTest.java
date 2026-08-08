@@ -814,4 +814,97 @@ class PrImprovementServiceTest {
     assertFalse(sent.contains("src/Other.java"), sent);
     assertTrue(sent.contains("src/Foo.java"), sent);
   }
+
+  /**
+   * A third file whose hunk starts deep in the file, so a line number that is correct for the whole
+   * PR is nowhere near an index within its own batch. It is the smallest change of the three, so
+   * the planner sizes it last and it can only land in a batch after the others.
+   */
+  private static final String LATE_PATCH =
+      """
+      @@ -0,0 +120,2 @@
+      +int backoffMillis = 100;
+      +Thread.sleep(backoffMillis);""";
+
+  private static FileDiff lateFile() {
+    return new FileDiff("src/Late.java", "modified", 2, 0, 2, LATE_PATCH);
+  }
+
+  private static final String LATE_IMPROVEMENT =
+      """
+      {"improvements":[{"file":"src/Late.java","line":121,"title":"Back off without blocking",
+      "category":"performance","rationale":"A sleep blocks the worker for the whole backoff.",
+      "suggestion_old":"Thread.sleep(backoffMillis);",
+      "suggestion_new":"scheduler.delay(backoffMillis);"}]}
+      """;
+
+  /**
+   * A per-call diff budget equal to the largest rendered file section, derived from the real
+   * renderer rather than guessed: every file then fits a batch whole (so nothing is clipped), but
+   * no two ever share one, so each file gets its own batch.
+   */
+  private int oneFilePerBatchBudget(FileDiff... files) {
+    var names = ReviewDiffFormatter.namesOf(List.of(files));
+    var counter = new TokenCounter();
+    int largest = 0;
+    for (var file : files) {
+      largest =
+          Math.max(largest, counter.estimateTokens(diffFormatter.formatFileSection(file, names)));
+    }
+    return largest;
+  }
+
+  @Test
+  void anchorsAnImprovementFromALaterBatchToItsAbsoluteLine() {
+    // A batch carries only its own files, but line resolution must stay whole-PR. src/Late.java's
+    // hunk starts at line 120 on purpose: an improvement that came out of a later batch has to
+    // anchor at the file's real line number, so a line map built from one batch — or one indexed
+    // within a batch — would either fail to anchor it or rewrite the wrong line.
+    budgetWithDiffRoom(oneFilePerBatchBudget(foo(), otherFile(), lateFile()));
+    prWithFiles(foo(), otherFile(), lateFile());
+    when(improveAssistant.improve(any(), any(), any(), any()))
+        .thenAnswer(
+            call ->
+                call.<String>getArgument(0).contains("src/Late.java")
+                    ? LATE_IMPROVEMENT
+                    : "{\"improvements\":[]}");
+
+    service.handle(task(), AUTH);
+
+    var sent = diffsSentToAssistant();
+    int batchWithLate = -1;
+    for (int i = 0; i < sent.size(); i++) {
+      if (sent.get(i).contains("src/Late.java")) {
+        batchWithLate = i;
+      }
+    }
+    assertTrue(batchWithLate > 0, "src/Late.java should reach a later batch, was " + batchWithLate);
+    var inline = capturedInlineComment();
+    assertEquals("src/Late.java", inline.path());
+    assertEquals(121, inline.line());
+    assertTrue(inline.body().contains("scheduler.delay(backoffMillis);"), inline.body());
+  }
+
+  @Test
+  void neverCommitsASuggestionToAFileTheRepositoryAskedTheBotToIgnore() {
+    // The batches never show the model an ignored file, but a hallucinated path must not be able
+    // to anchor onto one either: the line map is built from the same effective file list the
+    // batches are planned over, so #449's exclusion holds all the way to the committable comment.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(new RepoSettings(List.of("src/Other.java"), ".github/thrillhousebot.yml"));
+    prWithFiles(foo(), otherFile());
+    assistantReturns(
+        """
+        {"improvements":[{"file":"src/Other.java","line":2,"title":"Bound the retry loop",
+        "category":"error-handling","rationale":"An unbounded retry can spin forever.",
+        "suggestion_old":"while (retries < 3) { call(); }",
+        "suggestion_new":"while (retries++ < 3) { call(); }"}]}
+        """);
+
+    service.handle(task(), AUTH);
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
+  }
 }

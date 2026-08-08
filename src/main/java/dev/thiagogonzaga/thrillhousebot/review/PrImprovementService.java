@@ -138,7 +138,10 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
         postComment(auth, task, NO_CHANGES);
         return;
       }
-      var plan = planBatches(task, inputs);
+      // Resolved once and threaded downstream: the batches and the line map must agree on which
+      // files are in scope, or an out-of-scope file could still be anchored onto.
+      var reviewable = respectPerRepoIgnores(task, inputs.reviewableFiles());
+      var plan = planBatches(reviewable, inputs);
       if (plan.batches().isEmpty()) {
         postComment(auth, task, NO_CHANGES + disclosure(plan));
         return;
@@ -148,7 +151,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
         postComment(auth, task, GENERATION_FAILED);
         return;
       }
-      var outcome = post(auth, task, inputs, generated.improvements());
+      var outcome = post(auth, task, inputs, reviewable, generated.improvements());
       postComment(auth, task, summaryMessage(outcome, plan, generated.failedBatches()));
       Log.infof(
           "/improve posted %d committable suggestion(s) and %d copy-paste block(s)"
@@ -171,8 +174,8 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
    * whole files from a command whose entire value is covering the change set. An explicit {@code
    * max-input-tokens <= 0} disables budgeting and yields a single uncapped batch.
    */
-  private DiffBudgetPlanner.BudgetPlan planBatches(ImproveTask task, Inputs inputs) {
-    var reviewable = respectPerRepoIgnores(task, inputs.reviewableFiles());
+  private DiffBudgetPlanner.BudgetPlan planBatches(
+      List<GitHubPullRequestClient.FileDiff> reviewable, Inputs inputs) {
     if (activeModel.maxInputTokens() <= 0) {
       return budgetPlanner.plan(reviewable, 0, 1);
     }
@@ -307,14 +310,19 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
    * Posts every postable improvement that anchors onto the diff as an inline committable
    * suggestion, collecting the rest for the summary's copy-paste section. Both kinds count against
    * the per-run comment cap so a large PR can never produce an unbounded run.
+   *
+   * <p>The line map is built once from the run's whole effective file list — every batch's files
+   * together, never one batch's — so an improvement produced by any batch anchors to its correct
+   * absolute line. It is the same list the batches were planned over, so a file the repository
+   * asked the bot to ignore cannot be anchored onto either, even if the model names one.
    */
   private ImproveOutcome post(
       String auth,
       ImproveTask task,
       Inputs inputs,
+      List<GitHubPullRequestClient.FileDiff> reviewable,
       List<ImprovementResponse.Improvement> improvements) {
-    var lineResolver =
-        new DiffLineResolver(diffFormatter().patchesByReviewableFiles(inputs.reviewableFiles()));
+    var lineResolver = new DiffLineResolver(diffFormatter().patchesByReviewableFiles(reviewable));
     boolean canPostInline = inputs.headSha() != null && !inputs.headSha().isBlank();
     if (!canPostInline) {
       Log.debugf(
