@@ -130,8 +130,10 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<String> olderAiResponseJsons,
       BotIdentity botIdentity) {
+    var previous = parseResponse(previousAiResponseJson);
     return buildPreviousFindingsContext(
-        parsePreviousFindings(previousAiResponseJson),
+        previous.findings(),
+        isPersistedResponse(previous),
         priorReviews,
         inlineComments,
         parsePreviousResponses(olderAiResponseJsons),
@@ -141,20 +143,86 @@ public class FollowUpAnalyzer {
   /**
    * Same as the JSON overload, but consumes findings already deserialized for this review so the
    * prior-response JSON is not re-parsed.
+   *
+   * <p>{@code previousResponsePersisted} is what keeps the review-body fallback in its lane. The
+   * fallback exists for sessions that persisted no readable AI response at all; inferring that from
+   * an empty rendering instead also caught the ordinary case of a persisted round that legitimately
+   * found nothing, and fed the bot's own review prose back to the model under a header saying "the
+   * following issues were flagged in the previous review" (#455). The two cases are told apart by
+   * the caller, which knows which one it is in, not by the shape of the output.
    */
   public String buildPreviousFindingsContext(
       List<ReviewResponse.Finding> previousFindings,
+      boolean previousResponsePersisted,
       List<GitHubReviewClient.ReviewResponse> priorReviews,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse> olderAiResponses,
       BotIdentity botIdentity) {
     var structured = formatStructuredFindings(previousFindings, inlineComments, botIdentity);
     var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
-    if (!structured.isEmpty()) {
+    if (!structured.isEmpty() || previousResponsePersisted) {
       return structured + answered;
     }
     var fallback = buildPreviousFindingsContext(priorReviews, botIdentity);
     return fallback + answered;
+  }
+
+  /**
+   * The prior round the current review reports on: the newest persisted round that actually raised
+   * findings, or an empty list when none did.
+   *
+   * <p>A round that legitimately found nothing has no findings of its own to be reported on, so
+   * treating it as "the previous round" evicted the still-open set entirely — the finding raised
+   * two rounds ago dropped out of the prompt, out of {@code previous_findings_status}, and out of
+   * every id-keyed consumer, and could never be marked resolved again (#455). Skipping such a round
+   * carries the open set forward.
+   *
+   * <p>The round's own list is returned <em>whole</em>, deliberately: every id stays exactly the
+   * 1-based position the finding had when it was posted, which is the index its inline comment's
+   * hidden marker carries and the id space {@code previous_findings_status} references. Filtering
+   * out findings a later round already closed would renumber the rest and break both.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static List<ReviewResponse.Finding> effectivePreviousFindings(
+      List<ReviewResponse> priorAiResponses) {
+    var index = effectivePreviousRoundIndex(priorAiResponses);
+    return index < 0 ? List.of() : priorAiResponses.get(index).findings();
+  }
+
+  /**
+   * Position of {@link #effectivePreviousFindings}'s round in {@code priorAiResponses} (newest
+   * first), or {@code -1} when no prior round raised anything. An absent list, and an absent slot
+   * within one, count as rounds that raised nothing: this is the id space every downstream consumer
+   * keys off, so it degrades to "no previous round" rather than failing the review — the same way
+   * {@link #parsePreviousResponses} and {@link #toStatuses} treat absent input.
+   */
+  public static int effectivePreviousRoundIndex(List<ReviewResponse> priorAiResponses) {
+    if (priorAiResponses == null) {
+      return -1;
+    }
+    for (var i = 0; i < priorAiResponses.size(); i++) {
+      var response = priorAiResponses.get(i);
+      if (response != null && !response.findings().isEmpty()) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Whether a parsed round is a response the bot actually persisted, as opposed to the shared blank
+   * stand-in {@link #parseResponse} substitutes for a missing or unparseable one. Reference
+   * identity is the discriminator on purpose: a round that legitimately found nothing parses into
+   * its own instance — equal to the stand-in, but not the same object — and telling those two apart
+   * is exactly what keeps the review-body fallback out of a zero-finding round. It also lets
+   * callers reuse the single parse they already did rather than parsing the JSON a second time.
+   *
+   * <p>An absent response is the same absence a missing or unparseable one is, and so is not
+   * persisted either.
+   */
+  public static boolean isPersistedResponse(ReviewResponse response) {
+    return response != null && response != EMPTY_RESPONSE;
   }
 
   /**
@@ -934,19 +1002,27 @@ public class FollowUpAnalyzer {
   /**
    * The still-open prior findings keyed by content (a finding carried across rounds is held at most
    * once; insertion order is preserved for stable, deterministic output). Each round closes what
-   * the next round's status addressed, and {@code currentStatuses} — which reports on the newest
-   * prior round — drops everything the current round accounted for.
+   * the next round's status addressed, and {@code currentStatuses} — which reports on the round
+   * {@link #effectivePreviousFindings} named — drops everything the current round accounted for.
+   *
+   * <p>The round a {@code previous_findings_status} block reports on is the newest <em>earlier</em>
+   * round that actually raised findings, not simply the round before it. A round that found nothing
+   * exposes no ids to reference, so the next round is shown — and reports on — the last round that
+   * did. Pairing a status block with an empty round instead left every id unmappable, so nothing
+   * ever closed and the held set drifted upward with each further round (#455).
    */
   private Map<String, OpenFinding> openFindingsAcrossRounds(
       List<ReviewResponse> chrono, List<ReviewResponse.PreviousFindingStatus> currentStatuses) {
     var open = new LinkedHashMap<String, OpenFinding>();
-    for (var i = 0; i < chrono.size(); i++) {
-      if (i > 0) {
-        closeAddressed(open, chrono.get(i - 1).findings(), chrono.get(i).previousFindingsStatus());
+    var reportedRound = List.<ReviewResponse.Finding>of();
+    for (var round : chrono) {
+      closeAddressed(open, reportedRound, round.previousFindingsStatus());
+      addOpenFindings(open, round.findings());
+      if (!round.findings().isEmpty()) {
+        reportedRound = round.findings();
       }
-      addOpenFindings(open, chrono.get(i).findings());
     }
-    closeReported(open, chrono.get(chrono.size() - 1).findings(), currentStatuses);
+    closeReported(open, reportedRound, currentStatuses);
     return open;
   }
 
@@ -1186,7 +1262,9 @@ public class FollowUpAnalyzer {
 
   /**
    * Fallback context built from the last bot review body, for sessions without a persisted AI
-   * response. The body carries no structured findings, so this is best-effort only.
+   * response. The body carries no structured findings, so this is best-effort only — and a body the
+   * bot generated about its own verdict carries nothing at all, so it is dropped rather than
+   * offered to the model as a prior finding ({@link #isSelfAuthoredStatusBody}).
    */
   public String buildPreviousFindingsContext(
       List<GitHubReviewClient.ReviewResponse> priorReviews, BotIdentity botIdentity) {
@@ -1201,8 +1279,42 @@ public class FollowUpAnalyzer {
 
     // The prompt template provides the lead-in sentence; emit only the review body
     var body = lastBotReview.get().body();
-    return body != null ? body : "";
+    if (body == null || isSelfAuthoredStatusBody(body)) {
+      return "";
+    }
+    return body;
   }
+
+  /**
+   * Whether a bot review body is the bot's own verdict prose rather than review content. The prompt
+   * frames whatever this fallback returns as "the following issues were flagged in the previous
+   * review … determine if each is resolved, unresolved, or justified", so a sentence the bot wrote
+   * about its own verdict would be handed back to it as an issue to account for, and re-counted
+   * every round (#455). The bot must never treat its own output as its input.
+   *
+   * <p>Recognition is by the body's first non-blank line against the producers' own constants — the
+   * unresolved-previous status sentence, the clean-review message, the two CI-hold notices, and the
+   * partial-review banner — so the check cannot drift from the text it recognizes. A body a human
+   * (or an older, findings-carrying review) wrote starts with none of them and is preserved.
+   */
+  static boolean isSelfAuthoredStatusBody(String body) {
+    var first = body.lines().map(String::strip).filter(line -> !line.isEmpty()).findFirst();
+    if (first.isEmpty()) {
+      return true;
+    }
+    var line = first.get();
+    return ReviewResult.isUnresolvedPreviousMessage(line)
+        || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
+        || line.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)
+        || line.startsWith(ReviewResult.TRUNCATION_NOTICE_LEAD_IN)
+        || line.startsWith(ZERO_ISSUES_FIRST_LINE);
+  }
+
+  /**
+   * First line of {@link PrSummaryGenerator#ZERO_ISSUES_MESSAGE} — the clean-review celebration.
+   */
+  private static final String ZERO_ISSUES_FIRST_LINE =
+      PrSummaryGenerator.ZERO_ISSUES_MESSAGE.lines().findFirst().orElse("");
 
   /**
    * Converts AI response's previous_findings_status into ReviewResult statuses, keeping only the

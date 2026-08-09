@@ -185,4 +185,42 @@ class ReviewResultTest {
     assertFalse(disclosure.contains("findings and verdict"), disclosure);
     assertFalse(disclosure.contains("partial review"), disclosure);
   }
+
+  /**
+   * #455 — the recognizer decides whether a prior review body is the bot's own verdict prose (and
+   * so must never be fed back to the model as a "previous finding") or someone else's text, which
+   * must be kept. It has to match every count the generator can emit, in the shape a stored review
+   * body arrives in.
+   */
+  @Test
+  void isUnresolvedPreviousMessageShouldMatchTheGeneratedSentenceForAnyCount() {
+    for (var count : List.of(1L, 2L, 47L)) {
+      assertTrue(
+          ReviewResult.isUnresolvedPreviousMessage(ReviewResult.unresolvedPreviousMessage(count)),
+          "count " + count);
+    }
+    assertTrue(
+        ReviewResult.isUnresolvedPreviousMessage(
+            "  " + ReviewResult.unresolvedPreviousMessage(3) + "  "),
+        "a stored review body keeps its surrounding whitespace");
+  }
+
+  /**
+   * #455 — everything the recognizer accepts is dropped from the previous-findings context, so a
+   * near miss costs a maintainer their review body. A human sentence that merely opens with the
+   * same words, or that reproduces only the generated ending, is not the bot's own prose.
+   */
+  @Test
+  void isUnresolvedPreviousMessageShouldRejectTextThatOnlyResemblesIt() {
+    assertFalse(ReviewResult.isUnresolvedPreviousMessage(null));
+    assertFalse(
+        ReviewResult.isUnresolvedPreviousMessage(
+            "No new issues in this revision, but the null check on line 12 is still wrong."),
+        "a human review opening with the same words carries a real finding and must be kept");
+    assertFalse(
+        ReviewResult.isUnresolvedPreviousMessage(
+            "Please fix them, or reply on their review thread (where one exists) with why they are"
+                + " deferred."),
+        "the generated ending without the generated opening is not the sentence");
+  }
 }

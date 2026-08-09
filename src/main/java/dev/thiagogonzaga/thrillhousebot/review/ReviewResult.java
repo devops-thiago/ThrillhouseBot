@@ -207,12 +207,47 @@ public record ReviewResult(
   // A backstop-held finding may have no inline thread (its line was outside the diff when raised),
   // hence the "where one exists" qualifier.
   public static String unresolvedPreviousMessage(long unresolved) {
-    return String.format(
-        "No new issues in this revision, but %d previous finding(s) remain unresolved — "
-            + "fix them, or reply on their review thread (where one exists) with why they are"
-            + " deferred.",
-        unresolved);
+    return UNRESOLVED_PREVIOUS_PREFIX + unresolved + UNRESOLVED_PREVIOUS_SUFFIX;
   }
+
+  private static final String UNRESOLVED_PREVIOUS_PREFIX = "No new issues in this revision, but ";
+
+  private static final String UNRESOLVED_PREVIOUS_SUFFIX =
+      " previous finding(s) remain unresolved — fix them, or reply on their review thread (where"
+          + " one exists) with why they are deferred.";
+
+  /**
+   * Whether {@code text} is {@link #unresolvedPreviousMessage(long)} for some count — the bot's own
+   * sentence about previous findings, which carries no finding of its own. Recognizing it is what
+   * lets the previous-findings context reject a review body the bot wrote itself instead of
+   * offering it to the model as an issue "flagged in the previous review" (#455).
+   *
+   * <p>Both ends are required, because everything this accepts is discarded: a body that only opens
+   * with the same words is a human review carrying a real finding. Absent text matches nothing.
+   */
+  public static boolean isUnresolvedPreviousMessage(String text) {
+    if (text == null) {
+      return false;
+    }
+    var stripped = text.strip();
+    return stripped.startsWith(UNRESOLVED_PREVIOUS_PREFIX)
+        && stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX);
+  }
+
+  /**
+   * Lead-in of the no-new-findings review body posted when CI checks hold approval back. Shared
+   * with {@link ReviewPublisher} so the recognizer above cannot drift from the producer.
+   */
+  static final String NO_ISSUES_CI_PENDING_LEAD_IN =
+      "ThrillhouseBot found no issues in this PR, but some checks are still pending or failed:";
+
+  /** Lead-in of the no-new-findings review body posted when the CI status could not be read. */
+  static final String NO_ISSUES_CI_UNREADABLE_LEAD_IN =
+      "ThrillhouseBot found no issues in this PR, but the CI status could not be read, so approval"
+          + " is held until it can be confirmed.";
+
+  /** Lead-in of {@link #truncationNotice(int, TruncationDetail)}'s partial-review banner. */
+  static final String TRUNCATION_NOTICE_LEAD_IN = "> ⚠️ **Large PR — partial review.**";
 
   /**
    * The shared "N file(s) were omitted …" clause, so the review banner and the on-demand-command
@@ -239,8 +274,8 @@ public record ReviewResult(
    */
   public static String truncationNotice(int omittedFiles, TruncationDetail detail) {
     return String.format(
-        "> ⚠️ **Large PR — partial review.** %s; the findings and verdict below cover only the"
-            + " reviewed portion.%n%n",
+        TRUNCATION_NOTICE_LEAD_IN
+            + " %s; the findings and verdict below cover only the reviewed portion.%n%n",
         coverageGapClause(omittedFiles, detail));
   }
 

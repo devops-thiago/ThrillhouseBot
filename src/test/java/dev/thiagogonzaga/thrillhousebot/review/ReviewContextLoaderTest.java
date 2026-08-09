@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -27,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -1151,7 +1153,7 @@ class ReviewContextLoaderTest {
       when(followUpAnalyzer.parsePreviousResponses(List.of(priorJson, olderJson)))
           .thenReturn(parsed);
       when(followUpAnalyzer.buildPreviousFindingsContext(
-              anyList(), any(), any(), any(), any(BotIdentity.class)))
+              anyList(), anyBoolean(), any(), any(), any(), any(BotIdentity.class)))
           .thenReturn("ctx");
       stubLoad(
           List.of(
@@ -1170,10 +1172,196 @@ class ReviewContextLoaderTest {
       verify(followUpAnalyzer)
           .buildPreviousFindingsContext(
               eq(parsed.get(0).findings()),
+              eq(true),
               any(),
               any(),
               eq(parsed.subList(1, parsed.size())),
               any(BotIdentity.class));
+    }
+  }
+
+  /**
+   * #455 — a follow-up round that finds nothing must not evict the finding raised before it. These
+   * drive {@link ReviewContextLoader#load} with the real {@link FollowUpAnalyzer}, so the section
+   * asserted on is the one the model is actually handed.
+   */
+  @Nested
+  class PreviousFindingsAcrossAZeroFindingRound {
+
+    private static final String CARRIED_FILE =
+        "src/main/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolver.java";
+    private static final String OTHER_FILE =
+        "src/main/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsParser.java";
+    private static final String CARRIED_TITLE =
+        "Undecodable content causes fallback to alternate config name";
+    private static final String OTHER_TITLE = "Unbounded YAML document size";
+    private static final String CARRIED_ANCHOR = "var name = decode(content);";
+
+    private static String findingJson(String file, int line, String title) {
+      return "{\"risk\":\"medium\",\"file\":\""
+          + file
+          + "\",\"line\":"
+          + line
+          + ",\"title\":\""
+          + title
+          + "\",\"description\":\"The first existing config file must be selected.\","
+          + "\"suggestion_old\":\""
+          + CARRIED_ANCHOR
+          + "\"}";
+    }
+
+    /** Round 1 of the PR #449 sequence: one MEDIUM finding, summary-only (no inline thread). */
+    private static final String ROUND_ONE_JSON =
+        "{\"findings\":["
+            + findingJson(CARRIED_FILE, 166, CARRIED_TITLE)
+            + "],\"previous_findings_status\":[],\"summary\":null}";
+
+    private static final String ROUND_ONE_TWO_FINDINGS_JSON =
+        "{\"findings\":["
+            + findingJson(CARRIED_FILE, 166, CARRIED_TITLE)
+            + ","
+            + findingJson(OTHER_FILE, 42, OTHER_TITLE)
+            + "],\"previous_findings_status\":[],\"summary\":null}";
+
+    /** Round 2: no new issues, reporting round 1's finding still unresolved. */
+    private static final String ROUND_TWO_JSON =
+        "{\"findings\":[],\"previous_findings_status\":"
+            + "[{\"id\":1,\"status\":\"unresolved\",\"note\":\"still there\"}],\"summary\":null}";
+
+    private static ReviewOrchestrator.ReviewRequest request() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner",
+          "repo",
+          1,
+          "headsha1",
+          "Title",
+          "body",
+          "basesha1",
+          "main",
+          99L,
+          true,
+          "main",
+          false);
+    }
+
+    private ReviewContextLoader realAnalyzerLoader() {
+      return new ReviewContextLoader(
+          prClient,
+          reviewClient,
+          commentClient,
+          instructionsResolver,
+          repoSettingsResolver,
+          projectStackResolver,
+          diffFormatter,
+          labeler,
+          new FollowUpAnalyzer(new ObjectMapper()),
+          new BugFixContextResolver(commentClient),
+          configKeyContextResolver,
+          patchCoverageResolver,
+          sessionPersistence,
+          BotIdentity.from(List.of(BOT_LOGIN)),
+          activeModel);
+    }
+
+    /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */
+    private void stubRoundThree(List<String> priorJsons) {
+      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  new GitHubPullRequestClient.FileDiff(
+                      CARRIED_FILE, "modified", 1, 0, 1, "@@ -166 +166 @@\n+" + CARRIED_ANCHOR)));
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "body",
+                  new GitHubPullRequestClient.Ref("headsha1"),
+                  new GitHubPullRequestClient.Ref("basesha1"),
+                  1,
+                  1,
+                  0));
+      when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  new GitHubReviewClient.ReviewResponse(
+                      1L,
+                      ReviewResult.unresolvedPreviousMessage(1),
+                      "COMMENTED",
+                      "abc",
+                      new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN))));
+      when(commentClient.listComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(List.of());
+      when(sessionPersistence.findAllPriorAiResponseJsons(any(), eq(1), anyLong()))
+          .thenReturn(priorJsons);
+      when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+          .thenReturn(new InstructionsResolver.ResolvedInstructions("", ""));
+      when(labeler.fetchExistingLabels(any(), any(), any())).thenReturn(List.of());
+      when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
+    }
+
+    private ReviewContextLoader.ReviewContext loadRoundThree(List<String> priorJsons) {
+      stubRoundThree(priorJsons);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+      return realAnalyzerLoader().load("auth", request(), session, "owner/repo");
+    }
+
+    @Test
+    void findingFromRoundOneSurvivesAZeroFindingRoundNumberedAndInTheIdSpace() {
+      var ctx = loadRoundThree(List.of(ROUND_TWO_JSON, ROUND_ONE_JSON));
+
+      assertEquals(
+          1,
+          ctx.previousFindingsList().size(),
+          "the zero-finding round evicted the still-open finding from the id space");
+      assertEquals(CARRIED_TITLE, ctx.previousFindingsList().get(0).title());
+      assertTrue(
+          ctx.previousFindings()
+              .contains("1. [MEDIUM] " + CARRIED_FILE + ":166 — " + CARRIED_TITLE),
+          "previous-findings section was: " + ctx.previousFindings());
+      assertFalse(
+          ctx.previousFindings().contains("remain unresolved"),
+          "the bot's own review body was handed back to it as a previous finding");
+    }
+
+    /**
+     * The #169 id-space pin: with nothing to carry, a zero-finding round leaves {@code previous}
+     * empty — {@link VerdictBuilder} passes it to {@code recheckDeclines} as the id space, and a
+     * pseudo-finding fabricated from a review body must never enter it.
+     */
+    @Test
+    void zeroFindingRoundWithNothingToCarryLeavesTheIdSpaceEmptyAndTheSectionAbsent() {
+      var ctx = loadRoundThree(List.of(ROUND_TWO_JSON));
+
+      assertTrue(
+          ctx.previousFindingsList().isEmpty(),
+          "a review body must never be turned into a previous finding");
+      assertEquals(
+          "",
+          ctx.previousFindings(),
+          "an absent previous-findings section is what suppresses the prompt block entirely");
+    }
+
+    /**
+     * The carry-forward pin: a real prior finding keeps the id its own round gave it — the id its
+     * inline comment's marker carries and the one {@code previous_findings_status} references.
+     */
+    @Test
+    void carriedFindingsKeepTheIdsTheirOwnRoundGaveThem() {
+      var analyzer = new FollowUpAnalyzer(new ObjectMapper());
+
+      var ctx = loadRoundThree(List.of(ROUND_TWO_JSON, ROUND_ONE_TWO_FINDINGS_JSON));
+      var previous = ctx.previousFindingsList();
+
+      assertEquals(
+          Map.of(1, CARRIED_FILE, 2, OTHER_FILE), analyzer.previousFindingFilesById(previous));
+      var unresolved =
+          analyzer.unresolvedFindings(
+              previous, List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", "n")));
+      assertEquals(1, unresolved.size());
+      assertEquals(OTHER_FILE, unresolved.get(0).file(), "id 2 no longer names the same finding");
     }
   }
 }

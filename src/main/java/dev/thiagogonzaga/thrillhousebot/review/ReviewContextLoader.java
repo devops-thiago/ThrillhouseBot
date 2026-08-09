@@ -153,11 +153,14 @@ public class ReviewContextLoader {
     }
 
     /**
-     * Findings from the newest prior AI response (empty when this is a first review or the prior
-     * JSON was missing/unparseable). Parsed once in {@link #load}.
+     * The prior findings this round reports on — the newest prior AI response that actually raised
+     * findings, so a round that legitimately found nothing does not evict the still-open set or its
+     * ids ({@link FollowUpAnalyzer#effectivePreviousFindings}). Empty on a first review, when every
+     * prior JSON was missing/unparseable, or when no prior round found anything. Parsed once in
+     * {@link #load}.
      */
     public List<ReviewResponse.Finding> previousFindingsList() {
-      return priorAiResponses.isEmpty() ? List.of() : priorAiResponses.get(0).findings();
+      return FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
     }
   }
 
@@ -221,22 +224,40 @@ public class ReviewContextLoader {
     // gate, approve backstop, and later thread matching all reuse these objects.
     List<ReviewResponse> priorAiResponses =
         followUpAnalyzer.parsePreviousResponses(priorAiResponseJsons);
+    // The round this review reports on is the newest prior round that actually raised findings: a
+    // round that legitimately found nothing exposes no ids, and treating it as "the previous round"
+    // dropped the still-open finding out of the prompt and out of every id-keyed consumer (#455).
+    // Everything derived from it — the rendered context, the id space, the raw JSON the supersede
+    // pass re-reads — is taken from that one round, so the three cannot drift apart. When no round
+    // raised anything there is nothing to skip past, and the newest round keeps both roles exactly
+    // as before.
+    var previousRoundIndex =
+        Math.max(FollowUpAnalyzer.effectivePreviousRoundIndex(priorAiResponses), 0);
     String previousAiResponseJson =
-        priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(0);
+        priorAiResponseJsons.isEmpty() ? null : priorAiResponseJsons.get(previousRoundIndex);
     List<ReviewResponse> olderAiResponses =
-        priorAiResponses.size() > 1
-            ? priorAiResponses.subList(1, priorAiResponses.size())
+        previousRoundIndex + 1 < priorAiResponses.size()
+            ? priorAiResponses.subList(previousRoundIndex + 1, priorAiResponses.size())
             : List.of();
     List<GitHubReviewClient.PullRequestComment> inlineComments =
         hasContext
             ? fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber())
             : List.of();
-    List<ReviewResponse.Finding> latestFindings =
-        priorAiResponses.isEmpty() ? List.of() : priorAiResponses.get(0).findings();
+    List<ReviewResponse.Finding> previousFindingsSource =
+        FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
+    // The review-body fallback is for sessions carrying no readable AI response at all. Once any
+    // prior round parsed, the bot's own review prose must never stand in for structured findings.
+    boolean previousResponsePersisted =
+        priorAiResponses.stream().anyMatch(FollowUpAnalyzer::isPersistedResponse);
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
-                latestFindings, priorReviews, inlineComments, olderAiResponses, botIdentity)
+                previousFindingsSource,
+                previousResponsePersisted,
+                priorReviews,
+                inlineComments,
+                olderAiResponses,
+                botIdentity)
             : "";
 
     var instructions =

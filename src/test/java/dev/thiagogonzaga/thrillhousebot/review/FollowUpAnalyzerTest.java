@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -758,7 +759,8 @@ class FollowUpAnalyzerTest {
     assertTrue(analyzer.matchFindingThreads(List.of(), List.of(), BOT_ID).isEmpty());
 
     var ctx =
-        analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), List.of(), BOT_ID);
+        analyzer.buildPreviousFindingsContext(
+            previous, true, List.of(), List.of(), List.of(), BOT_ID);
     assertTrue(ctx.contains("src/A.java"));
     assertTrue(ctx.contains("src/B.java"));
 
@@ -766,7 +768,7 @@ class FollowUpAnalyzerTest {
     assertEquals(
         "",
         analyzer.buildPreviousFindingsContext(
-            (List<ReviewResponse.Finding>) null, List.of(), List.of(), List.of(), BOT_ID));
+            (List<ReviewResponse.Finding>) null, false, List.of(), List.of(), List.of(), BOT_ID));
 
     // Older rounds with no maintainer reply contribute nothing to the answered-earlier section.
     var older =
@@ -776,12 +778,12 @@ class FollowUpAnalyzerTest {
                     + "\"title\":\"Old\",\"description\":\"d\",\"suggestion_old\":\"o\","
                     + "\"suggestion_new\":\"n\"}],\"previous_findings_status\":[],\"summary\":null}"));
     var withOlder =
-        analyzer.buildPreviousFindingsContext(previous, List.of(), List.of(), older, BOT_ID);
+        analyzer.buildPreviousFindingsContext(previous, true, List.of(), List.of(), older, BOT_ID);
     assertTrue(withOlder.contains("src/A.java"));
     assertFalse(withOlder.contains("Answered in earlier rounds"));
     assertTrue(
         analyzer
-            .buildPreviousFindingsContext(previous, List.of(), List.of(), null, BOT_ID)
+            .buildPreviousFindingsContext(previous, true, List.of(), List.of(), null, BOT_ID)
             .contains("src/A.java"));
 
     assertTrue(
@@ -1809,6 +1811,117 @@ class FollowUpAnalyzerTest {
         """;
 
     assertEquals("", analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID));
+  }
+
+  private static List<GitHubReviewClient.ReviewResponse> botReviews(String body) {
+    return List.of(
+        new GitHubReviewClient.ReviewResponse(
+            1L, body, "COMMENTED", "abc", new GitHubReviewClient.ReviewResponse.User(BOT)));
+  }
+
+  /**
+   * #455 — on PR #449 round 2 found nothing and posted the bot's own "N previous finding(s) remain
+   * unresolved …" sentence as its review body; round 3's previous-findings section was that
+   * sentence verbatim, under a header telling the model those were issues flagged in the previous
+   * review. Neither path may hand the bot's own prose back to it: not the zero-finding round (which
+   * has a persisted response and must therefore render nothing), and not the legitimate
+   * no-persisted-response fallback (which must discard a body the bot generated itself).
+   */
+  @Test
+  void previousFindingsContextShouldNeverCarryTheBotsOwnStatusBody() {
+    var reviews = botReviews(ReviewResult.unresolvedPreviousMessage(1));
+    var zeroFindingRound =
+        """
+        {"findings": [], "previous_findings_status": [], "summary": null}
+        """;
+
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(zeroFindingRound, reviews, BOT_ID),
+        "a persisted round that legitimately found nothing must render no previous findings");
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(null, reviews, BOT_ID),
+        "the review-body fallback must discard a body the bot wrote about its own verdict");
+  }
+
+  /**
+   * Every review body the bot generates for a no-new-findings round is its own output, so none of
+   * them may be offered as a prior finding. A body it did not generate still is.
+   */
+  @Test
+  void reviewBodyFallbackShouldDropEveryBotGeneratedBodyAndKeepTheRest() {
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(
+            botReviews(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), BOT_ID));
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(
+            botReviews(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN + "\n- Check **build** is failed"),
+            BOT_ID));
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(
+            botReviews(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), BOT_ID));
+    assertEquals(
+        "",
+        analyzer.buildPreviousFindingsContext(
+            botReviews(ReviewResult.truncationNotice(3)), BOT_ID));
+    assertEquals("", analyzer.buildPreviousFindingsContext(botReviews("   \n\n"), BOT_ID));
+    assertEquals(
+        "1. [HIGH] src/A.java:10 — Unsafe regex",
+        analyzer.buildPreviousFindingsContext(
+            botReviews("1. [HIGH] src/A.java:10 — Unsafe regex"), BOT_ID),
+        "a legacy body carrying real findings is still the only context such a session has");
+
+    var humanEcho = "No new issues in this revision, but the null check on line 12 is still wrong.";
+    assertEquals(
+        humanEcho,
+        analyzer.buildPreviousFindingsContext(botReviews(humanEcho), BOT_ID),
+        "a body that only opens like the generated sentence carries a real finding and is kept");
+  }
+
+  /**
+   * The round-selection helpers are the id space every downstream consumer keys off, so an absent
+   * or unreadable round must degrade to "no previous round" rather than throw mid-review. Matches
+   * how the rest of this class treats absent input ({@code parsePreviousResponses(null)}, {@code
+   * toStatuses(null)}).
+   */
+  @Test
+  void effectivePreviousRoundHelpersShouldTreatAbsentRoundsAsNoPreviousRound() {
+    assertEquals(-1, FollowUpAnalyzer.effectivePreviousRoundIndex(null));
+    assertTrue(FollowUpAnalyzer.effectivePreviousFindings(null).isEmpty());
+
+    var rounds = new ArrayList<ReviewResponse>();
+    rounds.add(null);
+    rounds.add(analyzer.parseResponse(PREVIOUS_JSON));
+    assertEquals(
+        1,
+        FollowUpAnalyzer.effectivePreviousRoundIndex(rounds),
+        "an unreadable slot is skipped, not mistaken for the round that raised findings");
+    assertEquals("src/A.java", FollowUpAnalyzer.effectivePreviousFindings(rounds).get(0).file());
+  }
+
+  /**
+   * #455 — the review-body fallback is gated on whether the bot persisted a response at all, and
+   * {@link FollowUpAnalyzer#isPersistedResponse} is the discriminator. A missing or unparseable
+   * response is not persisted; a round that legitimately found nothing is, even though the two
+   * carry identical (empty) findings.
+   */
+  @Test
+  void isPersistedResponseShouldSeparateAStoredRoundFromAMissingOne() {
+    assertFalse(FollowUpAnalyzer.isPersistedResponse(null));
+    assertFalse(FollowUpAnalyzer.isPersistedResponse(analyzer.parseResponse(null)));
+    assertFalse(FollowUpAnalyzer.isPersistedResponse(analyzer.parseResponse("   ")));
+    assertFalse(
+        FollowUpAnalyzer.isPersistedResponse(analyzer.parseResponse("{not json")),
+        "an unparseable response is the same absence as a missing one");
+    assertTrue(
+        FollowUpAnalyzer.isPersistedResponse(
+            analyzer.parseResponse(
+                "{\"findings\":[],\"previous_findings_status\":[],\"summary\":null}")),
+        "a round that legitimately found nothing did persist a response");
   }
 
   @Test
