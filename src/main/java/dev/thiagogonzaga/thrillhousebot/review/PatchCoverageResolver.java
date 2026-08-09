@@ -244,10 +244,16 @@ public class PatchCoverageResolver {
    */
   static List<UncoveredFile> intersectWithAddedLines(
       JacocoCoverageReport report, List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+    // Resolve the whole file list at once so a report entry that suffix-matches more than one of
+    // these repository paths (a multi-module build's same-named class) is dropped rather than
+    // attributed to each — a per-file lookup cannot see that cross-file collision.
+    var uncoveredByPath =
+        report.uncoveredLinesByPath(
+            reviewableFiles.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
     var result = new ArrayList<UncoveredFile>();
     for (var file : reviewableFiles) {
-      var reportedUncovered = report.uncoveredLines(file.filename());
-      if (reportedUncovered.isEmpty()) {
+      var reportedUncovered = uncoveredByPath.get(file.filename());
+      if (reportedUncovered == null || reportedUncovered.isEmpty()) {
         continue;
       }
       var uncoveredAdditions = new TreeSet<Integer>();
