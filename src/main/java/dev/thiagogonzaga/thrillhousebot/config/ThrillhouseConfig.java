@@ -537,7 +537,7 @@ public interface ThrillhouseConfig {
      */
     interface ReasoningConfig {
       /** Effort values accepted by {@link #effort()}, in ascending cost/quality order. */
-      List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high");
+      List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high", "xhigh", "max");
 
       /** Master switch — no reasoning parameter is sent unless this is {@code true}. */
       @WithDefault("false")
@@ -545,8 +545,11 @@ public interface ThrillhouseConfig {
 
       /**
        * Effort sent while {@link #enabled()}: one of {@code none}, {@code low}, {@code medium},
-       * {@code high} (case-insensitive). {@code none} explicitly asks the model not to reason —
-       * useful to pin down a reasoning-capable model that reasons by default. Validated at boot by
+       * {@code high}, {@code xhigh}, {@code max} (case-insensitive). {@code none} explicitly asks
+       * the model not to reason — useful to pin down a reasoning-capable model that reasons by
+       * default; {@code xhigh} and {@code max} are the extended tiers newer reasoning models expose
+       * above {@code high}. The value rides the wire verbatim, so a provider that does not
+       * recognize a tier rejects the call rather than silently downgrading it. Validated at boot by
        * {@link StartupConfigValidator}.
        */
       @WithDefault("low")

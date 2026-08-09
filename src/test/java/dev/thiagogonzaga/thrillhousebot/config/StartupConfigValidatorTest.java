@@ -512,9 +512,10 @@ class StartupConfigValidatorTest {
 
   @Test
   void failsFastWhenReasoningEffortIsInvalid() {
-    var ex = assertFailsValidation(new ConfigBuilder().reasoningEffort("max").build());
+    var ex = assertFailsValidation(new ConfigBuilder().reasoningEffort("maximum").build());
     assertTrue(
-        ex.getMessage().contains("AI_REASONING_EFFORT must be one of none, low, medium, high"),
+        ex.getMessage()
+            .contains("AI_REASONING_EFFORT must be one of none, low, medium, high, xhigh, max"),
         ex.getMessage());
   }
 
@@ -561,7 +562,7 @@ class StartupConfigValidatorTest {
 
   @Test
   void acceptsEveryReasoningEffortCaseInsensitivelyWithWhitespace() {
-    for (var effort : new String[] {"none", "LOW", " Medium ", "high"}) {
+    for (var effort : new String[] {"none", "LOW", " Medium ", "high", "XHigh", " max "}) {
       new ConfigBuilder().reasoningEnabled(true).reasoningEffort(effort).build().validate();
     }
   }
