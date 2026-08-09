@@ -23,6 +23,8 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
@@ -45,6 +47,7 @@ class MaintainerReplyServiceTest {
   @Mock private GitHubPullRequestClient prClient;
   @Mock private ReviewDiffFormatter diffFormatter;
   @Mock private ReplyAssistant replyAssistant;
+  @Mock private RepoSettingsResolver repoSettingsResolver;
 
   // A real TriggerDetector — its bot-login check is the actual logic we want exercised.
   private final TriggerDetector triggerDetector = new TriggerDetector();
@@ -54,17 +57,33 @@ class MaintainerReplyServiceTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
-    service =
-        new MaintainerReplyService(
-            authClient,
-            authorizer,
-            triggerDetector,
-            reviewClient,
-            commentClient,
-            prClient,
-            diffFormatter,
-            replyAssistant);
+    service = serviceWith(diffFormatter);
     when(authClient.getAuthHeader(anyLong())).thenReturn(AUTH);
+  }
+
+  /**
+   * Builds a service with the given diff formatter. The default suite uses the {@code @Mock} one
+   * for interaction assertions; the per-repo-ignore and disclosure tests pass a <em>real</em>
+   * {@link ReviewDiffFormatter} so the actual filtering and line-cap logic is exercised, not merely
+   * a stubbed call.
+   */
+  private MaintainerReplyService serviceWith(ReviewDiffFormatter formatter) {
+    return new MaintainerReplyService(
+        authClient,
+        authorizer,
+        triggerDetector,
+        reviewClient,
+        commentClient,
+        prClient,
+        formatter,
+        replyAssistant,
+        repoSettingsResolver);
+  }
+
+  private static GitHubPullRequestClient.FileDiff fileDiff(
+      String filename, String patch, int additions) {
+    return new GitHubPullRequestClient.FileDiff(
+        filename, "modified", additions, 0, additions, patch);
   }
 
   private static GitHubReviewClient.PullRequestComment comment(
@@ -217,7 +236,9 @@ class MaintainerReplyServiceTest {
     authorize();
     when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of());
-    when(diffFormatter.buildDiffString(any())).thenReturn("diff --git a/Foo b/Foo");
+    when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
+    when(diffFormatter.buildDiffStringWithStats(any(), any()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("diff --git a/Foo b/Foo", 0));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
         .thenReturn("It is safe because...");
 
@@ -338,7 +359,8 @@ class MaintainerReplyServiceTest {
     verify(commentClient)
         .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
     assertEquals("Answer.", body.getValue().body());
-    verify(diffFormatter, never()).buildDiffString(any()); // never reached — fetch threw first
+    verify(diffFormatter, never())
+        .buildDiffStringWithStats(any(), any()); // never reached — fetch threw first
   }
 
   @Test
@@ -361,7 +383,9 @@ class MaintainerReplyServiceTest {
     authorize();
     when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of());
-    when(diffFormatter.buildDiffString(any())).thenReturn("diff");
+    when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
+    when(diffFormatter.buildDiffStringWithStats(any(), any()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("diff", 0));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("");
 
     service.handle(mentionTask());
@@ -472,7 +496,9 @@ class MaintainerReplyServiceTest {
     authorize();
     when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of());
-    when(diffFormatter.buildDiffString(any())).thenReturn("d");
+    when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
+    when(diffFormatter.buildDiffStringWithStats(any(), any()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("d", 0));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
     // Whitespace-only (non-null) title and description exercise the !isBlank() branch.
     var task =
@@ -496,5 +522,83 @@ class MaintainerReplyServiceTest {
 
     verify(commentClient)
         .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), any());
+  }
+
+  // A file reviewable under the (empty) global list but excluded only by a per-repo pattern: its
+  // patch must not reach the model. Uses a real formatter so the actual glob filtering is
+  // exercised.
+  @Test
+  void mentionExcludesFileMatchedOnlyByPerRepoIgnorePattern() {
+    authorize();
+    // Empty global ignore list: secret.txt is reviewable globally, excluded only per-repo.
+    var realService = serviceWith(new ReviewDiffFormatter(List.of(), 5000));
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                fileDiff("src/Foo.java", "@@ -1 +1 @@\n-old\n+VISIBLE_CHANGE", 1),
+                fileDiff("vendor/secret.txt", "@@ -0,0 +1 @@\n+TOPSECRET_VENDORED_KEY", 1)));
+    when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
+        .thenReturn(new RepoSettings(List.of("vendor/**"), List.of(), "src"));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+
+    realService.handle(mentionTask());
+
+    var codeContext = ArgumentCaptor.forClass(String.class);
+    verify(replyAssistant).reply(any(), any(), any(), codeContext.capture(), any());
+    assertTrue(
+        codeContext.getValue().contains("VISIBLE_CHANGE"), "reviewable file's patch is sent");
+    assertFalse(
+        codeContext.getValue().contains("TOPSECRET_VENDORED_KEY"),
+        "per-repo-ignored file's patch must not reach the model");
+  }
+
+  // A repository that declares no config resolves to the global list only — behaves exactly as
+  // before, so a globally-reviewable file's patch is still sent.
+  @Test
+  void mentionWithNoRepoConfigSendsGloballyReviewableFile() {
+    authorize();
+    var realService = serviceWith(new ReviewDiffFormatter(List.of(), 5000));
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(fileDiff("vendor/secret.txt", "@@ -0,0 +1 @@\n+TOPSECRET_VENDORED_KEY", 1)));
+    // No repo config: resolver returns EMPTY (the default mock returns null → SoftLoaders → EMPTY).
+    when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
+        .thenReturn(RepoSettings.EMPTY);
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+
+    realService.handle(mentionTask());
+
+    var codeContext = ArgumentCaptor.forClass(String.class);
+    verify(replyAssistant).reply(any(), any(), any(), codeContext.capture(), any());
+    assertTrue(
+        codeContext.getValue().contains("TOPSECRET_VENDORED_KEY"),
+        "with no per-repo ignore, a globally-reviewable file is still sent (behaves as before)");
+  }
+
+  // A diff over max-diff-lines must produce a reply that discloses the omission — the surface could
+  // not say so before. Real formatter with a tiny line cap forces truncation.
+  @Test
+  void mentionDisclosesTruncationOnLargePr() {
+    authorize();
+    // A 3-line cap against two multi-line files forces at least one omitted file.
+    var realService = serviceWith(new ReviewDiffFormatter(List.of(), 3));
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                fileDiff("src/A.java", "@@ -1 +1 @@\n-a\n+aa\n+aaa\n+aaaa", 3),
+                fileDiff("src/B.java", "@@ -1 +1 @@\n-b\n+bb\n+bbb\n+bbbb", 3),
+                fileDiff("src/C.java", "@@ -1 +1 @@\n-c\n+cc\n+ccc\n+cccc", 3)));
+    when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
+        .thenReturn(RepoSettings.EMPTY);
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+
+    realService.handle(mentionTask());
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertTrue(
+        body.getValue().body().contains("partial coverage"),
+        "a truncated diff must disclose the omission in the posted reply");
   }
 }
