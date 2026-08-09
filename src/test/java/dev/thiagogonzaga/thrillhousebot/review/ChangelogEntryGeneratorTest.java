@@ -19,64 +19,155 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver.ResolvedInstructions;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistant;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistantPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.MockitoAnnotations;
 
-@ExtendWith(MockitoExtension.class)
 class ChangelogEntryGeneratorTest {
 
   private static final String AUTH = "token gh-abc";
 
+  private static final String PATCH =
+      """
+      @@ -0,0 +1,3 @@
+      +var in = Files.newInputStream(path);
+      +int total = 0;
+      +total += items.size();""";
+
+  /** A second file, so the line cap has something to drop and the planner something to batch. */
+  private static final String OTHER_PATCH =
+      """
+      @@ -0,0 +1,3 @@
+      +int retries = 0;
+      +while (retries < 3) { call(); }
+      +log.info("done");""";
+
   @Mock private GitHubPullRequestClient prClient;
-  @Mock private ReviewDiffFormatter diffFormatter;
   @Mock private InstructionsResolver instructionsResolver;
+  @Mock private RepoSettingsResolver repoSettingsResolver;
+  @Mock private ActiveModelSettings activeModel;
+  @Mock private ThrillhouseConfig config;
+  @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
   @Mock private ChangelogAssistant changelogAssistant;
 
-  @InjectMocks private ChangelogEntryGenerator generator;
+  private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
+
+  private ChangelogEntryGenerator generator;
 
   @BeforeEach
   void setUp() {
+    MockitoAnnotations.openMocks(this);
+    lenient().when(config.review()).thenReturn(reviewConfig);
+    lenient().when(reviewConfig.maxAiCalls()).thenReturn(6);
+    // Default: budgeting on with ample room, so a normal PR is a single batch and needs no merge
+    // call — the same shape the command had before batching.
+    lenient().when(activeModel.maxInputTokens()).thenReturn(1_000_000);
+    lenient().when(activeModel.tokenSafetyMargin()).thenReturn(1.0);
+    lenient().when(activeModel.outputBufferTokens()).thenReturn(0);
     lenient()
         .when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(ResolvedInstructions.EMPTY);
+    lenient()
+        .when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(RepoSettings.EMPTY);
+    generator = generatorWith(diffFormatter);
   }
 
-  private void diffReturns(String diff) {
-    diffReturns(diff, 0);
+  private ChangelogEntryGenerator generatorWith(ReviewDiffFormatter formatter) {
+    return new ChangelogEntryGenerator(
+        prClient,
+        formatter,
+        instructionsResolver,
+        repoSettingsResolver,
+        new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
+        activeModel,
+        config,
+        changelogAssistant);
   }
 
-  private void diffReturns(String diff, int omittedFiles) {
+  private static FileDiff foo() {
+    return new FileDiff("src/Foo.java", "modified", 3, 0, 3, PATCH);
+  }
+
+  private static FileDiff otherFile() {
+    return new FileDiff("src/Other.java", "modified", 3, 0, 3, OTHER_PATCH);
+  }
+
+  private void prWithFiles(FileDiff... files) {
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("Title", "Body", null, null));
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(List.of(new FileDiff("Foo.java", "modified", 1, 0, 1, "@@ -1 +1 @@")));
-    when(diffFormatter.buildDiffStringWithStats(anyList(), anyList()))
-        .thenReturn(new ReviewDiffFormatter.FormattedDiff(diff, omittedFiles));
+        .thenReturn(List.of(files));
+  }
+
+  private void prWithFilesAndDetails(PullRequestDetails details) {
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(details);
+    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(foo()));
+  }
+
+  private void draftReturns(String entry) {
+    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(entry);
   }
 
   private String generate() {
     return generator.generate("owner", "repo", 7, "main", 12345L, AUTH);
   }
 
+  /** The diff text each batch call actually received, in call order. */
+  private List<String> diffsSentToAssistant() {
+    var diff = ArgumentCaptor.forClass(String.class);
+    verify(changelogAssistant, atLeastOnce()).draft(diff.capture(), any(), any(), any(), any());
+    return diff.getAllValues();
+  }
+
+  /**
+   * A per-call input budget of exactly the shared prompt overhead plus {@code diffTokens}. Derived
+   * from {@code /changelog}'s own prompts rather than hardcoded, so editing a prompt cannot
+   * silently turn these tests into no-ops by making every file overflow — and so a regression that
+   * sized the overhead from another command's prompts would show up here.
+   */
+  private static int budgetFor(int diffTokens) {
+    var overhead =
+        new TokenCounter()
+            .estimateTokens(
+                ChangelogAssistantPrompts.systemPrompt()
+                    + PrSuggestionPrompts.userPrompt()
+                    + PromptTemplateEscaper.fence(" ")
+                    + "Title"
+                    + "Body"
+                    + "");
+    return overhead + diffTokens;
+  }
+
+  /** Budgeting on, with {@code diffTokens} of room per call for diff text. */
+  private void budgetWithDiffRoom(int diffTokens) {
+    when(activeModel.maxInputTokens()).thenReturn(budgetFor(diffTokens));
+  }
+
   @Test
   void wrapsTheAssistantEntryInAComment() {
-    diffReturns("## Overview: 1 files (+1 -0)\n\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("title", "body", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- **Thing**: does x (#7)\n");
+    prWithFiles(foo());
+    draftReturns("### Added\n- **Thing**: does x (#7)\n");
 
     String body = generate();
 
@@ -87,33 +178,9 @@ class ChangelogEntryGeneratorTest {
   }
 
   @Test
-  void appendsPartialCoverageDisclosureWhenTheDiffWasTruncated() {
-    diffReturns("## Overview: 75 files (+9000 -0)\n\ndiff", 48);
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- x (#7)");
-
-    String body = generate();
-
-    assertNotNull(body);
-    assertEquals(
-        ReviewResult.truncationDisclosure(48),
-        body.substring(
-            body.indexOf(ChangelogEntryGenerator.FOOTER)
-                + ChangelogEntryGenerator.FOOTER.length()));
-    assertTrue(body.contains("48 file(s) were omitted"), body);
-    assertTrue(body.contains("partial coverage"), body);
-    assertFalse(body.contains("findings and verdict"), body);
-  }
-
-  @Test
-  void appendsNoDisclosureWhenNothingWasOmitted() {
-    diffReturns("## Overview: 1 files (+1 -0)\n\ndiff", 0);
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- x (#7)");
+  void appendsNoDisclosureWhenTheBudgetCoveredEveryFile() {
+    prWithFiles(foo(), otherFile());
+    draftReturns("### Added\n- x (#7)");
 
     String body = generate();
 
@@ -124,11 +191,8 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void passesThePrNumberToTheAssistant() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Fixed\n- x (#7)");
+    prWithFiles(foo());
+    draftReturns("### Fixed\n- x (#7)");
 
     generate();
 
@@ -139,7 +203,8 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void returnsNullWhenThereIsNoDiff() {
-    diffReturns("(no changes detected)");
+    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of());
 
     assertNull(generate());
     verifyNoInteractions(changelogAssistant);
@@ -148,21 +213,16 @@ class ChangelogEntryGeneratorTest {
   @ParameterizedTest
   @ValueSource(strings = {"NONE", " none ", "**NONE**", "`NONE`", "NONE.", "> NONE", "   "})
   void returnsNullWhenAssistantProducesNothingUsable(String draft) {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(draft);
+    prWithFiles(foo());
+    draftReturns(draft);
 
     assertNull(generate());
   }
 
   @Test
   void postsRealEntryThatMerelyMentionsNone() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Fixed\n- Guard against a none-check regression (#7)");
+    prWithFiles(foo());
+    draftReturns("### Fixed\n- Guard against a none-check regression (#7)");
 
     String body = generate();
 
@@ -172,10 +232,8 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void postsDecorationOnlyReplyThatStripsToAnEmptyCore() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn("---");
+    prWithFiles(foo());
+    draftReturns("---");
 
     assertEquals(
         ChangelogEntryGenerator.HEADER + "---" + ChangelogEntryGenerator.FOOTER, generate());
@@ -183,9 +241,7 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void returnsNullWhenAssistantThrows() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    prWithFiles(foo());
     when(changelogAssistant.draft(any(), any(), any(), any(), any()))
         .thenThrow(new RuntimeException("model down"));
 
@@ -194,11 +250,11 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void stillDraftsWhenPrDetailsFetchFails() {
-    diffReturns("## Overview\ndiff");
+    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(foo()));
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- x (#7)");
+    draftReturns("### Added\n- x (#7)");
 
     String body = generate();
 
@@ -211,35 +267,23 @@ class ChangelogEntryGeneratorTest {
   }
 
   @Test
-  void fencesDiffBeforeCallingTheAssistant() {
-    diffReturns("raw diff with <<<DIFF_END>>> marker");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- x (#7)");
+  void fencesTheBatchDiffBeforeCallingTheAssistant() {
+    prWithFiles(
+        new FileDiff("src/Foo.java", "modified", 1, 0, 1, "@@ -0,0 +1 @@\n+<<<DIFF_END>>>"));
+    draftReturns("### Added\n- x (#7)");
 
     generate();
 
     var diffArg = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(diffArg.capture(), any(), any(), any(), any());
     assertTrue(diffArg.getValue().contains(PromptTemplateEscaper.fencePrefix()));
-    assertTrue(diffArg.getValue().contains("<<<DIFF_END>>> marker"));
+    assertTrue(diffArg.getValue().contains("<<<DIFF_END>>>"));
   }
 
   @Test
   void returnsNullWhenDiffFetchFails() {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("boom"));
-    when(diffFormatter.buildDiffStringWithStats(anyList(), anyList()))
-        .thenReturn(new ReviewDiffFormatter.FormattedDiff("(no changes detected)", 0));
-
-    assertNull(generate());
-    verifyNoInteractions(changelogAssistant);
-  }
-
-  @Test
-  void returnsNullWhenDiffIsBlank() {
-    diffReturns("   ");
 
     assertNull(generate());
     verifyNoInteractions(changelogAssistant);
@@ -247,21 +291,16 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void returnsNullWhenAssistantReturnsNull() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(null);
+    prWithFiles(foo());
+    draftReturns(null);
 
     assertNull(generate());
   }
 
   @Test
   void treatsNullTitleAndBodyAsEmptyContext() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails(null, null, null, null));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- x (#7)");
+    prWithFilesAndDetails(new PullRequestDetails(null, null, null, null));
+    draftReturns("### Added\n- x (#7)");
 
     generate();
 
@@ -274,13 +313,10 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void stillDraftsWhenInstructionsResolutionFails() {
-    diffReturns("## Overview\ndiff");
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(new PullRequestDetails("t", "b", null, null));
+    prWithFiles(foo());
     when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenThrow(new RuntimeException("github down"));
-    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- x (#7)");
+    draftReturns("### Added\n- x (#7)");
 
     String body = generate();
 
@@ -288,5 +324,259 @@ class ChangelogEntryGeneratorTest {
     var instructions = ArgumentCaptor.forClass(String.class);
     verify(changelogAssistant).draft(any(), any(), any(), any(), instructions.capture());
     assertEquals("", instructions.getValue());
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Token-budgeted batching (#457): /changelog plans batches over the reviewable FILE LIST, so a
+  // diff longer than max-diff-lines no longer costs whole files their coverage.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  void draftsFromFilesThatTheLineCapWouldHaveDroppedEntirely() {
+    // The whole point of the change. With a line cap this small the rendered diff string keeps only
+    // the first file, so the pre-batching implementation drafted the entry from a diff that never
+    // mentioned src/Other.java. Batching sizes by tokens over the file list instead.
+    var lineCapped = new ReviewDiffFormatter(List.of(), 4);
+    budgetWithDiffRoom(4000);
+    prWithFiles(foo(), otherFile());
+    draftReturns("### Added\n- x (#7)");
+
+    String body = generatorWith(lineCapped).generate("owner", "repo", 7, "main", 12345L, AUTH);
+
+    assertNotNull(body);
+    var sent = String.join("\n", diffsSentToAssistant());
+    assertTrue(sent.contains("src/Other.java"), sent);
+    assertTrue(sent.contains("while (retries < 3) { call(); }"), sent);
+  }
+
+  @Test
+  void mergesThePerBatchCandidatesIntoOneEntry() {
+    // Two batches produce two candidate entries. The command must post exactly one entry, and two
+    // candidates that describe the same change in different words can only be collapsed by the
+    // merge call — so its answer is what gets posted, not the concatenation.
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenAnswer(
+            call ->
+                call.<String>getArgument(0).contains("src/Other.java")
+                    ? "### Added\n- Retries are bounded (#7)"
+                    : "### Added\n- Streams are closed (#7)");
+    when(changelogAssistant.merge(any(), any(), any(), any(), any()))
+        .thenReturn("### Added\n- **Reliability**: bounded retries and closed streams (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(diffsSentToAssistant().size() > 1, "expected more than one batch call");
+    assertTrue(body.contains("bounded retries and closed streams"), body);
+    // Exactly one entry: the raw candidates must not be pasted in alongside the merge.
+    assertFalse(body.contains("- Retries are bounded (#7)"), body);
+    assertFalse(body.contains("- Streams are closed (#7)"), body);
+    assertEquals(1, body.split("### Added", -1).length - 1, body);
+    // Both candidates reached the merge call, fenced as untrusted data, with the PR number.
+    var candidates = ArgumentCaptor.forClass(String.class);
+    var prNumber = ArgumentCaptor.forClass(String.class);
+    verify(changelogAssistant).merge(candidates.capture(), prNumber.capture(), any(), any(), any());
+    assertEquals("7", prNumber.getValue());
+    assertTrue(candidates.getValue().contains(PromptTemplateEscaper.fencePrefix()));
+    assertTrue(candidates.getValue().contains("Retries are bounded"), candidates.getValue());
+    assertTrue(candidates.getValue().contains("Streams are closed"), candidates.getValue());
+  }
+
+  @Test
+  void spendsNoMergeCallOnASingleCandidate() {
+    prWithFiles(foo());
+    draftReturns("### Added\n- x (#7)");
+
+    assertNotNull(generate());
+    // One candidate already is the entry; the reserved call stays unspent.
+    verify(changelogAssistant, never()).merge(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void spendsNoMergeCallWhenOnlyOneBatchFoundAnythingWorthReporting() {
+    // A batch that declines with NONE contributes no candidate, so a PR whose changelog-worthy
+    // change sits in one batch still posts that batch's entry unmerged.
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenAnswer(
+            call ->
+                call.<String>getArgument(0).contains("src/Other.java")
+                    ? "NONE"
+                    : "### Added\n- Streams are closed (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.contains("Streams are closed"), body);
+    verify(changelogAssistant, never()).merge(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void returnsNullWhenEveryBatchDeclines() {
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    draftReturns("NONE");
+
+    assertNull(generate());
+    verify(changelogAssistant, never()).merge(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void returnsNullWhenTheMergeDeclines() {
+    // The merge may still conclude that nothing is worth an entry; a literal NONE must never be
+    // posted as if it were the changelog text.
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    draftReturns("### Added\n- x (#7)");
+    when(changelogAssistant.merge(any(), any(), any(), any(), any())).thenReturn("**NONE**");
+
+    assertNull(generate());
+  }
+
+  @Test
+  void reservesOneOfTheAiCallsForTheMerge() {
+    // max-ai-calls bounds the whole run, merge included: with an allowance of 3 the command may
+    // spend at most 2 batch calls, or the reduce step would push the run over the operator's cap.
+    when(reviewConfig.maxAiCalls()).thenReturn(3);
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile(), thirdFile());
+    draftReturns("### Added\n- x (#7)");
+    when(changelogAssistant.merge(any(), any(), any(), any(), any()))
+        .thenReturn("### Added\n- merged (#7)");
+
+    generate();
+
+    verify(changelogAssistant, times(2)).draft(any(), any(), any(), any(), any());
+    verify(changelogAssistant, times(1)).merge(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void namesTheFilesLeftUncoveredWhenTheBatchBudgetRunsOut() {
+    // With batching, max-ai-calls — not max-diff-lines — is what bounds coverage on a huge PR.
+    // Drafting from only the first N batches and saying nothing would be the same class of defect
+    // as the line cap this replaced, just relocated, so the uncovered files are named.
+    when(reviewConfig.maxAiCalls()).thenReturn(2);
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    draftReturns("### Added\n- x (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.contains("partial coverage"), body);
+    assertTrue(body.contains("src/Other.java"), body);
+    assertTrue(body.contains("omitted entirely"), body);
+  }
+
+  @Test
+  void sendsOneUncappedBatchWhenTokenBudgetingIsDisabled() {
+    // max-input-tokens=0 turns budgeting off; that must mean one uncapped call over every file,
+    // not a regression to the line-capped diff string.
+    when(activeModel.maxInputTokens()).thenReturn(0);
+    prWithFiles(foo(), otherFile());
+    draftReturns("### Added\n- x (#7)");
+
+    String body = generate();
+
+    assertNotNull(body);
+    var sent = diffsSentToAssistant();
+    assertEquals(1, sent.size());
+    assertTrue(sent.get(0).contains("src/Foo.java"), sent.get(0));
+    assertTrue(sent.get(0).contains("src/Other.java"), sent.get(0));
+    assertFalse(body.contains("partial coverage"), body);
+  }
+
+  @Test
+  void leavesFilesTheRepositoryAskedTheBotToIgnoreOutOfScope() {
+    // #449: per-repo ignore patterns are additive on top of the global set, and the filtered list
+    // is what the batches are planned from — so an ignored file never reaches the entry.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(
+            new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
+    prWithFiles(foo(), otherFile());
+    draftReturns("### Added\n- x (#7)");
+
+    generate();
+
+    var sent = String.join("\n", diffsSentToAssistant());
+    assertFalse(sent.contains("src/Other.java"), sent);
+    assertTrue(sent.contains("src/Foo.java"), sent);
+  }
+
+  @Test
+  void discloseTheShortfallWhenOneBatchFails() {
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenAnswer(
+            call -> {
+              if (call.<String>getArgument(0).contains("src/Other.java")) {
+                throw new RuntimeException("model down");
+              }
+              return "### Added\n- Streams are closed (#7)";
+            });
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.contains("Streams are closed"), body);
+    assertTrue(body.contains("Partial pass"), body);
+    assertTrue(body.contains("could not be analyzed"), body);
+  }
+
+  @Test
+  void namesTheFilesWhenTheBudgetCouldNotCoverASingleOne() {
+    // A budget too small for even a one-line clip of any file. The old line cap would still have
+    // handed the model a stub and posted an entry "for the PR"; going quiet instead would hide a
+    // misconfigured budget. Neither: say nothing was covered, and name what was not.
+    // A budget the shared prompt overhead alone exhausts: the planner floors the diff budget at
+    // one token, and no clip of any file fits that.
+    when(activeModel.maxInputTokens()).thenReturn(10);
+    prWithFiles(foo(), otherFile());
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.startsWith(ChangelogEntryGenerator.NOT_COVERED), body);
+    assertTrue(body.contains("src/Foo.java"), body);
+    assertTrue(body.contains("src/Other.java"), body);
+    assertTrue(body.contains("partial coverage"), body);
+    verifyNoInteractions(changelogAssistant);
+  }
+
+  @Test
+  void staysSilentWhenEveryChangedFileIsOutOfScope() {
+    // The other half of the empty-plan branch: nothing was covered *and* nothing was omitted,
+    // because the repository ignores every changed file. That is genuinely nothing to write an
+    // entry about, so the command posts nothing — announcing an uncoverable budget here would be a
+    // false alarm about a budget that was never the problem.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(
+            new RepoSettings(
+                List.of("src/Foo.java", "src/Other.java"),
+                List.of(),
+                ".github/thrillhousebot.yml"));
+    prWithFiles(foo(), otherFile());
+
+    assertNull(generate());
+    verifyNoInteractions(changelogAssistant);
+  }
+
+  /** A third file, so a max-ai-calls of 3 can be shown to buy only two batches. */
+  private static FileDiff thirdFile() {
+    return new FileDiff(
+        "src/Third.java",
+        "modified",
+        3,
+        0,
+        3,
+        """
+        @@ -0,0 +1,3 @@
+        +var cache = new HashMap<String, String>();
+        +cache.put("k", "v");
+        +return cache;""");
   }
 }

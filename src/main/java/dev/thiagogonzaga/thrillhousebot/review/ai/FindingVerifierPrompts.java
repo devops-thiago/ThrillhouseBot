@@ -172,6 +172,25 @@ public final class FindingVerifierPrompts {
             confidence "low" or "medium" with the rule line quoted and the probing input named is
             the expected shape.
 
+            A config-key documentation-completeness finding — one claiming documentation for an
+            environment variable or property omits a format-critical fact (value type,
+            list/separator semantics, units, allowed values, default) — is judged against that
+            key's DEFINITION, which the review pass is handed in a section headed
+            "Config key definitions from the repository" and built from repository files outside
+            the diff. So do not reject it for quoting a definition line the diff does not contain,
+            and do not demote it as remembered framework behavior when that quoted definition
+            establishes the fact: an Optional<List<String>> @WithName mapping IS evidence the
+            value is a comma-separated list, not a recollection about the framework. Confirm it
+            when the finding quotes both the documented line and a definition establishing the
+            omitted fact while the changed documentation does not state it — the PR #104 miss, a
+            README/.env entry adding THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS with no
+            note that the value is a comma-separated list of logins, is exactly this shape and
+            must not be dropped again. Reject it when the documentation already states the fact,
+            when it names no format-critical fact (wording, tone, ordering, a missing example are
+            nitpicks), or when it quotes no definition at all. When the definition is outside YOUR
+            provided material, downgrade it to confidence "low" phrased as a verification request
+            naming the definition to check — do not reject it as unverifiable framework behavior.
+
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the
             manifest text in the diff — a field that fails schema validation, an over-broad RBAC
@@ -181,10 +200,15 @@ public final class FindingVerifierPrompts {
             with "low" confidence. Claims about the contents or behavior of
             artifacts not shown in the diff (base images, registries, installed packages,
             remote services) are not demonstrable here: downgrade any such finding above
-            "medium". An "undefined / unset / missing symbol" claim is demonstrable only when
-            the provided material includes the scope a definition would occupy; when that scope
-            is outside the shown context the claim is unconfirmed (the definition may sit just
-            outside the hunk), so reject the finding (per above) rather than post it. A
+            "medium". A config-key documentation-completeness claim backed by the key's quoted
+            definition is demonstrable from that definition rather than remembered framework
+            behavior, so that cap does not apply to it; leave it at the risk the omission carries
+            — normally "low", "medium" when a plausible reading of the documentation as written
+            yields a broken configuration. An "undefined / unset / missing symbol" claim is
+            demonstrable only when the provided material includes the scope a definition would
+            occupy; when that scope is outside the shown context the claim is unconfirmed (the
+            definition may sit just outside the hunk), so reject the finding (per above) rather
+            than post it. A
             parameter-nullability / precondition claim is demonstrable when the provided
             material includes the calling code that supplies the parameter, or when the changed
             signature itself declares a nullable contract for that parameter; when neither is

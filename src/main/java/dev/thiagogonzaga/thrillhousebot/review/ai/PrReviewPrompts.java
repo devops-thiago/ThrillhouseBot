@@ -101,6 +101,28 @@ public final class PrReviewPrompts {
                "high" when the trace inverts the feature for its normal case. Not a finding when
                producer and consumer agree, or when the consumer is not in the provided material —
                say nothing rather than narrating the data flow of an ordinary local change.
+            10. CONFIG KEY DOCUMENTATION COMPLETENESS: when the diff documents a configuration key
+               — an environment variable or property named in a .md, .env* or config table — AND a
+               "Config key definitions from the repository" section supplies that key's definition,
+               read the documented description against that definition and flag it when the
+               description omits a FORMAT-CRITICAL fact an operator needs to set the value
+               correctly: the value TYPE, LIST/SEPARATOR semantics (a List-typed binding is
+               comma-separated in SmallRye/Quarkus config, so documentation that shows one value
+               and never says so leaves a maintainer to guess a space or semicolon and silently get
+               one non-matching entry), UNITS or duration format, ALLOWED VALUES of an enum-like
+               key, or the DEFAULT applied when the key is unset. Correct-but-incomplete IS a
+               finding here: this is the one documentation OMISSION the phrasing-nitpick exclusion
+               below does not swallow. Quote the documented line and the definition line that
+               establishes the missing fact, name which fact is missing, and use risk "low" — risk
+               "medium" when a plausible reading of the documentation as written produces a broken
+               configuration. Stay inside that list: wording, tone, ordering, table formatting, a
+               missing example, and any fact the definition does not establish are not findings.
+               The starkest form of the same gap counts too — a key the diff ADDS while also
+               changing a documentation/config file that lists sibling keys without listing the new
+               one is undocumented; report that here. Say nothing when the definition is not in the
+               provided material, when the documentation already states the fact anywhere in the
+               changed material, or when the diff changes no documentation/config file at all (you
+               cannot see whether documentation for the key exists elsewhere).
 
             For each finding, provide:
             - risk: "critical" | "high" | "medium" | "low"
@@ -130,7 +152,10 @@ public final class PrReviewPrompts {
               ask for that level of detail. Cosmetic phrasing nitpicks (documentation-vs-code
               wording, stylistic config formatting) with no correctness or security impact are not
               findings — but a genuine config defect, least-privilege violation, or hardening gap is
-              a real finding, not a nitpick, and belongs at its impact-based severity above.
+              a real finding, not a nitpick, and belongs at its impact-based severity above. So is
+              a config-key documentation gap under dimension 10: an omitted type, separator, unit,
+              allowed value or default is a correctness gap for whoever sets the key, not a
+              phrasing nitpick. Prose style, tone and ordering remain nitpicks.
 
             Confidence calibration:
             - confidence "high" means another reviewer could confirm the issue using only the
@@ -230,6 +255,13 @@ public final class PrReviewPrompts {
               visible, or you cannot name that case, the finding is invalid. Raise it for the
               structure the change is about, not for every local variable that crosses a hunk
               boundary.
+            - A config-key documentation-completeness claim (dimension 10) must quote the
+              documented line from the diff AND the definition line — from the diff or from the
+              config-key definitions section — that establishes the omitted fact, and name which
+              fact is missing (type, separator, units, allowed values, default). A claim that only
+              rewords the documentation, one whose missing fact the quoted definition does not
+              establish, or one about a key whose definition is not in the provided material, is
+              invalid.
             - Claims about the contents or behavior of artifacts not shown in the diff (base
               images, registries, installed packages, remote services) cannot be verified here:
               they are never "critical" or "high", and the description must be phrased as a
