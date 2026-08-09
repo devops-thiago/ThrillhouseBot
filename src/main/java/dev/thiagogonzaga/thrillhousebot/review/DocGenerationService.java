@@ -288,8 +288,12 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
       }
       for (var doc : response.docs()) {
         // Batches hold disjoint files, but a model can still quote a file it saw named in another
-        // batch's context — two comments on one declaration line would be noise on the PR.
-        if (seen.add(doc.file().strip() + ":" + doc.line())) {
+        // batch's context — two comments on one declaration line would be noise on the PR. The
+        // postability check gates the dedupe key: file is nullable, so keying on doc.file().strip()
+        // first would throw on a malformed entry (losing every valid entry in the same reply), and
+        // a non-postable entry consuming file:line would both block a later batch's valid
+        // suggestion for that declaration and leave a malformed reply reported as COULD_NOT_PLACE.
+        if (doc.isPostable() && seen.add(doc.file().strip() + ":" + doc.line())) {
           merged.add(doc);
         }
       }
