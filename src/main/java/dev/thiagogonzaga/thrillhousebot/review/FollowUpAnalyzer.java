@@ -1277,8 +1277,14 @@ public class FollowUpAnalyzer {
    * file to its rename target as {@link #hasVanished} does. A content-identical pure rename (blank
    * target) leaves the anchor resolvable at neither path but the finding unchanged, so it counts as
    * present — the same way {@link #addUnreportedVanished} keeps it {@code unresolved}.
+   *
+   * <p>The {@code file() == null} guard is defensive: {@link #holdableTarget} only passes cluster
+   * members, and {@link #addOpenFindings} admits a finding to a cluster only when {@link
+   * #findingKey} is non-null — which it never is for a null-file finding — so no production caller
+   * can reach it with a null file. Package-private (not {@code private}) so that contract can be
+   * pinned directly by a unit test rather than left as an unreachable branch.
    */
-  private static boolean isStillPresent(
+  static boolean isStillPresent(
       ReviewResponse.Finding finding,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {

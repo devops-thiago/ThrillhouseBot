@@ -1593,6 +1593,21 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void isStillPresentShouldReturnFalseForANullFileFinding() {
+    // Defensive-contract test: a null-file finding cannot reach isStillPresent in production —
+    // addOpenFindings admits a finding to a cluster only when findingKey is non-null, and
+    // findingKey
+    // returns null for a null file, so holdableTarget's cluster members always carry a file.
+    // Pinning
+    // the guard directly means a future refactor that drops it is caught.
+    var nullFile = new ReviewResponse.Finding("medium", null, 1, "No file", "d", "anchor()", null);
+
+    assertFalse(
+        FollowUpAnalyzer.isStillPresent(nullFile, new DiffLineResolver(Map.of()), Map.of()),
+        "a null-file finding cannot be placed in the diff, so it is never present");
+  }
+
+  @Test
   void unreportedUnresolvedShouldReturnEmptyForMissingInputs() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 
