@@ -490,6 +490,49 @@ class PatchCoverageResolverTest {
     }
 
     @Test
+    void dropsAReportEntryThatMatchesMoreThanOneRepositoryFile() {
+      // One report entry in a shared package suffix-matches the same-named class in two modules of
+      // a multi-module build. Attributing module-a's uncovered lines to module-b (or the other way)
+      // is the symmetric twin of the existing N-entries->1-path guard and must be refused.
+      var report =
+          JacocoCoverageReport.parse(
+              new java.io.ByteArrayInputStream(
+                  """
+                  <report name="multi">
+                    <package name="com/example">
+                      <sourcefile name="Foo.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+                    </package>
+                  </report>
+                  """
+                      .getBytes(StandardCharsets.UTF_8)));
+      var files =
+          List.of(
+              new FileDiff(
+                  "module-a/src/main/java/com/example/Foo.java",
+                  "modified",
+                  1,
+                  0,
+                  1,
+                  "@@ -1,0 +1,1 @@\n+x"),
+              new FileDiff(
+                  "module-b/src/main/java/com/example/Foo.java",
+                  "modified",
+                  1,
+                  0,
+                  1,
+                  "@@ -1,0 +1,1 @@\n+x"));
+
+      var uncovered = PatchCoverageResolver.intersectWithAddedLines(report, files);
+
+      assertTrue(
+          uncovered.isEmpty(),
+          () ->
+              "one report entry matches both modules' same-named class; attributing it to either is"
+                  + " a guess: "
+                  + uncovered.stream().map(PatchCoverageResolver.UncoveredFile::path).toList());
+    }
+
+    @Test
     void breaksATieOnPathSoTheOrderIsStableAcrossReviews() {
       var report =
           JacocoCoverageReport.parse(
