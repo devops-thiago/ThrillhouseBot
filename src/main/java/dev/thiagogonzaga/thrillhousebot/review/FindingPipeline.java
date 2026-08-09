@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -195,12 +196,24 @@ public class FindingPipeline {
         try {
           outcomesByIndex[i] = futures.get(i).join();
         } catch (CompletionException e) {
-          failedIndices.add(i);
-          Log.warnf(
-              e,
-              "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
-              i + 1,
-              batches.size());
+          if (isResponseTruncated(e)) {
+            // The batch's own retry below would re-send the identical prompt against the identical
+            // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
+            Log.warnf(
+                e,
+                "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
+                    + " files as not reviewed",
+                i + 1,
+                batches.size());
+            plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
+          } else {
+            failedIndices.add(i);
+            Log.warnf(
+                e,
+                "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
+                i + 1,
+                batches.size());
+          }
         }
       }
     }
@@ -293,6 +306,23 @@ public class FindingPipeline {
 
   private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
+  }
+
+  /**
+   * Whether a batch failure was the model hitting its response-length cap. Walks the cause chain
+   * because the failure arrives wrapped — {@link CompletionException} over the {@link
+   * dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException} the service threw.
+   */
+  private static boolean isResponseTruncated(Throwable failure) {
+    for (var cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof AiResponseTruncatedException) {
+        return true;
+      }
+      if (cause.getCause() == cause) {
+        break;
+      }
+    }
+    return false;
   }
 
   /**

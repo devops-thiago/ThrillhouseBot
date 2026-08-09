@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingHandle;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -127,6 +128,14 @@ public class AiReviewService {
 
       try {
         return streamOnce(session, streamFactory, attempt, broadcastTokens);
+      } catch (AiResponseTruncatedException e) {
+        // Deterministic: the next attempt sends the identical prompt against the identical cap and
+        // is cut at the identical point. Retrying only bills the same failure again.
+        Log.warnf(
+            "AI review attempt %d/%d for session %d hit the response-length cap; not retrying"
+                + " (identical call would truncate identically)",
+            attempt, maxAttempts, session.id);
+        throw e;
       } catch (RuntimeException e) {
         lastFailure = e;
         Log.warnf(
@@ -252,6 +261,18 @@ public class AiReviewService {
       flushStream.run();
       // ChatResponse guarantees a non-null aiMessage; its text may still be null.
       var text = buffer.textOrFallback(response.aiMessage().text());
+      // A length stop means the body is cut mid-structure. Naming it here is what keeps it out of
+      // the transient-retry path below — parsing it first would surface only "not valid review
+      // JSON", which is indistinguishable from a malformed response and gets retried.
+      if (response.finishReason() == FinishReason.LENGTH) {
+        result.completeExceptionally(
+            new AiResponseTruncatedException(
+                "Model stopped at its response-length cap (finish_reason=length) after "
+                    + text.length()
+                    + " characters, so the response is incomplete. Raise the active model's"
+                    + " max-output-tokens, or leave it unset to use the provider default."));
+        return;
+      }
       result.complete(parser.parse(text));
     } catch (RuntimeException e) {
       result.completeExceptionally(e);
