@@ -32,14 +32,23 @@ public class PrSummaryGenerator {
   // unrequested walkthrough_diagram.
   private final boolean diagramEnabled;
 
+  // Opt-in "large PR, nothing inline" note; carries its own thresholds and off switch.
+  private final LargePrNudge largePrNudge;
+
   @Inject
   public PrSummaryGenerator(ThrillhouseConfig config) {
-    this(config.review().diagram().enabled());
+    this(config.review().diagram().enabled(), LargePrNudge.from(config.review().largePrNudge()));
   }
 
-  /** Visible for tests. */
+  /** Visible for tests; the large-PR nudge stays off, matching its shipped default. */
   PrSummaryGenerator(boolean diagramEnabled) {
+    this(diagramEnabled, LargePrNudge.DISABLED);
+  }
+
+  /** Visible for tests: pins the diagram switch and the large-PR nudge policy together. */
+  PrSummaryGenerator(boolean diagramEnabled, LargePrNudge largePrNudge) {
     this.diagramEnabled = diagramEnabled;
+    this.largePrNudge = largePrNudge;
   }
 
   /** The clean-review celebration; rendered inside the summary, never as a separate comment. */
@@ -124,6 +133,9 @@ public class PrSummaryGenerator {
     appendPreviousFindings(sb, result);
     appendFindingsOrCelebration(sb, result);
     appendDoubleCheckFindings(sb, result);
+    // After the findings sections so the note can refer back to them, and so a reader meets the
+    // celebration (or the double-check list) before the caveat about how much to trust it.
+    largePrNudge.render(filesChanged, additions, deletions, result).ifPresent(sb::append);
     appendCiChecks(sb, result);
 
     sb.append("---\n");

@@ -29,13 +29,18 @@ class PrSummaryGeneratorTest {
   private final PrSummaryGenerator generator = new PrSummaryGenerator(true);
 
   @Test
-  void injectConstructorReadsDiagramEnabledFromConfig() {
+  void injectConstructorReadsDiagramEnabledAndLargePrNudgeFromConfig() {
     var config = mock(ThrillhouseConfig.class);
     var review = mock(ThrillhouseConfig.ReviewConfig.class);
     var diagram = mock(ThrillhouseConfig.DiagramConfig.class);
+    var nudge = mock(ThrillhouseConfig.LargePrNudgeConfig.class);
     when(config.review()).thenReturn(review);
     when(review.diagram()).thenReturn(diagram);
     when(diagram.enabled()).thenReturn(true);
+    when(review.largePrNudge()).thenReturn(nudge);
+    when(nudge.enabled()).thenReturn(true);
+    when(nudge.minFiles()).thenReturn(20);
+    when(nudge.minChangedLines()).thenReturn(1000);
 
     var fromConfig = new PrSummaryGenerator(config);
     var result =
@@ -47,6 +52,12 @@ class PrSummaryGeneratorTest {
             1, 5, 0, List.of(), summaryWithDiagram("flowchart TD\n  A --> B"), result);
 
     assertTrue(summary.contains("### Control-Flow Diagram"));
+    // The same config wiring carries the nudge policy; this 1-file PR is under both bounds.
+    assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
+    assertTrue(
+        fromConfig
+            .generate(42, 3102, 876, List.of(), null, result)
+            .contains(LargePrNudge.NUDGE_HEADING));
   }
 
   @Test
@@ -992,6 +1003,55 @@ class PrSummaryGeneratorTest {
 
     assertTrue(summary.contains("### Control-Flow Diagram"));
     assertTrue(summary.contains("A[\"call foo()\"] --> B{\"ready?\"}"));
+  }
+
+  @Test
+  void shouldRenderLargePrNudgeAfterTheCelebrationWhenEnabledAndNothingPostedInline() {
+    // The #343 fixture: a PR well over the file threshold whose review produced no findings at
+    // all. The celebration still renders — the review really did find nothing — but the summary
+    // now also says that on a change this size, that is worth checking by hand.
+    var nudging = new PrSummaryGenerator(false, new LargePrNudge(true, 20, 1000));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = nudging.generate(42, 3102, 876, List.of(), null, result);
+
+    assertTrue(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
+    assertTrue(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
+    assertTrue(
+        summary.contains("no inline findings across 42 changed files (+3102 -876)"), summary);
+    // Ordering: the caveat reads after the celebration it qualifies.
+    assertTrue(
+        summary.indexOf(LargePrNudge.NUDGE_HEADING)
+            > summary.indexOf(PrSummaryGenerator.ZERO_ISSUES_MESSAGE),
+        summary);
+  }
+
+  @Test
+  void shouldNotRenderLargePrNudgeOnASmallCleanPr() {
+    var nudging = new PrSummaryGenerator(false, new LargePrNudge(true, 20, 1000));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = nudging.generate(3, 120, 45, List.of(), null, result);
+
+    assertTrue(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
+    assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
+  }
+
+  @Test
+  void shouldNotRenderLargePrNudgeWhenTheFeatureIsOff() {
+    // The shipped default: the test-visible single-arg constructor leaves the nudge disabled, so
+    // even a huge finding-free PR renders exactly the summary it renders today.
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(120, 20000, 9000, List.of(), null, result);
+
+    assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
   }
 
   private static ReviewResponse.Summary summaryWithDiagram(String diagram) {
