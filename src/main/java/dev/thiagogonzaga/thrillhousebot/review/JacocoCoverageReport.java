@@ -140,20 +140,18 @@ final class JacocoCoverageReport {
       return EMPTY;
     }
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
-      for (var seen = 0; seen < MAX_ZIP_ENTRIES; seen++) {
-        var entry = zip.getNextEntry();
-        if (entry == null) {
-          break;
-        }
-        if (entry.isDirectory() || !entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
-          continue;
-        }
-        // readNBytes bounds the decompressed size regardless of what the entry's header claims,
-        // which is the only number a zip bomb cannot lie its way past.
-        var report = parse(new ByteArrayInputStream(zip.readNBytes(MAX_ENTRY_BYTES)));
-        if (!report.isEmpty()) {
-          Log.infof("Read patch coverage from artifact entry %s", entry.getName());
-          return report;
+      var seen = 0;
+      for (var entry = zip.getNextEntry();
+          entry != null && seen < MAX_ZIP_ENTRIES;
+          entry = zip.getNextEntry(), seen++) {
+        if (!entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
+          // readNBytes bounds the decompressed size regardless of what the entry's header claims,
+          // which is the only number a zip bomb cannot lie its way past.
+          var report = parse(new ByteArrayInputStream(zip.readNBytes(MAX_ENTRY_BYTES)));
+          if (!report.isEmpty()) {
+            Log.infof("Read patch coverage from artifact entry %s", entry.getName());
+            return report;
+          }
         }
       }
     } catch (IOException | RuntimeException e) {
@@ -196,6 +194,11 @@ final class JacocoCoverageReport {
           var name = attribute(reader, "name", "");
           current = null;
           if (!name.isBlank() && result.size() < MAX_SOURCE_FILES) {
+            // '/' is not a filesystem separator here and must not be made platform-dependent:
+            // a JaCoCo <package name> is the JVM internal binary name, which the class-file
+            // format defines as '/'-separated on every platform, and the repository paths it is
+            // matched against are git paths, also always '/'. A File.separator here would break
+            // every report produced on Windows.
             var path = packageName.isBlank() ? name : packageName + "/" + name;
             current = result.computeIfAbsent(path, unused -> new TreeSet<>());
           }
@@ -236,7 +239,7 @@ final class JacocoCoverageReport {
     }
     try {
       return Integer.parseInt(raw.strip());
-    } catch (NumberFormatException e) {
+    } catch (NumberFormatException _) {
       return 0;
     }
   }
@@ -256,15 +259,16 @@ final class JacocoCoverageReport {
   }
 
   /** Applies a hardening property the running StAX implementation may not know about. */
-  private static void setIfSupported(XMLInputFactory factory, String property, Object value) {
+  static void setIfSupported(XMLInputFactory factory, String property, Object value) {
     try {
       factory.setProperty(property, value);
-    } catch (IllegalArgumentException e) {
+    } catch (IllegalArgumentException _) {
       Log.debugf("StAX implementation does not support %s", property);
     }
   }
 
-  private static void closeQuietly(XMLStreamReader reader) {
+  /** Closes the reader, swallowing the failure the checked signature forces us to handle. */
+  static void closeQuietly(XMLStreamReader reader) {
     if (reader == null) {
       return;
     }

@@ -113,8 +113,9 @@ public class PatchCoverageResolver {
     if (!enabled) {
       return "";
     }
+    // Never null: RepoSettings normalizes an absent name to "" in its compact constructor.
     var artifactName = repoSettings.coverageArtifact();
-    if (artifactName == null || artifactName.isBlank()) {
+    if (artifactName.isBlank()) {
       return "";
     }
     var headSha = req.commitSha();
@@ -169,27 +170,37 @@ public class PatchCoverageResolver {
     if (runs == null) {
       return null;
     }
-    var probed = 0;
-    for (var run : runs.workflowRuns()) {
-      if (!headSha.equalsIgnoreCase(run.headSha())) {
-        continue;
-      }
-      if (probed++ >= MAX_RUNS_PROBED) {
-        break;
-      }
-      var artifacts =
-          actionsClient.listRunArtifacts(
-              auth, ACCEPT, owner, repo, run.id(), GitHubActionsClient.ARTIFACTS_PER_PAGE);
-      if (artifacts == null) {
-        continue;
-      }
-      for (var artifact : artifacts.artifacts()) {
-        if (!artifact.expired() && artifactName.equalsIgnoreCase(artifact.name())) {
-          return artifact.id();
-        }
+    // Declarative rather than a loop with jumps: the policy is "only runs for this exact commit,
+    // and at most MAX_RUNS_PROBED of them", and saying it once here keeps the walk below to the
+    // single thing it does — look for the named artifact.
+    var candidates =
+        runs.workflowRuns().stream()
+            .filter(run -> headSha.equalsIgnoreCase(run.headSha()))
+            .limit(MAX_RUNS_PROBED)
+            .toList();
+    for (var run : candidates) {
+      var artifactId = artifactIdOnRun(auth, owner, repo, run.id(), artifactName);
+      if (artifactId != null) {
+        return artifactId;
       }
     }
     return null;
+  }
+
+  /** The named, unexpired artifact's id on one run, or {@code null} when it has none. */
+  private Long artifactIdOnRun(
+      String auth, String owner, String repo, long runId, String artifactName) {
+    var artifacts =
+        actionsClient.listRunArtifacts(
+            auth, ACCEPT, owner, repo, runId, GitHubActionsClient.ARTIFACTS_PER_PAGE);
+    if (artifacts == null) {
+      return null;
+    }
+    return artifacts.artifacts().stream()
+        .filter(artifact -> !artifact.expired() && artifactName.equalsIgnoreCase(artifact.name()))
+        .map(GitHubActionsClient.Artifact::id)
+        .findFirst()
+        .orElse(null);
   }
 
   /**
@@ -261,17 +272,16 @@ public class PatchCoverageResolver {
       if (raw.startsWith("@@") && hunkStart.find()) {
         newLine = Integer.parseInt(hunkStart.group(1));
         inHunk = true;
-        continue;
-      }
-      if (!inHunk || raw.isEmpty()) {
-        continue;
-      }
-      var marker = raw.charAt(0);
-      if (marker == '+') {
-        added.add(newLine);
-        newLine++;
-      } else if (marker == ' ') {
-        newLine++;
+      } else if (inHunk && !raw.isEmpty()) {
+        // '+' is an added line and advances the right side; ' ' is context and only advances it;
+        // '-' exists on the left side alone and does neither.
+        var marker = raw.charAt(0);
+        if (marker == '+') {
+          added.add(newLine);
+          newLine++;
+        } else if (marker == ' ') {
+          newLine++;
+        }
       }
     }
     return added;

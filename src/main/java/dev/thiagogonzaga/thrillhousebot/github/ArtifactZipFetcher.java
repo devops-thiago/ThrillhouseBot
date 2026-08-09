@@ -62,6 +62,16 @@ public class ArtifactZipFetcher {
       Log.debugf("Refusing to download coverage artifact from %s", location);
       return NOTHING;
     }
+    return transfer(location);
+  }
+
+  /**
+   * The transfer itself, with {@link #fetch}'s scheme policy already applied — separated so the
+   * bytes-on-the-wire behaviour (status handling, the size bound, redirect following, failure
+   * degradation) can be exercised against a loopback server without a TLS endpoint. Production
+   * reaches it only through {@link #fetch}, so only {@code https} is ever transferred.
+   */
+  byte[] transfer(URI location) {
     // Redirects are safe to follow here precisely because no credential is attached.
     var builder =
         HttpClient.newBuilder()
@@ -83,7 +93,7 @@ public class ArtifactZipFetcher {
       try (var body = response.body()) {
         return readBounded(body);
       }
-    } catch (InterruptedException e) {
+    } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
       Log.debug("Interrupted while downloading coverage artifact");
       return NOTHING;

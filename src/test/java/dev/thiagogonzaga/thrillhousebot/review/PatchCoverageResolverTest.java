@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
@@ -162,6 +163,40 @@ class PatchCoverageResolverTest {
 
       verifyNoInteractions(actionsClient, zipFetcher);
     }
+
+    @Test
+    void contributesNothingForABlankArtifactNameOrAnUnknownHeadSha() {
+      assertEquals("", resolve(true, "   "), "whitespace is not an artifact name anyone uploaded");
+
+      var noSha =
+          new ReviewOrchestrator.ReviewRequest(
+              "o", "r", 7, null, "title", "body", "basesha", "main", 1L, false, "main", false);
+      var blankSha =
+          new ReviewOrchestrator.ReviewRequest(
+              "o", "r", 7, "  ", "title", "body", "basesha", "main", 1L, false, "main", false);
+      assertEquals(
+          "",
+          resolver(true).resolve("token", noSha, settingsNaming(ARTIFACT), changedFile()),
+          "without a head SHA there is no revision to attribute coverage to");
+      assertEquals(
+          "", resolver(true).resolve("token", blankSha, settingsNaming(ARTIFACT), changedFile()));
+
+      verifyNoInteractions(actionsClient, zipFetcher);
+    }
+
+    @Test
+    void theInjectionConstructorReadsTheDeploymentKillSwitch() {
+      var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
+      when(config.review().patchCoverage().enabled()).thenReturn(false);
+
+      var injected = new PatchCoverageResolver(actionsClient, zipFetcher, config);
+
+      assertEquals(
+          "",
+          injected.resolve("token", request(), settingsNaming(ARTIFACT), changedFile()),
+          "the CDI constructor must wire thrillhousebot.review.patch-coverage.enabled");
+      verifyNoInteractions(actionsClient, zipFetcher);
+    }
   }
 
   @Nested
@@ -195,18 +230,30 @@ class PatchCoverageResolverTest {
     }
 
     @Test
-    void ignoresAnArtifactWithAnotherNameOrAnExpiredOne() {
+    void ignoresAnArtifactWithAnotherName() {
       givenRunWithArtifact("build-logs");
-      assertEquals("", resolve(true, ARTIFACT), "only the artifact the repository named is read");
+      // The download is fully wired: were the name check to fall away, this test would report
+      // uncovered lines instead of passing on an unstubbed collaborator's default.
+      givenDownloadRedirectsTo(BLOB);
+      when(zipFetcher.fetch(BLOB)).thenReturn(zippedReport(REPORT));
 
-      reset(actionsClient);
+      assertEquals("", resolve(true, ARTIFACT), "only the artifact the repository named is read");
+      verifyNoInteractions(zipFetcher);
+    }
+
+    @Test
+    void ignoresAnExpiredArtifactEvenThoughItsBytesWouldStillParse() {
       givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "success"));
       when(actionsClient.listRunArtifacts(any(), any(), eq("o"), eq("r"), eq(42L), anyInt()))
           .thenReturn(
               new GitHubActionsClient.RunArtifacts(
                   1, List.of(new GitHubActionsClient.Artifact(99L, ARTIFACT, 1_024, true))));
+      // Same wiring: a readable report is waiting behind the download, so "" can only be the
+      // expiry check doing its job — not an unmocked collaborator quietly skipping the path.
+      givenDownloadRedirectsTo(BLOB);
+      when(zipFetcher.fetch(BLOB)).thenReturn(zippedReport(REPORT));
 
-      assertEquals("", resolve(true, ARTIFACT), "an expired artifact has no bytes left to read");
+      assertEquals("", resolve(true, ARTIFACT), "GitHub has already deleted an expired artifact");
       verifyNoInteractions(zipFetcher);
     }
 
@@ -226,6 +273,93 @@ class PatchCoverageResolverTest {
 
       assertEquals(
           "", resolve(true, ARTIFACT), "a coverage fetch failure must never fail a review");
+    }
+
+    @Test
+    void degradesToNoContextWhenNoRunOrArtifactListCanBeRead() {
+      when(actionsClient.listWorkflowRuns(
+              any(), any(), eq("o"), eq("r"), eq(HEAD_SHA), eq("completed"), anyInt()))
+          .thenReturn(null);
+      assertEquals(
+          "", resolve(true, ARTIFACT), "a null runs payload is not a run with no artifact");
+
+      reset(actionsClient);
+      givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "success"));
+      when(actionsClient.listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt()))
+          .thenReturn(null);
+      assertEquals("", resolve(true, ARTIFACT), "a null artifact list degrades to no coverage");
+
+      verifyNoInteractions(zipFetcher);
+    }
+
+    @Test
+    void probesOnlyABoundedNumberOfRunsForTheSameCommit() {
+      var runs = new GitHubActionsClient.WorkflowRun[PatchCoverageResolver.MAX_RUNS_PROBED + 4];
+      for (var i = 0; i < runs.length; i++) {
+        runs[i] = new GitHubActionsClient.WorkflowRun(i + 1L, "ci", HEAD_SHA, "completed", "ok");
+      }
+      givenRuns(runs);
+      when(actionsClient.listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt()))
+          .thenReturn(new GitHubActionsClient.RunArtifacts(0, List.of()));
+
+      assertEquals("", resolve(true, ARTIFACT));
+
+      verify(actionsClient, times(PatchCoverageResolver.MAX_RUNS_PROBED))
+          .listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt());
+    }
+
+    @Test
+    void degradesToNoContextWhenTheDownloadEndpointAnswersWithNothing() {
+      givenRunWithArtifact(ARTIFACT);
+      when(actionsClient.downloadArtifact(any(), any(), eq("o"), eq("r"), eq(99L)))
+          .thenReturn(null);
+
+      assertEquals("", resolve(true, ARTIFACT));
+      verifyNoInteractions(zipFetcher);
+    }
+
+    @Test
+    void degradesToNoContextWhenTheReportSaysNothingAboutAnyChangedFile() {
+      givenRunWithArtifact(ARTIFACT);
+      givenDownloadRedirectsTo(BLOB);
+      when(zipFetcher.fetch(BLOB))
+          .thenReturn(
+              zippedReport(
+                  """
+                  <report name="r">
+                    <package name="somewhere/else">
+                      <sourcefile name="Other.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+                    </package>
+                  </report>
+                  """));
+
+      assertEquals(
+          "",
+          resolve(true, ARTIFACT),
+          "a readable report that measures none of the changed files says nothing about them");
+    }
+
+    @Test
+    void degradesToNoContextWhenTheUncoveredLinesAreAllOutsideTheDiff() {
+      givenRunWithArtifact(ARTIFACT);
+      givenDownloadRedirectsTo(BLOB);
+      when(zipFetcher.fetch(BLOB))
+          .thenReturn(
+              zippedReport(
+                  """
+                  <report name="r">
+                    <package name="dev/thiagogonzaga/thrillhousebot/review">
+                      <sourcefile name="CiStatusEvaluator.java">
+                        <line nr="900" mi="3" ci="0"/>
+                      </sourcefile>
+                    </package>
+                  </report>
+                  """));
+
+      assertEquals(
+          "",
+          resolve(true, ARTIFACT),
+          "pre-existing untested code is not this pull request's business");
     }
 
     @Test
@@ -251,12 +385,36 @@ class PatchCoverageResolverTest {
   }
 
   @Nested
+  class AddedLineExtraction {
+
+    @Test
+    void aFileWithNoPatchContributesNothing() {
+      assertTrue(PatchCoverageResolver.addedLines(null).isEmpty());
+      assertTrue(PatchCoverageResolver.addedLines("   ").isEmpty());
+      assertTrue(
+          PatchCoverageResolver.addedLines("no hunk header here\njust prose").isEmpty(),
+          "lines before the first hunk header have no right-side numbering to report");
+    }
+
+    @Test
+    void ignoresAnAtAtLineThatIsNotAHunkHeaderAndEmptyLines() {
+      var patch = "@@ malformed header @@\n@@ -1,2 +5,3 @@\n+added\n\n context\n+also";
+
+      assertEquals(
+          List.of(5, 7),
+          List.copyOf(PatchCoverageResolver.addedLines(patch)),
+          "an unparseable @@ line must not reset the counter, and a bare empty line is skipped");
+    }
+  }
+
+  @Nested
   class Rendering {
 
     @Test
     void collapsesConsecutiveLinesAndCapsTheRanges() {
       var lines = new TreeSet<Integer>(List.of(1, 2, 3, 9, 20, 21));
 
+      assertEquals("", PatchCoverageResolver.formatRanges(new TreeSet<>()), "no lines, no ranges");
       assertEquals("1-3, 9, 20-21", PatchCoverageResolver.formatRanges(lines));
 
       var many = new TreeSet<Integer>();
@@ -282,6 +440,28 @@ class PatchCoverageResolverTest {
       assertTrue(
           rendered.contains("(3 more changed file(s) with uncovered added lines)"), rendered);
       assertTrue(rendered.length() <= PatchCoverageResolver.MAX_TOTAL_CHARS + 40, "bounded output");
+    }
+
+    @Test
+    void truncatesASectionThatWouldRivalTheDiff() {
+      var files = new ArrayList<PatchCoverageResolver.UncoveredFile>();
+      for (var i = 0; i < PatchCoverageResolver.MAX_FILES_RENDERED; i++) {
+        var lines = new TreeSet<Integer>();
+        for (var line = 1; line <= 40; line += 2) {
+          lines.add(line + i * 1_000);
+        }
+        files.add(
+            new PatchCoverageResolver.UncoveredFile(
+                "src/main/java/dev/thiagogonzaga/thrillhousebot/review/VeryLongName" + i + ".java",
+                lines));
+      }
+
+      var rendered = PatchCoverageResolver.render(List.copyOf(files));
+
+      assertTrue(rendered.endsWith("… (patch coverage truncated)"), rendered);
+      assertTrue(
+          rendered.length() <= PatchCoverageResolver.MAX_TOTAL_CHARS + 30,
+          "the section is bounded even when every file has many scattered ranges");
     }
 
     @Test
@@ -311,6 +491,33 @@ class PatchCoverageResolverTest {
       assertEquals(
           List.of("a/Many.java", "a/Few.java"),
           uncovered.stream().map(PatchCoverageResolver.UncoveredFile::path).toList());
+    }
+
+    @Test
+    void breaksATieOnPathSoTheOrderIsStableAcrossReviews() {
+      var report =
+          JacocoCoverageReport.parse(
+              new java.io.ByteArrayInputStream(
+                  """
+                  <report name="r">
+                    <package name="a">
+                      <sourcefile name="Zebra.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+                      <sourcefile name="Alpha.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+                    </package>
+                  </report>
+                  """
+                      .getBytes(StandardCharsets.UTF_8)));
+      var files =
+          List.of(
+              new FileDiff("a/Zebra.java", "modified", 1, 0, 1, "@@ -1,0 +1,1 @@\n+x"),
+              new FileDiff("a/Alpha.java", "modified", 1, 0, 1, "@@ -1,0 +1,1 @@\n+x"));
+
+      var uncovered = PatchCoverageResolver.intersectWithAddedLines(report, files);
+
+      assertEquals(
+          List.of("a/Alpha.java", "a/Zebra.java"),
+          uncovered.stream().map(PatchCoverageResolver.UncoveredFile::path).toList(),
+          "equal counts must not leave the section's order at the mercy of file-list order");
     }
   }
 }

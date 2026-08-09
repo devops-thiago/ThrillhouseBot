@@ -16,17 +16,23 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -157,6 +163,138 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void saysNothingAboutAPathItWasNotAsked() {
+      var report = parse(REPORT);
+
+      assertTrue(report.uncoveredLines(null).isEmpty(), "a null path resolves to nothing");
+      assertTrue(report.uncoveredLines("   ").isEmpty(), "a blank path resolves to nothing");
+      assertTrue(
+          report.uncoveredLines("src/main/java/dev/other/Unrelated.java").isEmpty(),
+          "a file the report never mentions is not 'uncovered' — it is unmeasured");
+    }
+
+    @Test
+    void readsASourceFileInTheDefaultPackage() {
+      var report =
+          parse(
+              """
+              <report name="r">
+                <package name="">
+                  <sourcefile name="Root.java"><line nr="7" mi="2" ci="0"/></sourcefile>
+                </package>
+              </report>
+              """);
+
+      assertEquals(
+          List.of(7),
+          List.copyOf(report.uncoveredLines("Root.java")),
+          "an empty package name must not produce a leading-slash path that matches nothing");
+    }
+
+    @Test
+    void ignoresLineElementsThatCarryNoUsableNumbers() {
+      var report =
+          parse(
+              """
+              <report name="r">
+                <line nr="1" mi="9" ci="0"/>
+                <package>
+                  <sourcefile name="Nameless.java"><line nr="2" mi="1" ci="0"/></sourcefile>
+                </package>
+                <package name="a">
+                  <sourcefile name="Odd.java">
+                    <line nr="0" mi="9" ci="0"/>
+                    <line nr="-3" mi="9" ci="0"/>
+                    <line nr="not-a-number" mi="9" ci="0"/>
+                    <line nr="4" mi="" ci="0"/>
+                    <line nr="5" ci="0"/>
+                    <line nr="6" mi="9" ci="0"/>
+                  </sourcefile>
+                  <sourcefile name="">
+                    <line nr="8" mi="9" ci="0"/>
+                  </sourcefile>
+                </package>
+              </report>
+              """);
+
+      assertEquals(
+          List.of(6),
+          List.copyOf(report.uncoveredLines("a/Odd.java")),
+          "a non-positive, unparseable, or missing-counter line is dropped, not guessed at");
+      assertTrue(
+          report.uncoveredLines("a/").isEmpty(), "a sourcefile with no name contributes nothing");
+      assertEquals(
+          List.of(2),
+          List.copyOf(report.uncoveredLines("Nameless.java")),
+          "a package element with no name attribute falls back to the default package");
+    }
+
+    @Test
+    void capsHowManyLinesOneSourceFileMayContribute() {
+      var xml = new StringBuilder("<report name=\"r\"><package name=\"a\">");
+      xml.append("<sourcefile name=\"Huge.java\">");
+      for (var nr = 1; nr <= JacocoCoverageReport.MAX_LINES_PER_FILE + 50; nr++) {
+        xml.append("<line nr=\"").append(nr).append("\" mi=\"1\" ci=\"0\"/>");
+      }
+      xml.append("</sourcefile></package></report>");
+
+      assertEquals(
+          JacocoCoverageReport.MAX_LINES_PER_FILE,
+          parse(xml.toString()).uncoveredLines("a/Huge.java").size(),
+          "a pathological report cannot make one file's line list unbounded");
+    }
+
+    @Test
+    void capsHowManySourceFilesOneReportMayContribute() {
+      var xml = new StringBuilder("<report name=\"r\"><package name=\"a\">");
+      var overflow = JacocoCoverageReport.MAX_SOURCE_FILES + 5;
+      for (var i = 0; i < overflow; i++) {
+        xml.append("<sourcefile name=\"F")
+            .append(i)
+            .append(".java\"><line nr=\"1\" mi=\"1\" ci=\"0\"/></sourcefile>");
+      }
+      xml.append("</package></report>");
+      var report = parse(xml.toString());
+
+      assertFalse(report.uncoveredLines("a/F0.java").isEmpty(), "files under the cap are kept");
+      assertTrue(
+          report.uncoveredLines("a/F" + (overflow - 1) + ".java").isEmpty(),
+          "files past the cap are dropped rather than growing the map without bound");
+    }
+
+    @Test
+    void degradesToEmptyWhenTheDocumentCannotEvenBeOpened() {
+      InputStream failing =
+          new InputStream() {
+            @Override
+            public int read() throws IOException {
+              throw new IOException("stream died before the prolog");
+            }
+          };
+
+      assertTrue(
+          JacocoCoverageReport.parse(failing).isEmpty(),
+          "a reader that was never constructed must still be closed safely");
+    }
+
+    @Test
+    void swallowsAFailureToCloseTheReader() throws XMLStreamException {
+      var reader = mock(XMLStreamReader.class);
+      doThrow(new XMLStreamException("close failed")).when(reader).close();
+
+      assertDoesNotThrow(() -> JacocoCoverageReport.closeQuietly(reader));
+    }
+
+    @Test
+    void skipsAHardeningPropertyTheParserDoesNotKnow() {
+      var factory = XMLInputFactory.newInstance();
+
+      assertDoesNotThrow(
+          () -> JacocoCoverageReport.setIfSupported(factory, "urn:no-such-stax-property", ""),
+          "an implementation that rejects a hardening property must not fail the parse");
+    }
+
+    @Test
     void degradesToEmptyForContentThatIsNotAJacocoReport() {
       assertTrue(parse("not xml at all <<<").isEmpty(), "malformed XML must not throw");
       assertTrue(
@@ -193,6 +331,35 @@ class JacocoCoverageReportTest {
       assertFalse(
           JacocoCoverageReport.fromArtifactZip(zipOf(entries)).isEmpty(),
           "an unrelated XML entry earlier in the archive must not end the search");
+    }
+
+    @Test
+    void ignoresDirectoryEntriesAndStopsAtTheEntryCap() throws IOException {
+      var withDirectory = new LinkedHashMap<String, String>();
+      withDirectory.put("site/", "");
+      withDirectory.put("site/jacoco.xml", REPORT);
+      assertFalse(
+          JacocoCoverageReport.fromArtifactZip(zipOf(withDirectory)).isEmpty(),
+          "a directory entry is skipped rather than parsed");
+
+      var padded = new LinkedHashMap<String, String>();
+      for (var i = 0; i < JacocoCoverageReport.MAX_ZIP_ENTRIES + 5; i++) {
+        padded.put("pad" + i + ".txt", "x");
+      }
+      padded.put("jacoco.xml", REPORT);
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(zipOf(padded)).isEmpty(),
+          "the walk stops at the entry cap instead of reading an unbounded archive");
+    }
+
+    @Test
+    void degradesToEmptyWhenTheArchiveIsTruncatedMidEntry() throws IOException {
+      var whole = zipOf(Map.of("jacoco.xml", REPORT));
+      var truncated = java.util.Arrays.copyOf(whole, whole.length / 2);
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(truncated).isEmpty(),
+          "a half-downloaded archive must degrade, not throw out of the review");
     }
 
     @Test

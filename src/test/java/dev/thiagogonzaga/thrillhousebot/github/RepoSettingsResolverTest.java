@@ -394,6 +394,16 @@ class RepoSettingsResolverTest {
     }
 
     @Test
+    void aNullArtifactNameNormalizesToNoArtifact() {
+      var settings = new RepoSettings(java.util.List.of(), java.util.List.of(), null, YML);
+
+      assertEquals(
+          "",
+          settings.coverageArtifact(),
+          "the record normalizes null so no caller has to null-check the opt-in");
+    }
+
+    @Test
     void leavesCoverageOffForEveryUnusableShape() {
       assertEquals("", RepoSettings.EMPTY.coverageArtifact(), "no config file at all");
       assertEquals(
