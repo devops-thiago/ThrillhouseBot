@@ -16,6 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -24,7 +26,10 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.CreatePullRequestCommentRequest;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.CreateReviewRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReplyToReviewCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -171,5 +176,80 @@ class GitHubReviewClientTest {
     when(client.listReviewsPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(null);
 
     assertEquals(0, client.listReviews("auth", "json", "o", "r", 7).size());
+  }
+
+  // GitHub's hard body limit and the notice appended on truncation, as literals (see the comment
+  // client test) so the boundary and wording are pinned independently of the production constants.
+  private static final int MAX = 65_536;
+  private static final String NOTICE = "\n\n… (truncated at GitHub's 65,536-character limit)";
+
+  private static String repeat(char c, int n) {
+    return String.valueOf(c).repeat(n);
+  }
+
+  @Test
+  void reviewBodyOverTheLimitIsTruncatedWithAnHonestNotice() {
+    var body = repeat('a', MAX + 5_000);
+
+    var capped = new CreateReviewRequest("sha", body, "COMMENT", List.of()).body();
+
+    assertEquals(MAX, capped.length(), "over-long review body must be capped to exactly the limit");
+    assertTrue(capped.endsWith(NOTICE));
+  }
+
+  @Test
+  void reviewBodyAtTheLimitIsNotTruncated() {
+    var body = repeat('a', MAX);
+
+    var capped = new CreateReviewRequest("sha", body, "COMMENT", List.of()).body();
+
+    assertEquals(MAX, capped.length());
+    assertEquals(body, capped, "a review body exactly at the limit passes through byte-identical");
+  }
+
+  @Test
+  void reviewBodyOneOverTheLimitIsTruncated() {
+    var capped = new CreateReviewRequest("sha", repeat('a', MAX + 1), "COMMENT", List.of()).body();
+
+    assertEquals(MAX, capped.length());
+    assertTrue(capped.endsWith(NOTICE));
+  }
+
+  @Test
+  void inlineCommentBodyOverTheLimitIsTruncatedWithAnHonestNotice() {
+    var body = repeat('a', MAX + 5_000);
+
+    var capped =
+        new CreatePullRequestCommentRequest("sha", body, "src/Foo.java", 1, "RIGHT", null, null)
+            .body();
+
+    assertEquals(MAX, capped.length());
+    assertTrue(capped.endsWith(NOTICE));
+  }
+
+  @Test
+  void inlineCommentBodyUnderTheLimitPassesThroughUnchanged() {
+    var body = "a normal inline comment";
+
+    var capped =
+        new CreatePullRequestCommentRequest("sha", body, "src/Foo.java", 1, "RIGHT", null, null)
+            .body();
+
+    assertSame(body, capped);
+  }
+
+  @Test
+  void replyBodyOverTheLimitIsTruncatedWithAnHonestNotice() {
+    var capped = new ReplyToReviewCommentRequest(repeat('a', MAX + 5_000)).body();
+
+    assertEquals(MAX, capped.length());
+    assertTrue(capped.endsWith(NOTICE));
+  }
+
+  @Test
+  void replyBodyUnderTheLimitPassesThroughUnchanged() {
+    var body = "a normal reply";
+
+    assertSame(body, new ReplyToReviewCommentRequest(body).body());
   }
 }

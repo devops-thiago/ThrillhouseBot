@@ -97,7 +97,11 @@ public interface GitHubCommentClient {
       @PathParam("commentId") long commentId,
       CreateCommentRequest request);
 
-  record CreateCommentRequest(String body) {}
+  record CreateCommentRequest(String body) {
+    public CreateCommentRequest {
+      body = CommentBodyLimit.cap(body);
+    }
+  }
 
   /** Title and body of a linked issue, fetched to ground the bug-fix efficacy check. */
   record IssueDetails(int number, String title, String body) {}
