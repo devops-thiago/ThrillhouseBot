@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -83,12 +84,49 @@ class AiPricingConfigTest {
   }
 
   @Test
-  void shouldShipDeepSeekV4FlashContextAndOutputCaps() {
-    // Unlike the other entries in the models map, deepseek-v4-flash ships real values rather than
-    // an empty binding stub, so the caps are a shipped default a deployment inherits silently.
+  void shouldShipDeepSeekV4FlashContextWindowWithoutAResponseCap() {
+    // Unlike the other entries in the models map, deepseek-v4-flash ships a real input cap rather
+    // than an empty binding stub, so it is a default a deployment inherits silently. It ships no
+    // max-output-tokens on purpose — see noShippedModelCapCanRefuseToBoot.
     var settings = config.ai().models().get("deepseek-v4-flash");
     assertNotNull(settings, "deepseek-v4-flash model settings must resolve");
     assertEquals(1_000_000, settings.maxInputTokens().orElseThrow());
-    assertEquals(384_000, settings.maxOutputTokens().orElseThrow());
+    assertTrue(
+        settings.maxOutputTokens().isEmpty(),
+        "shipping a response cap here refuses to boot on the default output buffer");
+  }
+
+  @Test
+  void noShippedModelCapCanRefuseToBoot() {
+    // StartupConfigValidator rejects a configuration whose max-output-tokens exceeds the effective
+    // output buffer, so a shipped max-output-tokens above the default buffer takes down every
+    // deployment naming that model — with a startup failure, not a degraded review.
+    //
+    // That rule only fires for the ACTIVE model, which is why no ordinary test sees it: the suite
+    // activates one model and the shipped table names eighteen. Walk the table directly instead.
+    var reviewBuffer = config.review().outputBufferTokens();
+
+    config
+        .ai()
+        .models()
+        .forEach(
+            (model, settings) ->
+                settings
+                    .maxOutputTokens()
+                    .ifPresent(
+                        cap -> {
+                          // A model may raise its own buffer alongside the cap; that is consistent
+                          // and boots. Only the pair as it actually resolves matters.
+                          int buffer = settings.outputBufferTokens().orElse(reviewBuffer);
+                          assertTrue(
+                              cap <= buffer,
+                              "shipped max-output-tokens "
+                                  + cap
+                                  + " for '"
+                                  + model
+                                  + "' exceeds its effective output buffer "
+                                  + buffer
+                                  + " — every deployment naming this model would fail to start");
+                        }));
   }
 }
