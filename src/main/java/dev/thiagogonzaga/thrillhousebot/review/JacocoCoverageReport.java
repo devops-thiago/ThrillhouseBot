@@ -21,7 +21,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -129,6 +132,65 @@ final class JacocoCoverageReport {
       }
     }
     return matched == null ? new TreeSet<>() : matched.uncoveredLines();
+  }
+
+  /**
+   * Uncovered lines for a whole set of repository paths at once, dropping any attribution that is
+   * ambiguous from <em>either</em> side. A repository path two report entries suffix-match is the
+   * ambiguity {@link #uncoveredLines} already refuses. Its symmetric twin — one report entry that
+   * suffix-matches two repository paths — is refused here too: in a multi-module or multi-variant
+   * build the same {@code com/example/Foo.java} report path is a whole-segment suffix of every
+   * module's copy, and a {@code <package name="">} default-package entry suffix-matches every file
+   * of that name. Attributing one module's coverage to another module's same-named class is the one
+   * failure mode that produces a wrong finding instead of no finding, so only a report entry that
+   * uniquely matches exactly one of these paths (and is uniquely matched by it) contributes lines.
+   *
+   * <p>Callers that resolve a whole file list — the patch-coverage intersection — must use this
+   * rather than calling {@link #uncoveredLines} per file, because the cross-file collision is
+   * invisible to any single-path lookup.
+   */
+  Map<String, NavigableSet<Integer>> uncoveredLinesByPath(Collection<String> repositoryPaths) {
+    var matchesByPath = new LinkedHashMap<String, List<SourceFile>>();
+    var pathsPerEntry = new IdentityHashMap<SourceFile, Integer>();
+    for (var repositoryPath : repositoryPaths) {
+      if (repositoryPath == null || repositoryPath.isBlank()) {
+        continue;
+      }
+      var candidates = byFileName.get(fileName(repositoryPath));
+      if (candidates == null) {
+        continue;
+      }
+      var matched = new ArrayList<SourceFile>();
+      for (var candidate : candidates) {
+        if (isSuffixPath(repositoryPath, candidate.path())) {
+          matched.add(candidate);
+        }
+      }
+      if (matched.isEmpty()) {
+        continue;
+      }
+      matchesByPath.put(repositoryPath, matched);
+      for (var sourceFile : matched) {
+        pathsPerEntry.merge(sourceFile, 1, Integer::sum);
+      }
+    }
+    var result = new LinkedHashMap<String, NavigableSet<Integer>>();
+    for (var entry : matchesByPath.entrySet()) {
+      var matched = entry.getValue();
+      if (matched.size() != 1) {
+        Log.debugf("Ambiguous coverage entries for %s; ignoring them", entry.getKey());
+        continue;
+      }
+      var sourceFile = matched.get(0);
+      if (pathsPerEntry.get(sourceFile) != 1) {
+        Log.debugf(
+            "Coverage entry %s matches more than one repository file; ignoring it",
+            sourceFile.path());
+        continue;
+      }
+      result.put(entry.getKey(), sourceFile.uncoveredLines());
+    }
+    return result;
   }
 
   /** Whether {@code suffix} is {@code path} itself or a whole-segment tail of it. */
