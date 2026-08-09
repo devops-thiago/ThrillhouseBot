@@ -89,8 +89,17 @@ public class ConfigKeyContextResolver {
 
   static final int CONTEXT_LINES_AFTER = 2;
 
-  /** A key token must keep at least this many segments when prefix segments are dropped. */
-  private static final int MIN_SUFFIX_SEGMENTS = 2;
+  /**
+   * A key token must keep at least this many segments when prefix segments are dropped. Three, not
+   * two: a two-segment tail is too generic — {@code THRILLHOUSEBOT_HTTP_PORT} degraded to {@code
+   * HTTP_PORT} matches {@code quarkus.http.port}, an unrelated key's definition rendered as though
+   * it were this one's.
+   */
+  private static final int MIN_SUFFIX_SEGMENTS = 3;
+
+  /** Appended to a snippet found only by dropping prefix segments, so the model can discount it. */
+  private static final String SUFFIX_MATCH_NOTE =
+      "(matched by dropping key prefix segments — may name a different key)";
 
   /** Heading of the rendered section. Package-private so tests and callers agree on it. */
   static final String SECTION_HEADING =
@@ -474,17 +483,34 @@ public class ConfigKeyContextResolver {
     }
   }
 
-  /** Rendered definition sites for one normalized token inside one file. */
+  /**
+   * Rendered definition sites for one normalized token inside one file. An exact whole-key match
+   * anywhere in the file is preferred over a suffix match anywhere in it, so a fuzzy prefix-dropped
+   * hit on an early line can no longer beat the key's real definition further down. Only when the
+   * file holds no exact match at all are suffix matches used, and each is labelled so the model can
+   * discount it.
+   */
   static List<String> snippetsFor(String path, String[] lines, String normalizedToken) {
+    var exact = matchingSnippets(path, lines, normalizedToken, true);
+    return exact.isEmpty() ? matchingSnippets(path, lines, normalizedToken, false) : exact;
+  }
+
+  private static List<String> matchingSnippets(
+      String path, String[] lines, String normalizedToken, boolean exactOnly) {
     var snippets = new ArrayList<String>();
     var lastRendered = -1;
     for (var i = 0; i < lines.length && snippets.size() < MAX_SNIPPETS_PER_KEY; i++) {
       var from = Math.max(0, i - CONTEXT_LINES_BEFORE);
+      var defines =
+          exactOnly
+              ? lineDefinesExactly(lines[i], normalizedToken)
+              : lineDefinesBySuffix(lines[i], normalizedToken);
       // from > lastRendered skips a match the previous window already shows: adjacent matches (a
       // property and its override on consecutive lines) share one snippet rather than repeating it.
-      if (lineDefines(lines[i], normalizedToken) && from > lastRendered) {
+      if (defines && from > lastRendered) {
         var to = Math.min(lines.length - 1, i + CONTEXT_LINES_AFTER);
-        snippets.add(renderSnippet(path, lines, from, to));
+        var snippet = renderSnippet(path, lines, from, to);
+        snippets.add(exactOnly ? snippet : snippet + "\n" + SUFFIX_MATCH_NOTE);
         lastRendered = to;
       }
     }
@@ -521,23 +547,40 @@ public class ConfigKeyContextResolver {
   }
 
   /**
-   * Whether a line defines the key. The normalized line is searched for the whole key first — the
-   * literal env name of an explicit {@code ${ENV:default}} override, or the full property key — and
-   * then for the key with leading segments dropped, which is what a {@code @WithName} mapping
-   * carries when the env name is derived rather than written out.
+   * Whether a line defines the key, by an exact whole-key match or by a prefix-dropped suffix
+   * match. The two are separable — {@link #snippetsFor} prefers exact matches file-wide — but a
+   * single boolean is what a plain "does this line mention the key at all" caller wants.
    */
   static boolean lineDefines(String line, String normalizedToken) {
+    return lineDefinesExactly(line, normalizedToken) || lineDefinesBySuffix(line, normalizedToken);
+  }
+
+  /**
+   * Whether the line carries the whole key: the literal env name of an explicit {@code
+   * ${ENV:default}} override, or the full property key.
+   */
+  static boolean lineDefinesExactly(String line, String normalizedToken) {
     if (line == null || line.isBlank()) {
       return false;
     }
-    var normalizedLine = normalize(line);
-    if (containsSegment(normalizedLine, normalizedToken)) {
-      return true;
+    return containsSegment(normalize(line), normalizedToken);
+  }
+
+  /**
+   * Whether the line carries the key with its leading segments dropped, which is what a
+   * {@code @WithName} mapping carries when the env name is derived rather than written out. At
+   * least {@link #MIN_SUFFIX_SEGMENTS} segments must survive, so a short key never degrades into a
+   * too-generic tail that matches an unrelated key's definition.
+   */
+  static boolean lineDefinesBySuffix(String line, String normalizedToken) {
+    if (line == null || line.isBlank()) {
+      return false;
     }
     var segments = normalizedToken.split("_");
     if (segments.length <= MIN_SUFFIX_SEGMENTS) {
       return false;
     }
+    var normalizedLine = normalize(line);
     // Longest suffix first, so "MANUAL_TRIGGER_ALLOWED_LOGINS" is preferred over "ALLOWED_LOGINS".
     for (var start = 1; start <= segments.length - MIN_SUFFIX_SEGMENTS; start++) {
       var suffix = String.join("_", List.of(segments).subList(start, segments.length));

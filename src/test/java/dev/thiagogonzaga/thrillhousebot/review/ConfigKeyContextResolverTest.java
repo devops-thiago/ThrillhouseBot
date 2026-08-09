@@ -347,6 +347,45 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldNotDegradeAThreeSegmentTokenToItsTwoSegmentTail() {
+      // THRILLHOUSEBOT_HTTP_PORT must not degrade to HTTP_PORT and match quarkus.http.port, which
+      // is a different key's definition rendered as though it were this one's.
+      assertFalse(
+          ConfigKeyContextResolver.lineDefines(
+              "quarkus.http.port=8080",
+              ConfigKeyContextResolver.normalize("THRILLHOUSEBOT_HTTP_PORT")),
+          "a 3-segment token dropped to a 2-segment suffix matches far too much");
+      assertTrue(
+          ConfigKeyContextResolver.lineDefines(
+              "thrillhousebot.http.port=8080",
+              ConfigKeyContextResolver.normalize("THRILLHOUSEBOT_HTTP_PORT")),
+          "the whole key still matches its own definition");
+    }
+
+    @Test
+    void shouldPreferAnExactMatchAnywhereInTheFileOverASuffixMatch() {
+      var token = ConfigKeyContextResolver.normalize("ALPHA_BETA_GAMMA_DELTA");
+      var lines =
+          new String[] {
+            "x=${BETA_GAMMA_DELTA:1}", // a suffix hit on line 1
+            "f",
+            "f",
+            "f",
+            "f",
+            "y=${ALPHA_BETA_GAMMA_DELTA:2}" // the exact definition further down
+          };
+
+      var snippets = ConfigKeyContextResolver.snippetsFor("app.properties", lines, token);
+
+      assertTrue(
+          snippets.stream().anyMatch(s -> s.contains("ALPHA_BETA_GAMMA_DELTA")),
+          () -> "the exact definition must be rendered: " + snippets);
+      assertTrue(
+          snippets.stream().noneMatch(s -> s.contains("BETA_GAMMA_DELTA:1")),
+          () -> "a fuzzy suffix hit must not be preferred when an exact match exists: " + snippets);
+    }
+
+    @Test
     void shouldIgnoreBlankAndAbsentLines() {
       assertFalse(ConfigKeyContextResolver.lineDefines(null, TOKEN));
       assertFalse(ConfigKeyContextResolver.lineDefines("   ", TOKEN));
