@@ -1020,7 +1020,8 @@ public class FollowUpAnalyzer {
 
   /**
    * Same as the JSON overload, using prior responses already deserialized for this review so each
-   * persisted round is not re-parsed.
+   * persisted round is not re-parsed. Rename-blind overload; the verdict path uses the {@code
+   * renameTargets} variant below.
    */
   public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
       List<ReviewResponse> priorAiResponses,
@@ -1028,13 +1029,32 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity) {
+    return unreportedUnresolvedStatusesFromParsed(
+        priorAiResponses, currentStatuses, inlineComments, lineResolver, botIdentity, Map.of());
+  }
+
+  /**
+   * Rename-aware variant used by the review verdict path. A still-present finding whose file was
+   * renamed-and-edited lives at {@code renameTargets.get(finding.file())} in the current diff, not
+   * at its pre-rename path; {@link #supersedeVanished}/{@link #addUnreportedVanished} already map
+   * through {@code renameTargets}, so the backstop's presence check must too — otherwise a finding
+   * moved by a rename escapes both gates and sails past APPROVE (F5 — the sibling defect of F2,
+   * where one of two paths got the guard and the twin did not).
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
     var chrono = toChronological(priorAiResponses);
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
-    return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity);
+    return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity, renameTargets);
   }
 
   /**
@@ -1103,10 +1123,12 @@ public class FollowUpAnalyzer {
       List<List<OpenFinding>> clusters,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var cluster : clusters) {
-      OpenFinding target = holdableTarget(cluster, inlineComments, lineResolver, botIdentity);
+      OpenFinding target =
+          holdableTarget(cluster, inlineComments, lineResolver, botIdentity, renameTargets);
       if (target != null) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
@@ -1124,18 +1146,22 @@ public class FollowUpAnalyzer {
    * OpenFinding#id()}) plus the finding's own content rather than by title, so a null-title
    * finding's thread is still seen and a thread-less finding cannot bind to a different finding
    * that reused the same marker index in another round.
+   *
+   * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
+   * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
+   * was renamed-and-edited (F5).
    */
   private OpenFinding holdableTarget(
       List<OpenFinding> cluster,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     OpenFinding target = null;
     boolean anyReplied = false;
     for (var member : cluster) {
       var finding = member.finding();
-      if (target == null
-          && lineResolver.isFindingPresent(finding.file(), finding.suggestionOld())) {
+      if (target == null && isStillPresent(finding, lineResolver, renameTargets)) {
         target = member;
       }
       if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null) {
@@ -1143,6 +1169,26 @@ public class FollowUpAnalyzer {
       }
     }
     return anyReplied ? null : target;
+  }
+
+  /**
+   * Whether a finding's flagged code is still in the current diff, resolving a renamed-and-edited
+   * file to its rename target as {@link #hasVanished} does. A content-identical pure rename (blank
+   * target) leaves the anchor resolvable at neither path but the finding unchanged, so it counts as
+   * present — the same way {@link #addUnreportedVanished} keeps it {@code unresolved}.
+   */
+  private static boolean isStillPresent(
+      ReviewResponse.Finding finding,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    if (finding.file() == null) {
+      return false;
+    }
+    var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());
+    if (currentPath.isBlank()) {
+      return true;
+    }
+    return lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
   }
 
   /** A still-open prior finding and the 1-based id it carried within the round that raised it. */

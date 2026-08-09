@@ -1429,6 +1429,29 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void unreportedUnresolvedShouldHoldStillPresentFindingUnderARenamedAndEditedFile() {
+    // The finding's file was renamed-and-edited; its flagged code is still present at the rename
+    // target, not the pre-rename path. The backstop must resolve through renameTargets — as
+    // supersedeVanished/addUnreportedVanished already do — or the finding escapes the hold (F5).
+    var round =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium", "old/Moved.java", 5, "Still open", "d", "movedFlagged()", null)),
+            List.of(),
+            null);
+    var resolver =
+        new DiffLineResolver(Map.of("new/Moved.java", "@@ -5,1 +5,1 @@\n-old\n+movedFlagged()"));
+    var renameTargets = Map.of("old/Moved.java", "new/Moved.java");
+
+    var held =
+        analyzer.unreportedUnresolvedStatusesFromParsed(
+            List.of(round), List.of(), List.of(), resolver, BOT_ID, renameTargets);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
   void unreportedUnresolvedShouldReturnEmptyForMissingInputs() {
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
 

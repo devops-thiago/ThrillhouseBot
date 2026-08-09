@@ -180,7 +180,8 @@ public class VerdictBuilder {
                 effectiveStatuses,
                 ctx.inlineComments(),
                 ctx.lineResolver(),
-                botIdentity)
+                botIdentity,
+                currentRenameTargets)
             : List.<ReviewResult.PreviousFindingStatus>of();
     return buildResult(
         effectiveResponse,
