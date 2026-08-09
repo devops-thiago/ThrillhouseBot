@@ -358,6 +358,84 @@ class RepoSettingsResolverTest {
     }
   }
 
+  /**
+   * The coverage-report artifact name (#115): the single opt-in that turns patch-coverage context
+   * on for a repository. Anything unusable must leave it off rather than send the bot hunting for
+   * an artifact nobody uploaded.
+   */
+  @Nested
+  class CoverageArtifactParsing {
+
+    @Test
+    void readsTheArtifactNameAndTrimsIt() {
+      stubFile(YML, "review:\n  coverage-artifact: \"  coverage-report  \"\n");
+
+      var settings = resolve();
+
+      assertEquals("coverage-report", settings.coverageArtifact());
+      assertEquals(YML, settings.source(), "the name alone is enough to make the file count");
+    }
+
+    @Test
+    void readsTheArtifactNameAlongsideTheOtherSettings() {
+      stubFile(
+          YML,
+          """
+          review:
+            ignored-files:
+              - "docs/generated/**"
+            coverage-artifact: jacoco-xml
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("docs/generated/**"), settings.ignoredFiles());
+      assertEquals("jacoco-xml", settings.coverageArtifact());
+    }
+
+    @Test
+    void aNullArtifactNameNormalizesToNoArtifact() {
+      var settings = new RepoSettings(java.util.List.of(), java.util.List.of(), null, YML);
+
+      assertEquals(
+          "",
+          settings.coverageArtifact(),
+          "the record normalizes null so no caller has to null-check the opt-in");
+    }
+
+    @Test
+    void leavesCoverageOffForEveryUnusableShape() {
+      assertEquals("", RepoSettings.EMPTY.coverageArtifact(), "no config file at all");
+      assertEquals(
+          "",
+          RepoSettingsParser.parse("review:\n  ignored-files:\n    - \"a/**\"\n", YML)
+              .coverageArtifact(),
+          "a config file that declares no artifact");
+      assertEquals(
+          "",
+          RepoSettingsParser.parse("review:\n  coverage-artifact:\n", YML).coverageArtifact(),
+          "a key written with no value");
+      assertEquals(
+          "",
+          RepoSettingsParser.parse("review:\n  coverage-artifact: ~\n", YML).coverageArtifact(),
+          "an explicit YAML null, whose asText() is the literal \"null\"");
+      assertEquals(
+          "",
+          RepoSettingsParser.parse("review:\n  coverage-artifact:\n    - a\n", YML)
+              .coverageArtifact(),
+          "a list is not an artifact name");
+      assertEquals(
+          "",
+          RepoSettingsParser.parse(
+                  "review:\n  coverage-artifact: \""
+                      + "x".repeat(RepoSettingsParser.MAX_ARTIFACT_NAME_LENGTH + 1)
+                      + "\"\n",
+                  YML)
+              .coverageArtifact(),
+          "an over-long name is dropped");
+    }
+  }
+
   @Nested
   class FailSoft {
 

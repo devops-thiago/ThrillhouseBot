@@ -290,6 +290,7 @@ will change per provider:
 | `REVIEW_IMPROVE_ENABLED` | Allow the on-demand `/improve` command to run a whole-PR improvement pass and post committable suggestions | `true` |
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
+| `REVIEW_PATCH_COVERAGE_ENABLED` | Feed patch coverage into the review context: the added lines the repository's own coverage report records as never executed (see [Repository configuration](#repository-configuration)). Only takes effect for a repository that names its coverage artifact in `.github/thrillhousebot.yml` | `false` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. Only the first review posts the full summary; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
@@ -305,7 +306,7 @@ will change per provider:
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per AI streaming attempt; keep it >= `AI_TIMEOUT` so timed-out attempts don't leave orphaned provider streams | `300` |
 | `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repo-relative path of the per-repo instructions file read on each review | `.github/thrillhousebot.md` |
 | `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs excluded from review — lockfiles, generated code, build output. `*` does not cross `/`; use `**` to span directories. Replaces (not extends) the default list, so re-include the defaults you still want | `**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**` |
-| `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Let each repository extend the ignore list with globs of its own, and scope review rules to a path, from `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)). Both are additive; set `false` to make the deployment list and the global instructions the only ones that count | `true` |
+| `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Let each repository extend the ignore list with globs of its own, scope review rules to a path, and name its coverage-report artifact, from `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)). Both are additive; set `false` to make the deployment list and the global instructions the only ones that count | `true` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow the bot to create suggested labels that don't exist yet | `false` |
@@ -534,6 +535,10 @@ review:
         Every state change must be idempotent under retry.
     - path: "**/generated/**"
       instructions: "Generated code: style and naming findings do not apply."
+
+  # Name of the workflow artifact holding this repository's JaCoCo XML coverage report.
+  # Only read when the deployment sets REVIEW_PATCH_COVERAGE_ENABLED=true.
+  coverage-artifact: "coverage-report"
 ```
 
 **Precedence: the effective ignore list is the union of both — global ∪ per-repo.**
@@ -555,6 +560,34 @@ scope and the global instructions conflict, the scope wins for its own files. A 
 matching nothing in the pull request is not sent at all, and a file the ignore list
 already excluded is never scoped — ignore rules run first. Path globs use the same
 syntax and the same matcher as `ignored-files`.
+
+**Patch coverage: `coverage-artifact` names a report, and nothing is assumed without
+it.** The bot never builds the pull request, so it cannot measure coverage itself. When
+the deployment sets `REVIEW_PATCH_COVERAGE_ENABLED=true` *and* a repository names an
+artifact here, each review looks for that artifact on a **completed workflow run for the
+exact head commit** (GitHub's `head_sha` filter), downloads it, and intersects the
+report's never-executed lines with the lines the diff adds. The reviewer is then shown a
+short "uncovered changed lines" list and told two things: changed logic nothing exercises
+is reportable, and a correctness claim about such a line must not be softened by the
+usual "but a test in this diff covers it" check — no test runs that line.
+
+For this to work the workflow must upload the report, e.g.
+
+```yaml
+- run: ./mvnw clean test jacoco:report
+- uses: actions/upload-artifact@v7
+  with:
+    name: coverage-report          # must match review.coverage-artifact
+    path: target/site/jacoco/jacoco.xml
+```
+
+Only JaCoCo XML is understood today. **A repository that names no artifact — the common
+case — contributes nothing, and its review is exactly what it was before.** The same is
+true when the run uploaded nothing by that name, the artifact has expired, the download
+fails, or the report is in another format: the section is omitted rather than guessed at.
+Nothing about coverage is ever inferred from the diff, and a line's *absence* from the
+list is explicitly not evidence that a test covers it. Files the ignore list already
+excluded are never reported as under-tested.
 
 The file is read from the repository's default branch on each review and cached for
 five minutes. Everything about it fails soft: a missing file, invalid YAML, an

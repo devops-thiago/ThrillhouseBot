@@ -813,6 +813,7 @@ class ConfigKeyContextResolverTest {
             "",
             "",
             configKeyContext,
+            "",
             files,
             () -> new DiffLineResolver(Map.of()),
             null);

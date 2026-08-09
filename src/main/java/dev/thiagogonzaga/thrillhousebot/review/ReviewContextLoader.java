@@ -38,10 +38,10 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 /**
  * Loads everything a review reads from GitHub and persistence before the AI is called — the diff,
  * base comparison, prior reviews/comments, persisted prior findings, repository instructions,
- * existing labels, project stack, and the definition sites of the config keys the PR's
- * documentation names — and computes the first-visible / has-context signals. Extracted from {@code
- * ReviewOrchestrator} as the read side of the pipeline; every fetch fails soft exactly as before,
- * except the PR-files fetch whose failure must reach the caller.
+ * existing labels, project stack, the definition sites of the config keys the PR's documentation
+ * names, and the patch coverage of the diff — and computes the first-visible / has-context signals.
+ * Extracted from {@code ReviewOrchestrator} as the read side of the pipeline; every fetch fails
+ * soft exactly as before, except the PR-files fetch whose failure must reach the caller.
  *
  * <p>When token budgeting is on ({@code max-input-tokens > 0}), the legacy line-capped mega-diff
  * and base comparison are not loaded: {@link DiffBudgetPlanner} owns what the model sees and shared
@@ -63,6 +63,7 @@ public class ReviewContextLoader {
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BugFixContextResolver bugFixContextResolver;
   private final ConfigKeyContextResolver configKeyContextResolver;
+  private final PatchCoverageResolver patchCoverageResolver;
   private final ReviewSessionPersistence sessionPersistence;
   private final BotIdentity botIdentity;
   private final ActiveModelSettings activeModel;
@@ -80,6 +81,7 @@ public class ReviewContextLoader {
       FollowUpAnalyzer followUpAnalyzer,
       BugFixContextResolver bugFixContextResolver,
       ConfigKeyContextResolver configKeyContextResolver,
+      PatchCoverageResolver patchCoverageResolver,
       ReviewSessionPersistence sessionPersistence,
       BotIdentity botIdentity,
       ActiveModelSettings activeModel) {
@@ -94,6 +96,7 @@ public class ReviewContextLoader {
     this.followUpAnalyzer = followUpAnalyzer;
     this.bugFixContextResolver = bugFixContextResolver;
     this.configKeyContextResolver = configKeyContextResolver;
+    this.patchCoverageResolver = patchCoverageResolver;
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
     this.activeModel = activeModel;
@@ -127,6 +130,7 @@ public class ReviewContextLoader {
       String projectStack,
       String linkedIssuesContext,
       String configKeyContext,
+      String patchCoverage,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals) {
@@ -245,6 +249,10 @@ public class ReviewContextLoader {
         bugFixContextResolver.loadLinkedIssueContext(
             auth, req.owner(), req.repo(), req.prDescription());
     var configKeyContext = resolveConfigKeyContext(auth, req, reviewableFiles);
+    // Reuses the repo settings and the post-ignore file list already computed above: the coverage
+    // artifact name comes from the same single read, and an ignored file is never reported as
+    // under-tested.
+    var patchCoverage = patchCoverageResolver.resolve(auth, req, repoSettings, reviewableFiles);
 
     return new ReviewContext(
         files,
@@ -265,6 +273,7 @@ public class ReviewContextLoader {
         projectStack,
         linkedIssuesContext,
         configKeyContext,
+        patchCoverage,
         reviewableFiles,
         lineResolverSupplier,
         prTotals);

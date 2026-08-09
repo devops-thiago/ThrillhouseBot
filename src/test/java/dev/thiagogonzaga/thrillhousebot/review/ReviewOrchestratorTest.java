@@ -240,6 +240,7 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             new BugFixContextResolver(commentClient),
             new ConfigKeyContextResolver(prClient),
+            mock(PatchCoverageResolver.class),
             sessionPersistence,
             BOT_ID,
             new ActiveModelSettings(config, "m")),

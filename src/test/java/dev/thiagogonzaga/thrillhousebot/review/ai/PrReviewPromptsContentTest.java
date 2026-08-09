@@ -574,4 +574,38 @@ class PrReviewPromptsContentTest {
         "the summary user prompt must require the purpose to cover every listed entry");
     assertContains(user, "{{changedFiles}}", "the changed-files slot must survive the rewording");
   }
+
+  @Test
+  void patchCoverageRequestMakesUntestedChangedLogicReportable() {
+    String req = PrReviewPrompts.PATCH_COVERAGE_REQUEST;
+    assertContains(
+        req,
+        "no test executed",
+        "the patch-coverage block must state the listed lines were never executed (#115)");
+    assertContains(
+        req,
+        "a finding in its own right",
+        "changed logic nothing exercises must itself be reportable (#115)");
+    assertContains(
+        req,
+        "Do NOT lower it",
+        "a claim about an uncovered line must not be softened for a hypothetical covering test");
+    assertContains(
+        req,
+        "not evidence in the other direction",
+        "absence from the list must never be read as proof a line is covered");
+  }
+
+  @Test
+  void inDiffTestSelfCheckDoesNotSuppressAClaimAboutAnUncoveredLine() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "INAPPLICABLE to a line a provided patch-coverage section lists as",
+        "the in-diff-test gate must switch off for a measured-uncovered line (#115)");
+    assertContains(
+        sys,
+        "neither drops nor loses confidence on this ground",
+        "an uncovered-line finding must survive the self-check at its own confidence (#115)");
+  }
 }

@@ -44,6 +44,7 @@ public record EvalCase(String name, String diff, Spec spec) {
       String expectation,
       String targetFile,
       List<String> keywords,
+      String patchCoverage,
       String prTitle,
       String prDescription) {}
 
