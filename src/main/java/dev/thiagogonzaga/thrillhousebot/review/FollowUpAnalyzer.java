@@ -344,18 +344,36 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The bot's root inline comment for a finding. Preferred match: the hidden finding marker the bot
-   * embeds in every comment, which is unambiguous even when findings share a title. Fallback for
-   * comments posted before the marker existed: same file and the title in the body.
+   * The bot's root inline comment for a finding, for prompt context ({@link #appendThreadReplies}),
+   * thread resolution ({@link #matchFindingThreads}), and the decline re-check ({@link
+   * #declineContradiction}). Marker indices are per-round 1-based positions, so index {@code N}
+   * recurs every round; the same three-step content match {@link
+   * #answeredRootComment(ReviewResponse.Finding, int, List, BotIdentity)} uses for the
+   * safety-critical clearing decision applies here so a summary-only finding (no inline thread of
+   * its own that round, because {@link Finding#postsInline} routed it to the summary) does not bind
+   * to an <em>earlier, unrelated</em> round's same-index thread (F2 — the sibling defect of F5):
+   *
+   * <ol>
+   *   <li>the finding's own {@code finding=N} thread ({@code requireOwnContent}: its title, or its
+   *       description when it has no title, in the comment) — the unambiguous match;
+   *   <li>otherwise, when a {@code finding=N} comment <em>does</em> exist on the file it belongs to
+   *       a different finding (the index recurs across rounds), so nothing binds rather than
+   *       binding to it;
+   *   <li>only when no {@code finding=N} comment exists on the file at all does the title scan run,
+   *       for genuinely pre-marker comments.
+   * </ol>
    */
   private static Long rootCommentId(
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    Long markerRoot = markerRootComment(finding, findingId, false, inlineComments, botIdentity);
-    if (markerRoot != null) {
-      return markerRoot;
+    Long own = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
+    if (own != null) {
+      return own;
+    }
+    if (markerRootComment(finding, findingId, false, inlineComments, botIdentity) != null) {
+      return null;
     }
     return rootCommentByTitle(finding, inlineComments, botIdentity);
   }

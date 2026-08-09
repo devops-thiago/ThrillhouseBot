@@ -176,6 +176,45 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void matchFindingThreadsShouldNotBindSummaryOnlyFindingToAnEarlierRoundsSameIndexThread() {
+    // The effective previous round's finding #1 was summary-only (no inline thread of its own). An
+    // earlier round posted a DIFFERENT finding under the recurring finding=1 marker on the same
+    // file. Finding #1 must not bind to that unrelated same-index thread (F2).
+    var json =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/B.java", "line": 5, "title": "Missing null check",
+           "description": "may NPE"}
+        ]}
+        """;
+    var comments =
+        List.of(
+            comment(
+                300L,
+                null,
+                "src/B.java",
+                "**HIGH — Unrelated earlier bug**\n<!-- thrillhousebot:finding=1 -->",
+                BOT));
+
+    var threads = analyzer.matchFindingThreads(json, comments, BOT_ID);
+
+    assertFalse(
+        threads.containsKey(1),
+        "a summary-only finding must not bind to a different finding's same-index thread");
+  }
+
+  @Test
+  void matchFindingThreadsShouldStillBindViaTitleWhenNoMarkerExistsOnTheFile() {
+    // No finding=N marker anywhere on the file: the pre-marker title fallback still binds (F2 must
+    // not regress the marker-free path).
+    var comments = List.of(comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT));
+
+    var threads = analyzer.matchFindingThreads(PREVIOUS_JSON, comments, BOT_ID);
+
+    assertEquals(100L, threads.get(1));
+  }
+
+  @Test
   void dropRepliedDuplicatesShouldTolerateNullPriorList() {
     var comments = List.of(comment(100L, null, "src/B.java", "**MEDIUM — X**", BOT));
     var withFinding =
