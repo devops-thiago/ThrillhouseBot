@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -273,6 +274,42 @@ class DiffBudgetPlannerTest {
     assertEquals(List.of("src/Blob.bin"), plan.omittedFiles());
     assertEquals(List.of("src/App.java"), coveredFilenames(plan));
     assertTrue(plan.truncated());
+  }
+
+  @Test
+  void aPatchlessFileWithNoChangesIsNotTreatedAsACoverageGap() {
+    // A pure rename carries no patch AND no additions/deletions. It has nothing to review, but it
+    // is also nothing the review failed to cover — omitting it would hold APPROVE over a file that
+    // never needed reviewing. Only a patch-less file with real changes is a gap.
+    var pureRename = new FileDiff("src/Renamed.java", "renamed", 0, 0, 0, null);
+    var plan = planner.plan(List.of(pureRename), 100_000, 3);
+
+    assertTrue(
+        plan.omittedFiles().isEmpty(), "a zero-change patch-less file is not a coverage gap");
+    assertFalse(plan.truncated(), "a pure rename must not hold APPROVE");
+  }
+
+  @Test
+  void recordingTheSameUncoveredFileTwiceKeepsOneEntry() {
+    // A batch can be recorded more than once (a retry path, or two batches sharing a file), and the
+    // coverage gap must not be double-counted in the disclosure or the omitted total.
+    var plan = planner.plan(List.of(file("src/App.java", 5, patch(5))), 100_000, 3);
+
+    plan.recordUncoveredFiles(List.of("src/Failed.java"));
+    plan.recordUncoveredFiles(List.of("src/Failed.java"));
+
+    assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
+  }
+
+  @Test
+  void recordingANullFilenameIsIgnored() {
+    // A FileDiff can carry a null filename; recording it must not put a null into the gap list,
+    // where it would reach the disclosure text and the null-hostile immutable copies downstream.
+    var plan = planner.plan(List.of(file("src/App.java", 5, patch(5))), 100_000, 3);
+
+    plan.recordUncoveredFiles(Arrays.asList("src/Failed.java", null));
+
+    assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
   }
 
   @Test
