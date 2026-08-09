@@ -247,6 +247,35 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void aPatchlessChangedFileIsOmittedByNameNotSilentlyReviewed() {
+    // GitHub returns patch == null for binary files and for text diffs too large to display, while
+    // still reporting real additions/deletions. Such a file survives isPureRename (non-zero change
+    // count) and renders as a bare header with no ```diff``` body — there is nothing to review — so
+    // the planner must omit it by name, never pack it as if it were fully reviewed.
+    var patchless = new FileDiff("src/Huge.java", "modified", 4000, 10, 4010, null);
+    var plan = planner.plan(List.of(patchless), 100_000, 3);
+
+    assertEquals(List.of("src/Huge.java"), plan.omittedFiles());
+    assertTrue(
+        plan.truncated(), "an omitted patch-less file makes the review partial (holds APPROVE)");
+    assertTrue(
+        coveredFilenames(plan).isEmpty(), "a patch-less file must never be packed into a batch");
+  }
+
+  @Test
+  void aBlankPatchChangedFileIsOmittedWhileRealDiffsAreStillPacked() {
+    // The patch-less omission does not swallow files that do carry a diff: only the empty one is
+    // dropped, the real one is packed and covered.
+    var blank = new FileDiff("src/Blob.bin", "modified", 900, 0, 900, "   ");
+    var real = file("src/App.java", 5, patch(5));
+    var plan = planner.plan(List.of(blank, real), 100_000, 3);
+
+    assertEquals(List.of("src/Blob.bin"), plan.omittedFiles());
+    assertEquals(List.of("src/App.java"), coveredFilenames(plan));
+    assertTrue(plan.truncated());
+  }
+
+  @Test
   void perCallInputBudgetIsUnboundedWhenBudgetingIsDisabled() {
     when(reviewConfig.maxInputTokens()).thenReturn(0);
     assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());

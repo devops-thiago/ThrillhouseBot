@@ -35,6 +35,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -157,12 +158,14 @@ public class FindingPipeline {
    * batch's own in-budget text (the combined diff would exceed the very budget the batches exist to
    * respect), union the results through the finishing chain, then a single summary call rolls them
    * up into the PR-level summary. A batch that fails after {@link AiReviewService}'s internal
-   * retries is retried once more synchronously after the parallel pass — other batches keep their
-   * results instead of being discarded. Previous-findings statuses are aggregated from the batch
-   * calls — they saw the diff; the code-blind summary call must not decide what was resolved. The
-   * passed {@code promptInputs} is reused as the shared-context template — only the diff slot
-   * changes per batch, and the base comparison is dropped (it is a near-duplicate of the diff that
-   * would otherwise be re-sent in every call).
+   * retries is retried once more synchronously after the parallel pass; if it still fails it is
+   * soft-failed — its files are recorded as uncovered on the shared plan (so the verdict holds
+   * APPROVE and the summary discloses the gap) and every batch that succeeded keeps its findings,
+   * rather than the whole review being discarded. Previous-findings statuses are aggregated from
+   * the batch calls — they saw the diff; the code-blind summary call must not decide what was
+   * resolved. The passed {@code promptInputs} is reused as the shared-context template — only the
+   * diff slot changes per batch, and the base comparison is dropped (it is a near-duplicate of the
+   * diff that would otherwise be re-sent in every call).
    */
   private ReviewResponse runMultiCall(
       ReviewSession session,
@@ -208,13 +211,25 @@ public class FindingPipeline {
             processBatch(index, batches, session, promptInputs, plan, previousFilesById);
         Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
       } catch (RuntimeException e) {
-        throw new IllegalStateException("Parallel batch review failed", e);
+        // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
+        // one batch that never succeeds must not discard the batches that did. Keep their
+        // findings, record this batch's files as uncovered on the shared plan so the verdict holds
+        // APPROVE and the summary discloses the gap, and let the review proceed (outcome stays
+        // null and is skipped below).
+        Log.warnf(
+            e,
+            "Batch %d/%d failed after its retry; keeping the successful batches and disclosing its"
+                + " files as not reviewed rather than failing the whole review",
+            index + 1,
+            batches.size());
+        plan.recordUncoveredFiles(filenamesOf(batches.get(index).files()));
       }
     }
 
     var outcomes =
         IntStream.range(0, batches.size())
             .mapToObj(i -> outcomesByIndex[i])
+            .filter(Objects::nonNull)
             .sorted(Comparator.comparingInt(BatchOutcome::index))
             .toList();
 
@@ -274,6 +289,10 @@ public class FindingPipeline {
         verified.findings(),
         scopeStatusesToBatch(
             batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
+  }
+
+  private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
+    return files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
   }
 
   /**
@@ -558,9 +577,13 @@ public class FindingPipeline {
     // Scope totals next, ahead of the per-file rows, for the same reason: clamping drops the tail.
     sb.append(changeScopeSummary(ctx));
     var omitted = Set.copyOf(plan.omittedFiles());
-    var clipped = Set.copyOf(plan.clippedFiles());
+    var uncovered = Set.copyOf(plan.runtimeUncoveredFiles());
+    // effectiveClippedFiles drops any clipped file a failed batch left wholly uncovered, so it is
+    // disclosed once, as uncovered, not also marked "partially analyzed".
+    var clipped = Set.copyOf(plan.effectiveClippedFiles());
     for (var file : ctx.reviewableFiles()) {
-      if (ReviewDiffFormatter.namesContain(omitted, file.filename())) {
+      if (ReviewDiffFormatter.namesContain(omitted, file.filename())
+          || ReviewDiffFormatter.namesContain(uncovered, file.filename())) {
         continue;
       }
       sb.append(file.filename())
@@ -578,6 +601,11 @@ public class FindingPipeline {
     }
     for (var name : plan.omittedFiles()) {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
+    }
+    for (var name : plan.runtimeUncoveredFiles()) {
+      sb.append(name)
+          .append(
+              " (not reviewed — the review call for it did not complete; treated as uncovered)\n");
     }
     return sb.toString();
   }

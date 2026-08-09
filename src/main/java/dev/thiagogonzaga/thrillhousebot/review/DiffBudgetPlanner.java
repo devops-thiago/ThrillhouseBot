@@ -27,7 +27,9 @@ import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Splits a PR's reviewable files into token-budgeted batches so every file is covered by some model
@@ -75,21 +77,88 @@ public class DiffBudgetPlanner {
    * summary must not present them as fully reviewed. {@code budgeted} is false only for an explicit
    * {@code max-input-tokens=0} (legacy single uncapped batch) — consumers use it to pick between
    * the plan's omissions and the legacy line-cap count.
+   *
+   * <p>{@code runtimeUncoveredFiles} is a live, mutable accumulator, distinct from the planned
+   * omissions: the plan is built before the review runs, and the same instance flows to both the
+   * review pass and the verdict, so a batch that fails all its retries records its files here
+   * rather than aborting the whole review — the verdict still holds APPROVE and discloses the gap,
+   * but every batch that succeeded keeps its findings. Written only through {@link
+   * #recordUncoveredFiles(List)}; its accessor returns a defensive copy so the mutable backing
+   * never escapes. The {@code effective*} accessors fold it into the planned omissions.
    */
   public record BudgetPlan(
       List<DiffBatch> batches,
       List<String> omittedFiles,
       List<String> clippedFiles,
-      boolean budgeted) {
+      boolean budgeted,
+      List<String> runtimeUncoveredFiles) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
       clippedFiles = List.copyOf(clippedFiles);
+      // Kept mutable on purpose (not List.copyOf): the review pass records runtime batch failures
+      // onto this shared instance after the plan is built.
+      runtimeUncoveredFiles =
+          runtimeUncoveredFiles == null ? new CopyOnWriteArrayList<>() : runtimeUncoveredFiles;
+    }
+
+    /**
+     * A fresh plan with no runtime coverage gaps yet; failures are recorded on it as they occur.
+     */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted) {
+      this(batches, omittedFiles, clippedFiles, budgeted, new CopyOnWriteArrayList<>());
+    }
+
+    /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
+    @Override
+    public List<String> runtimeUncoveredFiles() {
+      return List.copyOf(runtimeUncoveredFiles);
+    }
+
+    /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
+    void recordUncoveredFiles(List<String> filenames) {
+      for (var name : filenames) {
+        if (name != null && !runtimeUncoveredFiles.contains(name)) {
+          runtimeUncoveredFiles.add(name);
+        }
+      }
     }
 
     public boolean truncated() {
-      // Clipped unseen hunks withhold coverage like omitted files — both hold APPROVE.
-      return !omittedFiles.isEmpty() || !clippedFiles.isEmpty();
+      // Clipped unseen hunks and files a failed batch never covered withhold coverage like omitted
+      // files — all three hold APPROVE.
+      return !omittedFiles.isEmpty() || !clippedFiles.isEmpty() || !runtimeUncoveredFiles.isEmpty();
+    }
+
+    /**
+     * Files with no usable coverage: the planned omissions plus any file a failed batch left
+     * unreviewed at runtime, each listed once. Consumers gating and disclosing coverage use this,
+     * not {@link #omittedFiles()}, so a runtime batch failure is accounted for like an omission.
+     */
+    public List<String> effectiveOmittedFiles() {
+      if (runtimeUncoveredFiles.isEmpty()) {
+        return omittedFiles;
+      }
+      var merged = new LinkedHashSet<>(omittedFiles);
+      merged.addAll(runtimeUncoveredFiles);
+      return List.copyOf(merged);
+    }
+
+    /**
+     * Clipped (partially analyzed) files minus any a failed batch left wholly uncovered — those are
+     * reported as omitted, not merely clipped, so a runtime failure never has a file counted twice
+     * nor its coverage overstated.
+     */
+    public List<String> effectiveClippedFiles() {
+      if (runtimeUncoveredFiles.isEmpty()) {
+        return clippedFiles;
+      }
+      var gapSet = new HashSet<>(runtimeUncoveredFiles);
+      return clippedFiles.stream().filter(n -> !gapSet.contains(n)).toList();
     }
 
     public boolean multiCall() {
@@ -236,6 +305,15 @@ public class DiffBudgetPlanner {
       String section,
       int diffBudgetTokens,
       Rendered rendered) {
+    if (isPatchlessWithChanges(file)) {
+      // GitHub returns a null/blank patch for binary files and for text diffs too large to
+      // display, while still reporting real additions/deletions. Its rendered section is a bare
+      // header with no ```diff``` body — there is nothing for the model to read — so packing it
+      // would count the file as fully reviewed and let an unbacked "resolved" claim through.
+      // Omit it by name like an unclippable file: never packed, holds APPROVE, disclosed.
+      rendered.unclippable().add(file.filename());
+      return;
+    }
     var tokens = tokenCounter.estimateTokens(section);
     if (tokens > diffBudgetTokens) {
       var clipped = clipToBudget(section, diffBudgetTokens);
@@ -248,6 +326,16 @@ public class DiffBudgetPlanner {
       tokens = tokenCounter.estimateTokens(clipped);
     }
     rendered.sized().add(new Sized(file, section, tokens));
+  }
+
+  /**
+   * A reviewable file GitHub reported with real additions/deletions but no patch text (binary, or a
+   * text diff too large to display). It survives {@link ReviewDiffFormatter#isPureRename} (which
+   * needs a zero change count) yet has no diff to review, so it must be omitted, not packed.
+   */
+  private static boolean isPatchlessWithChanges(GitHubPullRequestClient.FileDiff file) {
+    var patch = file.patch();
+    return (patch == null || patch.isBlank()) && file.additions() + file.deletions() > 0;
   }
 
   private static DiffBatch toBatch(List<Sized> sized) {

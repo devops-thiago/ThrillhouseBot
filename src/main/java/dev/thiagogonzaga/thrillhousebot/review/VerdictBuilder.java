@@ -115,14 +115,16 @@ public class VerdictBuilder {
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       DiffBudgetPlanner.BudgetPlan plan) {
-    // Budgeted: plan omitted + clipped files; legacy: line-cap count — never sum both.
+    // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
+    // into the omitted set (effective*); legacy: line-cap count — never sum both.
     var truncation =
         plan.budgeted()
-            ? new ReviewResult.TruncationDetail(plan.omittedFiles(), plan.clippedFiles())
+            ? new ReviewResult.TruncationDetail(
+                plan.effectiveOmittedFiles(), plan.effectiveClippedFiles())
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
         plan.budgeted()
-            ? plan.omittedFiles().size() + plan.clippedFiles().size()
+            ? plan.effectiveOmittedFiles().size() + plan.effectiveClippedFiles().size()
             : ctx.omittedFiles();
     // GitHub PR-level totals when available; ignore-glob drops can undercount diff-derived stats.
     // Pure renames are excluded from reviewableFiles for AI budget (#386) but still belong in the

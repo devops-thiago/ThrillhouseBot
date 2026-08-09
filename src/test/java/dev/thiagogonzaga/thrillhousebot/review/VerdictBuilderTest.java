@@ -155,6 +155,41 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void aFailedBatchsRuntimeUncoveredFilesHoldApprovalAndAreDisclosedAsOmitted() {
+    // Lead#3: a batch that failed all its retries records its files on the shared plan. The verdict
+    // reads that same instance and must fold them into the omitted set — holding APPROVE and naming
+    // them — exactly like a planned omission, so a partial review never claims full coverage.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    plan.recordUncoveredFiles(List.of("failed.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(1, result.omittedFiles());
+    assertTrue(result.truncated());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(
+        result.summaryMarkdown().contains("omitted entirely (failed.java)"),
+        result.summaryMarkdown());
+  }
+
+  @Test
+  void aRuntimeUncoveredFileThatWasAlsoClippedIsCountedOnceAsOmitted() {
+    // No double-count: a clipped file whose batch then failed is reported as omitted, not also as
+    // partially analyzed.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("f.java"), true);
+    plan.recordUncoveredFiles(List.of("f.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(1, result.omittedFiles());
+    assertTrue(
+        result.summaryMarkdown().contains("omitted entirely (f.java)"), result.summaryMarkdown());
+    assertFalse(result.summaryMarkdown().contains("partially analyzed"), result.summaryMarkdown());
+  }
+
+  @Test
   void clippedOnlyReviewIsDisclosedAsPartialAndHoldsApproval() {
     var ctx = contextWithLineCapOmissions(0);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("huge.java"), true);
