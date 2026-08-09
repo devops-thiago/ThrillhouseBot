@@ -313,6 +313,46 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void aPlanBuiltWithANullRuntimeGapListStillAcceptsGaps() {
+    // The canonical constructor normalizes a null accumulator rather than storing it: a null here
+    // would NPE the moment a failed batch recorded a gap, on the async review thread, taking the
+    // whole review down with it.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null);
+
+    assertTrue(plan.runtimeUncoveredFiles().isEmpty(), "a null accumulator normalizes to empty");
+
+    plan.recordUncoveredFiles(List.of("src/Failed.java"));
+
+    assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
+  }
+
+  @Test
+  void clippedFilesAreReportedUnchangedWhenNoBatchFailed() {
+    // No runtime gap: the clipped list passes through, so a partially analyzed file keeps its
+    // "clipped" meaning rather than being reported as wholly uncovered.
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("src/Clipped.java"), true);
+
+    assertEquals(List.of("src/Clipped.java"), plan.effectiveClippedFiles());
+  }
+
+  @Test
+  void aClippedFileAFailedBatchLeftUncoveredIsReportedOmittedNotClipped() {
+    // A file that was clipped AND then lost to a failed batch must not be counted twice: it drops
+    // out of the clipped list and is reported as omitted, so coverage is never overstated.
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of("src/Clipped.java", "src/Other.java"), true);
+
+    plan.recordUncoveredFiles(List.of("src/Clipped.java"));
+
+    assertEquals(List.of("src/Other.java"), plan.effectiveClippedFiles());
+    assertTrue(
+        plan.effectiveOmittedFiles().contains("src/Clipped.java"),
+        "the lost file is accounted for as omitted instead");
+  }
+
+  @Test
   void perCallInputBudgetIsUnboundedWhenBudgetingIsDisabled() {
     when(reviewConfig.maxInputTokens()).thenReturn(0);
     assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());
