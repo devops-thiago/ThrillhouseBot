@@ -843,4 +843,113 @@ class VerdictBuilderTest {
 
     assertEquals(ReviewState.COMMENT, result.reviewState());
   }
+
+  // ---- #455: a zero-finding round must neither evict, double-count, nor phantom-hold ----
+
+  private static final String CARRIED_FILE = "src/Carried.java";
+  private static final String CARRIED_ANCHOR = "var name = decode(content);";
+
+  private static final String CARRIED_ROUND_JSON =
+      "{\"findings\":[{\"risk\":\"medium\",\"file\":\""
+          + CARRIED_FILE
+          + "\",\"line\":166,\"title\":\"Undecodable content\",\"description\":\"d\","
+          + "\"suggestion_old\":\""
+          + CARRIED_ANCHOR
+          + "\"}],\"previous_findings_status\":[],\"summary\":null}";
+
+  /** Round 1: the one MEDIUM finding this PR ever raised. */
+  private static final ReviewResponse CARRIED_ROUND =
+      new ReviewResponse(
+          List.of(
+              new ReviewResponse.Finding(
+                  "medium", CARRIED_FILE, 166, "Undecodable content", "d", CARRIED_ANCHOR, null)),
+          List.of(),
+          null);
+
+  /**
+   * Round 3 of the PR #449 sequence, with round 2 having found nothing and reported round 1's
+   * finding {@code carriedStatus}. The anchor is still in the diff, so nothing is superseded and
+   * only the status bookkeeping decides the verdict.
+   */
+  private static ReviewContextLoader.ReviewContext afterZeroFindingRound(String carriedStatus) {
+    var zeroFindingRound =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, carriedStatus, "n")),
+            null);
+    return new ReviewContextLoader.ReviewContext(
+        List.of(),
+        "diff",
+        "",
+        0,
+        List.of(),
+        List.of("{\"findings\":[]}", CARRIED_ROUND_JSON),
+        List.of(zeroFindingRound, CARRIED_ROUND),
+        false,
+        true,
+        CARRIED_ROUND_JSON,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        List.of(new FileDiff(CARRIED_FILE, "modified", 1, 0, 1, "")),
+        () ->
+            new DiffLineResolver(
+                Map.of(CARRIED_FILE, "@@ -166,1 +166,1 @@\n-old\n+" + CARRIED_ANCHOR)),
+        null);
+  }
+
+  /**
+   * #455 — one finding was ever raised on the PR, so exactly one may be reported unresolved. The
+   * model's own status and the deterministic backstop each held it once, because the backstop
+   * mapped the current round's ids over the zero-finding round instead of the round they name.
+   */
+  @Test
+  void unresolvedCountAcrossAZeroFindingRoundStaysAtTheOneRealFinding() {
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var stillUnresolved =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+
+    var result =
+        builderWithRealAnalyzer(summaryGenerator)
+            .build(afterZeroFindingRound("unresolved"), stillUnresolved, CI_CLEAR, plan);
+
+    assertEquals(
+        1,
+        result.unresolvedPreviousCount(),
+        "the unresolved count must equal the number of distinct real findings still open");
+  }
+
+  /**
+   * #455 — the PR's only prior finding is reported resolved this round, so nothing genuine is
+   * outstanding and approval must return. Before the fix the backstop could not see that report
+   * (its ids did not map through the zero-finding round) and a phantom held APPROVE open forever.
+   */
+  @Test
+  void resolvedPriorFindingNoLongerPhantomHoldsApproveAfterAZeroFindingRound() {
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var resolvedNow =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed")),
+            null);
+
+    var result =
+        builderWithRealAnalyzer(summaryGenerator)
+            .build(afterZeroFindingRound("unresolved"), resolvedNow, CI_CLEAR, plan);
+
+    assertEquals(0, result.unresolvedPreviousCount());
+    assertEquals(
+        ReviewState.APPROVE,
+        result.reviewState(),
+        "a PR with no genuine outstanding findings must be approvable again");
+  }
 }

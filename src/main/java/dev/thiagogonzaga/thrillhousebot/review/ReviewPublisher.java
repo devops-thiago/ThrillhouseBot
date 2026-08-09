@@ -475,9 +475,7 @@ public class ReviewPublisher {
     var sb = new StringBuilder();
     boolean ciHeld = false;
     if (!result.offendingCiChecks().isEmpty()) {
-      sb.append(
-          "ThrillhouseBot found no issues in this PR, but some checks are still pending or"
-              + " failed:\n");
+      sb.append(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN).append("\n");
       for (var check : result.offendingCiChecks()) {
         String status = check.isFailing() ? "failed" : CI_PENDING;
         sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
@@ -485,9 +483,7 @@ public class ReviewPublisher {
       ciHeld = true;
     }
     if (result.ciUnreadable()) {
-      sb.append(
-          "ThrillhouseBot found no issues in this PR, but the CI status could not be read, so"
-              + " approval is held until it can be confirmed.\n");
+      sb.append(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN).append("\n");
       ciHeld = true;
     }
     if (unresolved > 0) {
