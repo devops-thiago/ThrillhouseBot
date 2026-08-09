@@ -123,6 +123,24 @@ public class ConfigKeyContextResolver {
       Pattern.compile(
           "\\b[a-z][a-z0-9]{0,63}(?:\\.[a-z0-9]" + SEG + "(?:-[a-z0-9]" + SEG + "){0,8}){2,16}\\b");
 
+  /**
+   * Both key shapes in one pattern, matched in a single left-to-right pass so tokens surface in the
+   * order the line mentions them. The two alternatives start on disjoint character classes
+   * (uppercase vs lowercase), so there is no ambiguity and no extra backtracking beyond what each
+   * bounded pattern already does.
+   */
+  private static final Pattern KEY_TOKEN =
+      Pattern.compile(ENV_TOKEN.pattern() + "|" + PROPERTY_TOKEN.pattern());
+
+  /**
+   * Trailing/leading dotted segments that mark a token as a hostname or a reverse-domain Java FQN
+   * rather than a configuration key. A hostname trails with the TLD ({@code api.github.com}); a
+   * reverse-domain package name leads with it ({@code org.eclipse.microprofile.rest.client}). No
+   * real config key begins or ends with a bare TLD segment, so both ends are checked.
+   */
+  private static final Set<String> TLD_SEGMENTS =
+      Set.of("com", "org", "net", "io", "co", "dev", "gov", "edu", "info", "app", "ai", "me", "us");
+
   /** Extensions of source files that can hold a config mapping. */
   private static final Set<String> SOURCE_EXTENSIONS =
       Set.of("java", "kt", "py", "ts", "js", "go", "rb", "rs");
@@ -203,14 +221,46 @@ public class ConfigKeyContextResolver {
   }
 
   private static void collectTokens(String addedText, Set<String> tokens) {
-    var env = ENV_TOKEN.matcher(addedText);
-    while (env.find() && tokens.size() < MAX_TOKENS) {
-      tokens.add(env.group());
+    var matcher = KEY_TOKEN.matcher(addedText);
+    while (matcher.find() && tokens.size() < MAX_TOKENS) {
+      var token = matcher.group();
+      if (looksLikeConfigKey(token, addedText, matcher.start())) {
+        tokens.add(token);
+      }
     }
-    var property = PROPERTY_TOKEN.matcher(addedText);
-    while (property.find() && tokens.size() < MAX_TOKENS) {
-      tokens.add(property.group());
+  }
+
+  /**
+   * Whether a matched token is plausibly a configuration key rather than a hostname or a Java
+   * fully-qualified name that happens to share the dotted-lowercase shape and would otherwise
+   * resolve against unrelated config lines and crowd out the actually-documented key. An {@code
+   * UPPER_SNAKE} env name is always a key. A dotted property token is rejected when it sits inside
+   * a URL on the source line, or when its first or last segment is a common TLD.
+   */
+  private static boolean looksLikeConfigKey(String token, String line, int start) {
+    if (token.indexOf('.') < 0) {
+      return true;
     }
+    if (isInsideUrl(line, start)) {
+      return false;
+    }
+    var segments = token.split("\\.");
+    return !TLD_SEGMENTS.contains(segments[0])
+        && !TLD_SEGMENTS.contains(segments[segments.length - 1]);
+  }
+
+  /** Whether the whitespace-delimited run of {@code text} containing offset {@code at} is a URL. */
+  private static boolean isInsideUrl(String text, int at) {
+    var from = at;
+    while (from > 0 && !Character.isWhitespace(text.charAt(from - 1))) {
+      from--;
+    }
+    var to = at;
+    while (to < text.length() && !Character.isWhitespace(text.charAt(to))) {
+      to++;
+    }
+    var word = text.substring(from, to);
+    return word.contains("://") || word.contains("www.");
   }
 
   /** The patch's added content ({@code +} lines, excluding the {@code +++} file header). */

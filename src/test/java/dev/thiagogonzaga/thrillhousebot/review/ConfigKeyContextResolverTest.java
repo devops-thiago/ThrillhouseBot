@@ -163,6 +163,35 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldRejectHostnamesAndFqnsAndPreserveFirstMentionOrder() {
+      // A doc line mixing a URL host, a Java FQN, a real property key and a real env name. The
+      // hostname (trailing TLD, inside a URL) and the FQN (leading reverse-domain TLD) must be
+      // dropped, and the survivors kept in the order the line mentions them — property first.
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(
+              List.of(
+                  docDiff(
+                      "README.md",
+                      "reach https://api.github.com/repos then set"
+                          + " `thrillhousebot.review.ci-gating`; the"
+                          + " org.eclipse.microprofile.rest.client package reads"
+                          + " `THRILLHOUSEBOT_REVIEW_CI_GATING`")));
+
+      assertFalse(
+          tokens.contains("api.github.com"),
+          () -> "a hostname inside a URL is not a config key: " + tokens);
+      assertFalse(
+          tokens.contains("org.eclipse.microprofile.rest.client"),
+          () -> "a Java fully-qualified name is not a config key: " + tokens);
+      assertEquals(
+          List.of("thrillhousebot.review.ci-gating", "THRILLHOUSEBOT_REVIEW_CI_GATING"),
+          tokens,
+          () ->
+              "the property is mentioned before the env name; order must follow position: "
+                  + tokens);
+    }
+
+    @Test
     void shouldNotMistakeFilenamesForPropertyKeys() {
       var tokens =
           ConfigKeyContextResolver.extractTokens(
