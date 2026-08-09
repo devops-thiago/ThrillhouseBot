@@ -163,7 +163,11 @@ public final class PrReviewPrompts {
               the path, do not discard the finding: lower confidence and say in the
               description that a test exists but may not exercise this path. A green test
               whose mocks contradict the real collaborator also does not suppress a finding —
-              that test does not exercise the production path it claims to cover.
+              that test does not exercise the production path it claims to cover. This whole
+              check is INAPPLICABLE to a line a provided patch-coverage section lists as
+              uncovered: measured zero executions settles it — no test in this diff reaches
+              that line, so none can be asked to explain the claim away, and the finding
+              neither drops nor loses confidence on this ground.
             - The symmetric case — a claim that a test FAILS, or any claim resting on exact
               line-count, array-length, or index arithmetic you performed by counting lines or
               elements in the diff (for example "the section is 7 lines, so it prints 4") — is at
@@ -583,6 +587,47 @@ public final class PrReviewPrompts {
               impossibility is already demonstrable from what is shown. Broader cross-file
               retrieval of collaborator sources is out of scope for this check alone.
             - A faithful stub that matches the real contract is not a finding."""
+          .stripIndent();
+
+  /**
+   * Trailing-guidance block injected when a coverage report for the PR's exact head commit could be
+   * read and some added line in it was never executed (issue #115). A green suite is otherwise
+   * taken at face value: this is the one signal that says which changed lines the suite never ran,
+   * so the reviewer can stop treating "CI is green" as evidence about them.
+   *
+   * <p>Two directions are load-bearing and both are stated. Uncovered changed logic is itself
+   * reportable, and — the subtler half — a correctness claim about an uncovered line is not
+   * softened by the SYSTEM self-check that asks why an in-diff test would still pass, because no
+   * test runs that line at all. The inverse inference is explicitly refused: a line's ABSENCE from
+   * the list is not evidence that a test covers it.
+   *
+   * <p>Terminated with {@link String#stripIndent()} so the value is not a compile-time constant: it
+   * is referenced from a method body (the assembler), and a plain inline literal this large would
+   * be copied verbatim into that class file (SpotBugs HSC_HUGE_SHARED_STRING_CONSTANT). The call is
+   * a no-op on the already-dedented text block — it exists only to defeat constant folding.
+   */
+  public static final String PATCH_COVERAGE_REQUEST =
+      """
+            ## Patch Coverage Check
+            A coverage report produced for THIS commit lists, below, lines this PR adds that
+            no test executed. This is measurement, not inference — treat it as fact about those
+            lines and nothing else.
+            - Changed logic on those lines that nothing exercises is a finding in its own right,
+              risk "low" or "medium" by what the untested code decides (a new branch, gate, or
+              error path is medium; a field assignment or log line is not worth reporting). Emit
+              ONE finding per untested block, anchored at its first listed line and quoting it,
+              titled for the behavior left untested — never one finding per line, and never a bare
+              restatement of the numbers.
+            - A correctness claim about a listed line carries the confidence its own evidence
+              earns. Do NOT lower it, and do not drop the finding, on the theory that a test in
+              this diff would have caught the problem: none runs that line. Say so in the
+              description ("the coverage report shows this line is never executed").
+            - The list is not evidence in the other direction. A line missing from it may simply
+              not be measured — a file the report never mentions, a language the report does not
+              cover, a run that instrumented only part of the build. Never claim a line IS covered,
+              and never treat absence from this list as a reason to drop a finding.
+            - Do not report the absence of tests as a finding for a file the list does not mention,
+              and do not restate the coverage numbers in the summary."""
           .stripIndent();
 
   public static final String HEURISTIC_FAILURE_MODES_REQUEST =

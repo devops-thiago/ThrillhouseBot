@@ -74,6 +74,9 @@ final class RepoSettingsParser {
   /** Ceiling on one scope's prose — an over-long block is dropped rather than sent to the model. */
   static final int MAX_SCOPE_INSTRUCTIONS_LENGTH = 4_000;
 
+  /** Ceiling on the coverage-artifact name; GitHub's own artifact names are far shorter. */
+  static final int MAX_ARTIFACT_NAME_LENGTH = 256;
+
   private static final ObjectMapper YAML_MAPPER = new ObjectMapper(yamlFactory());
 
   private RepoSettingsParser() {}
@@ -105,9 +108,10 @@ final class RepoSettingsParser {
       var review = root.path("review");
       var ignoredFiles = readPatterns(review.path("ignored-files"), source);
       var pathInstructions = readPathInstructions(review.path("path-instructions"), source);
-      return ignoredFiles.isEmpty() && pathInstructions.isEmpty()
+      var coverageArtifact = readCoverageArtifact(review.path("coverage-artifact"), source);
+      return ignoredFiles.isEmpty() && pathInstructions.isEmpty() && coverageArtifact.isEmpty()
           ? RepoSettings.EMPTY
-          : new RepoSettings(ignoredFiles, pathInstructions, source);
+          : new RepoSettings(ignoredFiles, pathInstructions, coverageArtifact, source);
     } catch (IOException | RuntimeException e) {
       log.warn(
           "Could not parse repository config {}; continuing with the global settings only",
@@ -135,6 +139,29 @@ final class RepoSettingsParser {
         yield List.of();
       }
     };
+  }
+
+  /**
+   * Reads {@code review.coverage-artifact} — the name of the workflow artifact holding this
+   * repository's JaCoCo XML coverage report. A scalar is the only accepted shape; anything else
+   * (including an explicit YAML null, whose {@code asText()} is the literal {@code "null"}) is a
+   * name nobody wrote and yields {@code ""}, which switches patch-coverage context off for the
+   * repository rather than sending the bot looking for a nonexistent artifact.
+   */
+  private static String readCoverageArtifact(JsonNode node, String source) {
+    if (node.isMissingNode() || node.isNull()) {
+      return "";
+    }
+    if (!node.isValueNode()) {
+      log.warn("Repository config {}: review.coverage-artifact is not a name; ignoring it", source);
+      return "";
+    }
+    var name = node.asText().trim();
+    if (name.length() > MAX_ARTIFACT_NAME_LENGTH) {
+      log.warn("Repository config {}: dropping an over-long coverage-artifact name", source);
+      return "";
+    }
+    return name;
   }
 
   /**

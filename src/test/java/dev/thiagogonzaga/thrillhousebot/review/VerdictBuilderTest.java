@@ -112,6 +112,7 @@ class VerdictBuilderTest {
         "",
         "",
         "",
+        "",
         List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
         () -> new DiffLineResolver(Map.of()),
         null);
@@ -231,6 +232,7 @@ class VerdictBuilderTest {
         "",
         "",
         "",
+        "",
         List.of(new FileDiff(file, "modified", 1, 0, 1, "")),
         () -> new DiffLineResolver(Map.of(file, "@@ -10,1 +10,1 @@\n-old\n+new")),
         null);
@@ -287,6 +289,7 @@ class VerdictBuilderTest {
             new InstructionsResolver.ResolvedInstructions("", ""),
             PathScopedInstructions.NONE,
             List.of(),
+            "",
             "",
             "",
             "",
@@ -392,6 +395,7 @@ class VerdictBuilderTest {
         new InstructionsResolver.ResolvedInstructions("", ""),
         PathScopedInstructions.NONE,
         List.of(),
+        "",
         "",
         "",
         "",
@@ -646,6 +650,7 @@ class VerdictBuilderTest {
             "",
             "",
             "",
+            "",
             List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
             () -> {
               touched[0] = true;
@@ -778,6 +783,7 @@ class VerdictBuilderTest {
             new InstructionsResolver.ResolvedInstructions("", ""),
             PathScopedInstructions.NONE,
             List.of(),
+            "",
             "",
             "",
             "",

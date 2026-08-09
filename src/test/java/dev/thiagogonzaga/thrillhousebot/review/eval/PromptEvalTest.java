@@ -171,7 +171,17 @@ class PromptEvalTest {
         evalCase.diff().contains("Test.java")
             ? "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"
             : "";
-    var repoInstructions = relatedTests.isBlank() ? "" : PrReviewPrompts.MOCK_FIDELITY_REQUEST;
+    // Same for a case that pins patch-coverage behavior (#115): the guidance and the
+    // uncovered-line list travel together, exactly as ReviewPromptAssembler sends them.
+    var coverage = orEmpty(evalCase.spec().patchCoverage());
+    var repoInstructions =
+        joinSections(
+            relatedTests.isBlank() ? "" : PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+            coverage.isBlank()
+                ? ""
+                : PrReviewPrompts.PATCH_COVERAGE_REQUEST
+                    + "\n\n"
+                    + PromptTemplateEscaper.escape(coverage));
     prReviewer
         .reviewStream(
             PromptTemplateEscaper.fence(evalCase.diff()),
@@ -210,5 +220,13 @@ class PromptEvalTest {
 
   private static String orEmpty(String value) {
     return value == null ? "" : value;
+  }
+
+  /** Blank-dropping join, mirroring {@code ReviewPromptAssembler.combineSections}. */
+  private static String joinSections(String first, String second) {
+    if (first.isBlank()) {
+      return second;
+    }
+    return second.isBlank() ? first : first + "\n\n" + second;
   }
 }

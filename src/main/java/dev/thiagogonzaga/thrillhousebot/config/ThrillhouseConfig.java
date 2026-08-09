@@ -357,8 +357,26 @@ public interface ThrillhouseConfig {
 
     DiagramConfig diagram();
 
+    @WithName("patch-coverage")
+    PatchCoverageConfig patchCoverage();
+
     @WithName("follow-up-summary")
     FollowUpSummaryConfig followUpSummary();
+  }
+
+  /**
+   * Opt-in patch-coverage context. When {@link #enabled()} — and only for a repository that names
+   * its coverage artifact in {@code .github/thrillhousebot.yml} under {@code
+   * review.coverage-artifact} — the bot downloads that artifact from a completed workflow run for
+   * the exact head commit, intersects the report's never-executed lines with the lines the diff
+   * adds, and tells the reviewer which changed logic no test exercises. Off by default: it spends
+   * GitHub Actions API calls and one artifact download per review, and a repository that declares
+   * no artifact name gets nothing from it either way.
+   */
+  interface PatchCoverageConfig {
+    /** Master switch — no artifact is looked up or downloaded unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
   }
 
   /**

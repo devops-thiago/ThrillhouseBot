@@ -31,10 +31,22 @@ import java.util.List;
  *     thrillhousebot.review.ignored-files} list
  * @param pathInstructions review rules scoped to a path glob, applied in addition to (never instead
  *     of) the repository's global prose instructions
+ * @param coverageArtifact name of the workflow artifact holding this repository's JaCoCo XML
+ *     coverage report, or {@code ""} when it publishes none. The bot never guesses this: without it
+ *     no coverage is looked up and the review carries no patch-coverage context
  * @param source the repo-relative path the settings were read from, or {@code "none"}
  */
 public record RepoSettings(
-    List<String> ignoredFiles, List<PathInstructions> pathInstructions, String source) {
+    List<String> ignoredFiles,
+    List<PathInstructions> pathInstructions,
+    String coverageArtifact,
+    String source) {
+
+  /** Convenience for the callers and tests that predate the coverage artifact name. */
+  public RepoSettings(
+      List<String> ignoredFiles, List<PathInstructions> pathInstructions, String source) {
+    this(ignoredFiles, pathInstructions, "", source);
+  }
 
   /**
    * One block of maintainer prose scoped to the files matching {@code path}. The rules are
@@ -48,10 +60,11 @@ public record RepoSettings(
   public record PathInstructions(String path, String instructions) {}
 
   /** No per-repo settings — the deployment defaults apply unchanged. */
-  public static final RepoSettings EMPTY = new RepoSettings(List.of(), List.of(), "none");
+  public static final RepoSettings EMPTY = new RepoSettings(List.of(), List.of(), "", "none");
 
   public RepoSettings {
     ignoredFiles = List.copyOf(ignoredFiles);
     pathInstructions = List.copyOf(pathInstructions);
+    coverageArtifact = coverageArtifact == null ? "" : coverageArtifact;
   }
 }

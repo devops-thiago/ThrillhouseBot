@@ -25,8 +25,9 @@ import jakarta.inject.Inject;
  * Turns a loaded {@link ReviewContextLoader.ReviewContext} into the {@link
  * AiReviewService.PromptInputs} the model is called with — fencing the diff, escaping the prose
  * slots, and assembling the trailing guidance (labels + diagram request + config-key definitions +
- * repository instructions, global then path-scoped) into the single {@code repoInstructions} slot.
- * Extracted from {@code ReviewOrchestrator} as the pure prompt-shaping transform.
+ * patch coverage + repository instructions, global then path-scoped) into the single {@code
+ * repoInstructions} slot. Extracted from {@code ReviewOrchestrator} as the pure prompt-shaping
+ * transform.
  */
 @ApplicationScoped
 public class ReviewPromptAssembler {
@@ -90,7 +91,9 @@ public class ReviewPromptAssembler {
                     combineSections(
                         bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext()),
                         configKeyContextSection(ctx.configKeyContext()))),
-                heuristicFailureModesSection(ctx.diff())),
+                combineSections(
+                    heuristicFailureModesSection(ctx.diff()),
+                    patchCoverageSection(ctx.patchCoverage()))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
@@ -158,6 +161,23 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PromptTemplateEscaper.escape(configKeyContext);
+  }
+
+  /**
+   * The uncovered-changed-lines guidance plus the list itself — empty whenever no coverage report
+   * could be read for this exact commit (issue #115), which is the normal case. Emitting the
+   * guidance without the data would be worse than emitting nothing: it tells the model to raise its
+   * confidence on lines it would then have to guess at, so the two travel together or not at all.
+   * The line list is derived from a report an arbitrary repository uploaded, so it is escaped and
+   * framed as data like the other untrusted slots.
+   */
+  static String patchCoverageSection(String patchCoverage) {
+    if (patchCoverage == null || patchCoverage.isBlank()) {
+      return "";
+    }
+    return PrReviewPrompts.PATCH_COVERAGE_REQUEST
+        + "\n\n"
+        + PromptTemplateEscaper.escape(patchCoverage);
   }
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */

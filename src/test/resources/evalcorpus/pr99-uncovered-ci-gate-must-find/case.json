@@ -1,0 +1,11 @@
+{
+  "kind": "generator",
+  "sourcePr": 99,
+  "why": "Issue #115: PR #99's new CI gate was under-covered, and the one approve-path test passed only because a collaborator was left unmocked so the gate never ran. The suite was green while the headline bug was present, so the reviewer had no reason to distrust it. With patch coverage in context the gating lines are known never to execute; the reviewer must report the untested gate instead of treating green CI as evidence about it.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewOrchestrator.java",
+  "keywords": ["uncovered", "never executed", "no test", "untested", "not exercised"],
+  "patchCoverage": "### Patch coverage for this diff (from the repository's own CI coverage report)\nLines this pull request ADDS that the coverage report for this exact commit records as executable and never executed by any test. Line numbers are new-file numbers, matching the diff.\n- src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewOrchestrator.java: 755-757, 1009, 1012-1044",
+  "prTitle": "fix(review): gate the APPROVE verdict on CI status (#95)",
+  "prDescription": "- [x] 🐛 Bug fix\n\nFixes #95\n\nThrillhouseBot could post a green APPROVE review while the PR's CI was still red or pending. This change gates the APPROVE verdict on the CI status of the head commit.\n\n- Treats a check as offending when it is failing, pending, or a required check that never reported; passing/skipped/neutral checks are excluded.\n- Downgrades a would-be APPROVE to COMMENT when any offending check exists.\n- No breaking changes; when CI is fully green the verdict is unchanged."
+}

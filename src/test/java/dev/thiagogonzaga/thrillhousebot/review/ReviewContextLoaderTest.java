@@ -49,6 +49,7 @@ class ReviewContextLoaderTest {
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ProjectStackResolver projectStackResolver;
   @Mock private ConfigKeyContextResolver configKeyContextResolver;
+  @Mock private PatchCoverageResolver patchCoverageResolver;
   @Mock private PrLabeler labeler;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private ReviewSessionPersistence sessionPersistence;
@@ -76,6 +77,7 @@ class ReviewContextLoaderTest {
             followUpAnalyzer,
             new BugFixContextResolver(commentClient),
             configKeyContextResolver,
+            patchCoverageResolver,
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel);
@@ -544,6 +546,42 @@ class ReviewContextLoaderTest {
       var ctx = loader.load("auth", request(), session, "owner/repo");
 
       assertTrue(ctx.pathInstructions().isEmpty());
+    }
+
+    /**
+     * #115 — patch coverage rides the same single repo-settings read and the same post-ignore file
+     * list, so an ignored file can never be reported as under-tested and no second settings fetch
+     * is added.
+     */
+    @Test
+    void patchCoverageIsResolvedFromTheOneSettingsReadAndReachesTheContext() {
+      var ignored =
+          new GitHubPullRequestClient.FileDiff(
+              "payments/generated/Api.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+c");
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              ignored);
+      stubCommonLoadDeps(files);
+      var settings =
+          new RepoSettings(
+              List.of("**/generated/**"),
+              List.of(),
+              "coverage-report",
+              ".github/thrillhousebot.yml");
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L)).thenReturn(settings);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+      when(patchCoverageResolver.resolve(eq("auth"), any(), eq(settings), anyList()))
+          .thenReturn("### uncovered");
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals("### uncovered", ctx.patchCoverage());
+      verify(patchCoverageResolver).resolve("auth", request(), settings, ctx.reviewableFiles());
+      assertFalse(ctx.reviewableFiles().contains(ignored));
+      verify(repoSettingsResolver, times(1)).resolve("owner", "repo", "main", 99L);
     }
   }
 

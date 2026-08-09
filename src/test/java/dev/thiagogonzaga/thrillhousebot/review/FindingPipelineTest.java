@@ -144,6 +144,7 @@ class FindingPipelineTest {
         "",
         "",
         "",
+        "",
         reviewableFiles,
         () -> new DiffLineResolver(Map.of()),
         prTotals);
