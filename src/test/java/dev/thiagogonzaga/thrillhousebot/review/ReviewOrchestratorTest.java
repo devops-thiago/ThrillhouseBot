@@ -445,6 +445,39 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void unresolvedBodyOmitsNotesThatAreNotReopenedDeclines() {
+      // Only a reopened-decline note (RebuttalContradiction.NOTE_LEAD_IN) is surfaced. An
+      // unresolved
+      // status with a null note, and a non-unresolved status, must both be skipped — the body shows
+      // the generic unresolved line with no extra note (F6).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", null),
+                  new ReviewResult.PreviousFindingStatus(2, "resolved", "fixed")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
+      assertFalse(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+    }
+
+    @Test
     void truncatedFirstReviewBodyNowDisclosesPartialReview() {
       var result =
           new ReviewResult(

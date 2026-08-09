@@ -908,6 +908,23 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void supersedeVanishedShouldNotSupersedeASettledId() {
+    // Finding #2's code vanished, but a newer round already closed it (settled). It must not be
+    // rewritten to superseded, or hasSupersededPrevious would pin on and re-post the summary every
+    // push (#470).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still"));
+
+    var rewritten =
+        analyzer.supersedeVanished(PREVIOUS_JSON, statuses, resolver, Map.of(), Set.of(2));
+
+    assertEquals(
+        "unresolved",
+        rewritten.get(0).status(),
+        "a settled id must not be re-superseded even when its code vanished");
+  }
+
+  @Test
   void supersedeVanishedShouldJudgePresenceByTheAnchorNotTheFile() {
     var anchoredJson =
         """
@@ -1073,6 +1090,14 @@ class FollowUpAnalyzerTest {
     assertEquals(
         Set.of(1, 2), FollowUpAnalyzer.settledPreviousIds(List.of(roundC, roundB, roundA)));
     assertEquals(Set.of(), FollowUpAnalyzer.settledPreviousIds(List.of(roundA)));
+
+    // A null newer round (missing/unparseable persisted response) is skipped, not dereferenced,
+    // while a non-null newer round beside it still contributes its closure.
+    var withNull = new ArrayList<ReviewResponse>();
+    withNull.add(null);
+    withNull.add(roundC);
+    withNull.add(roundA);
+    assertEquals(Set.of(1), FollowUpAnalyzer.settledPreviousIds(withNull));
   }
 
   @Test
@@ -1266,6 +1291,23 @@ class FollowUpAnalyzerTest {
         List.of(
             comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
             comment(101L, 100L, "src/A.java", "looks fine to me", "fork-author", "NONE"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+
+    assertEquals(List.of(1, 2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldTreatANullAssociationReplyAsNonWrite() {
+    // A reply whose author_association is absent (null) cannot be shown to hold write access, so it
+    // must not clear the hold — both findings stay held (F1).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    var comments =
+        List.of(
+            comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
+            comment(101L, 100L, "src/A.java", "looks fine to me", "someone", null));
 
     var held =
         analyzer.unreportedUnresolvedStatuses(
@@ -1520,6 +1562,28 @@ class FollowUpAnalyzerTest {
     var resolver =
         new DiffLineResolver(Map.of("new/Moved.java", "@@ -5,1 +5,1 @@\n-old\n+movedFlagged()"));
     var renameTargets = Map.of("old/Moved.java", "new/Moved.java");
+
+    var held =
+        analyzer.unreportedUnresolvedStatusesFromParsed(
+            List.of(round), List.of(), List.of(), resolver, BOT_ID, renameTargets);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldFindingUnderAContentIdenticalPureRename() {
+    // The finding's file was renamed without content changes (blank rename target), so its anchor
+    // resolves at neither path — but the finding is unchanged and must still be held (F5), matching
+    // addUnreportedVanished's pure-rename handling.
+    var round =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium", "old/Pure.java", 5, "Still open", "d", "unchanged()", null)),
+            List.of(),
+            null);
+    var resolver = new DiffLineResolver(Map.of());
+    var renameTargets = Map.of("old/Pure.java", "");
 
     var held =
         analyzer.unreportedUnresolvedStatusesFromParsed(

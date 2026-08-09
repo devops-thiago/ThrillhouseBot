@@ -353,6 +353,37 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldNotTreatAUrlSchemeSlashesAsALineComment() {
+    // A "://" URL scheme must not be mistaken for a // line-comment start when stripping comments
+    // from right-side code, so a dispatch on a later line is still seen as live evidence (F3).
+    var codeWithUrl =
+        "diff --git a/Worker.java\n@@ -1,2 +1,3 @@\n"
+            + "+    var docs = \"http://example.com/submit\";\n"
+            + "+    executor.submit(() -> run(ctx));\n";
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeWithUrl);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the URL's // is a scheme, not a comment, so the dispatch below it stays live evidence");
+    assertEquals("executor.submit(() -> run(ctx));", contradiction.get().evidence());
+  }
+
+  @Test
+  void shouldStripALeadingListDashFromTheQuotedClaim() {
+    // A maintainer's reply written as a markdown bullet ("- ...") is still their assertion; the
+    // leading "- " must be trimmed from the quoted claim.
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "- It is single-threaded.", DISPATCHING_CODE);
+
+    assertTrue(contradiction.isPresent());
+    assertEquals(
+        "It is single-threaded.",
+        contradiction.get().claim(),
+        "the leading list dash must be stripped from the quote");
+  }
+
+  @Test
   void shouldQuoteAConcurrentDispatchThatSurvivesOnAContextLine() {
     // The dispatch is on an unchanged context line (space-prefixed): still live code, so it refutes
     // the decline and the marker is stripped from the quote.
