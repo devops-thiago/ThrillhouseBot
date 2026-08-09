@@ -457,14 +457,28 @@ public class ConfigKeyContextResolver {
       String[] lines,
       Map<String, String> normalized,
       Map<String, List<String>> found) {
+    // Normalize each line once for the whole file rather than once per token: matching is otherwise
+    // O(tokens x lines) in normalization for a file that is only read once.
+    var normalizedLines = normalizeLines(lines);
     for (var entry : normalized.entrySet()) {
       var snippets = found.computeIfAbsent(entry.getKey(), unused -> new ArrayList<>());
       var room = MAX_SNIPPETS_PER_KEY - snippets.size();
       if (room > 0) {
-        snippetsFor(path, lines, entry.getValue()).stream().limit(room).forEach(snippets::add);
+        snippetsFor(path, lines, normalizedLines, entry.getValue()).stream()
+            .limit(room)
+            .forEach(snippets::add);
       }
     }
     found.values().removeIf(List::isEmpty);
+  }
+
+  /** Each source line normalized once, so per-token matching never re-normalizes the file. */
+  static String[] normalizeLines(String[] lines) {
+    var out = new String[lines.length];
+    for (var i = 0; i < lines.length; i++) {
+      out[i] = normalize(lines[i]);
+    }
+    return out;
   }
 
   /** A repository file's decoded text, or {@code null} when it cannot be read. */
@@ -491,20 +505,35 @@ public class ConfigKeyContextResolver {
    * discount it.
    */
   static List<String> snippetsFor(String path, String[] lines, String normalizedToken) {
-    var exact = matchingSnippets(path, lines, normalizedToken, true);
-    return exact.isEmpty() ? matchingSnippets(path, lines, normalizedToken, false) : exact;
+    return snippetsFor(path, lines, normalizeLines(lines), normalizedToken);
+  }
+
+  /**
+   * The same, but taking the file's lines pre-normalized so a whole-file walk normalizes each line
+   * once instead of once per token. {@code lines} is rendered; {@code normalizedLines} is matched.
+   */
+  static List<String> snippetsFor(
+      String path, String[] lines, String[] normalizedLines, String normalizedToken) {
+    var exact = matchingSnippets(path, lines, normalizedLines, normalizedToken, true);
+    return exact.isEmpty()
+        ? matchingSnippets(path, lines, normalizedLines, normalizedToken, false)
+        : exact;
   }
 
   private static List<String> matchingSnippets(
-      String path, String[] lines, String normalizedToken, boolean exactOnly) {
+      String path,
+      String[] lines,
+      String[] normalizedLines,
+      String normalizedToken,
+      boolean exactOnly) {
     var snippets = new ArrayList<String>();
     var lastRendered = -1;
     for (var i = 0; i < lines.length && snippets.size() < MAX_SNIPPETS_PER_KEY; i++) {
       var from = Math.max(0, i - CONTEXT_LINES_BEFORE);
       var defines =
           exactOnly
-              ? lineDefinesExactly(lines[i], normalizedToken)
-              : lineDefinesBySuffix(lines[i], normalizedToken);
+              ? definesExactly(normalizedLines[i], normalizedToken)
+              : definesBySuffix(normalizedLines[i], normalizedToken);
       // from > lastRendered skips a match the previous window already shows: adjacent matches (a
       // property and its override on consecutive lines) share one snippet rather than repeating it.
       if (defines && from > lastRendered) {
@@ -563,7 +592,7 @@ public class ConfigKeyContextResolver {
     if (line == null || line.isBlank()) {
       return false;
     }
-    return containsSegment(normalize(line), normalizedToken);
+    return definesExactly(normalize(line), normalizedToken);
   }
 
   /**
@@ -576,11 +605,23 @@ public class ConfigKeyContextResolver {
     if (line == null || line.isBlank()) {
       return false;
     }
+    return definesBySuffix(normalize(line), normalizedToken);
+  }
+
+  /** {@link #lineDefinesExactly} against an already-normalized line. */
+  private static boolean definesExactly(String normalizedLine, String normalizedToken) {
+    return !normalizedLine.isEmpty() && containsSegment(normalizedLine, normalizedToken);
+  }
+
+  /** {@link #lineDefinesBySuffix} against an already-normalized line. */
+  private static boolean definesBySuffix(String normalizedLine, String normalizedToken) {
+    if (normalizedLine.isEmpty()) {
+      return false;
+    }
     var segments = normalizedToken.split("_");
     if (segments.length <= MIN_SUFFIX_SEGMENTS) {
       return false;
     }
-    var normalizedLine = normalize(line);
     // Longest suffix first, so "MANUAL_TRIGGER_ALLOWED_LOGINS" is preferred over "ALLOWED_LOGINS".
     for (var start = 1; start <= segments.length - MIN_SUFFIX_SEGMENTS; start++) {
       var suffix = String.join("_", List.of(segments).subList(start, segments.length));

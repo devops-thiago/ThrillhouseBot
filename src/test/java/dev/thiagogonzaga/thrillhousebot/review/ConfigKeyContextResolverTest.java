@@ -465,6 +465,29 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldMatchUsingTheSuppliedNormalizedLinesAndRenderTheRawOnes() {
+      // The hoisted overload trusts the caller's pre-normalized lines (one normalization per file,
+      // not one per token) and does not re-derive them from the raw lines: a normalized array that
+      // maps the raw line to a DIFFERENT key proves the match reads the supplied normals while the
+      // rendered snippet is still the raw line.
+      var rawLines = new String[] {"totally unrelated raw text"};
+      var normalizedLines =
+          new String[] {ConfigKeyContextResolver.normalize("x=${WEBHOOK_DEDUP_TTL:1h}")};
+
+      var snippets =
+          ConfigKeyContextResolver.snippetsFor("app.properties", rawLines, normalizedLines, TOKEN);
+
+      assertEquals(
+          1,
+          snippets.size(),
+          () -> "the match must follow the supplied normalized lines: " + snippets);
+      assertTrue(
+          snippets.get(0).contains("totally unrelated raw text"),
+          () ->
+              "the rendered snippet is the raw line, matched via the normalized one: " + snippets);
+    }
+
+    @Test
     void shouldNotSplitASurrogatePairWhenTruncating() {
       var emoji = "ab😀cd";
 
