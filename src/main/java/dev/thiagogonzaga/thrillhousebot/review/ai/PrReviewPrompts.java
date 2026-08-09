@@ -252,7 +252,8 @@ public final class PrReviewPrompts {
               same enclosing unit (the same function, block, or scope). When the two places are
               in different units, first verify the units are genuinely equivalent; when the
               other place is not visible in the provided material at all, do not claim the
-              comparison.
+              comparison. This does not apply to a producer→consumer contract claim (dimension 9),
+              whose two ends are in different units by construction.
             - A producer→consumer contract claim (dimension 9) must quote BOTH ends from the
               provided material — the line that populates or computes the structure and the line
               that gates or branches on it — and name the concrete case on which they disagree

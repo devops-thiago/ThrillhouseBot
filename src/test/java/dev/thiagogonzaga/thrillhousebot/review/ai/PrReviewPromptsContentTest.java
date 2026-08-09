@@ -432,6 +432,32 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void generatorSelfCheckCarvesDimension9OutOfTheSameEnclosingUnitRequirement() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "does not apply to a producer→consumer contract claim (dimension 9)",
+        "the same-enclosing-unit self-check must exempt a dimension-9 claim (audit F4)");
+    assertContains(
+        sys,
+        "two ends are in different units by construction",
+        "the exemption must say why a producer→consumer claim spans two units (audit F4)");
+  }
+
+  @Test
+  void verifierCarvesDimension9OutOfTheDifferentEnclosingUnitsRejection() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "A producer→consumer contract finding (dimension 9)",
+        "the verifier must judge a dimension-9 producer→consumer finding on its own terms (audit F4)");
+    assertContains(
+        sys,
+        "belong to different enclosing units",
+        "the verifier carve-out must name the rejection ground it exempts (audit F4)");
+  }
+
+  @Test
   void generatorPromptReportsIncompleteConfigKeyDocumentation() {
     String sys = PrReviewPrompts.SYSTEM;
     assertContains(
