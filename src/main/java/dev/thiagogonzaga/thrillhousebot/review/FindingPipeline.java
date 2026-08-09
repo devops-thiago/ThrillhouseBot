@@ -56,6 +56,9 @@ public class FindingPipeline {
   /** Directory rows listed in the scope header before the remainder is rolled up by count. */
   private static final int MAX_SCOPE_DIRECTORIES = 10;
 
+  /** Cause-chain links inspected before giving up, so a cyclic chain cannot spin. */
+  private static final int MAX_CAUSE_DEPTH = 16;
+
   private record BatchOutcome(
       int index,
       List<ReviewResponse.Finding> findings,
@@ -311,15 +314,21 @@ public class FindingPipeline {
   /**
    * Whether a batch failure was the model hitting its response-length cap. Walks the cause chain
    * because the failure arrives wrapped — {@link CompletionException} over the {@link
-   * dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException} the service threw.
+   * dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException} the service threw, so depth 2 in
+   * practice.
+   *
+   * <p>Bounded rather than walked to {@code null}: a cause chain can cycle — a {@link Throwable}
+   * overriding {@code getCause()}, or plain {@code A caused-by B caused-by A} — and an unbounded
+   * walk would spin forever on the review thread. The bound is far above any real chain, so a
+   * truncation is never missed for depth.
    */
   private static boolean isResponseTruncated(Throwable failure) {
-    for (var cause = failure; cause != null; cause = cause.getCause()) {
+    var cause = failure;
+    for (var depth = 0;
+        cause != null && depth < MAX_CAUSE_DEPTH;
+        depth++, cause = cause.getCause()) {
       if (cause instanceof AiResponseTruncatedException) {
         return true;
-      }
-      if (cause.getCause() == cause) {
-        break;
       }
     }
     return false;

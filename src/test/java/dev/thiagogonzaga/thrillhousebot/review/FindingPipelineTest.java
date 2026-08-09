@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -228,6 +229,52 @@ class FindingPipelineTest {
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
     assertTrue(plan.truncated());
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
+  @Test
+  void multiCallSurvivesACyclicCauseChainOnAFailedBatch() {
+    // The truncation check walks the cause chain, and a cycle (here A caused-by B caused-by A)
+    // would spin forever on the review thread if the walk were unbounded. The batch must instead
+    // fall through to the ordinary soft-fail path — retried once, then disclosed.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var cyclic = cyclicFailure();
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(cyclic);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result =
+        assertTimeoutPreemptively(
+            java.time.Duration.ofSeconds(10),
+            () -> pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of())));
+
+    // Not a truncation, so the generic path applies: tried once, retried once, then disclosed.
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    assertEquals(1, result.findings().size());
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+  }
+
+  /** A RuntimeException whose cause chain loops back on itself after one hop. */
+  private static RuntimeException cyclicFailure() {
+    var head = new RuntimeException("head");
+    var tail =
+        new RuntimeException("tail") {
+          @Override
+          public synchronized Throwable getCause() {
+            return head;
+          }
+        };
+    return new RuntimeException("outer", tail) {
+      @Override
+      public synchronized Throwable getCause() {
+        return tail;
+      }
+    };
   }
 
   @Test
