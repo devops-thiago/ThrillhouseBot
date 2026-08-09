@@ -41,8 +41,9 @@ public final class PromptSections {
 
   /**
    * Pre-rendered repository-instructions section — header, source attribution, and the caller's
-   * command-specific {@code guidance} line(s) — with only the maintainer-provided content escaped,
-   * so the template needs a single variable. Empty when no instructions are configured. The {@code
+   * command-specific {@code guidance} line(s) — with only the maintainer-provided content wrapped
+   * in an unforgeable CSPRNG fence, so the template needs a single variable and repository-supplied
+   * prose cannot forge a section boundary. Empty when no instructions are configured. The {@code
    * guidance} string carries its own trailing newline.
    */
   public static String instructionsSection(
@@ -54,7 +55,7 @@ public final class PromptSections {
         + instructions.source()
         + ")\n"
         + guidance
-        + PromptTemplateEscaper.escape(instructions.content());
+        + PromptTemplateEscaper.fence(instructions.content());
   }
 
   /** How many matched paths are listed under a scope before the rest are rolled up. */
@@ -70,9 +71,12 @@ public final class PromptSections {
    * large pull request. Naming the glob rather than only the paths is what keeps an abbreviated
    * list from quietly narrowing a scope to its first few files.
    *
-   * <p>The globs, paths, and maintainer prose are all repository-controlled, so every one of them
-   * is escaped and framed as data exactly like the global instructions block. The {@code guidance}
-   * string carries its own trailing newline.
+   * <p>The globs, paths, and maintainer prose are all repository-controlled and framed as data. The
+   * multi-line rule block is wrapped in an unforgeable CSPRNG fence like the global instructions
+   * block; the glob and the changed-file list are single inline identifiers that head their block —
+   * the model scopes by them — so they are marker-neutralized in place rather than fenced, which
+   * would split them across the fence lines and break the "files matching &lt;glob&gt;" contract.
+   * The {@code guidance} string carries its own trailing newline.
    */
   public static String pathInstructionsSection(PathScopedInstructions scoped, String guidance) {
     if (scoped == null || scoped.isEmpty()) {
@@ -95,7 +99,7 @@ public final class PromptSections {
           .append("\nChanged files in this pull request under that glob: ")
           .append(PromptTemplateEscaper.escape(formatFiles(scope.files())))
           .append("\nRules for those files:\n")
-          .append(PromptTemplateEscaper.escape(scope.instructions()))
+          .append(PromptTemplateEscaper.fence(scope.instructions()))
           .append('\n');
     }
     return sb.toString();

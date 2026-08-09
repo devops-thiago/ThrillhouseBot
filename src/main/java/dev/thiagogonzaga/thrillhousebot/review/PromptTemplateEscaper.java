@@ -54,23 +54,27 @@ public final class PromptTemplateEscaper {
   }
 
   /**
-   * Prepares untrusted content (a diff, a PR description, a maintainer's question, a prior finding)
-   * for a prompt. The AI-service templates reference it through a Qute {@code @V} variable, and
-   * quarkus-langchain4j binds {@code @V} values as <em>template data</em>: their string value is
-   * inserted as-is and is <strong>not</strong> re-parsed as Qute. So the content already reaches
-   * the model byte-exact — braces, backslashes, {@code {#if}} / {@code {config:x}} expression
-   * syntax, everything renders verbatim and is never interpreted. (Verified end-to-end against the
-   * real engine by AiServicePromptRenderingTest.)
+   * Legacy marker neutralization for untrusted content that is <em>not</em> individually {@link
+   * #fence(String) fenced}. The AI-service templates reference such content through a Qute
+   * {@code @V} variable, and quarkus-langchain4j binds {@code @V} values as <em>template data</em>:
+   * their string value is inserted as-is and is <strong>not</strong> re-parsed as Qute. So the
+   * content already reaches the model byte-exact — braces, backslashes, {@code {#if}} / {@code
+   * {config:x}} expression syntax, everything renders verbatim and is never interpreted. (Verified
+   * end-to-end against the real engine by AiServicePromptRenderingTest.)
    *
-   * <p>The one transformation still required is neutralizing spoofed copies of the {@code
-   * <<<DIFF_START>>>} / {@code <<<DIFF_END>>>} delimiters the prompts wrap the diff in, so PR
-   * content can never fake the end of the diff section and smuggle in instructions after it.
+   * <p>This method is <strong>not</strong> the primary injection defense and is not sufficient on
+   * its own: the data/instruction boundary for an untrusted block is {@link #fence(String)}, whose
+   * per-call CSPRNG token PR content cannot forge. The review path now fences every untrusted prose
+   * slot (see {@code ReviewPromptAssembler} / {@code PromptSections}); this method survives for the
+   * remaining inline slots and for the on-request command generators that splice their prose
+   * directly, where it only rewrites the fixed legacy {@code <<<DIFF_START>>>} / {@code
+   * <<<DIFF_END>>>} marker strings — a residue of the older delimiter scheme — so those strings
+   * cannot be mistaken for a boundary. No current prompt delimits anything with those markers.
    *
    * <p>Self-referential edge: code that itself contains the three-bracket marker strings — this
-   * class, its tests, the prompt templates — necessarily renders with them neutralized, so the
-   * model reviews a slightly altered copy of exactly this one pattern and may misread the
-   * replacement below as an identity operation. That corruption is the cost of the injection
-   * defense and is intentionally accepted.
+   * class, its tests, the prompt templates — renders with them neutralized when it flows through an
+   * un-fenced slot, so the model reviews a slightly altered copy of exactly this one pattern. That
+   * corruption is the cost of the legacy neutralization and is intentionally accepted.
    */
   public static String escape(String value) {
     if (value == null || value.isEmpty()) {
@@ -80,12 +84,17 @@ public final class PromptTemplateEscaper {
   }
 
   /**
-   * The marker neutralization applied to all prompt content. The model only ever sees content in
-   * this form, so anything comparing model output against raw content (the quote validator) must
-   * pass the raw side through the same transformation.
+   * Rewrites the fixed legacy {@code <<<DIFF_START>>>} / {@code <<<DIFF_END>>>} marker strings so
+   * un-fenced content cannot present them as a section boundary. This is the transform {@link
+   * #escape(String)} applies.
+   *
+   * <p>It is deliberately <em>not</em> wired into the quote validator's raw side. The diff the
+   * model reviews reaches it through {@link #fence(String)} <em>byte-exact</em> (never
+   * neutralized), so {@code FindingQuoteValidator} indexes that same raw diff directly and the two
+   * sides already agree; neutralizing the raw diff there would instead desynchronize a byte-exact
+   * quote from its source. Only un-fenced prose/candidate slots pass through this method.
    */
   public static String neutralizeMarkers(String value) {
-    // Must match the markers in PrReviewPrompts.USER and FindingVerifierPrompts.USER
     return value
         .replace("<<<DIFF_START>>>", "<<DIFF_START>>")
         .replace("<<<DIFF_END>>>", "<<DIFF_END>>");
