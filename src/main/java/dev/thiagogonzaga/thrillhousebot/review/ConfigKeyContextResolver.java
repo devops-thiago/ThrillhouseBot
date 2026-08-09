@@ -89,8 +89,17 @@ public class ConfigKeyContextResolver {
 
   static final int CONTEXT_LINES_AFTER = 2;
 
-  /** A key token must keep at least this many segments when prefix segments are dropped. */
-  private static final int MIN_SUFFIX_SEGMENTS = 2;
+  /**
+   * A key token must keep at least this many segments when prefix segments are dropped. Three, not
+   * two: a two-segment tail is too generic — {@code THRILLHOUSEBOT_HTTP_PORT} degraded to {@code
+   * HTTP_PORT} matches {@code quarkus.http.port}, an unrelated key's definition rendered as though
+   * it were this one's.
+   */
+  private static final int MIN_SUFFIX_SEGMENTS = 3;
+
+  /** Appended to a snippet found only by dropping prefix segments, so the model can discount it. */
+  private static final String SUFFIX_MATCH_NOTE =
+      "(matched by dropping key prefix segments — may name a different key)";
 
   /** Heading of the rendered section. Package-private so tests and callers agree on it. */
   static final String SECTION_HEADING =
@@ -122,6 +131,33 @@ public class ConfigKeyContextResolver {
   private static final Pattern PROPERTY_TOKEN =
       Pattern.compile(
           "\\b[a-z][a-z0-9]{0,63}(?:\\.[a-z0-9]" + SEG + "(?:-[a-z0-9]" + SEG + "){0,8}){2,16}\\b");
+
+  /**
+   * Both key shapes in one pattern, matched in a single left-to-right pass so tokens surface in the
+   * order the line mentions them. The two alternatives start on disjoint character classes
+   * (uppercase vs lowercase), so there is no ambiguity and no extra backtracking beyond what each
+   * bounded pattern already does.
+   */
+  private static final Pattern KEY_TOKEN =
+      Pattern.compile(ENV_TOKEN.pattern() + "|" + PROPERTY_TOKEN.pattern());
+
+  /**
+   * Trailing/leading dotted segments that mark a token as a hostname or a reverse-domain Java FQN
+   * rather than a configuration key. A hostname trails with the TLD ({@code api.github.com}); a
+   * reverse-domain package name leads with it ({@code org.eclipse.microprofile.rest.client}). Both
+   * ends are therefore checked.
+   *
+   * <p>This is a precision/recall trade-off, not a law: a legitimate reverse-domain <em>config</em>
+   * key ({@code com.example.service.timeout}, {@code io.micrometer.export.step}) also leads with a
+   * TLD segment and is dropped here too. Such a key cannot be told apart from a Java package name
+   * by shape alone — only by whether it resolves to a key-position definition rather than an {@code
+   * import} — and a mis-extracted FQN that <em>does</em> resolve (against an {@code import} line in
+   * a config source) would fill a rendered slot and crowd out the documented key. The trade-off
+   * deliberately favours dropping the ambiguous reverse-domain token; reverse-domain config keys
+   * are rare, and one dropped enrichment snippet is cheaper than a wrong one.
+   */
+  private static final Set<String> TLD_SEGMENTS =
+      Set.of("com", "org", "net", "io", "co", "dev", "gov", "edu", "info", "app", "ai", "me", "us");
 
   /** Extensions of source files that can hold a config mapping. */
   private static final Set<String> SOURCE_EXTENSIONS =
@@ -203,14 +239,52 @@ public class ConfigKeyContextResolver {
   }
 
   private static void collectTokens(String addedText, Set<String> tokens) {
-    var env = ENV_TOKEN.matcher(addedText);
-    while (env.find() && tokens.size() < MAX_TOKENS) {
-      tokens.add(env.group());
+    var matcher = KEY_TOKEN.matcher(addedText);
+    while (matcher.find() && tokens.size() < MAX_TOKENS) {
+      var token = matcher.group();
+      if (looksLikeConfigKey(token, addedText, matcher.start())) {
+        tokens.add(token);
+      }
     }
-    var property = PROPERTY_TOKEN.matcher(addedText);
-    while (property.find() && tokens.size() < MAX_TOKENS) {
-      tokens.add(property.group());
+  }
+
+  /**
+   * Whether a matched token is plausibly a configuration key rather than a hostname or a Java
+   * fully-qualified name that happens to share the dotted-lowercase shape and would otherwise
+   * resolve against unrelated config lines and crowd out the actually-documented key. An {@code
+   * UPPER_SNAKE} env name is always a key. A dotted property token is rejected when it sits inside
+   * a URL on the source line, or when its first or last segment is a common TLD (see {@link
+   * #TLD_SEGMENTS} for the reverse-domain-config-key trade-off the leading-TLD check accepts).
+   */
+  private static boolean looksLikeConfigKey(String token, String line, int start) {
+    if (token.indexOf('.') < 0) {
+      return true;
     }
+    if (isInsideUrl(line, start)) {
+      return false;
+    }
+    var segments = token.split("\\.");
+    return !TLD_SEGMENTS.contains(segments[0])
+        && !TLD_SEGMENTS.contains(segments[segments.length - 1]);
+  }
+
+  /**
+   * Whether the whitespace-delimited run of {@code text} containing offset {@code at} is a URL. The
+   * forward scan's {@code to < text.length()} bound guards a token that runs to the very end of the
+   * string; the production caller always feeds {@code \n}-terminated text so that end is never hit
+   * there, but the guard is exercised directly in a unit test rather than left as untested defence.
+   */
+  static boolean isInsideUrl(String text, int at) {
+    var from = at;
+    while (from > 0 && !Character.isWhitespace(text.charAt(from - 1))) {
+      from--;
+    }
+    var to = at;
+    while (to < text.length() && !Character.isWhitespace(text.charAt(to))) {
+      to++;
+    }
+    var word = text.substring(from, to);
+    return word.contains("://") || word.contains("www.");
   }
 
   /** The patch's added content ({@code +} lines, excluding the {@code +++} file header). */
@@ -363,9 +437,13 @@ public class ConfigKeyContextResolver {
       if (fetched >= MAX_FILES_FETCHED || found.size() >= MAX_KEYS_RENDERED) {
         break;
       }
+      // Charge the budget per ATTEMPT, not per success: fetchContent returns null on an exception,
+      // an absent body, and blank content alike, so under a blanket failure (rate limit, expired
+      // token) or a repo of blank/unreadable candidates a per-success budget would issue one serial
+      // API call per candidate — hundreds in a large monorepo — deepening the very throttle it hit.
+      fetched++;
       var content = fetchContent(auth, owner, repo, path, ref);
       if (content != null) {
-        fetched++;
         absorbFile(path, content.split("\n", -1), normalized, found);
       }
     }
@@ -394,14 +472,28 @@ public class ConfigKeyContextResolver {
       String[] lines,
       Map<String, String> normalized,
       Map<String, List<String>> found) {
+    // Normalize each line once for the whole file rather than once per token: matching is otherwise
+    // O(tokens x lines) in normalization for a file that is only read once.
+    var normalizedLines = normalizeLines(lines);
     for (var entry : normalized.entrySet()) {
       var snippets = found.computeIfAbsent(entry.getKey(), unused -> new ArrayList<>());
       var room = MAX_SNIPPETS_PER_KEY - snippets.size();
       if (room > 0) {
-        snippetsFor(path, lines, entry.getValue()).stream().limit(room).forEach(snippets::add);
+        snippetsFor(path, lines, normalizedLines, entry.getValue()).stream()
+            .limit(room)
+            .forEach(snippets::add);
       }
     }
     found.values().removeIf(List::isEmpty);
+  }
+
+  /** Each source line normalized once, so per-token matching never re-normalizes the file. */
+  static String[] normalizeLines(String[] lines) {
+    var out = new String[lines.length];
+    for (var i = 0; i < lines.length; i++) {
+      out[i] = normalize(lines[i]);
+    }
+    return out;
   }
 
   /** A repository file's decoded text, or {@code null} when it cannot be read. */
@@ -420,17 +512,49 @@ public class ConfigKeyContextResolver {
     }
   }
 
-  /** Rendered definition sites for one normalized token inside one file. */
+  /**
+   * Rendered definition sites for one normalized token inside one file. An exact whole-key match
+   * anywhere in the file is preferred over a suffix match anywhere in it, so a fuzzy prefix-dropped
+   * hit on an early line can no longer beat the key's real definition further down. Only when the
+   * file holds no exact match at all are suffix matches used, and each is labelled so the model can
+   * discount it.
+   */
   static List<String> snippetsFor(String path, String[] lines, String normalizedToken) {
+    return snippetsFor(path, lines, normalizeLines(lines), normalizedToken);
+  }
+
+  /**
+   * The same, but taking the file's lines pre-normalized so a whole-file walk normalizes each line
+   * once instead of once per token. {@code lines} is rendered; {@code normalizedLines} is matched.
+   */
+  static List<String> snippetsFor(
+      String path, String[] lines, String[] normalizedLines, String normalizedToken) {
+    var exact = matchingSnippets(path, lines, normalizedLines, normalizedToken, true);
+    return exact.isEmpty()
+        ? matchingSnippets(path, lines, normalizedLines, normalizedToken, false)
+        : exact;
+  }
+
+  private static List<String> matchingSnippets(
+      String path,
+      String[] lines,
+      String[] normalizedLines,
+      String normalizedToken,
+      boolean exactOnly) {
     var snippets = new ArrayList<String>();
     var lastRendered = -1;
     for (var i = 0; i < lines.length && snippets.size() < MAX_SNIPPETS_PER_KEY; i++) {
       var from = Math.max(0, i - CONTEXT_LINES_BEFORE);
+      var defines =
+          exactOnly
+              ? definesExactly(normalizedLines[i], normalizedToken)
+              : definesBySuffix(normalizedLines[i], normalizedToken);
       // from > lastRendered skips a match the previous window already shows: adjacent matches (a
       // property and its override on consecutive lines) share one snippet rather than repeating it.
-      if (lineDefines(lines[i], normalizedToken) && from > lastRendered) {
+      if (defines && from > lastRendered) {
         var to = Math.min(lines.length - 1, i + CONTEXT_LINES_AFTER);
-        snippets.add(renderSnippet(path, lines, from, to));
+        var snippet = renderSnippet(path, lines, from, to);
+        snippets.add(exactOnly ? snippet : snippet + "\n" + SUFFIX_MATCH_NOTE);
         lastRendered = to;
       }
     }
@@ -467,18 +591,47 @@ public class ConfigKeyContextResolver {
   }
 
   /**
-   * Whether a line defines the key. The normalized line is searched for the whole key first — the
-   * literal env name of an explicit {@code ${ENV:default}} override, or the full property key — and
-   * then for the key with leading segments dropped, which is what a {@code @WithName} mapping
-   * carries when the env name is derived rather than written out.
+   * Whether a line defines the key, by an exact whole-key match or by a prefix-dropped suffix
+   * match. The two are separable — {@link #snippetsFor} prefers exact matches file-wide — but a
+   * single boolean is what a plain "does this line mention the key at all" caller wants.
    */
   static boolean lineDefines(String line, String normalizedToken) {
+    return lineDefinesExactly(line, normalizedToken) || lineDefinesBySuffix(line, normalizedToken);
+  }
+
+  /**
+   * Whether the line carries the whole key: the literal env name of an explicit {@code
+   * ${ENV:default}} override, or the full property key.
+   */
+  static boolean lineDefinesExactly(String line, String normalizedToken) {
     if (line == null || line.isBlank()) {
       return false;
     }
-    var normalizedLine = normalize(line);
-    if (containsSegment(normalizedLine, normalizedToken)) {
-      return true;
+    return definesExactly(normalize(line), normalizedToken);
+  }
+
+  /**
+   * Whether the line carries the key with its leading segments dropped, which is what a
+   * {@code @WithName} mapping carries when the env name is derived rather than written out. At
+   * least {@link #MIN_SUFFIX_SEGMENTS} segments must survive, so a short key never degrades into a
+   * too-generic tail that matches an unrelated key's definition.
+   */
+  static boolean lineDefinesBySuffix(String line, String normalizedToken) {
+    if (line == null || line.isBlank()) {
+      return false;
+    }
+    return definesBySuffix(normalize(line), normalizedToken);
+  }
+
+  /** {@link #lineDefinesExactly} against an already-normalized line. */
+  private static boolean definesExactly(String normalizedLine, String normalizedToken) {
+    return !normalizedLine.isEmpty() && containsSegment(normalizedLine, normalizedToken);
+  }
+
+  /** {@link #lineDefinesBySuffix} against an already-normalized line. */
+  private static boolean definesBySuffix(String normalizedLine, String normalizedToken) {
+    if (normalizedLine.isEmpty()) {
+      return false;
     }
     var segments = normalizedToken.split("_");
     if (segments.length <= MIN_SUFFIX_SEGMENTS) {

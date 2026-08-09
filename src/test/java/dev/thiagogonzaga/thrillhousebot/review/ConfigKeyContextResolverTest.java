@@ -163,6 +163,100 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldRejectHostnamesAndFqnsAndPreserveFirstMentionOrder() {
+      // A doc line mixing a URL host, a Java FQN, a real property key and a real env name. The
+      // hostname (trailing TLD, inside a URL) and the FQN (leading reverse-domain TLD) must be
+      // dropped, and the survivors kept in the order the line mentions them — property first.
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(
+              List.of(
+                  docDiff(
+                      "README.md",
+                      "reach https://api.github.com/repos then set"
+                          + " `thrillhousebot.review.ci-gating`; the"
+                          + " org.eclipse.microprofile.rest.client package reads"
+                          + " `THRILLHOUSEBOT_REVIEW_CI_GATING`")));
+
+      assertFalse(
+          tokens.contains("api.github.com"),
+          () -> "a hostname inside a URL is not a config key: " + tokens);
+      assertFalse(
+          tokens.contains("org.eclipse.microprofile.rest.client"),
+          () -> "a Java fully-qualified name is not a config key: " + tokens);
+      assertEquals(
+          List.of("thrillhousebot.review.ci-gating", "THRILLHOUSEBOT_REVIEW_CI_GATING"),
+          tokens,
+          () ->
+              "the property is mentioned before the env name; order must follow position: "
+                  + tokens);
+    }
+
+    @Test
+    void shouldRejectDottedTokensByTldPositionAndUrlWord() {
+      // Exercises each rejection reason on a non-URL token: last segment a TLD (hostname in prose),
+      // first segment a TLD (reverse-domain FQN, or the accepted reverse-domain-key trade-off), a
+      // www. word (URL without a scheme), and a token that is none of these (kept).
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(
+              List.of(
+                  docDiff(
+                      "README.md",
+                      "host service.example.com and package io.quarkus.arc but keep"
+                          + " `thrillhousebot.review.enabled` and see www.docs.internal for more")));
+
+      assertFalse(
+          tokens.contains("service.example.com"),
+          () -> "last segment is a TLD (a hostname), even in prose: " + tokens);
+      assertFalse(
+          tokens.contains("io.quarkus.arc"),
+          () -> "first segment is a TLD (reverse-domain shape): " + tokens);
+      assertFalse(
+          tokens.contains("www.docs.internal"),
+          () -> "a www. word is a URL, not a config key: " + tokens);
+      assertEquals(
+          List.of("thrillhousebot.review.enabled"),
+          tokens,
+          () ->
+              "only the token that is neither a hostname, an FQN, nor in a URL survives: "
+                  + tokens);
+    }
+
+    @Test
+    void shouldTreatAUrlAtTheVeryStartOfALineAsAUrl() {
+      // The URL begins at offset 0, so scanning back to find the word start reaches the string's
+      // start rather than a preceding space — the other side of that boundary walk.
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(
+              List.of(
+                  docDiff(
+                      "README.md",
+                      "http://foo.example.internal/x is the base and `keep.this.key`")));
+
+      assertFalse(
+          tokens.contains("foo.example.internal"),
+          () -> "a host at the very start of the line is still inside a URL: " + tokens);
+      assertEquals(
+          List.of("keep.this.key"), tokens, () -> "the real key past the URL survives: " + tokens);
+    }
+
+    @Test
+    void shouldDetectAUrlWordThatRunsToTheEndOfTheString() {
+      // The word extends to the very end with no trailing whitespace, exercising the forward scan's
+      // end-of-string bound directly. That bound guards a token at the end of the buffer; the
+      // production caller always feeds \n-terminated text so it is never hit there, but the guard
+      // is
+      // real defence and is validated here rather than left untested.
+      var url = "see https://api.example.host";
+      assertTrue(
+          ConfigKeyContextResolver.isInsideUrl(url, url.indexOf("api")),
+          "a URL word reaching the end of the string is still a URL");
+      var prose = "plain trailing.host";
+      assertFalse(
+          ConfigKeyContextResolver.isInsideUrl(prose, prose.indexOf("trailing")),
+          "a non-URL word reaching the end of the string is not a URL");
+    }
+
+    @Test
     void shouldNotMistakeFilenamesForPropertyKeys() {
       var tokens =
           ConfigKeyContextResolver.extractTokens(
@@ -318,6 +412,45 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldNotDegradeAThreeSegmentTokenToItsTwoSegmentTail() {
+      // THRILLHOUSEBOT_HTTP_PORT must not degrade to HTTP_PORT and match quarkus.http.port, which
+      // is a different key's definition rendered as though it were this one's.
+      assertFalse(
+          ConfigKeyContextResolver.lineDefines(
+              "quarkus.http.port=8080",
+              ConfigKeyContextResolver.normalize("THRILLHOUSEBOT_HTTP_PORT")),
+          "a 3-segment token dropped to a 2-segment suffix matches far too much");
+      assertTrue(
+          ConfigKeyContextResolver.lineDefines(
+              "thrillhousebot.http.port=8080",
+              ConfigKeyContextResolver.normalize("THRILLHOUSEBOT_HTTP_PORT")),
+          "the whole key still matches its own definition");
+    }
+
+    @Test
+    void shouldPreferAnExactMatchAnywhereInTheFileOverASuffixMatch() {
+      var token = ConfigKeyContextResolver.normalize("ALPHA_BETA_GAMMA_DELTA");
+      var lines =
+          new String[] {
+            "x=${BETA_GAMMA_DELTA:1}", // a suffix hit on line 1
+            "f",
+            "f",
+            "f",
+            "f",
+            "y=${ALPHA_BETA_GAMMA_DELTA:2}" // the exact definition further down
+          };
+
+      var snippets = ConfigKeyContextResolver.snippetsFor("app.properties", lines, token);
+
+      assertTrue(
+          snippets.stream().anyMatch(s -> s.contains("ALPHA_BETA_GAMMA_DELTA")),
+          () -> "the exact definition must be rendered: " + snippets);
+      assertTrue(
+          snippets.stream().noneMatch(s -> s.contains("BETA_GAMMA_DELTA:1")),
+          () -> "a fuzzy suffix hit must not be preferred when an exact match exists: " + snippets);
+    }
+
+    @Test
     void shouldIgnoreBlankAndAbsentLines() {
       assertFalse(ConfigKeyContextResolver.lineDefines(null, TOKEN));
       assertFalse(ConfigKeyContextResolver.lineDefines("   ", TOKEN));
@@ -333,6 +466,18 @@ class ConfigKeyContextResolverTest {
       assertTrue(
           ConfigKeyContextResolver.lineDefines(
               "x=${FOO_BAR:1}", ConfigKeyContextResolver.normalize("FOO_BAR")));
+    }
+
+    @Test
+    void shouldReportALineAsDefiningTheKeyThroughTheSuffixBranch() {
+      // No exact whole-key hit on this line, so lineDefines must fall through to the suffix branch:
+      // the derived @WithName env name matches with its two prefix segments dropped.
+      assertTrue(
+          ConfigKeyContextResolver.lineDefines(
+              "  @WithName(\"manual-trigger-allowed-logins\")",
+              ConfigKeyContextResolver.normalize(
+                  "THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS")),
+          "an exact match is absent, so the suffix branch is what makes this a definition");
     }
 
     @Test
@@ -394,6 +539,29 @@ class ConfigKeyContextResolverTest {
           snippet.contains("    3 |"),
           () -> "a blank line inside the window is structure, not padding: " + snippet);
       assertTrue(snippet.contains("    4 | tail"), snippet);
+    }
+
+    @Test
+    void shouldMatchUsingTheSuppliedNormalizedLinesAndRenderTheRawOnes() {
+      // The hoisted overload trusts the caller's pre-normalized lines (one normalization per file,
+      // not one per token) and does not re-derive them from the raw lines: a normalized array that
+      // maps the raw line to a DIFFERENT key proves the match reads the supplied normals while the
+      // rendered snippet is still the raw line.
+      var rawLines = new String[] {"totally unrelated raw text"};
+      var normalizedLines =
+          new String[] {ConfigKeyContextResolver.normalize("x=${WEBHOOK_DEDUP_TTL:1h}")};
+
+      var snippets =
+          ConfigKeyContextResolver.snippetsFor("app.properties", rawLines, normalizedLines, TOKEN);
+
+      assertEquals(
+          1,
+          snippets.size(),
+          () -> "the match must follow the supplied normalized lines: " + snippets);
+      assertTrue(
+          snippets.get(0).contains("totally unrelated raw text"),
+          () ->
+              "the rendered snippet is the raw line, matched via the normalized one: " + snippets);
     }
 
     @Test
@@ -644,6 +812,26 @@ class ConfigKeyContextResolverTest {
       givenRepository(paths.toArray(new String[0]));
       for (String path : paths) {
         givenFile(path, "unrelated.property.key=1\n");
+      }
+
+      assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
+      verify(prClient, times(ConfigKeyContextResolver.MAX_FILES_FETCHED))
+          .getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+    }
+
+    @Test
+    void shouldChargeTheFetchBudgetPerAttemptNotPerSuccess() {
+      // Every candidate is blank, so fetchContent returns null for each. Under a blanket failure
+      // (rate limit, expired token) or a repo of blank candidates the budget must still be spent
+      // per
+      // ATTEMPT, or the loop issues one serial API call per candidate against a budget of 8.
+      var paths = new ArrayList<String>();
+      for (int i = 0; i < ConfigKeyContextResolver.MAX_FILES_FETCHED + 4; i++) {
+        paths.add("module" + i + "/application.properties");
+      }
+      givenRepository(paths.toArray(new String[0]));
+      for (String path : paths) {
+        givenFile(path, "   \n  \n");
       }
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
