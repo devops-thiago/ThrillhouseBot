@@ -164,6 +164,15 @@ public class PatchCoverageResolver {
    */
   private Long findArtifactId(
       String auth, String owner, String repo, String headSha, String artifactName) {
+    // One page on purpose, and not the single-page truncation this project flags elsewhere.
+    // GitHub applies head_sha as a query parameter, so the page holds only the runs for the one
+    // commit under review — never the repository's most recent activity — and exceeding
+    // RUNS_PER_PAGE would take that many completed workflows or re-runs on a single SHA. If a
+    // repository ever does, the cost is bounded and is already this feature's designed degrade
+    // path: the named artifact is not found, no coverage section is produced, and the review
+    // proceeds exactly as it does for every repository that publishes no report at all. Walking
+    // further pages would spend an extra API call on every review to change nothing for any of
+    // them.
     var runs =
         actionsClient.listWorkflowRuns(
             auth, ACCEPT, owner, repo, headSha, COMPLETED, GitHubActionsClient.RUNS_PER_PAGE);
@@ -190,6 +199,10 @@ public class PatchCoverageResolver {
   /** The named, unexpired artifact's id on one run, or {@code null} when it has none. */
   private Long artifactIdOnRun(
       String auth, String owner, String repo, long runId, String artifactName) {
+    // Single page again, for the same reason and with more headroom: this is scoped to ONE run
+    // and asks for GitHub's maximum page size, so it truncates only for a run that uploaded more
+    // than ARTIFACTS_PER_PAGE artifacts. The consequence is identical — the report is not found
+    // and the feature contributes nothing.
     var artifacts =
         actionsClient.listRunArtifacts(
             auth, ACCEPT, owner, repo, runId, GitHubActionsClient.ARTIFACTS_PER_PAGE);

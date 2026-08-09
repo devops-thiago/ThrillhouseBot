@@ -36,7 +36,12 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterRestClient(configKey = "github-api")
 public interface GitHubActionsClient {
 
-  /** Completed runs examined for one head SHA — more workflows than any real repository has. */
+  /**
+   * Completed runs read for one head SHA. This is a page size, not a page walk: the request is
+   * filtered server-side by {@code head_sha}, so it bounds the workflows and re-runs on a SINGLE
+   * commit rather than recent repository activity. See {@code PatchCoverageResolver.findArtifactId}
+   * for why one page is enough and what exceeding it costs.
+   */
   int RUNS_PER_PAGE = 30;
 
   /** Artifacts listed per run; GitHub's maximum page size, so one call covers any real run. */
