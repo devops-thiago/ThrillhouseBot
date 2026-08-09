@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -1873,6 +1874,54 @@ class FollowUpAnalyzerTest {
         analyzer.buildPreviousFindingsContext(
             botReviews("1. [HIGH] src/A.java:10 — Unsafe regex"), BOT_ID),
         "a legacy body carrying real findings is still the only context such a session has");
+
+    var humanEcho = "No new issues in this revision, but the null check on line 12 is still wrong.";
+    assertEquals(
+        humanEcho,
+        analyzer.buildPreviousFindingsContext(botReviews(humanEcho), BOT_ID),
+        "a body that only opens like the generated sentence carries a real finding and is kept");
+  }
+
+  /**
+   * The round-selection helpers are the id space every downstream consumer keys off, so an absent
+   * or unreadable round must degrade to "no previous round" rather than throw mid-review. Matches
+   * how the rest of this class treats absent input ({@code parsePreviousResponses(null)}, {@code
+   * toStatuses(null)}).
+   */
+  @Test
+  void effectivePreviousRoundHelpersShouldTreatAbsentRoundsAsNoPreviousRound() {
+    assertEquals(-1, FollowUpAnalyzer.effectivePreviousRoundIndex(null));
+    assertTrue(FollowUpAnalyzer.effectivePreviousFindings(null).isEmpty());
+
+    var rounds = new ArrayList<ReviewResponse>();
+    rounds.add(null);
+    rounds.add(analyzer.parseResponse(PREVIOUS_JSON));
+    assertEquals(
+        1,
+        FollowUpAnalyzer.effectivePreviousRoundIndex(rounds),
+        "an unreadable slot is skipped, not mistaken for the round that raised findings");
+    assertEquals("src/A.java", FollowUpAnalyzer.effectivePreviousFindings(rounds).get(0).file());
+  }
+
+  /**
+   * #455 — the review-body fallback is gated on whether the bot persisted a response at all, and
+   * {@link FollowUpAnalyzer#isPersistedResponse} is the discriminator. A missing or unparseable
+   * response is not persisted; a round that legitimately found nothing is, even though the two
+   * carry identical (empty) findings.
+   */
+  @Test
+  void isPersistedResponseShouldSeparateAStoredRoundFromAMissingOne() {
+    assertFalse(FollowUpAnalyzer.isPersistedResponse(null));
+    assertFalse(FollowUpAnalyzer.isPersistedResponse(analyzer.parseResponse(null)));
+    assertFalse(FollowUpAnalyzer.isPersistedResponse(analyzer.parseResponse("   ")));
+    assertFalse(
+        FollowUpAnalyzer.isPersistedResponse(analyzer.parseResponse("{not json")),
+        "an unparseable response is the same absence as a missing one");
+    assertTrue(
+        FollowUpAnalyzer.isPersistedResponse(
+            analyzer.parseResponse(
+                "{\"findings\":[],\"previous_findings_status\":[],\"summary\":null}")),
+        "a round that legitimately found nothing did persist a response");
   }
 
   @Test

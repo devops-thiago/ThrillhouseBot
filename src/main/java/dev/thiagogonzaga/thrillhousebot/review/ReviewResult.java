@@ -221,6 +221,9 @@ public record ReviewResult(
    * sentence about previous findings, which carries no finding of its own. Recognizing it is what
    * lets the previous-findings context reject a review body the bot wrote itself instead of
    * offering it to the model as an issue "flagged in the previous review" (#455).
+   *
+   * <p>Both ends are required, because everything this accepts is discarded: a body that only opens
+   * with the same words is a human review carrying a real finding. Absent text matches nothing.
    */
   public static boolean isUnresolvedPreviousMessage(String text) {
     if (text == null) {

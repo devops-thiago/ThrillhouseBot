@@ -192,7 +192,10 @@ public class FollowUpAnalyzer {
 
   /**
    * Position of {@link #effectivePreviousFindings}'s round in {@code priorAiResponses} (newest
-   * first), or {@code -1} when no prior round raised anything.
+   * first), or {@code -1} when no prior round raised anything. An absent list, and an absent slot
+   * within one, count as rounds that raised nothing: this is the id space every downstream consumer
+   * keys off, so it degrades to "no previous round" rather than failing the review — the same way
+   * {@link #parsePreviousResponses} and {@link #toStatuses} treat absent input.
    */
   public static int effectivePreviousRoundIndex(List<ReviewResponse> priorAiResponses) {
     if (priorAiResponses == null) {
@@ -214,6 +217,9 @@ public class FollowUpAnalyzer {
    * its own instance — equal to the stand-in, but not the same object — and telling those two apart
    * is exactly what keeps the review-body fallback out of a zero-finding round. It also lets
    * callers reuse the single parse they already did rather than parsing the JSON a second time.
+   *
+   * <p>An absent response is the same absence a missing or unparseable one is, and so is not
+   * persisted either.
    */
   public static boolean isPersistedResponse(ReviewResponse response) {
     return response != null && response != EMPTY_RESPONSE;
