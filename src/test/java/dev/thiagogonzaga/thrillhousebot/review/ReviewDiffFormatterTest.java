@@ -25,6 +25,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -744,6 +745,23 @@ class ReviewDiffFormatterTest {
 
       assertFalse(formatter.isIgnored(null));
       assertFalse(formatter.isIgnored("  "));
+    }
+
+    /**
+     * #471 — the name-set lookups the review path runs against {@code Set.copyOf(...)} must
+     * tolerate a null filename the same way the ignore globs above do. An immutable set throws on
+     * {@code contains(null)} rather than answering false, which failed whole reviews off the ack
+     * thread.
+     */
+    @Test
+    void shouldTreatANullFilenameAsAbsentFromAnImmutableNameSet() {
+      var names = Set.copyOf(List.of("src/Main.java"));
+
+      assertFalse(
+          ReviewDiffFormatter.namesContain(names, null),
+          "an unnamed file is simply not in the set");
+      assertTrue(ReviewDiffFormatter.namesContain(names, "src/Main.java"));
+      assertFalse(ReviewDiffFormatter.namesContain(names, "src/Other.java"));
     }
   }
 

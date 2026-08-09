@@ -560,7 +560,7 @@ public class FindingPipeline {
     var omitted = Set.copyOf(plan.omittedFiles());
     var clipped = Set.copyOf(plan.clippedFiles());
     for (var file : ctx.reviewableFiles()) {
-      if (omitted.contains(file.filename())) {
+      if (ReviewDiffFormatter.namesContain(omitted, file.filename())) {
         continue;
       }
       sb.append(file.filename())
@@ -571,7 +571,7 @@ public class FindingPipeline {
           .append(" -")
           .append(file.deletions())
           .append(
-              clipped.contains(file.filename())
+              ReviewDiffFormatter.namesContain(clipped, file.filename())
                   ? " — partially analyzed: clipped to fit the review call budget"
                   : "")
           .append(")\n");
@@ -661,11 +661,13 @@ public class FindingPipeline {
 
   /**
    * The file's parent directory, or a stable label for a path carrying no directory component —
-   * which also covers a blank one. A null path is not guarded here: the per-file loop above already
-   * dereferences the same name against an immutable set, so it could never reach this point.
+   * which also covers a blank one, and a null one. The directory breakdown runs ahead of the
+   * per-file rows, so this is the first place an unnamed file is dereferenced; a file with no path
+   * carries no directory component either, so it lands in the same bucket rather than failing the
+   * review.
    */
   private static String directoryOf(String path) {
-    var slash = path.lastIndexOf('/');
+    var slash = path == null ? -1 : path.lastIndexOf('/');
     return slash <= 0 ? "(repository root)" : path.substring(0, slash);
   }
 

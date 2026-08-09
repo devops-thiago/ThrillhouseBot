@@ -93,6 +93,13 @@ class VerdictBuilderTest {
 
   /** A context whose legacy diff render dropped {@code lineCapOmitted} files. */
   private static ReviewContextLoader.ReviewContext contextWithLineCapOmissions(int lineCapOmitted) {
+    return contextWithLineCapOmissions(
+        lineCapOmitted, List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")));
+  }
+
+  /** Same context with a caller-supplied reviewable-file list. */
+  private static ReviewContextLoader.ReviewContext contextWithLineCapOmissions(
+      int lineCapOmitted, List<FileDiff> reviewableFiles) {
     return new ReviewContextLoader.ReviewContext(
         List.of(),
         "diff",
@@ -113,7 +120,7 @@ class VerdictBuilderTest {
         "",
         "",
         "",
-        List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")),
+        reviewableFiles,
         () -> new DiffLineResolver(Map.of()),
         null);
   }
@@ -188,6 +195,33 @@ class VerdictBuilderTest {
     verify(summaryGenerator)
         .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
     assertTrue(rowsCaptor.getValue().isEmpty(), rowsCaptor.getValue().toString());
+  }
+
+  /**
+   * #471 — the walkthrough filter is the third site that asks an immutable name set whether it
+   * holds a {@code FileDiff.filename()} that Jackson never validated. {@code contains(null)} throws
+   * there instead of answering false, so one unnamed file would fail the whole verdict on the async
+   * review thread. An unnamed file is simply not in the omitted set and keeps its row.
+   */
+  @Test
+  void anUnnamedFileIsNotTreatedAsOmittedFromTheWalkthroughRows() {
+    var ctx =
+        contextWithLineCapOmissions(
+            0,
+            List.of(
+                new FileDiff(null, "modified", 1, 0, 1, ""),
+                new FileDiff("a.java", "modified", 1, 0, 1, "")));
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java"), List.of(), true);
+    var rowsCaptor = ArgumentCaptor.forClass(List.class);
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    verify(summaryGenerator)
+        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
+    assertEquals(
+        List.of(new PrSummaryGenerator.ChangedFile(null, "modified")),
+        rowsCaptor.getValue(),
+        "only the named omitted file is dropped; the unnamed one keeps its row");
   }
 
   @Test

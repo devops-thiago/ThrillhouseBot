@@ -134,7 +134,9 @@ public class VerdictBuilder {
     var omittedNames = Set.copyOf(truncation.omittedFileNames());
     var changedFiles =
         toChangedFiles(
-            overviewFiles.stream().filter(f -> !omittedNames.contains(f.filename())).toList());
+            overviewFiles.stream()
+                .filter(f -> !ReviewDiffFormatter.namesContain(omittedNames, f.filename()))
+                .toList());
     // A model-reported "unresolved" whose targeted code left the diff (force-push) becomes
     // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
     // Skip the DiffLineResolver when there are no statuses — first reviews and empty-status
