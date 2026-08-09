@@ -198,13 +198,32 @@ public interface GitHubReviewClient {
 
   record PullRequestCommentResponse(long id, String body, String path, Integer line) {}
 
-  /** An inline review comment; replies carry the root comment's id in {@code inReplyToId}. */
+  /**
+   * An inline review comment; replies carry the root comment's id in {@code inReplyToId}.
+   *
+   * <p>{@code authorAssociation} is GitHub's per-comment statement of the author's relationship to
+   * the repository ({@code OWNER}/{@code MEMBER}/{@code COLLABORATOR}/{@code CONTRIBUTOR}/{@code
+   * NONE}/…). The follow-up analyzer uses it to tell a write-capable maintainer's reply — which may
+   * clear an approve hold or overrule a finding — from a fork-PR author's, which may not.
+   */
   record PullRequestComment(
       long id,
       @JsonProperty("in_reply_to_id") Long inReplyToId,
       String path,
       String body,
-      ReviewResponse.User user) {}
+      ReviewResponse.User user,
+      @JsonProperty("author_association") String authorAssociation) {
+
+    /**
+     * Back-compat convenience for callers/tests that carry no author association. Defaults it to
+     * {@code null}, which the analyzer treats as not write-capable — the safe direction, since a
+     * comment with an unknown association must not clear a hold or overrule a finding.
+     */
+    public PullRequestComment(
+        long id, Long inReplyToId, String path, String body, ReviewResponse.User user) {
+      this(id, inReplyToId, path, body, user, null);
+    }
+  }
 
   record ReviewResponse(
       long id,

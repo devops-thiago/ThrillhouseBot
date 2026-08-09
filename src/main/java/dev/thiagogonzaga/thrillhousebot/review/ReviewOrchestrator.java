@@ -298,11 +298,7 @@ public class ReviewOrchestrator {
           "resolve addressed threads",
           () ->
               reviewPublisher.resolveAddressedThreads(
-                  auth,
-                  doneReq,
-                  previousFindings,
-                  inlineComments,
-                  aiResponse.previousFindingsStatus()));
+                  auth, doneReq, previousFindings, inlineComments, result.previousStatuses()));
       runPostResultStep(
           doneReq,
           "capture finding feedback",

@@ -158,7 +158,32 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse> olderAiResponses,
       BotIdentity botIdentity) {
-    var structured = formatStructuredFindings(previousFindings, inlineComments, botIdentity);
+    return buildPreviousFindingsContext(
+        previousFindings,
+        previousResponsePersisted,
+        priorReviews,
+        inlineComments,
+        olderAiResponses,
+        botIdentity,
+        Set.of());
+  }
+
+  /**
+   * Variant that also skips prior findings a newer round already closed ({@code settledIds}, {@link
+   * #settledPreviousIds}) so the model is not re-shown a finding that has been settled and asked to
+   * re-account for it (#470). The settled entries keep their id slots — only their content is
+   * omitted — so the surviving ids do not shift.
+   */
+  public String buildPreviousFindingsContext(
+      List<ReviewResponse.Finding> previousFindings,
+      boolean previousResponsePersisted,
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<ReviewResponse> olderAiResponses,
+      BotIdentity botIdentity,
+      Set<Integer> settledIds) {
+    var structured =
+        formatStructuredFindings(previousFindings, inlineComments, botIdentity, settledIds);
     var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
     if (!structured.isEmpty() || previousResponsePersisted) {
       return structured + answered;
@@ -208,6 +233,42 @@ public class FollowUpAnalyzer {
       }
     }
     return -1;
+  }
+
+  /**
+   * Ids (1-based positions in the effective previous round) that a <em>newer</em> round already
+   * closed with a resolved/justified verdict, and that therefore must be treated as settled: not
+   * re-listed to the model as still open, and never re-emitted as {@code superseded} when their
+   * code later leaves the diff.
+   *
+   * <p>The effective previous round is the newest round that raised findings, so every round newer
+   * than it raised nothing and reports on it (ids reference that round). {@link
+   * #effectivePreviousFindings} returns that round's list <em>whole</em> — ids stay stable — so a
+   * later round's close is invisible to the id-keyed supersede/context passes; without this set
+   * {@link #addUnreportedVanished} re-supersedes a finding a newer round already resolved, which
+   * pins {@code hasSupersededPrevious} on and re-posts the summary every push while suppressing the
+   * follow-up delta (#470). This is the same {@code closeAddressed} replay the backstop does.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static Set<Integer> settledPreviousIds(List<ReviewResponse> priorAiResponses) {
+    var index = effectivePreviousRoundIndex(priorAiResponses);
+    if (index <= 0) {
+      return Set.of();
+    }
+    var settled = new HashSet<Integer>();
+    for (var i = 0; i < index; i++) {
+      var round = priorAiResponses.get(i);
+      if (round == null) {
+        continue;
+      }
+      for (var status : round.previousFindingsStatus()) {
+        if (isAddressedVerdict(status.status())) {
+          settled.add(status.id());
+        }
+      }
+    }
+    return settled;
   }
 
   /**
@@ -289,7 +350,8 @@ public class FollowUpAnalyzer {
   private String formatStructuredFindings(
       List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Set<Integer> settledIds) {
     if (previous == null || previous.isEmpty()) {
       return "";
     }
@@ -297,6 +359,12 @@ public class FollowUpAnalyzer {
     var sb = new StringBuilder();
     var id = 1;
     for (var finding : previous) {
+      // A finding a newer round already closed keeps its id slot (so the surviving ids do not
+      // shift) but is not re-shown as open for the model to re-account for (#470).
+      if (settledIds.contains(id)) {
+        id++;
+        continue;
+      }
       sb.append(id)
           .append(". [")
           .append(finding.risk() == null ? "UNKNOWN" : finding.risk().toUpperCase(Locale.ROOT))
@@ -344,18 +412,36 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The bot's root inline comment for a finding. Preferred match: the hidden finding marker the bot
-   * embeds in every comment, which is unambiguous even when findings share a title. Fallback for
-   * comments posted before the marker existed: same file and the title in the body.
+   * The bot's root inline comment for a finding, for prompt context ({@link #appendThreadReplies}),
+   * thread resolution ({@link #matchFindingThreads}), and the decline re-check ({@link
+   * #declineContradiction}). Marker indices are per-round 1-based positions, so index {@code N}
+   * recurs every round; the same three-step content match {@link
+   * #answeredRootComment(ReviewResponse.Finding, int, List, BotIdentity)} uses for the
+   * safety-critical clearing decision applies here so a summary-only finding (no inline thread of
+   * its own that round, because {@link Finding#postsInline} routed it to the summary) does not bind
+   * to an <em>earlier, unrelated</em> round's same-index thread (F2 — the sibling defect of F5):
+   *
+   * <ol>
+   *   <li>the finding's own {@code finding=N} thread ({@code requireOwnContent}: its title, or its
+   *       description when it has no title, in the comment) — the unambiguous match;
+   *   <li>otherwise, when a {@code finding=N} comment <em>does</em> exist on the file it belongs to
+   *       a different finding (the index recurs across rounds), so nothing binds rather than
+   *       binding to it;
+   *   <li>only when no {@code finding=N} comment exists on the file at all does the title scan run,
+   *       for genuinely pre-marker comments.
+   * </ol>
    */
   private static Long rootCommentId(
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    Long markerRoot = markerRootComment(finding, findingId, false, inlineComments, botIdentity);
-    if (markerRoot != null) {
-      return markerRoot;
+    Long own = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
+    if (own != null) {
+      return own;
+    }
+    if (markerRootComment(finding, findingId, false, inlineComments, botIdentity) != null) {
+      return null;
     }
     return rootCommentByTitle(finding, inlineComments, botIdentity);
   }
@@ -602,6 +688,20 @@ public class FollowUpAnalyzer {
         >= FindingDeduplicator.CONTENT_OVERLAP_THRESHOLD;
   }
 
+  /**
+   * A maintainer reply that may clear an approve hold, drop a re-raised finding, or overrule a
+   * decline — a non-bot reply whose author holds (or may hold) write access to the repository.
+   *
+   * <p>A reply's {@code author_association} is GitHub's per-comment statement of the author's
+   * relationship to the repo; only {@code OWNER}/{@code MEMBER}/{@code COLLABORATOR} can carry
+   * write access, so a fork-PR author's reply ({@code CONTRIBUTOR}/{@code NONE}/…) is not a
+   * maintainer decision and must not clear the backstop, delete a finding, or drive an override —
+   * it renders as context in the prompt only. This mirrors the cheap association prefilter {@code
+   * ManualReviewAuthorizer}/{@code FindingFeedbackCaptureService} apply before any write. The
+   * authoritative collaborator-permission call those services follow up with is not repeated here:
+   * these predicates run deep in the verdict path with no installation token in hand, and deferring
+   * a bot hold to an invited collaborator who engaged on the thread is the safe direction.
+   */
   private static boolean hasHumanReply(
       Long rootId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
@@ -611,7 +711,21 @@ public class FollowUpAnalyzer {
             c ->
                 rootId.equals(c.inReplyToId())
                     && c.user() != null
-                    && !botIdentity.matches(c.user().login()));
+                    && !botIdentity.matches(c.user().login())
+                    && mayHoldWriteAccess(c.authorAssociation()));
+  }
+
+  /**
+   * GitHub {@code author_association} values a write-access holder can present. Any other value
+   * provably lacks write access — association precedence guarantees a collaborator/member is never
+   * reported as one of those — so a reply carrying it is not a maintainer decision.
+   */
+  private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
+      Set.of("OWNER", "MEMBER", "COLLABORATOR");
+
+  private static boolean mayHoldWriteAccess(String authorAssociation) {
+    return authorAssociation != null
+        && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
 
   /** Maps each previous finding's prompt id to its bot root comment, for thread resolution. */
@@ -701,6 +815,22 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
+    return supersedeVanished(
+        previousAiResponseJson, statuses, lineResolver, renameTargets, Set.of());
+  }
+
+  /**
+   * Rename- and settle-aware variant: a finding a newer round already closed ({@code settledIds},
+   * {@link #settledPreviousIds}) is left untouched rather than rewritten to {@code superseded} when
+   * its code later leaves the diff — the close already accounted for it, and a phantom supersede
+   * would pin {@code hasSupersededPrevious} on and re-post the summary every push (#470).
+   */
+  public List<ReviewResponse.PreviousFindingStatus> supersedeVanished(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      Set<Integer> settledIds) {
     if (statuses == null || statuses.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -710,7 +840,8 @@ public class FollowUpAnalyzer {
     }
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
-      if (hasVanished(status, previous, lineResolver, renameTargets)) {
+      if (!settledIds.contains(status.id())
+          && hasVanished(status, previous, lineResolver, renameTargets)) {
         Log.infof(
             "Superseding unresolved previous finding #%d — its targeted code is no longer in the"
                 + " current diff",
@@ -736,6 +867,22 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
+    return addUnreportedVanished(previous, statuses, lineResolver, renameTargets, Set.of());
+  }
+
+  /**
+   * Settle-aware variant: a prior finding a newer round already closed ({@code settledIds}, {@link
+   * #settledPreviousIds}) is not re-emitted here — neither superseded when its code left the diff
+   * nor held as unresolved — because the close already accounted for it. Re-superseding it pins
+   * {@code hasSupersededPrevious} on and re-posts the summary every push while suppressing the
+   * follow-up delta (#470). Its id slot is still skipped by position, so no id shifts.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> addUnreportedVanished(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      Set<Integer> settledIds) {
     if (previous == null || previous.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -747,7 +894,7 @@ public class FollowUpAnalyzer {
     for (int index = 0; index < previous.size(); index++) {
       var id = index + 1;
       var finding = previous.get(index);
-      if (reportedIds.contains(id) || finding.file() == null) {
+      if (reportedIds.contains(id) || settledIds.contains(id) || finding.file() == null) {
         continue;
       }
       var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());
@@ -889,7 +1036,11 @@ public class FollowUpAnalyzer {
     return RebuttalContradiction.find(finding, humanReplies.get(0), reviewedCode).orElse(null);
   }
 
-  /** Bodies of the maintainer replies on a thread, oldest first; bot replies are not rebuttals. */
+  /**
+   * Bodies of the maintainer replies on a thread, oldest first; bot replies are not rebuttals, and
+   * neither is a reply from an author without write access ({@link #mayHoldWriteAccess}) — a
+   * fork-PR author cannot supply the rebuttal the decline re-check reads.
+   */
   private static List<String> humanReplies(
       Long rootId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
@@ -897,6 +1048,7 @@ public class FollowUpAnalyzer {
     return inlineComments.stream()
         .filter(c -> rootId.equals(c.inReplyToId()))
         .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
+        .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
         .map(GitHubReviewClient.PullRequestComment::body)
         .filter(body -> body != null && !body.isBlank())
         .toList();
@@ -969,7 +1121,8 @@ public class FollowUpAnalyzer {
 
   /**
    * Same as the JSON overload, using prior responses already deserialized for this review so each
-   * persisted round is not re-parsed.
+   * persisted round is not re-parsed. Rename-blind overload; the verdict path uses the {@code
+   * renameTargets} variant below.
    */
   public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
       List<ReviewResponse> priorAiResponses,
@@ -977,13 +1130,32 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity) {
+    return unreportedUnresolvedStatusesFromParsed(
+        priorAiResponses, currentStatuses, inlineComments, lineResolver, botIdentity, Map.of());
+  }
+
+  /**
+   * Rename-aware variant used by the review verdict path. A still-present finding whose file was
+   * renamed-and-edited lives at {@code renameTargets.get(finding.file())} in the current diff, not
+   * at its pre-rename path; {@link #supersedeVanished}/{@link #addUnreportedVanished} already map
+   * through {@code renameTargets}, so the backstop's presence check must too — otherwise a finding
+   * moved by a rename escapes both gates and sails past APPROVE (F5 — the sibling defect of F2,
+   * where one of two paths got the guard and the twin did not).
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
     var chrono = toChronological(priorAiResponses);
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
-    return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity);
+    return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity, renameTargets);
   }
 
   /**
@@ -1052,10 +1224,12 @@ public class FollowUpAnalyzer {
       List<List<OpenFinding>> clusters,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var cluster : clusters) {
-      OpenFinding target = holdableTarget(cluster, inlineComments, lineResolver, botIdentity);
+      OpenFinding target =
+          holdableTarget(cluster, inlineComments, lineResolver, botIdentity, renameTargets);
       if (target != null) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
@@ -1073,18 +1247,22 @@ public class FollowUpAnalyzer {
    * OpenFinding#id()}) plus the finding's own content rather than by title, so a null-title
    * finding's thread is still seen and a thread-less finding cannot bind to a different finding
    * that reused the same marker index in another round.
+   *
+   * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
+   * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
+   * was renamed-and-edited (F5).
    */
   private OpenFinding holdableTarget(
       List<OpenFinding> cluster,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       DiffLineResolver lineResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     OpenFinding target = null;
     boolean anyReplied = false;
     for (var member : cluster) {
       var finding = member.finding();
-      if (target == null
-          && lineResolver.isFindingPresent(finding.file(), finding.suggestionOld())) {
+      if (target == null && isStillPresent(finding, lineResolver, renameTargets)) {
         target = member;
       }
       if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null) {
@@ -1092,6 +1270,32 @@ public class FollowUpAnalyzer {
       }
     }
     return anyReplied ? null : target;
+  }
+
+  /**
+   * Whether a finding's flagged code is still in the current diff, resolving a renamed-and-edited
+   * file to its rename target as {@link #hasVanished} does. A content-identical pure rename (blank
+   * target) leaves the anchor resolvable at neither path but the finding unchanged, so it counts as
+   * present — the same way {@link #addUnreportedVanished} keeps it {@code unresolved}.
+   *
+   * <p>The {@code file() == null} guard is defensive: {@link #holdableTarget} only passes cluster
+   * members, and {@link #addOpenFindings} admits a finding to a cluster only when {@link
+   * #findingKey} is non-null — which it never is for a null-file finding — so no production caller
+   * can reach it with a null file. Package-private (not {@code private}) so that contract can be
+   * pinned directly by a unit test rather than left as an unreachable branch.
+   */
+  static boolean isStillPresent(
+      ReviewResponse.Finding finding,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    if (finding.file() == null) {
+      return false;
+    }
+    var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());
+    if (currentPath.isBlank()) {
+      return true;
+    }
+    return lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
   }
 
   /** A still-open prior finding and the 1-based id it carried within the round that raised it. */

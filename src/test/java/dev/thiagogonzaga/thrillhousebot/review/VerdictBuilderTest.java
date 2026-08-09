@@ -391,7 +391,8 @@ class VerdictBuilderTest {
                       + " runs asynchronously on the review executor after the webhook has"
                       + " returned 200.",
                   new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse
-                      .User("maintainer")));
+                      .User("maintainer"),
+                  "MEMBER"));
 
   private static final ReviewResponse DECLINED_PRIOR_RESPONSE =
       new ReviewResponse(

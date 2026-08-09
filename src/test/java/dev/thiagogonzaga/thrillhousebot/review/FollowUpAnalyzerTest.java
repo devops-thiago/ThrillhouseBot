@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -55,8 +56,15 @@ class FollowUpAnalyzerTest {
 
   private static GitHubReviewClient.PullRequestComment comment(
       long id, Long inReplyTo, String path, String body, String author) {
+    // Default replies to a write-capable association so existing maintainer-reply fixtures still
+    // clear holds after the author-association gate (F1). Non-privileged replies use the overload.
+    return comment(id, inReplyTo, path, body, author, "MEMBER");
+  }
+
+  private static GitHubReviewClient.PullRequestComment comment(
+      long id, Long inReplyTo, String path, String body, String author, String association) {
     return new GitHubReviewClient.PullRequestComment(
-        id, inReplyTo, path, body, new GitHubReviewClient.ReviewResponse.User(author));
+        id, inReplyTo, path, body, new GitHubReviewClient.ReviewResponse.User(author), association);
   }
 
   @Test
@@ -166,6 +174,45 @@ class FollowUpAnalyzerTest {
 
     assertEquals(100L, threads.get(1));
     assertEquals(200L, threads.get(2));
+  }
+
+  @Test
+  void matchFindingThreadsShouldNotBindSummaryOnlyFindingToAnEarlierRoundsSameIndexThread() {
+    // The effective previous round's finding #1 was summary-only (no inline thread of its own). An
+    // earlier round posted a DIFFERENT finding under the recurring finding=1 marker on the same
+    // file. Finding #1 must not bind to that unrelated same-index thread (F2).
+    var json =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/B.java", "line": 5, "title": "Missing null check",
+           "description": "may NPE"}
+        ]}
+        """;
+    var comments =
+        List.of(
+            comment(
+                300L,
+                null,
+                "src/B.java",
+                "**HIGH — Unrelated earlier bug**\n<!-- thrillhousebot:finding=1 -->",
+                BOT));
+
+    var threads = analyzer.matchFindingThreads(json, comments, BOT_ID);
+
+    assertFalse(
+        threads.containsKey(1),
+        "a summary-only finding must not bind to a different finding's same-index thread");
+  }
+
+  @Test
+  void matchFindingThreadsShouldStillBindViaTitleWhenNoMarkerExistsOnTheFile() {
+    // No finding=N marker anywhere on the file: the pre-marker title fallback still binds (F2 must
+    // not regress the marker-free path).
+    var comments = List.of(comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT));
+
+    var threads = analyzer.matchFindingThreads(PREVIOUS_JSON, comments, BOT_ID);
+
+    assertEquals(100L, threads.get(1));
   }
 
   @Test
@@ -444,6 +491,27 @@ class FollowUpAnalyzerTest {
         List.of(
             comment(100L, null, "src/B.java", "**MEDIUM — Missing null check**", BOT),
             comment(101L, 100L, "src/B.java", "bot self-reply", BOT));
+    var reRaised =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium", "high", "src/B.java", 5, "Missing null check", "d", null, null)),
+            List.of(),
+            null);
+
+    assertSame(
+        reRaised,
+        analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID));
+  }
+
+  @Test
+  void dropRepliedDuplicatesShouldKeepFindingRepliedToByANonWriteAuthor() {
+    // A fork-PR author (author_association CONTRIBUTOR) replies on the finding thread. Their reply
+    // is not a maintainer decision, so it must not delete the re-raised finding (F1).
+    var comments =
+        List.of(
+            comment(100L, null, "src/B.java", "**MEDIUM — Missing null check**", BOT),
+            comment(101L, 100L, "src/B.java", "Not a real bug.", "fork-author", "CONTRIBUTOR"));
     var reRaised =
         new ReviewResponse(
             List.of(
@@ -840,6 +908,23 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void supersedeVanishedShouldNotSupersedeASettledId() {
+    // Finding #2's code vanished, but a newer round already closed it (settled). It must not be
+    // rewritten to superseded, or hasSupersededPrevious would pin on and re-post the summary every
+    // push (#470).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still"));
+
+    var rewritten =
+        analyzer.supersedeVanished(PREVIOUS_JSON, statuses, resolver, Map.of(), Set.of(2));
+
+    assertEquals(
+        "unresolved",
+        rewritten.get(0).status(),
+        "a settled id must not be re-superseded even when its code vanished");
+  }
+
+  @Test
   void supersedeVanishedShouldJudgePresenceByTheAnchorNotTheFile() {
     var anchoredJson =
         """
@@ -950,6 +1035,90 @@ class FollowUpAnalyzerTest {
     assertEquals("superseded", statuses.get(2).status());
     assertEquals("unresolved", statuses.get(3).status());
     assertTrue(statuses.get(3).note().contains("renamed without content changes"));
+  }
+
+  @Test
+  void addUnreportedVanishedShouldNotResupersedeAFindingANewerRoundAlreadyClosed() {
+    // f2's code vanished, but a newer round already closed it (settled). Re-superseding it would
+    // pin hasSupersededPrevious on and re-post the summary every push while suppressing the delta
+    // (#470).
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "medium", "src/A.java", 1, "Open", "d", "openAnchor()", null),
+            new ReviewResponse.Finding(
+                "medium", "src/B.java", 2, "Closed", "d", "goneAnchor()", null));
+    var resolver =
+        new DiffLineResolver(Map.of("src/A.java", "@@ -1,1 +1,1 @@\n-old\n+openAnchor()"));
+
+    // Without the settled set, f2 (id 2) is superseded — the phantom the fix removes.
+    var naive = analyzer.addUnreportedVanished(previous, List.of(), resolver, Map.of());
+    assertEquals(List.of(2), naive.stream().map(s -> s.id()).toList());
+    assertEquals("superseded", naive.get(0).status());
+
+    var settled =
+        analyzer.addUnreportedVanished(previous, List.of(), resolver, Map.of(), Set.of(2));
+    assertTrue(
+        settled.stream().noneMatch(s -> s.id() == 2),
+        "a finding a newer round already closed must not be re-superseded");
+  }
+
+  @Test
+  void settledPreviousIdsShouldCollectClosuresFromRoundsNewerThanTheEffectiveOne() {
+    // newest-first: two zero-finding rounds close #1 (resolved) and #2 (justified); the effective
+    // previous round raised #1..#3. #3 stays open.
+    var roundC =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed")),
+            null);
+    var roundB =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "justified", "declined")),
+            null);
+    var roundA =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding("medium", "high", "src/A.java", 1, "1", "d", null, null),
+                new ReviewResponse.Finding("medium", "high", "src/B.java", 2, "2", "d", null, null),
+                new ReviewResponse.Finding(
+                    "medium", "high", "src/C.java", 3, "3", "d", null, null)),
+            List.of(),
+            null);
+
+    assertEquals(
+        Set.of(1, 2), FollowUpAnalyzer.settledPreviousIds(List.of(roundC, roundB, roundA)));
+    assertEquals(Set.of(), FollowUpAnalyzer.settledPreviousIds(List.of(roundA)));
+
+    // A null newer round (missing/unparseable persisted response) is skipped, not dereferenced,
+    // while a non-null newer round beside it still contributes its closure.
+    var withNull = new ArrayList<ReviewResponse>();
+    withNull.add(null);
+    withNull.add(roundC);
+    withNull.add(roundA);
+    assertEquals(Set.of(1), FollowUpAnalyzer.settledPreviousIds(withNull));
+  }
+
+  @Test
+  void contextShouldOmitSettledFindingsButKeepTheirIdSlots() {
+    // Finding #2 was closed by a newer round; it must not be re-shown to the model, but #1 and #3
+    // must keep their original id numbers (no renumber) (#470).
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "critical", "high", "src/A.java", 10, "First", "d", null, null),
+            new ReviewResponse.Finding(
+                "medium", "high", "src/B.java", 5, "Second", "d", null, null),
+            new ReviewResponse.Finding("high", "high", "src/C.java", 7, "Third", "d", null, null));
+
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            previous, true, List.of(), List.of(), List.of(), BOT_ID, Set.of(2));
+
+    assertTrue(context.contains("1. [CRITICAL] src/A.java:10 — First"), context);
+    assertFalse(context.contains("Second"), context);
+    assertTrue(context.contains("3. [HIGH] src/C.java:7 — Third"), context);
   }
 
   @Test
@@ -1111,6 +1280,40 @@ class FollowUpAnalyzerTest {
             List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
 
     assertEquals(List.of(2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldNotClearHoldForNonWriteReply() {
+    // A fork-PR author's reply (author_association NONE) must not clear the approve backstop, so
+    // both findings stay held (F1).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    var comments =
+        List.of(
+            comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
+            comment(101L, 100L, "src/A.java", "looks fine to me", "fork-author", "NONE"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+
+    assertEquals(List.of(1, 2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldTreatANullAssociationReplyAsNonWrite() {
+    // A reply whose author_association is absent (null) cannot be shown to hold write access, so it
+    // must not clear the hold — both findings stay held (F1).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    var comments =
+        List.of(
+            comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
+            comment(101L, 100L, "src/A.java", "looks fine to me", "someone", null));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+
+    assertEquals(List.of(1, 2), heldIds(held));
   }
 
   @Test
@@ -1342,6 +1545,66 @@ class FollowUpAnalyzerTest {
             List.of(PREVIOUS_JSON), List.of(), List.of(), resolver, BOT_ID);
 
     assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldStillPresentFindingUnderARenamedAndEditedFile() {
+    // The finding's file was renamed-and-edited; its flagged code is still present at the rename
+    // target, not the pre-rename path. The backstop must resolve through renameTargets — as
+    // supersedeVanished/addUnreportedVanished already do — or the finding escapes the hold (F5).
+    var round =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium", "old/Moved.java", 5, "Still open", "d", "movedFlagged()", null)),
+            List.of(),
+            null);
+    var resolver =
+        new DiffLineResolver(Map.of("new/Moved.java", "@@ -5,1 +5,1 @@\n-old\n+movedFlagged()"));
+    var renameTargets = Map.of("old/Moved.java", "new/Moved.java");
+
+    var held =
+        analyzer.unreportedUnresolvedStatusesFromParsed(
+            List.of(round), List.of(), List.of(), resolver, BOT_ID, renameTargets);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldHoldFindingUnderAContentIdenticalPureRename() {
+    // The finding's file was renamed without content changes (blank rename target), so its anchor
+    // resolves at neither path — but the finding is unchanged and must still be held (F5), matching
+    // addUnreportedVanished's pure-rename handling.
+    var round =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium", "old/Pure.java", 5, "Still open", "d", "unchanged()", null)),
+            List.of(),
+            null);
+    var resolver = new DiffLineResolver(Map.of());
+    var renameTargets = Map.of("old/Pure.java", "");
+
+    var held =
+        analyzer.unreportedUnresolvedStatusesFromParsed(
+            List.of(round), List.of(), List.of(), resolver, BOT_ID, renameTargets);
+
+    assertEquals(List.of(1), heldIds(held));
+  }
+
+  @Test
+  void isStillPresentShouldReturnFalseForANullFileFinding() {
+    // Defensive-contract test: a null-file finding cannot reach isStillPresent in production —
+    // addOpenFindings admits a finding to a cluster only when findingKey is non-null, and
+    // findingKey
+    // returns null for a null file, so holdableTarget's cluster members always carry a file.
+    // Pinning
+    // the guard directly means a future refactor that drops it is caught.
+    var nullFile = new ReviewResponse.Finding("medium", null, 1, "No file", "d", "anchor()", null);
+
+    assertFalse(
+        FollowUpAnalyzer.isStillPresent(nullFile, new DiffLineResolver(Map.of()), Map.of()),
+        "a null-file finding cannot be placed in the diff, so it is never present");
   }
 
   @Test
@@ -2154,6 +2417,33 @@ class FollowUpAnalyzerTest {
     assertTrue(
         rechecked.get(0).note().contains("executor.execute(() -> execute(ctx));"),
         "the note must quote the contradicting line, was: " + rechecked.get(0).note());
+  }
+
+  @Test
+  void recheckShouldIgnoreARebuttalFromANonWriteAuthor() {
+    // The contradicting rebuttal text is supplied by a fork-PR author (author_association
+    // CONTRIBUTOR), not a maintainer. It must not drive the decline override — with no maintainer
+    // reply, the "exactly one reply" leg fails and the status is left untouched (F1).
+    var comments =
+        List.of(
+            comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+            comment(
+                701L,
+                700L,
+                PAUSE_FILE,
+                "Not changed — pause() is only ever called from the /pause command path, which runs"
+                    + " asynchronously on the review executor after the webhook has returned 200.",
+                "fork-author",
+                "CONTRIBUTOR"));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        "justified",
+        rechecked.get(0).status(),
+        "a rebuttal from an author without write access must not drive the override");
   }
 
   @Test

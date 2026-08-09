@@ -202,7 +202,7 @@ class ReviewOrchestratorTest {
     lenient()
         .when(
             followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-                any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any()))
         .thenReturn(List.of());
     lenient()
         .when(
@@ -404,6 +404,77 @@ class ReviewOrchestratorTest {
       assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
       assertTrue(body.contains("partial review"), body);
       assertTrue(body.contains("7 file"), body);
+    }
+
+    @Test
+    void reopenedDeclineBodySurfacesTheContradictionNote() {
+      // A maintainer's decline the code contradicts is reopened as unresolved carrying the
+      // contradiction note. The review body must surface that note next to the unresolved line so
+      // the maintainer sees why their decline was not honored, and how to keep it (F6).
+      var note =
+          RebuttalContradiction.NOTE_LEAD_IN
+              + " the reply argues \"only ever called from the command path\", but the reviewed"
+              + " code dispatches this path concurrently — \"executor.execute(() -> execute(ctx));"
+              + "\". A single call site does not serialize work handed to an executor or a new"
+              + " thread, so the premise does not refute the finding. Reply again to keep the"
+              + " decline.";
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", note)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
+      assertTrue(body.contains("Reply again to keep the decline."), body);
+      assertTrue(body.contains("executor.execute(() -> execute(ctx));"), body);
+    }
+
+    @Test
+    void unresolvedBodyOmitsNotesThatAreNotReopenedDeclines() {
+      // Only a reopened-decline note (RebuttalContradiction.NOTE_LEAD_IN) is surfaced. An
+      // unresolved
+      // status with a null note, and a non-unresolved status, must both be skipped — the body shows
+      // the generic unresolved line with no extra note (F6).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", null),
+                  new ReviewResult.PreviousFindingStatus(2, "resolved", "fixed")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
+      assertFalse(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
     }
 
     @Test
@@ -2157,7 +2228,7 @@ class ReviewOrchestratorTest {
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID)))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn("Previous finding context");
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of("{\"round\":2}", "{\"round\":1}"));
@@ -2194,7 +2265,7 @@ class ReviewOrchestratorTest {
         verify(followUpAnalyzer).parsePreviousResponses(List.of("{\"round\":2}", "{\"round\":1}"));
         verify(followUpAnalyzer)
             .buildPreviousFindingsContext(
-                eq(List.of()), eq(true), any(), any(), eq(List.of(round1)), eq(BOT_ID));
+                eq(List.of()), eq(true), any(), any(), eq(List.of(round1)), eq(BOT_ID), any());
         verify(followUpAnalyzer)
             .dropRepliedDuplicates(
                 any(), eq(List.of("{\"round\":2}", "{\"round\":1}")), any(), eq(BOT_ID));
@@ -4760,12 +4831,12 @@ class ReviewOrchestratorTest {
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID)))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-                any(), any(), any(), any(), eq(BOT_ID)))
+                any(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn(
                 List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
@@ -4790,7 +4861,7 @@ class ReviewOrchestratorTest {
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID)))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -4798,7 +4869,8 @@ class ReviewOrchestratorTest {
         orchestrator.review(followUpRequest());
 
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID));
+            .buildPreviousFindingsContext(
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any());
       }
     }
 
@@ -4812,7 +4884,7 @@ class ReviewOrchestratorTest {
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID)))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -4830,7 +4902,8 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("ThrillhouseBot PR Summary")));
         verify(followUpAnalyzer)
-            .buildPreviousFindingsContext(anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID));
+            .buildPreviousFindingsContext(
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any());
       }
     }
 
@@ -4869,7 +4942,7 @@ class ReviewOrchestratorTest {
         when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
             .thenReturn(List.of(PRIOR_FINDING_JSON));
         when(followUpAnalyzer.buildPreviousFindingsContext(
-                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID)))
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         // The silent drop: this round reports neither the finding nor a status for it.
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -4898,12 +4971,64 @@ class ReviewOrchestratorTest {
       }
     }
 
+    @Test
+    void shouldNotResolveThreadForADeclineTheRecheckOverturned() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = followUpSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        delegateStatusGate();
+        // The model justified finding #1, but the decline re-check overturned it to unresolved.
+        // Thread resolution must run on the verdict's effective statuses, not the raw model
+        // statuses, so the still-open thread is not resolved on a status the code rejected (F7).
+        when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any()))
+            .thenAnswer(inv -> inv.getArgument(1));
+        when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any()))
+            .thenAnswer(inv -> inv.getArgument(1));
+        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+            .thenReturn(
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "reopened")));
+        when(followUpAnalyzer.matchFindingThreads(
+                ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+            .thenReturn(Map.of(1, 100L));
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of(PRIOR_FINDING_JSON));
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
+            .thenReturn("previous context");
+        when(reviewClient.listPullRequestComments(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.PullRequestComment(
+                        100L,
+                        null,
+                        "src/Main.java",
+                        "**MEDIUM — Dropped finding**\n" + SuggestionFormatter.findingMarker(1),
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+        when(reviewThreadService.threadsByRootComment(
+                anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T1", false)));
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(),
+                    List.of(new ReviewResponse.PreviousFindingStatus(1, "justified", "declined")),
+                    null));
+
+        orchestrator.review(followUpRequest());
+
+        verify(reviewThreadService, never()).resolve(anyString(), anyString());
+      }
+    }
+
     /** Runs the real parse + backstop computation instead of a canned status list. */
     private void delegateBackstopComputation() {
       when(followUpAnalyzer.parsePreviousResponses(any()))
           .thenAnswer(invocation -> realAnalyzer.parsePreviousResponses(invocation.getArgument(0)));
       when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-              any(), any(), any(), any(), eq(BOT_ID)))
+              any(), any(), any(), any(), eq(BOT_ID), any()))
           .thenAnswer(
               invocation ->
                   realAnalyzer.unreportedUnresolvedStatusesFromParsed(
@@ -4911,7 +5036,8 @@ class ReviewOrchestratorTest {
                       invocation.getArgument(1),
                       invocation.getArgument(2),
                       invocation.getArgument(3),
-                      invocation.getArgument(4)));
+                      invocation.getArgument(4),
+                      invocation.getArgument(5)));
     }
 
     private static final String PRIOR_FINDING_JSON =
@@ -4973,10 +5099,10 @@ class ReviewOrchestratorTest {
     void shouldResolveThreadsForResolvedAndJustifiedFindings() {
       var statuses =
           List.of(
-              new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
-              new ReviewResponse.PreviousFindingStatus(2, "justified", "intentional"),
-              new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still"),
-              new ReviewResponse.PreviousFindingStatus(4, "resolved", "fixed"));
+              new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
+              new ReviewResult.PreviousFindingStatus(2, "justified", "intentional"),
+              new ReviewResult.PreviousFindingStatus(3, "unresolved", "still"),
+              new ReviewResult.PreviousFindingStatus(4, "resolved", "fixed"));
       when(followUpAnalyzer.matchFindingThreads(
               ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
           .thenReturn(Map.of(1, 100L, 2, 200L, 3, 300L, 4, 400L));
@@ -5001,7 +5127,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldSkipFindingsWithoutAMatchedThread() {
-      var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+      var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"));
       when(followUpAnalyzer.matchFindingThreads(
               ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
           .thenReturn(Map.of());
@@ -5016,8 +5142,8 @@ class ReviewOrchestratorTest {
     @Test
     void shouldDoNothingWhenNoFindingWasAddressedOrNoComments() {
       var unresolvedOnly =
-          List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
-      var resolved = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+          List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still"));
+      var resolved = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"));
 
       reviewPublisher.resolveAddressedThreads(
           AUTH, request(), List.of(), List.of(rootComment()), unresolvedOnly);
@@ -5028,7 +5154,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldSwallowThreadResolutionFailures() {
-      var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"));
+      var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"));
       when(followUpAnalyzer.matchFindingThreads(
               ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
           .thenReturn(Map.of(1, 100L));
