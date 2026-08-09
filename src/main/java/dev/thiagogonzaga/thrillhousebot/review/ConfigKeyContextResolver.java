@@ -268,8 +268,13 @@ public class ConfigKeyContextResolver {
         && !TLD_SEGMENTS.contains(segments[segments.length - 1]);
   }
 
-  /** Whether the whitespace-delimited run of {@code text} containing offset {@code at} is a URL. */
-  private static boolean isInsideUrl(String text, int at) {
+  /**
+   * Whether the whitespace-delimited run of {@code text} containing offset {@code at} is a URL. The
+   * forward scan's {@code to < text.length()} bound guards a token that runs to the very end of the
+   * string; the production caller always feeds {@code \n}-terminated text so that end is never hit
+   * there, but the guard is exercised directly in a unit test rather than left as untested defence.
+   */
+  static boolean isInsideUrl(String text, int at) {
     var from = at;
     while (from > 0 && !Character.isWhitespace(text.charAt(from - 1))) {
       from--;

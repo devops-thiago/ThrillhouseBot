@@ -240,6 +240,23 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldDetectAUrlWordThatRunsToTheEndOfTheString() {
+      // The word extends to the very end with no trailing whitespace, exercising the forward scan's
+      // end-of-string bound directly. That bound guards a token at the end of the buffer; the
+      // production caller always feeds \n-terminated text so it is never hit there, but the guard
+      // is
+      // real defence and is validated here rather than left untested.
+      var url = "see https://api.example.host";
+      assertTrue(
+          ConfigKeyContextResolver.isInsideUrl(url, url.indexOf("api")),
+          "a URL word reaching the end of the string is still a URL");
+      var prose = "plain trailing.host";
+      assertFalse(
+          ConfigKeyContextResolver.isInsideUrl(prose, prose.indexOf("trailing")),
+          "a non-URL word reaching the end of the string is not a URL");
+    }
+
+    @Test
     void shouldNotMistakeFilenamesForPropertyKeys() {
       var tokens =
           ConfigKeyContextResolver.extractTokens(
