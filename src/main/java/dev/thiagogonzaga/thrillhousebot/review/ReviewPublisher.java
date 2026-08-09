@@ -719,13 +719,18 @@ public class ReviewPublisher {
    * Resolves the GitHub threads of previous findings the model judged resolved (fix landed) or
    * justified (a reply explains the deferral), so addressed feedback stops cluttering the PR.
    * Best-effort: the review outcome is already posted when this runs.
+   *
+   * <p>Takes the <em>effective</em> statuses the verdict computed ({@link
+   * ReviewResult#previousStatuses}), not the raw model statuses: a decline the re-check overturned
+   * is {@code unresolved} here, so its thread is correctly left open rather than resolved on a
+   * status the code already rejected (F7).
    */
   void resolveAddressedThreads(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
       List<ReviewResponse.Finding> previousFindings,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      List<ReviewResponse.PreviousFindingStatus> statuses) {
+      List<ReviewResult.PreviousFindingStatus> statuses) {
     try {
       List<Integer> addressed =
           statuses.stream()
@@ -733,7 +738,7 @@ public class ReviewPublisher {
                   s ->
                       "resolved".equalsIgnoreCase(s.status())
                           || "justified".equalsIgnoreCase(s.status()))
-              .map(ReviewResponse.PreviousFindingStatus::id)
+              .map(ReviewResult.PreviousFindingStatus::id)
               .toList();
       if (addressed.isEmpty() || inlineComments.isEmpty()) {
         return;
