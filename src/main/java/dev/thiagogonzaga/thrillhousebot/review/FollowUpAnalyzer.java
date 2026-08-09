@@ -602,6 +602,20 @@ public class FollowUpAnalyzer {
         >= FindingDeduplicator.CONTENT_OVERLAP_THRESHOLD;
   }
 
+  /**
+   * A maintainer reply that may clear an approve hold, drop a re-raised finding, or overrule a
+   * decline — a non-bot reply whose author holds (or may hold) write access to the repository.
+   *
+   * <p>A reply's {@code author_association} is GitHub's per-comment statement of the author's
+   * relationship to the repo; only {@code OWNER}/{@code MEMBER}/{@code COLLABORATOR} can carry
+   * write access, so a fork-PR author's reply ({@code CONTRIBUTOR}/{@code NONE}/…) is not a
+   * maintainer decision and must not clear the backstop, delete a finding, or drive an override —
+   * it renders as context in the prompt only. This mirrors the cheap association prefilter {@code
+   * ManualReviewAuthorizer}/{@code FindingFeedbackCaptureService} apply before any write. The
+   * authoritative collaborator-permission call those services follow up with is not repeated here:
+   * these predicates run deep in the verdict path with no installation token in hand, and deferring
+   * a bot hold to an invited collaborator who engaged on the thread is the safe direction.
+   */
   private static boolean hasHumanReply(
       Long rootId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
@@ -611,7 +625,21 @@ public class FollowUpAnalyzer {
             c ->
                 rootId.equals(c.inReplyToId())
                     && c.user() != null
-                    && !botIdentity.matches(c.user().login()));
+                    && !botIdentity.matches(c.user().login())
+                    && mayHoldWriteAccess(c.authorAssociation()));
+  }
+
+  /**
+   * GitHub {@code author_association} values a write-access holder can present. Any other value
+   * provably lacks write access — association precedence guarantees a collaborator/member is never
+   * reported as one of those — so a reply carrying it is not a maintainer decision.
+   */
+  private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
+      Set.of("OWNER", "MEMBER", "COLLABORATOR");
+
+  private static boolean mayHoldWriteAccess(String authorAssociation) {
+    return authorAssociation != null
+        && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
 
   /** Maps each previous finding's prompt id to its bot root comment, for thread resolution. */
@@ -889,7 +917,11 @@ public class FollowUpAnalyzer {
     return RebuttalContradiction.find(finding, humanReplies.get(0), reviewedCode).orElse(null);
   }
 
-  /** Bodies of the maintainer replies on a thread, oldest first; bot replies are not rebuttals. */
+  /**
+   * Bodies of the maintainer replies on a thread, oldest first; bot replies are not rebuttals, and
+   * neither is a reply from an author without write access ({@link #mayHoldWriteAccess}) — a
+   * fork-PR author cannot supply the rebuttal the decline re-check reads.
+   */
   private static List<String> humanReplies(
       Long rootId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
@@ -897,6 +929,7 @@ public class FollowUpAnalyzer {
     return inlineComments.stream()
         .filter(c -> rootId.equals(c.inReplyToId()))
         .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
+        .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
         .map(GitHubReviewClient.PullRequestComment::body)
         .filter(body -> body != null && !body.isBlank())
         .toList();

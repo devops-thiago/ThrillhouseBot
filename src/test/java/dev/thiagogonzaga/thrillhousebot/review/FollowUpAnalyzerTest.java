@@ -55,8 +55,15 @@ class FollowUpAnalyzerTest {
 
   private static GitHubReviewClient.PullRequestComment comment(
       long id, Long inReplyTo, String path, String body, String author) {
+    // Default replies to a write-capable association so existing maintainer-reply fixtures still
+    // clear holds after the author-association gate (F1). Non-privileged replies use the overload.
+    return comment(id, inReplyTo, path, body, author, "MEMBER");
+  }
+
+  private static GitHubReviewClient.PullRequestComment comment(
+      long id, Long inReplyTo, String path, String body, String author, String association) {
     return new GitHubReviewClient.PullRequestComment(
-        id, inReplyTo, path, body, new GitHubReviewClient.ReviewResponse.User(author));
+        id, inReplyTo, path, body, new GitHubReviewClient.ReviewResponse.User(author), association);
   }
 
   @Test
@@ -444,6 +451,27 @@ class FollowUpAnalyzerTest {
         List.of(
             comment(100L, null, "src/B.java", "**MEDIUM — Missing null check**", BOT),
             comment(101L, 100L, "src/B.java", "bot self-reply", BOT));
+    var reRaised =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium", "high", "src/B.java", 5, "Missing null check", "d", null, null)),
+            List.of(),
+            null);
+
+    assertSame(
+        reRaised,
+        analyzer.dropRepliedDuplicates(reRaised, List.of(PREVIOUS_JSON), comments, BOT_ID));
+  }
+
+  @Test
+  void dropRepliedDuplicatesShouldKeepFindingRepliedToByANonWriteAuthor() {
+    // A fork-PR author (author_association CONTRIBUTOR) replies on the finding thread. Their reply
+    // is not a maintainer decision, so it must not delete the re-raised finding (F1).
+    var comments =
+        List.of(
+            comment(100L, null, "src/B.java", "**MEDIUM — Missing null check**", BOT),
+            comment(101L, 100L, "src/B.java", "Not a real bug.", "fork-author", "CONTRIBUTOR"));
     var reRaised =
         new ReviewResponse(
             List.of(
@@ -1111,6 +1139,23 @@ class FollowUpAnalyzerTest {
             List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
 
     assertEquals(List.of(2), heldIds(held));
+  }
+
+  @Test
+  void unreportedUnresolvedShouldNotClearHoldForNonWriteReply() {
+    // A fork-PR author's reply (author_association NONE) must not clear the approve backstop, so
+    // both findings stay held (F1).
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    var comments =
+        List.of(
+            comment(100L, null, "src/A.java", "**CRITICAL — SQL injection**", BOT),
+            comment(101L, 100L, "src/A.java", "looks fine to me", "fork-author", "NONE"));
+
+    var held =
+        analyzer.unreportedUnresolvedStatuses(
+            List.of(PREVIOUS_JSON), List.of(), comments, resolver, BOT_ID);
+
+    assertEquals(List.of(1, 2), heldIds(held));
   }
 
   @Test
@@ -2154,6 +2199,33 @@ class FollowUpAnalyzerTest {
     assertTrue(
         rechecked.get(0).note().contains("executor.execute(() -> execute(ctx));"),
         "the note must quote the contradicting line, was: " + rechecked.get(0).note());
+  }
+
+  @Test
+  void recheckShouldIgnoreARebuttalFromANonWriteAuthor() {
+    // The contradicting rebuttal text is supplied by a fork-PR author (author_association
+    // CONTRIBUTOR), not a maintainer. It must not drive the decline override — with no maintainer
+    // reply, the "exactly one reply" leg fails and the status is left untouched (F1).
+    var comments =
+        List.of(
+            comment(700L, null, PAUSE_FILE, "**MEDIUM — " + RACE_TITLE + "**", BOT),
+            comment(
+                701L,
+                700L,
+                PAUSE_FILE,
+                "Not changed — pause() is only ever called from the /pause command path, which runs"
+                    + " asynchronously on the review executor after the webhook has returned 200.",
+                "fork-author",
+                "CONTRIBUTOR"));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        "justified",
+        rechecked.get(0).status(),
+        "a rebuttal from an author without write access must not drive the override");
   }
 
   @Test
