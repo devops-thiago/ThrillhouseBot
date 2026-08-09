@@ -172,7 +172,12 @@ public interface ThrillhouseConfig {
     @WithName("max-input-tokens")
     int maxInputTokens();
 
-    /** Tokens reserved out of the context window for the model's response (findings JSON). */
+    /**
+     * Tokens held back from the input budget for the model's response (findings JSON), because on a
+     * shared window the response is spent from the same pool the prompt was packed into. Ignored
+     * for a model marked {@link AiPricingConfig.ModelSettings#separateOutputBudget()}, whose
+     * response draws on an allowance of its own and so takes nothing from the diff.
+     */
     @WithDefault("8192")
     @WithName("output-buffer-tokens")
     int outputBufferTokens();
@@ -586,8 +591,9 @@ public interface ThrillhouseConfig {
       Optional<Integer> maxInputTokens();
 
       /**
-       * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens reserved
-       * out of the context window for the model's response.
+       * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens held back
+       * from the input budget for the model's response. Only meaningful on a shared window: with
+       * {@link #separateOutputBudget()} set, nothing is held back regardless of this value.
        */
       @WithName("output-buffer-tokens")
       Optional<Integer> outputBufferTokens();
