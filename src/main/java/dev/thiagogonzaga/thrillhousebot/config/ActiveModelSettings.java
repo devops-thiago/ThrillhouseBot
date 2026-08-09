@@ -86,6 +86,25 @@ public class ActiveModelSettings {
         .orElseGet(() -> config.review().outputBufferTokens());
   }
 
+  /**
+   * Whether the active model's response allowance is independent of its input window. Defaults to
+   * {@code false} — the shared-window contract every model assumed before this existed — so an
+   * unconfigured model keeps exactly today's budgeting.
+   */
+  public boolean separateOutputBudget() {
+    return settings().flatMap(ModelSettings::separateOutputBudget).orElse(false);
+  }
+
+  /**
+   * Tokens the budgeter must hold back from the input budget for the response: {@link
+   * #outputBufferTokens()} on a shared window, and zero when the response draws from a budget of
+   * its own. Single source of truth for that decision so the planner and the startup validator
+   * cannot disagree about it.
+   */
+  public int reservedOutputTokens() {
+    return separateOutputBudget() ? 0 : outputBufferTokens();
+  }
+
   /** Token safety margin: the model's override, else the global review value. */
   public double tokenSafetyMargin() {
     return settings()

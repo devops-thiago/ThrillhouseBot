@@ -70,6 +70,7 @@ class DiffBudgetPlannerTest {
     lenient().when(settings.maxInputTokens()).thenReturn(maxInputTokens);
     lenient().when(settings.outputBufferTokens()).thenReturn(outputBufferTokens);
     lenient().when(settings.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -364,6 +365,33 @@ class DiffBudgetPlannerTest {
     when(reviewConfig.tokenSafetyMargin()).thenReturn(0.9);
     when(reviewConfig.outputBufferTokens()).thenReturn(8192);
     assertEquals(43200 - 8192, planner.perCallInputBudget());
+  }
+
+  @Test
+  void perCallInputBudgetKeepsTheWholeWindowWhenTheOutputBudgetIsSeparate() {
+    // #493: the output buffer is subtracted because a shared window spends output tokens out of
+    // the input pool. When the model's response allowance is its own, that subtraction hands the
+    // diff budget away for nothing — here it would cost 384000 of a 900000-token budget.
+    var settings = modelSettings(Optional.of(1_000_000), Optional.of(384_000), Optional.empty());
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(true));
+    models.put(MODEL, settings);
+    when(reviewConfig.maxInputTokens()).thenReturn(1_000_000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(0.9);
+
+    assertEquals(900_000, planner.perCallInputBudget());
+  }
+
+  @Test
+  void perCallInputBudgetStillSubtractsTheBufferOnASharedWindow() {
+    // The counterpart: without the flag the subtraction stands, so this change cannot quietly
+    // widen the budget for every existing deployment.
+    var settings = modelSettings(Optional.of(1_000_000), Optional.of(384_000), Optional.empty());
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(false));
+    models.put(MODEL, settings);
+    when(reviewConfig.maxInputTokens()).thenReturn(1_000_000);
+    when(reviewConfig.tokenSafetyMargin()).thenReturn(0.9);
+
+    assertEquals(900_000 - 384_000, planner.perCallInputBudget());
   }
 
   @Test

@@ -59,6 +59,7 @@ class ActiveModelSettingsTest {
     lenient().when(settings.frequencyPenalty()).thenReturn(Optional.empty());
     lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
     lenient().when(settings.seed()).thenReturn(Optional.empty());
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -75,6 +76,26 @@ class ActiveModelSettingsTest {
     assertTrue(active.presencePenalty().isEmpty());
     assertTrue(active.seed().isEmpty());
     assertFalse(active.budgetClampedByModelCap());
+    assertFalse(
+        active.separateOutputBudget(), "an unconfigured model keeps the shared-window contract");
+    assertEquals(
+        8_192, active.reservedOutputTokens(), "a shared window still reserves the output buffer");
+  }
+
+  @Test
+  void reservesNothingWhenTheModelsOutputBudgetIsSeparate() {
+    // #493: the reservation exists because output tokens are spent out of the input window. When
+    // the response has an allowance of its own it takes nothing from the diff, so holding budget
+    // back for it is pure loss — here 384000 of a 1M window, ~40% of the per-call diff budget.
+    var settings = entry();
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(true));
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(384_000));
+    models.put(MODEL, settings);
+
+    assertTrue(active.separateOutputBudget());
+    assertEquals(384_000, active.outputBufferTokens(), "the configured buffer itself is unchanged");
+    assertEquals(
+        0, active.reservedOutputTokens(), "but nothing is held back from the input budget");
   }
 
   @Test
