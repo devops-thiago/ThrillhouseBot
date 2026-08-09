@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -22,13 +23,17 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
+import dev.thiagogonzaga.thrillhousebot.review.ai.DocGeneratorPrompts;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -43,9 +48,27 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * as an inline {@code ```suggestion} comment on the symbol's declaration line. Authorization, the
  * pause check and the {@code add-docs-enabled} kill switch are enforced by the caller before this
  * runs.
+ *
+ * <p>Coverage and scoping come from {@link AbstractPrSuggestionGenerator}, the same seam the other
+ * on-request commands use. Two things follow from that, and both matter more here than anywhere
+ * else because this command posts committable edits:
+ *
+ * <ul>
+ *   <li>The file list is narrowed by the repository's own ignore globs on top of the
+ *       deployment-wide ones, so a path a maintainer told the bot to leave alone is never handed
+ *       back as a one-click commit button.
+ *   <li>The pass is planned as token-budgeted batches over the whole change set rather than one
+ *       call over a {@code max-diff-lines} render, so a large PR no longer has only its first N
+ *       lines documented with a footnote about the rest.
+ * </ul>
+ *
+ * <p>Unlike its siblings this command loads the PR itself rather than through {@link
+ * AbstractPrSuggestionGenerator#loadInputs}: it distinguishes "the PR could not be loaded" from
+ * "the PR has nothing reviewable to document" in what it posts back, and it needs the head SHA
+ * before doing any work at all, since without one no suggestion can be anchored.
  */
 @ApplicationScoped
-public class DocGenerationService {
+public class DocGenerationService extends AbstractPrSuggestionGenerator {
 
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String COMMAND = "/add-docs";
@@ -64,17 +87,27 @@ public class DocGenerationService {
       "📝 ThrillhouseBot generated documentation but could not anchor it to the current diff. "
           + "This usually happens after a force-push — try `/add-docs` again.";
 
+  /**
+   * Posted when the plan covered nothing: every changed file overflowed even a single-file batch.
+   * {@link #NOTHING_TO_DOCUMENT} here would be a verdict on code the model never read, so this
+   * names the budget as the cause instead.
+   */
+  static final String NOT_COVERED =
+      "📝 ThrillhouseBot could not fit any part of this PR into the per-call input-token budget, so"
+          + " it has nothing to document. Raise the input-token budget and re-run `/add-docs`.";
+
+  /** The summary is assembled locally, so the whole max-ai-calls allowance goes to batch calls. */
+  private static final int REDUCE_CALLS = 0;
+
   private final GitHubAuthClient authClient;
   private final GitHubPullRequestClient prClient;
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
-  private final ReviewDiffFormatter diffFormatter;
   private final SuggestionFormatter suggestionFormatter;
   private final InstructionsResolver instructionsResolver;
   private final ProjectStackResolver projectStackResolver;
   private final DocGenerator docGenerator;
   private final DocGenerationParser parser;
-  private final ThrillhouseConfig config;
 
   @Inject
   public DocGenerationService(
@@ -88,18 +121,27 @@ public class DocGenerationService {
       ProjectStackResolver projectStackResolver,
       DocGenerator docGenerator,
       DocGenerationParser parser,
+      RepoSettingsResolver repoSettingsResolver,
+      DiffBudgetPlanner budgetPlanner,
+      ActiveModelSettings activeModel,
       ThrillhouseConfig config) {
+    super(
+        prClient,
+        diffFormatter,
+        instructionsResolver,
+        repoSettingsResolver,
+        budgetPlanner,
+        activeModel,
+        config);
     this.authClient = authClient;
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
-    this.diffFormatter = diffFormatter;
     this.suggestionFormatter = suggestionFormatter;
     this.instructionsResolver = instructionsResolver;
     this.projectStackResolver = projectStackResolver;
     this.docGenerator = docGenerator;
     this.parser = parser;
-    this.config = config;
   }
 
   /**
@@ -107,7 +149,12 @@ public class DocGenerationService {
    * asynchronously.
    */
   public record DocTask(
-      String owner, String repo, int prNumber, String defaultBranch, long installationId) {}
+      String owner, String repo, int prNumber, String defaultBranch, long installationId) {
+
+    CommandTarget target() {
+      return new CommandTarget(owner, repo, defaultBranch, installationId);
+    }
+  }
 
   /** Generates and posts the documentation suggestions. Swallows every failure after logging it. */
   @ActivateRequestContext
@@ -124,49 +171,94 @@ public class DocGenerationService {
 
       var files =
           SoftLoaders.files(prClient, auth, task.owner(), task.repo(), task.prNumber(), COMMAND);
-      var reviewable = diffFormatter.reviewableFiles(files);
+      // Resolved once and threaded downstream: the batches and the line map must agree on which
+      // files are in scope. This command posts committable suggestions, so a file the repository
+      // asked the bot to leave alone must reach neither a batch nor the anchor resolver.
+      var reviewable =
+          respectPerRepoIgnores(task.target(), COMMAND, diffFormatter().reviewableFiles(files));
       if (reviewable.isEmpty()) {
         postComment(auth, task, NO_FILES);
         return;
       }
 
-      var generated = generateOrReportFailure(auth, task, files, reviewable, pr);
-      if (generated == null) {
+      var planned = planOrReportFailure(auth, task, pr, reviewable);
+      if (planned == null) {
+        return;
+      }
+      if (planned.plan().batches().isEmpty()) {
+        Log.debugf(
+            "No file of %s/%s #%d fit an /add-docs batch",
+            task.owner(), task.repo(), task.prNumber());
+        postComment(auth, task, NOT_COVERED + disclosure(planned.plan()));
         return;
       }
 
-      var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, generated.response());
-      postComment(
-          auth, task, summaryMessage(generated.response(), outcome, generated.omittedFiles()));
+      var generated = generateEachBatch(planned);
+      if (generated == null) {
+        postComment(auth, task, GENERATION_FAILED);
+        return;
+      }
+      var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, generated.docs());
+      postComment(auth, task, summaryMessage(generated, outcome, planned.plan()));
       Log.infof(
-          "/add-docs posted %d suggestion(s) and %d note(s) on %s/%s #%d",
-          outcome.suggestions(), outcome.notes(), task.owner(), task.repo(), task.prNumber());
+          "/add-docs posted %d suggestion(s) and %d note(s) from %d batch(es) on %s/%s #%d",
+          outcome.suggestions(),
+          outcome.notes(),
+          planned.plan().batches().size(),
+          task.owner(),
+          task.repo(),
+          task.prNumber());
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Failed to handle /add-docs on %s/%s #%d", task.owner(), task.repo(), task.prNumber());
     }
   }
 
-  /** Parsed documentation plus how many files the diff line budget omitted. */
-  private record GeneratedDocs(DocGenerationResponse response, int omittedFiles) {}
+  /** One run's prompt inputs, its resolved project stack, and the batch plan built from them. */
+  private record PlannedRun(Inputs inputs, String stack, DiffBudgetPlanner.BudgetPlan plan) {}
 
   /**
-   * Builds the diff, runs generation, and returns the parsed docs plus the omitted-file count —
-   * posting the failure notice and returning {@code null} when the diff build, model call, or parse
-   * throws, so the caller can bail without a nested try. The diff build stays inside this handler
-   * on purpose: a formatter failure must still surface {@code GENERATION_FAILED} to the user rather
-   * than be swallowed by {@link #handle}'s outer catch with only a log line.
+   * Resolves the per-call context and plans the token-budgeted batches, posting the failure notice
+   * and returning {@code null} when planning throws — so the caller can bail without a nested try.
+   * Planning stays inside this handler on purpose: a planner failure must still surface {@code
+   * GENERATION_FAILED} to the user rather than be swallowed by {@link #handle}'s outer catch with
+   * only a log line.
    */
-  private GeneratedDocs generateOrReportFailure(
+  private PlannedRun planOrReportFailure(
       String auth,
       DocTask task,
-      List<GitHubPullRequestClient.FileDiff> files,
-      List<GitHubPullRequestClient.FileDiff> reviewable,
-      GitHubPullRequestClient.PullRequestDetails pr) {
+      GitHubPullRequestClient.PullRequestDetails pr,
+      List<GitHubPullRequestClient.FileDiff> reviewable) {
     try {
-      var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
-      var response = generate(task, formatted.text(), pr);
-      return new GeneratedDocs(response, formatted.omittedFiles());
+      String stack =
+          SoftLoaders.projectStack(
+              projectStackResolver,
+              task.owner(),
+              task.repo(),
+              task.defaultBranch(),
+              task.installationId(),
+              COMMAND);
+      // The whole-PR render is deliberately absent: nothing is sent to a model from it, and this
+      // command establishes "is there anything to work from" from the reviewable file list above.
+      var inputs =
+          new Inputs(
+              "",
+              orEmpty(pr.title()),
+              orEmpty(pr.body()),
+              buildInstructionsSection(task),
+              pr.head().sha(),
+              reviewable);
+      // The project stack rides on every batch call, so it has to be part of the overhead the
+      // planner subtracts before sizing batches — see the six-argument planBatches.
+      var plan =
+          planBatches(
+              reviewable,
+              inputs,
+              DocGeneratorPrompts.systemPrompt(),
+              DocGeneratorPrompts.userPrompt(),
+              PromptTemplateEscaper.escape(stack),
+              REDUCE_CALLS);
+      return new PlannedRun(inputs, stack, plan);
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Doc generation failed for %s/%s #%d", task.owner(), task.repo(), task.prNumber());
@@ -175,26 +267,66 @@ public class DocGenerationService {
     }
   }
 
-  private DocGenerationResponse generate(
-      DocTask task, String diff, GitHubPullRequestClient.PullRequestDetails pr) {
-    String prContext = PromptSections.prContext(pr.title(), pr.body());
-    String stack =
-        SoftLoaders.projectStack(
-            projectStackResolver,
-            task.owner(),
-            task.repo(),
-            task.defaultBranch(),
-            task.installationId(),
-            COMMAND);
-    String instructions = buildInstructionsSection(task);
+  /** The docs merged across every batch, plus how many batch calls failed outright. */
+  private record Generated(List<DocGenerationResponse.DocSuggestion> docs, int failedBatches) {}
 
+  /**
+   * The map step plus the local union reduce: one call per batch, docs merged in batch order. A
+   * batch whose call fails or whose response will not parse is skipped rather than failing the run
+   * — the other batches still cover most of the PR — and the count is disclosed. Returns {@code
+   * null} only when every batch failed, which is the case that warrants the failure notice.
+   */
+  private Generated generateEachBatch(PlannedRun planned) {
+    var merged = new ArrayList<DocGenerationResponse.DocSuggestion>();
+    var seen = new HashSet<String>();
+    int failed = 0;
+    for (var batch : planned.plan().batches()) {
+      var response = generateOne(planned, batch);
+      if (response == null) {
+        failed++;
+        continue;
+      }
+      for (var doc : response.docs()) {
+        // Batches hold disjoint files, but a model can still quote a file it saw named in another
+        // batch's context — two comments on one declaration line would be noise on the PR.
+        if (seen.add(doc.file().strip() + ":" + doc.line())) {
+          merged.add(doc);
+        }
+      }
+    }
+    if (failed == planned.plan().batches().size()) {
+      Log.debugf("Every /add-docs batch failed — reporting the failure");
+      return null;
+    }
+    return new Generated(List.copyOf(merged), failed);
+  }
+
+  /** One batch's assistant call and parse, or {@code null} when either step fails. */
+  private DocGenerationResponse generateOne(PlannedRun planned, DiffBudgetPlanner.DiffBatch batch) {
     String raw =
-        docGenerator.generate(
-            PromptTemplateEscaper.fence(diff),
-            PromptTemplateEscaper.escape(prContext),
-            PromptTemplateEscaper.escape(stack),
-            instructions);
-    return parser.parse(raw);
+        callAssistant(
+            COMMAND,
+            () ->
+                docGenerator.generate(
+                    PromptTemplateEscaper.fence(batch.text()),
+                    PromptTemplateEscaper.escape(
+                        PromptSections.prContext(
+                            planned.inputs().title(), planned.inputs().body())),
+                    PromptTemplateEscaper.escape(planned.stack()),
+                    planned.inputs().instructions()));
+    if (raw == null) {
+      return null;
+    }
+    try {
+      return parser.parse(raw);
+    } catch (RuntimeException e) {
+      Log.warnf(e, "Could not parse an /add-docs batch response — skipping that batch");
+      return null;
+    }
+  }
+
+  private static String orEmpty(String value) {
+    return value == null ? "" : value;
   }
 
   /** How many /add-docs comments landed, split into committable suggestions and plain notes. */
@@ -208,19 +340,23 @@ public class DocGenerationService {
 
   /**
    * Posts each postable suggestion that anchors cleanly to the diff; returns the per-kind counts.
+   *
+   * <p>The line map is built from the run's whole effective file list — every batch's files
+   * together, never one batch's — so a doc produced by any batch anchors to its correct absolute
+   * line. It is the same list the batches were planned over, so a file the repository asked the bot
+   * to ignore cannot be anchored onto either, even if the model names one.
    */
   DocPostOutcome postSuggestions(
       String auth,
       DocTask task,
       String commitSha,
       List<GitHubPullRequestClient.FileDiff> reviewable,
-      DocGenerationResponse response) {
-    var lineResolver = new DiffLineResolver(diffFormatter.patchesByReviewableFiles(reviewable));
-    int cap = config.review().maxReviewComments();
+      List<DocGenerationResponse.DocSuggestion> docs) {
+    var lineResolver = new DiffLineResolver(diffFormatter().patchesByReviewableFiles(reviewable));
+    int cap = config().review().maxReviewComments();
     int suggestions = 0;
     int notes = 0;
     int skippedByCap = 0;
-    var docs = response.docs();
     for (int i = 0; i < docs.size(); i++) {
       if (suggestions + notes >= cap) {
         skippedByCap =
@@ -341,16 +477,21 @@ public class DocGenerationService {
   }
 
   /**
-   * The summary comment for a completed {@code /add-docs} run, with a partial-coverage disclosure
-   * appended when the diff line budget dropped whole files — so docs derived from a truncated diff
-   * are never presented as if they covered the whole PR (reuses the review path's wording).
+   * The summary comment for a completed {@code /add-docs} run, with the batch-failure note and the
+   * partial-coverage disclosure appended when the token budget left whole files uncovered — so docs
+   * derived from part of the change set are never presented as if they covered the whole PR (reuses
+   * the review path's wording).
    */
   private String summaryMessage(
-      DocGenerationResponse response, DocPostOutcome outcome, int omittedFiles) {
-    return baseSummaryMessage(response, outcome) + ReviewResult.truncationDisclosure(omittedFiles);
+      Generated generated, DocPostOutcome outcome, DiffBudgetPlanner.BudgetPlan plan) {
+    return baseSummaryMessage(generated.docs(), outcome)
+        + batchFailureNote(
+            generated.failedBatches(), COMMAND, "the symbols in them are not documented here.")
+        + disclosure(plan);
   }
 
-  private String baseSummaryMessage(DocGenerationResponse response, DocPostOutcome outcome) {
+  private String baseSummaryMessage(
+      List<DocGenerationResponse.DocSuggestion> docs, DocPostOutcome outcome) {
     int suggestions = outcome.suggestions();
     int notes = outcome.notes();
     String capSuffix =
@@ -389,7 +530,7 @@ public class DocGenerationService {
           + outcome.skippedByCap()
           + "** changed symbol(s) were not documented. Raise the comment cap or re-run `/add-docs`.";
     }
-    return response.docs().isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
+    return docs.isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
   }
 
   // Command-specific guidance for the repository-instructions section.

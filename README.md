@@ -297,9 +297,9 @@ will change per provider:
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Changed lines (additions + deletions) at or above which the nudge applies; either dimension triggers it on its own. `0` switches this dimension off — with both at `0` the nudge never fires | `1000` |
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve` run (batch calls only — its summary is assembled locally); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (`/add-docs`, replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
+| `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests`, `/add-docs` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Maximum inline comments posted per review; findings over the cap are surfaced in the summary instead of dropped | `50` |
 | `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call before the review errors out | `5` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
@@ -692,10 +692,10 @@ This is still an early-stage project; the current constraints are:
   split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
   don't fit are disclosed by name instead of silently dropped. `/improve` batches the same
   way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call), as does
-  `/generate-tests` (its per-batch test files are unioned locally). `/describe` and
-  `/changelog` batch up to `REVIEW_MAX_AI_CALLS - 1` calls, reserving one for the step that
-  reduces the per-batch results to a single answer. Only `/add-docs` still sends the diff in
-  a single call without batching.
+  `/generate-tests` (its per-batch test files are unioned locally) and `/add-docs` (its
+  per-batch doc suggestions are merged locally). `/describe` and `/changelog` batch up to
+  `REVIEW_MAX_AI_CALLS - 1` calls, reserving one for the step that reduces the per-batch
+  results to a single answer.
 - **Pure renames** — files GitHub reports as `renamed` with zero additions/deletions and
   no patch are omitted from AI review input (they have nothing to review). The summary
   overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit
