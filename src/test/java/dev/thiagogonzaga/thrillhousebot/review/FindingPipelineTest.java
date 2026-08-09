@@ -18,7 +18,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -198,7 +197,11 @@ class FindingPipelineTest {
   }
 
   @Test
-  void multiCallPropagatesBatchFailureAsIllegalStateException() {
+  void multiCallSoftFailsAPersistentlyFailingBatchAndKeepsTheSuccessfulOnes() {
+    // Lead#3: a batch that fails all its retries must not discard the batches that succeeded. The
+    // review keeps their findings, records the failed batch's files as uncovered (so the verdict
+    // holds APPROVE and the summary discloses the gap), and still produces a summary — instead of
+    // throwing IllegalStateException and reporting the whole review as failed.
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -206,18 +209,28 @@ class FindingPipelineTest {
     when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(failure);
     when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
 
     var plan = multiBatchPlan();
-    var resolver = new DiffLineResolver(Map.of());
-    var thrown =
-        assertThrows(
-            IllegalStateException.class,
-            () -> pipeline.run(session, template, ctx, plan, resolver));
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
-    assertEquals("Parallel batch review failed", thrown.getMessage());
-    assertSame(failure, thrown.getCause());
+    // Batch 1 is tried in the parallel pass and retried once; both fail, then it is soft-failed.
     verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
-    verify(aiReviewService, never()).summarize(any(), any());
+    verify(aiReviewService).summarize(eq(session), any());
+    assertEquals(1, result.findings().size());
+    assertEquals("B", result.findings().get(0).title());
+    assertSame(summary, result.summary());
+
+    // The failed batch's file is recorded as an uncovered coverage gap on the shared plan, so the
+    // verdict (which reads the same instance) holds APPROVE and discloses it.
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertTrue(plan.truncated());
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(changedFiles.contains("a.java (not reviewed"), changedFiles);
+    assertTrue(changedFiles.contains("b.java (modified"), changedFiles);
   }
 
   @Test

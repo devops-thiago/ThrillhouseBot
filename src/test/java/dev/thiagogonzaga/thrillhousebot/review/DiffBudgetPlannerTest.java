@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -244,6 +245,111 @@ class DiffBudgetPlannerTest {
     var accounted = new HashSet<>(coveredFilenames(plan));
     accounted.addAll(plan.omittedFiles());
     assertEquals(5, accounted.size(), "every file covered or omitted, exactly once");
+  }
+
+  @Test
+  void aPatchlessChangedFileIsOmittedByNameNotSilentlyReviewed() {
+    // GitHub returns patch == null for binary files and for text diffs too large to display, while
+    // still reporting real additions/deletions. Such a file survives isPureRename (non-zero change
+    // count) and renders as a bare header with no ```diff``` body — there is nothing to review — so
+    // the planner must omit it by name, never pack it as if it were fully reviewed.
+    var patchless = new FileDiff("src/Huge.java", "modified", 4000, 10, 4010, null);
+    var plan = planner.plan(List.of(patchless), 100_000, 3);
+
+    assertEquals(List.of("src/Huge.java"), plan.omittedFiles());
+    assertTrue(
+        plan.truncated(), "an omitted patch-less file makes the review partial (holds APPROVE)");
+    assertTrue(
+        coveredFilenames(plan).isEmpty(), "a patch-less file must never be packed into a batch");
+  }
+
+  @Test
+  void aBlankPatchChangedFileIsOmittedWhileRealDiffsAreStillPacked() {
+    // The patch-less omission does not swallow files that do carry a diff: only the empty one is
+    // dropped, the real one is packed and covered.
+    var blank = new FileDiff("src/Blob.bin", "modified", 900, 0, 900, "   ");
+    var real = file("src/App.java", 5, patch(5));
+    var plan = planner.plan(List.of(blank, real), 100_000, 3);
+
+    assertEquals(List.of("src/Blob.bin"), plan.omittedFiles());
+    assertEquals(List.of("src/App.java"), coveredFilenames(plan));
+    assertTrue(plan.truncated());
+  }
+
+  @Test
+  void aPatchlessFileWithNoChangesIsNotTreatedAsACoverageGap() {
+    // A pure rename carries no patch AND no additions/deletions. It has nothing to review, but it
+    // is also nothing the review failed to cover — omitting it would hold APPROVE over a file that
+    // never needed reviewing. Only a patch-less file with real changes is a gap.
+    var pureRename = new FileDiff("src/Renamed.java", "renamed", 0, 0, 0, null);
+    var plan = planner.plan(List.of(pureRename), 100_000, 3);
+
+    assertTrue(
+        plan.omittedFiles().isEmpty(), "a zero-change patch-less file is not a coverage gap");
+    assertFalse(plan.truncated(), "a pure rename must not hold APPROVE");
+  }
+
+  @Test
+  void recordingTheSameUncoveredFileTwiceKeepsOneEntry() {
+    // A batch can be recorded more than once (a retry path, or two batches sharing a file), and the
+    // coverage gap must not be double-counted in the disclosure or the omitted total.
+    var plan = planner.plan(List.of(file("src/App.java", 5, patch(5))), 100_000, 3);
+
+    plan.recordUncoveredFiles(List.of("src/Failed.java"));
+    plan.recordUncoveredFiles(List.of("src/Failed.java"));
+
+    assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
+  }
+
+  @Test
+  void recordingANullFilenameIsIgnored() {
+    // A FileDiff can carry a null filename; recording it must not put a null into the gap list,
+    // where it would reach the disclosure text and the null-hostile immutable copies downstream.
+    var plan = planner.plan(List.of(file("src/App.java", 5, patch(5))), 100_000, 3);
+
+    plan.recordUncoveredFiles(Arrays.asList("src/Failed.java", null));
+
+    assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
+  }
+
+  @Test
+  void aPlanBuiltWithANullRuntimeGapListStillAcceptsGaps() {
+    // The canonical constructor normalizes a null accumulator rather than storing it: a null here
+    // would NPE the moment a failed batch recorded a gap, on the async review thread, taking the
+    // whole review down with it.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null);
+
+    assertTrue(plan.runtimeUncoveredFiles().isEmpty(), "a null accumulator normalizes to empty");
+
+    plan.recordUncoveredFiles(List.of("src/Failed.java"));
+
+    assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
+  }
+
+  @Test
+  void clippedFilesAreReportedUnchangedWhenNoBatchFailed() {
+    // No runtime gap: the clipped list passes through, so a partially analyzed file keeps its
+    // "clipped" meaning rather than being reported as wholly uncovered.
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("src/Clipped.java"), true);
+
+    assertEquals(List.of("src/Clipped.java"), plan.effectiveClippedFiles());
+  }
+
+  @Test
+  void aClippedFileAFailedBatchLeftUncoveredIsReportedOmittedNotClipped() {
+    // A file that was clipped AND then lost to a failed batch must not be counted twice: it drops
+    // out of the clipped list and is reported as omitted, so coverage is never overstated.
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of("src/Clipped.java", "src/Other.java"), true);
+
+    plan.recordUncoveredFiles(List.of("src/Clipped.java"));
+
+    assertEquals(List.of("src/Other.java"), plan.effectiveClippedFiles());
+    assertTrue(
+        plan.effectiveOmittedFiles().contains("src/Clipped.java"),
+        "the lost file is accounted for as omitted instead");
   }
 
   @Test
