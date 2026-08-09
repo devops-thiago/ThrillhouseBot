@@ -206,20 +206,24 @@ final class JacocoCoverageReport {
   // ---------------------------------------------------------------- parsing
 
   /**
-   * The coverage in a downloaded artifact archive: the first {@code .xml} entry that parses as a
-   * JaCoCo report with at least one source file wins. {@link #EMPTY} when the bytes are not a
-   * readable zip, hold no such entry, or hold nothing this parser understands.
+   * The coverage in a downloaded artifact archive: <em>every</em> {@code .xml} entry that parses as
+   * a JaCoCo report is merged, so a multi-module artifact carrying one report per module
+   * contributes all of them rather than only the first. {@link #EMPTY} when the bytes are not a
+   * readable zip, hold no such entry, or hold nothing this parser understands. The merged size is
+   * bounded by {@link #MAX_SOURCE_FILES} (and each file by {@link #MAX_LINES_PER_FILE}).
    *
    * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
    * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
    * enough: the next {@link ZipInputStream#getNextEntry()} implicitly inflates the whole of an
    * unread entry to reach the following header, which is exactly the path a maximally-compressed
-   * archive takes to gigabytes. The walk aborts the moment the aggregate budget is blown.
+   * archive takes to gigabytes. The walk aborts the moment the aggregate budget is blown, keeping
+   * whatever it had already merged.
    */
   static JacocoCoverageReport fromArtifactZip(byte[] zipBytes) {
     if (zipBytes == null || zipBytes.length == 0) {
       return EMPTY;
     }
+    var merged = new HashMap<String, NavigableSet<Integer>>();
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
       var seen = 0;
       var inflatedTotal = 0L;
@@ -242,17 +246,40 @@ final class JacocoCoverageReport {
         }
         inflatedTotal += read;
         if (sink != null && sink.size() > 0) {
-          var report = parse(new ByteArrayInputStream(sink.toByteArray()));
-          if (!report.isEmpty()) {
+          var one = parseToMap(new ByteArrayInputStream(sink.toByteArray()));
+          if (!one.isEmpty()) {
             Log.infof("Read patch coverage from artifact entry %s", entry.getName());
-            return report;
+            mergeInto(merged, one);
           }
         }
       }
     } catch (IOException | RuntimeException e) {
       Log.debugf(e, "Could not read the coverage artifact archive");
     }
-    return EMPTY;
+    return merged.isEmpty() ? EMPTY : new JacocoCoverageReport(merged);
+  }
+
+  /**
+   * Unions one report's uncovered lines into the accumulator, bounded by {@link #MAX_SOURCE_FILES}
+   * source files and {@link #MAX_LINES_PER_FILE} lines each so a pathological multi-module artifact
+   * cannot grow the merged map without limit. A report path shared by two modules (itself a
+   * same-named collision the {@link #uncoveredLinesByPath} guard later drops) unions rather than
+   * overwrites, so no module's lines are silently lost before that guard runs.
+   */
+  private static void mergeInto(
+      Map<String, NavigableSet<Integer>> merged, Map<String, NavigableSet<Integer>> one) {
+    for (var entry : one.entrySet()) {
+      if (!merged.containsKey(entry.getKey()) && merged.size() >= MAX_SOURCE_FILES) {
+        continue;
+      }
+      var target = merged.computeIfAbsent(entry.getKey(), unused -> new TreeSet<>());
+      for (var line : entry.getValue()) {
+        if (target.size() >= MAX_LINES_PER_FILE) {
+          break;
+        }
+        target.add(line);
+      }
+    }
   }
 
   /**
@@ -290,13 +317,23 @@ final class JacocoCoverageReport {
 
   /** Parses one JaCoCo XML document, or {@link #EMPTY} when it is not one / cannot be read. */
   static JacocoCoverageReport parse(InputStream xml) {
+    var map = parseToMap(xml);
+    return map.isEmpty() ? EMPTY : new JacocoCoverageReport(map);
+  }
+
+  /**
+   * The raw uncovered-lines-per-report-path map of one JaCoCo XML document, or an empty map when it
+   * is not one / cannot be read. The archive walk merges these across entries before building a
+   * single report; {@link #parse} wraps one directly.
+   */
+  static Map<String, NavigableSet<Integer>> parseToMap(InputStream xml) {
     XMLStreamReader reader = null;
     try {
       reader = secureInputFactory().createXMLStreamReader(xml);
-      return new JacocoCoverageReport(readSourceFiles(reader));
+      return readSourceFiles(reader);
     } catch (XMLStreamException | RuntimeException e) {
       Log.debugf(e, "Could not parse the coverage report as JaCoCo XML");
-      return EMPTY;
+      return Map.of();
     } finally {
       closeQuietly(reader);
     }

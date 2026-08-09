@@ -353,6 +353,40 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void mergesEveryXmlReportNotJustTheFirst() throws IOException {
+      var entries = new LinkedHashMap<String, String>();
+      entries.put(
+          "module-a/jacoco.xml",
+          """
+          <report name="a">
+            <package name="com/example/a">
+              <sourcefile name="Alpha.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="com/example/b">
+              <sourcefile name="Beta.java"><line nr="2" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      var report = JacocoCoverageReport.fromArtifactZip(zipOf(entries));
+
+      assertEquals(
+          List.of(1),
+          List.copyOf(report.uncoveredLines("module-a/src/main/java/com/example/a/Alpha.java")),
+          "the first module's report is read");
+      assertEquals(
+          List.of(2),
+          List.copyOf(report.uncoveredLines("module-b/src/main/java/com/example/b/Beta.java")),
+          "a second module's report must not be lost to a first-match-wins walk");
+    }
+
+    @Test
     void degradesToEmptyWhenTheArchiveIsTruncatedMidEntry() throws IOException {
       var whole = zipOf(Map.of("jacoco.xml", REPORT));
       var truncated = java.util.Arrays.copyOf(whole, whole.length / 2);
