@@ -52,9 +52,12 @@ final class CommentBodyLimit {
     if (body == null || body.length() <= MAX_LENGTH) {
       return body;
     }
+    // Both operands are compile-time constants and the notice is orders of magnitude shorter than
+    // the limit, so keep is always well above zero; and body is longer than MAX_LENGTH to reach
+    // here, so charAt(keep - 1) is always in range. No bounds guard is needed.
     int keep = MAX_LENGTH - TRUNCATION_NOTICE.length();
     // Never leave a dangling high surrogate at the cut point — that would corrupt a code point.
-    if (keep > 0 && Character.isHighSurrogate(body.charAt(keep - 1))) {
+    if (Character.isHighSurrogate(body.charAt(keep - 1))) {
       keep--;
     }
     return body.substring(0, keep) + TRUNCATION_NOTICE;
