@@ -652,6 +652,26 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldChargeTheFetchBudgetPerAttemptNotPerSuccess() {
+      // Every candidate is blank, so fetchContent returns null for each. Under a blanket failure
+      // (rate limit, expired token) or a repo of blank candidates the budget must still be spent
+      // per
+      // ATTEMPT, or the loop issues one serial API call per candidate against a budget of 8.
+      var paths = new ArrayList<String>();
+      for (int i = 0; i < ConfigKeyContextResolver.MAX_FILES_FETCHED + 4; i++) {
+        paths.add("module" + i + "/application.properties");
+      }
+      givenRepository(paths.toArray(new String[0]));
+      for (String path : paths) {
+        givenFile(path, "   \n  \n");
+      }
+
+      assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
+      verify(prClient, times(ConfigKeyContextResolver.MAX_FILES_FETCHED))
+          .getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+    }
+
+    @Test
     void shouldCapRenderedKeysAndTotalCharacters() {
       var properties = new StringBuilder();
       var documented = new StringBuilder();

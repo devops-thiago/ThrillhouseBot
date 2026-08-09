@@ -363,9 +363,13 @@ public class ConfigKeyContextResolver {
       if (fetched >= MAX_FILES_FETCHED || found.size() >= MAX_KEYS_RENDERED) {
         break;
       }
+      // Charge the budget per ATTEMPT, not per success: fetchContent returns null on an exception,
+      // an absent body, and blank content alike, so under a blanket failure (rate limit, expired
+      // token) or a repo of blank/unreadable candidates a per-success budget would issue one serial
+      // API call per candidate — hundreds in a large monorepo — deepening the very throttle it hit.
+      fetched++;
       var content = fetchContent(auth, owner, repo, path, ref);
       if (content != null) {
-        fetched++;
         absorbFile(path, content.split("\n", -1), normalized, found);
       }
     }
