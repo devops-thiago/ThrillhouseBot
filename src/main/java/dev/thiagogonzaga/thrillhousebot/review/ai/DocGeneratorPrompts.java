@@ -110,5 +110,28 @@ public final class DocGeneratorPrompts {
             {{/if}}
             """;
 
+  /**
+   * The system prompt as a runtime value, for callers that only need to <em>size</em> it — the
+   * batch planner's shared-overhead estimate. A reference to the {@code static final String}
+   * constant itself is inlined into the referencing class file at compile time, so a command that
+   * sized its own overhead would carry a second multi-kilobyte copy of the prompt (SpotBugs {@code
+   * HSC_HUGE_SHARED_STRING_CONSTANT}). The annotations still need the constant; nothing else does.
+   */
+  public static String systemPrompt() {
+    return SYSTEM;
+  }
+
+  /**
+   * The user-message template as a runtime value, for callers that only need to <em>size</em> it.
+   * See {@link #systemPrompt()} for why sizing callers avoid referencing the constant directly.
+   *
+   * <p>{@code /add-docs} has its own user template rather than sharing {@link
+   * PrSuggestionPrompts#USER} — it carries a project-stack section the others do not — so sizing
+   * one of its batches against the shared template would measure the wrong prompt.
+   */
+  public static String userPrompt() {
+    return USER;
+  }
+
   private DocGeneratorPrompts() {}
 }

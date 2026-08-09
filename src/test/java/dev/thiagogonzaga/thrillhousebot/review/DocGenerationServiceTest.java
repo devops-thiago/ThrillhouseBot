@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -31,10 +32,13 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.Ref;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
+import dev.thiagogonzaga.thrillhousebot.review.ai.DocGeneratorPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,6 +79,8 @@ class DocGenerationServiceTest {
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private ProjectStackResolver projectStackResolver;
+  @Mock private RepoSettingsResolver repoSettingsResolver;
+  @Mock private ActiveModelSettings activeModel;
   @Mock private DocGenerator docGenerator;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
@@ -91,22 +97,58 @@ class DocGenerationServiceTest {
     when(authClient.getAuthHeader(anyLong())).thenReturn(AUTH);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(50);
+    when(reviewConfig.maxAiCalls()).thenReturn(6);
+    // Budgeting on with ample room, so a normal PR is a single batch — the same shape the command
+    // had before it joined the batching seam.
+    when(activeModel.maxInputTokens()).thenReturn(1_000_000);
+    when(activeModel.tokenSafetyMargin()).thenReturn(1.0);
+    when(activeModel.outputBufferTokens()).thenReturn(0);
     when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
     when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
-    service =
-        new DocGenerationService(
-            authClient,
-            prClient,
-            reviewClient,
-            commentClient,
-            diffFormatter,
-            suggestionFormatter,
-            instructionsResolver,
-            projectStackResolver,
-            docGenerator,
-            parser,
-            config);
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(RepoSettings.EMPTY);
+    service = serviceWith(diffFormatter);
+  }
+
+  /** The service under test, wired around the given formatter. */
+  private DocGenerationService serviceWith(ReviewDiffFormatter formatter) {
+    return new DocGenerationService(
+        authClient,
+        prClient,
+        reviewClient,
+        commentClient,
+        formatter,
+        suggestionFormatter,
+        instructionsResolver,
+        projectStackResolver,
+        docGenerator,
+        parser,
+        repoSettingsResolver,
+        new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
+        activeModel,
+        config);
+  }
+
+  /** A per-call budget with exactly {@code diffTokens} of room for diff text. */
+  private void budgetWithDiffRoom(int diffTokens) {
+    var overhead =
+        new TokenCounter()
+            .estimateTokens(
+                DocGeneratorPrompts.systemPrompt()
+                    + DocGeneratorPrompts.userPrompt()
+                    + PromptTemplateEscaper.fence(" ")
+                    + "Title"
+                    + "Body"
+                    + "");
+    when(activeModel.maxInputTokens()).thenReturn(overhead + diffTokens);
+  }
+
+  /** The diff text of every batch call the generator received, in order. */
+  private List<String> diffsSentToGenerator() {
+    var diff = ArgumentCaptor.forClass(String.class);
+    verify(docGenerator, atLeastOnce()).generate(diff.capture(), any(), any(), any());
+    return diff.getAllValues();
   }
 
   private DocGenerationService.DocTask task() {
@@ -122,6 +164,17 @@ class DocGenerationServiceTest {
 
   private static FileDiff fooWithPatch() {
     return new FileDiff("src/Foo.java", "modified", 6, 0, 6, PATCH);
+  }
+
+  /** A second changed file, so the planner has something to split into more than one batch. */
+  private static FileDiff otherFile() {
+    return new FileDiff(
+        "src/Other.java",
+        "modified",
+        3,
+        0,
+        3,
+        "@@ -0,0 +1,3 @@\n+public int hop(int n) {\n+  return n;\n+}");
   }
 
   private String postedSummary() {
@@ -165,28 +218,12 @@ class DocGenerationServiceTest {
   }
 
   @Test
-  void appendsPartialCoverageDisclosureToTheSummaryWhenFilesWereOmitted() {
-    var truncatingFormatter = mock(ReviewDiffFormatter.class);
-    var foo = fooWithPatch();
-    when(truncatingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
-    when(truncatingFormatter.buildDiffStringWithStats(anyList(), anyList()))
-        .thenReturn(new ReviewDiffFormatter.FormattedDiff("## Overview\n(truncated)", 48));
-    when(truncatingFormatter.patchesByReviewableFiles(anyList()))
-        .thenReturn(Map.of("src/Foo.java", PATCH));
-    var truncatingService =
-        new DocGenerationService(
-            authClient,
-            prClient,
-            reviewClient,
-            commentClient,
-            truncatingFormatter,
-            suggestionFormatter,
-            instructionsResolver,
-            projectStackResolver,
-            docGenerator,
-            parser,
-            config);
-    prWithFiles(foo);
+  void appendsPartialCoverageDisclosureNamingTheFilesNoBatchCouldCover() {
+    // One batch's worth of allowance and room for one file, so the second is left uncovered by the
+    // token budget — and named, rather than silently dropped at a line boundary.
+    when(reviewConfig.maxAiCalls()).thenReturn(1);
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
             """
@@ -195,13 +232,13 @@ class DocGenerationServiceTest {
             "suggestion_new":"/** Doubles x. */\\npublic int bar(int x) {"}]}
             """);
 
-    truncatingService.handle(task());
+    service.handle(task());
 
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     var summary = postedSummary();
     assertTrue(summary.contains("**1**"), summary);
-    assertTrue(summary.contains("48 file(s) were omitted"), summary);
     assertTrue(summary.contains("partial coverage"), summary);
+    assertTrue(summary.contains("src/Other.java"), summary);
     assertFalse(summary.contains("findings and verdict"), summary);
   }
 
@@ -457,25 +494,15 @@ class DocGenerationServiceTest {
   }
 
   @Test
-  void reportsFailureWhenDiffBuildThrows() {
+  void reportsFailureWhenBatchPlanningThrows() {
+    // Planning stays inside the command's own handler so a planner failure still surfaces the
+    // failure notice to the maintainer rather than only a log line.
     var throwingFormatter = mock(ReviewDiffFormatter.class);
     var foo = fooWithPatch();
     when(throwingFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
-    when(throwingFormatter.buildDiffStringWithStats(anyList(), anyList()))
+    when(throwingFormatter.formatFileSection(any(), anySet()))
         .thenThrow(new RuntimeException("formatter boom"));
-    var throwingService =
-        new DocGenerationService(
-            authClient,
-            prClient,
-            reviewClient,
-            commentClient,
-            throwingFormatter,
-            suggestionFormatter,
-            instructionsResolver,
-            projectStackResolver,
-            docGenerator,
-            parser,
-            config);
+    var throwingService = serviceWith(throwingFormatter);
     prWithFiles(foo);
 
     throwingService.handle(task());
@@ -678,5 +705,286 @@ class DocGenerationServiceTest {
 
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     assertTrue(postedSummary().contains("**1**"));
+  }
+
+  /** The doc the model returns for {@code src/Other.java}, anchored to its declaration line. */
+  private static final String DOC_FOR_OTHER =
+      """
+      {"docs":[{"file":"src/Other.java","line":1,"symbol":"hop(int)",
+      "suggestion_old":"public int hop(int n) {",
+      "suggestion_new":"/** Hops. */\\npublic int hop(int n) {"}]}
+      """;
+
+  @Test
+  void postsNoSuggestionForAFileOnlyThePerRepoIgnorePatternExcludes() {
+    // src/Other.java is reviewable under the global ignore list (which is empty here) and is
+    // excluded only by the pattern the repository declared for itself. This command posts
+    // committable edits, so an ignored path must reach neither a batch nor the anchor resolver.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(
+            new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_OTHER);
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+    var sent = String.join("\n", diffsSentToGenerator());
+    assertFalse(sent.contains("src/Other.java"), "the ignored file must not reach a batch");
+    assertTrue(sent.contains("src/Foo.java"), "the in-scope file must still reach a batch");
+  }
+
+  @Test
+  void keepsTheGlobalIgnoreListWorkingForARepositoryWithNoOwnSettings() {
+    // No .github/thrillhousebot.yml: the effective ignore set must still be exactly the global
+    // list — the per-repo patterns are additive, never a replacement for it.
+    var globallyIgnoring = new ReviewDiffFormatter(List.of("**/*.md"), 5000);
+    var globalService = serviceWith(globallyIgnoring);
+    prWithFiles(fooWithPatch(), new FileDiff("docs/README.md", "modified", 1, 0, 1, "@@\n+hi"));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+
+    globalService.handle(task());
+
+    var sent = String.join("\n", diffsSentToGenerator());
+    assertFalse(sent.contains("docs/README.md"), sent);
+    assertTrue(sent.contains("src/Foo.java"), sent);
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("**1**"), postedSummary());
+  }
+
+  @Test
+  void documentsFilesThatTheLineCapWouldHaveDroppedEntirely() {
+    // The point of the change: coverage is planned over the whole file list, so a file past the
+    // max-diff-lines boundary still reaches a model instead of falling off the end of a
+    // line-capped render with only a footnote to show for it.
+    var tinyLineCap = new ReviewDiffFormatter(List.of(), 8);
+    var cappedService = serviceWith(tinyLineCap);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_OTHER);
+
+    cappedService.handle(task());
+
+    var sent = String.join("\n", diffsSentToGenerator());
+    assertTrue(sent.contains("public int hop(int n) {"), sent);
+    assertFalse(sent.contains("patch truncated"), sent);
+    var inline = capturedInlineComment();
+    assertEquals("src/Other.java", inline.path());
+    assertTrue(inline.body().contains("```suggestion"), inline.body());
+    assertFalse(postedSummary().contains("partial coverage"), postedSummary());
+  }
+
+  @Test
+  void plansOneBatchPerSliceOfTheChangeSetRatherThanOneCallOverTheWholeRender() {
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+
+    service.handle(task());
+
+    var sent = diffsSentToGenerator();
+    assertEquals(2, sent.size(), sent.toString());
+    // Each batch carries its own slice: asserting only that the slices *contain* their file would
+    // also pass if every call were handed the whole-PR render, which is what this replaces.
+    assertTrue(sent.get(0).contains("src/Foo.java"), sent.get(0));
+    assertFalse(sent.get(0).contains("src/Other.java"), sent.get(0));
+    assertTrue(sent.get(1).contains("src/Other.java"), sent.get(1));
+    assertFalse(sent.get(1).contains("src/Foo.java"), sent.get(1));
+  }
+
+  @Test
+  void keepsTheGuardsAcrossBatchesSoOnlyTheAnchorableDocIsPosted() {
+    // The anchor and declaration-retention guards run over the merged docs of every batch, not one
+    // batch's: a second batch must not be able to slip past them.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """)
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Other.java","line":1,"symbol":"hop",
+            "suggestion_old":"public int hop(int n) {",
+            "suggestion_new":"/** just a docstring, no code */"}]}
+            """);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals("src/Foo.java", inline.path());
+    assertTrue(postedSummary().contains("**1**"), postedSummary());
+  }
+
+  @Test
+  void keepsTheCommentCapOverTheDocsMergedFromEveryBatch() {
+    when(reviewConfig.maxReviewComments()).thenReturn(1);
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """)
+        .thenReturn(DOC_FOR_OTHER);
+
+    service.handle(task());
+
+    verify(reviewClient, times(1))
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("1 more changed symbol"), postedSummary());
+  }
+
+  @Test
+  void reportsTheBudgetRatherThanAVerdictWhenNoFileFitsABatch() {
+    // Going quiet would hide a misconfigured budget, and NOTHING_TO_DOCUMENT here would be a
+    // verdict on code the model never read.
+    when(activeModel.maxInputTokens()).thenReturn(10);
+    prWithFiles(fooWithPatch(), otherFile());
+
+    service.handle(task());
+
+    verifyNoInteractions(docGenerator);
+    var summary = postedSummary();
+    assertTrue(summary.startsWith(DocGenerationService.NOT_COVERED), summary);
+    assertTrue(summary.contains("src/Foo.java"), summary);
+    assertTrue(summary.contains("src/Other.java"), summary);
+  }
+
+  @Test
+  void keepsTheDocsFromTheBatchesThatSucceededWhenOneBatchFails() {
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenAnswer(
+            call -> {
+              if (call.<String>getArgument(0).contains("src/Other.java")) {
+                throw new RuntimeException("model down");
+              }
+              return """
+                  {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+                  "suggestion_old":"public int bar(int x) {",
+                  "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+                  """;
+            });
+
+    service.handle(task());
+
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("Partial pass"), postedSummary());
+  }
+
+  /** The doc the model returns for {@code src/Foo.java}, anchored to its declaration line. */
+  private static final String DOC_FOR_FOO =
+      """
+      {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar(int)",
+      "suggestion_old":"public int bar(int x) {",
+      "suggestion_new":"/** Doubles x. */\\npublic int bar(int x) {"}]}
+      """;
+
+  @Test
+  void postsOneCommentWhenTwoBatchesBothDocumentTheSameDeclaration() {
+    // Batches hold disjoint files, but a model can still document a file it only saw named in
+    // another batch's context. Two comments on one declaration line would be noise on the PR, so
+    // the merge across batches is keyed on file:line.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_FOO);
+
+    service.handle(task());
+
+    assertEquals(2, diffsSentToGenerator().size(), "both batches must have been called");
+    verify(reviewClient, times(1))
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    assertTrue(summary.contains("**1**"), summary);
+    assertFalse(summary.contains("**2**"), summary);
+  }
+
+  @Test
+  void skipsABatchWhoseResponseWillNotParseAndKeepsTheOthers() {
+    // A batch whose reply is not usable JSON is skipped like a failed call: the batches that did
+    // parse still cover most of the PR, and the loss is disclosed rather than failing the run.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenAnswer(
+            call ->
+                call.<String>getArgument(0).contains("src/Other.java")
+                    ? "Sure! Here are the docs I came up with."
+                    : DOC_FOR_FOO);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals("src/Foo.java", inline.path());
+    var summary = postedSummary();
+    assertTrue(summary.contains("**1**"), summary);
+    assertTrue(summary.contains("Partial pass"), summary);
+    assertTrue(summary.contains("1 batch(es) of this PR could not be analyzed"), summary);
+  }
+
+  @Test
+  void reportsFailureWhenNoBatchResponseWillParse() {
+    // Nothing was salvaged from any batch, so the run has no partial result to present — the
+    // maintainer gets the failure notice rather than a "nothing to document" verdict.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("I could not do that.");
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.GENERATION_FAILED, postedSummary());
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void reportsNoFilesWhenEveryChangedFileIsOutOfScopeForTheRepository() {
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenReturn(
+            new RepoSettings(
+                List.of("src/Foo.java", "src/Other.java"),
+                List.of(),
+                ".github/thrillhousebot.yml"));
+    prWithFiles(fooWithPatch(), otherFile());
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.NO_FILES, postedSummary());
+    verifyNoInteractions(docGenerator);
+  }
+
+  @Test
+  void continuesWithTheGlobalIgnoreListWhenRepositorySettingsCannotBeResolved() {
+    // The SoftLoaders contract: a failure in the new resolution path degrades to the previous
+    // behaviour rather than failing the command.
+    when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
+        .thenThrow(new RuntimeException("repo config down"));
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {",
+            "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
+            """);
+
+    service.handle(task());
+
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedSummary().contains("**1**"), postedSummary());
   }
 }
