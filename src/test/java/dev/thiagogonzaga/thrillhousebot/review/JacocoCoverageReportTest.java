@@ -363,6 +363,34 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void refusesAnArchiveThatInflatesPastTheAggregateCap() throws IOException {
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        // A maximally-compressible entry whose inflated size alone blows the aggregate budget,
+        // placed BEFORE the real report so reaching the report requires inflating the bomb. On the
+        // unfixed code, skipping this non-XML entry inflates the whole of it to find the next
+        // header, and the report behind it is then read as fact.
+        zip.putNextEntry(new ZipEntry("bomb.bin"));
+        var zeros = new byte[64 * 1024];
+        var written = 0L;
+        var target = JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES + zeros.length;
+        while (written <= target) {
+          zip.write(zeros);
+          written += zeros.length;
+        }
+        zip.closeEntry();
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "an archive inflating past the aggregate cap must be refused, not walked to the report"
+              + " hidden behind the bomb");
+    }
+
+    @Test
     void degradesToEmptyWhenTheArchiveIsUnusable() throws IOException {
       assertTrue(JacocoCoverageReport.fromArtifactZip(null).isEmpty(), "no bytes, no coverage");
       assertTrue(JacocoCoverageReport.fromArtifactZip(new byte[0]).isEmpty(), "empty bytes");

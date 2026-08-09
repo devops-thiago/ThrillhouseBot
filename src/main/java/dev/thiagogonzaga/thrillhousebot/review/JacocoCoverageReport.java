@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import io.quarkus.logging.Log;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -47,8 +48,9 @@ import javax.xml.stream.XMLStreamReader;
  *
  * <p>The bytes come from a workflow artifact uploaded by an arbitrary repository, so parsing is
  * defensive throughout — external entities and DTD loading are off, the archive's entry count and
- * uncompressed size are capped against a zip bomb, and every failure yields an {@link #EMPTY}
- * report rather than an exception.
+ * its <em>aggregate</em> inflated size are both capped against a zip bomb (see {@link
+ * #MAX_TOTAL_INFLATED_BYTES}), and every failure yields an {@link #EMPTY} report rather than an
+ * exception.
  */
 final class JacocoCoverageReport {
 
@@ -57,6 +59,17 @@ final class JacocoCoverageReport {
 
   /** Ceiling on one entry's decompressed size — a coverage report is not tens of megabytes. */
   static final int MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+
+  /**
+   * Aggregate ceiling on bytes inflated across <em>all</em> entries of one archive — the zip-bomb
+   * guard. A per-entry cap alone is not enough: skipping to the next entry inflates the whole of
+   * the current one, so a maximally-compressed 16&nbsp;MB artifact could otherwise drive gigabytes
+   * of decompression. Every entry is read through a counting copy that charges this running budget,
+   * and the walk aborts the moment the budget is blown. Generous enough for the largest legitimate
+   * multi-module report (the download itself is capped far lower, at {@code
+   * ArtifactZipFetcher.MAX_BYTES}), tight enough that inflation stays well under a second of CPU.
+   */
+  static final long MAX_TOTAL_INFLATED_BYTES = 128L * 1024 * 1024;
 
   /** Ceiling on how many source files one report may contribute. */
   static final int MAX_SOURCE_FILES = 5_000;
@@ -134,6 +147,12 @@ final class JacocoCoverageReport {
    * The coverage in a downloaded artifact archive: the first {@code .xml} entry that parses as a
    * JaCoCo report with at least one source file wins. {@link #EMPTY} when the bytes are not a
    * readable zip, hold no such entry, or hold nothing this parser understands.
+   *
+   * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
+   * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
+   * enough: the next {@link ZipInputStream#getNextEntry()} implicitly inflates the whole of an
+   * unread entry to reach the following header, which is exactly the path a maximally-compressed
+   * archive takes to gigabytes. The walk aborts the moment the aggregate budget is blown.
    */
   static JacocoCoverageReport fromArtifactZip(byte[] zipBytes) {
     if (zipBytes == null || zipBytes.length == 0) {
@@ -141,13 +160,27 @@ final class JacocoCoverageReport {
     }
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
       var seen = 0;
+      var inflatedTotal = 0L;
       for (var entry = zip.getNextEntry();
           entry != null && seen < MAX_ZIP_ENTRIES;
           entry = zip.getNextEntry(), seen++) {
-        if (!entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
-          // readNBytes bounds the decompressed size regardless of what the entry's header claims,
-          // which is the only number a zip bomb cannot lie its way past.
-          var report = parse(new ByteArrayInputStream(zip.readNBytes(MAX_ENTRY_BYTES)));
+        var budgetLeft = MAX_TOTAL_INFLATED_BYTES - inflatedTotal;
+        var isReport =
+            !entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
+        // Every entry is drained through the counting copy — a report to collect, anything else to
+        // discard — because leaving an entry partly read would hand the implicit inflation back to
+        // the next getNextEntry(). Only the aggregate budget can stop the drain.
+        var sink = isReport ? new ByteArrayOutputStream() : null;
+        var read = inflateEntry(zip, budgetLeft, MAX_ENTRY_BYTES, sink);
+        if (read < 0) {
+          Log.debugf(
+              "Coverage artifact inflates past the %d-byte aggregate cap; refusing it as a zip bomb",
+              MAX_TOTAL_INFLATED_BYTES);
+          break;
+        }
+        inflatedTotal += read;
+        if (sink != null && sink.size() > 0) {
+          var report = parse(new ByteArrayInputStream(sink.toByteArray()));
           if (!report.isEmpty()) {
             Log.infof("Read patch coverage from artifact entry %s", entry.getName());
             return report;
@@ -158,6 +191,39 @@ final class JacocoCoverageReport {
       Log.debugf(e, "Could not read the coverage artifact archive");
     }
     return EMPTY;
+  }
+
+  /**
+   * Fully inflates the current zip entry, charging its bytes against {@code budgetLeft}. Returns
+   * the number of bytes inflated, or {@code -1} the moment that running aggregate budget is
+   * exceeded — the archive is then a decompression bomb and the caller must abandon it. The whole
+   * entry is always consumed (short of an abort) so the next {@code getNextEntry()} never has to
+   * inflate a remainder. When {@code sink} is non-null, up to {@code collectLimit} bytes are
+   * captured into it for parsing; a report larger than that captures nothing — a truncated report
+   * is not one — but is still drained so the walk can safely reach the next entry.
+   */
+  private static long inflateEntry(
+      ZipInputStream zip, long budgetLeft, int collectLimit, ByteArrayOutputStream sink)
+      throws IOException {
+    var buffer = new byte[8192];
+    var read = 0L;
+    var collecting = sink != null;
+    int n;
+    while ((n = zip.read(buffer)) != -1) {
+      read += n;
+      if (read > budgetLeft) {
+        return -1;
+      }
+      if (collecting) {
+        if (read > collectLimit) {
+          collecting = false;
+          sink.reset();
+        } else {
+          sink.write(buffer, 0, n);
+        }
+      }
+    }
+    return read;
   }
 
   /** Parses one JaCoCo XML document, or {@link #EMPTY} when it is not one / cannot be read. */
