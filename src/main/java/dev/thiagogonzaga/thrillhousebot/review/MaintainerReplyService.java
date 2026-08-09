@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
@@ -52,6 +53,7 @@ public class MaintainerReplyService {
   private final GitHubPullRequestClient prClient;
   private final ReviewDiffFormatter diffFormatter;
   private final ReplyAssistant replyAssistant;
+  private final RepoSettingsResolver repoSettingsResolver;
 
   @Inject
   public MaintainerReplyService(
@@ -62,7 +64,8 @@ public class MaintainerReplyService {
       @RestClient GitHubCommentClient commentClient,
       @RestClient GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
-      ReplyAssistant replyAssistant) {
+      ReplyAssistant replyAssistant,
+      RepoSettingsResolver repoSettingsResolver) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -71,6 +74,7 @@ public class MaintainerReplyService {
     this.prClient = prClient;
     this.diffFormatter = diffFormatter;
     this.replyAssistant = replyAssistant;
+    this.repoSettingsResolver = repoSettingsResolver;
   }
 
   /**
@@ -185,23 +189,26 @@ public class MaintainerReplyService {
   }
 
   private void handleMention(String auth, ReplyTask task) {
+    var diff = fetchDiff(auth, task);
     String reply =
         generateReply(
             task.question(),
             PromptSections.prContext(task.prTitle(), task.prDescription()),
             "",
-            fetchDiff(auth, task),
+            diff.text(),
             "");
     if (reply == null) {
       return;
     }
+    // Append the partial-coverage disclosure (empty unless the diff was line-capped), so a large-PR
+    // answer is never presented as derived from the whole change — matching every other surface.
     commentClient.createComment(
         auth,
         ACCEPT,
         task.owner(),
         task.repo(),
         task.prNumber(),
-        new GitHubCommentClient.CreateCommentRequest(reply));
+        new GitHubCommentClient.CreateCommentRequest(reply + diff.disclosure()));
     Log.infof(
         "Posted conversational reply to mention on %s/%s #%d",
         task.owner(), task.repo(), task.prNumber());
@@ -268,14 +275,43 @@ public class MaintainerReplyService {
     return sb.toString();
   }
 
-  private String fetchDiff(String auth, ReplyTask task) {
+  /**
+   * The rendered PR diff handed to the reply model, plus any partial-coverage disclosure to append
+   * to the posted answer ({@code ""} when nothing was omitted).
+   */
+  private record MentionDiff(String text, String disclosure) {
+    static final MentionDiff EMPTY = new MentionDiff("", "");
+  }
+
+  private MentionDiff fetchDiff(String auth, ReplyTask task) {
     try {
       var files =
           prClient.getPullRequestFiles(auth, ACCEPT, task.owner(), task.repo(), task.prNumber());
-      return diffFormatter.buildDiffString(files);
+      // Honor the repository's own ignore globs (#51) — the same trust boundary the review path and
+      // every on-request command respect (#468/#469). A path a maintainer excluded in
+      // .github/thrillhousebot.yml must not reach the model on a bot-mention reply. Resolved from
+      // the base repo's default branch (no ref pinned), so a fork PR cannot inject its own ignore
+      // list; fails soft to the global list, so a config load failure degrades rather than drops
+      // the reply.
+      var repoSettings =
+          SoftLoaders.repoSettings(
+              repoSettingsResolver,
+              task.owner(),
+              task.repo(),
+              null,
+              task.installationId(),
+              "mention reply");
+      var globs = diffFormatter.ignoreGlobs(repoSettings.ignoredFiles());
+      var reviewable = diffFormatter.reviewableFiles(files, globs);
+      // buildDiffStringWithStats keeps the omitted-file count the stats-free overload discarded, so
+      // a line-capped diff can be disclosed instead of silently answered from a partial view.
+      var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
+      String disclosure =
+          formatted.truncated() ? ReviewResult.truncationDisclosure(formatted.omittedFiles()) : "";
+      return new MentionDiff(formatted.text(), disclosure);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch PR diff for mention reply, continuing without it", e);
-      return "";
+      return MentionDiff.EMPTY;
     }
   }
 }
