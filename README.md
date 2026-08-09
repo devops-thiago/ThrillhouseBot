@@ -266,7 +266,7 @@ will change per provider:
 | `AI_PROVIDER` | Provider label for telemetry (`gen_ai.provider.name`); derived from `AI_BASE_URL` when unset | _(derived)_ |
 | `AI_TIMEOUT` | Per-request timeout | `300s` |
 | `AI_REASONING_ENABLED` | Send a reasoning hint to reasoning-capable models; when `false` no reasoning parameter is sent and the provider default applies | `false` |
-| `AI_REASONING_EFFORT` | Effort sent while enabled: `none`/`low`/`medium`/`high` (`none` explicitly asks the model not to reason); reasoning tokens are billed as output tokens | `low` |
+| `AI_REASONING_EFFORT` | Effort sent while enabled: `none`/`low`/`medium`/`high`/`xhigh`/`max` (`none` explicitly asks the model not to reason; `xhigh`/`max` are the extended tiers newer reasoning models expose above `high`); reasoning tokens are billed as output tokens | `low` |
 | `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
