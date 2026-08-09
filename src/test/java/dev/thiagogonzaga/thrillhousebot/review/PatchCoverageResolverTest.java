@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -33,10 +34,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Unit tests for {@link PatchCoverageResolver} — sourcing the repository's own coverage report for
@@ -318,69 +323,60 @@ class PatchCoverageResolverTest {
       verifyNoInteractions(zipFetcher);
     }
 
-    @Test
-    void degradesToNoContextWhenTheReportSaysNothingAboutAnyChangedFile() {
+    /**
+     * The three ways a perfectly readable report can still leave nothing to say. They are one
+     * behaviour over three fixtures — the download is wired identically for each, and only the
+     * report differs — so they are parameterized rather than copied. The label is the case, and the
+     * reason travels with it into the failure message.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("reportsThatYieldNoUncoveredAddedLines")
+    void aReadableReportWithNoUncoveredAddedLinesProducesNoSection(
+        String label, String report, String why) {
       givenRunWithArtifact(ARTIFACT);
       givenDownloadRedirectsTo(BLOB);
-      when(zipFetcher.fetch(BLOB))
-          .thenReturn(
-              zippedReport(
-                  """
-                  <report name="r">
-                    <package name="somewhere/else">
-                      <sourcefile name="Other.java"><line nr="1" mi="1" ci="0"/></sourcefile>
-                    </package>
-                  </report>
-                  """));
+      when(zipFetcher.fetch(BLOB)).thenReturn(zippedReport(report));
 
-      assertEquals(
-          "",
-          resolve(true, ARTIFACT),
-          "a readable report that measures none of the changed files says nothing about them");
+      assertEquals("", resolve(true, ARTIFACT), why);
     }
 
-    @Test
-    void degradesToNoContextWhenTheUncoveredLinesAreAllOutsideTheDiff() {
-      givenRunWithArtifact(ARTIFACT);
-      givenDownloadRedirectsTo(BLOB);
-      when(zipFetcher.fetch(BLOB))
-          .thenReturn(
-              zippedReport(
-                  """
-                  <report name="r">
-                    <package name="dev/thiagogonzaga/thrillhousebot/review">
-                      <sourcefile name="CiStatusEvaluator.java">
-                        <line nr="900" mi="3" ci="0"/>
-                      </sourcefile>
-                    </package>
-                  </report>
-                  """));
-
-      assertEquals(
-          "",
-          resolve(true, ARTIFACT),
-          "pre-existing untested code is not this pull request's business");
-    }
-
-    @Test
-    void degradesToNoContextWhenEveryAddedLineIsCovered() {
-      givenRunWithArtifact(ARTIFACT);
-      givenDownloadRedirectsTo(BLOB);
-      when(zipFetcher.fetch(BLOB))
-          .thenReturn(
-              zippedReport(
-                  """
-                  <report name="r">
-                    <package name="dev/thiagogonzaga/thrillhousebot/review">
-                      <sourcefile name="CiStatusEvaluator.java">
-                        <line nr="11" mi="0" ci="4"/>
-                        <line nr="12" mi="0" ci="4"/>
-                      </sourcefile>
-                    </package>
-                  </report>
-                  """));
-
-      assertEquals("", resolve(true, ARTIFACT), "nothing to say is said with nothing");
+    static Stream<Arguments> reportsThatYieldNoUncoveredAddedLines() {
+      return Stream.of(
+          arguments(
+              "the report measures none of the changed files",
+              """
+              <report name="r">
+                <package name="somewhere/else">
+                  <sourcefile name="Other.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+                </package>
+              </report>
+              """,
+              "a readable report that measures none of the changed files says nothing about them"),
+          arguments(
+              "every uncovered line falls outside the diff",
+              """
+              <report name="r">
+                <package name="dev/thiagogonzaga/thrillhousebot/review">
+                  <sourcefile name="CiStatusEvaluator.java">
+                    <line nr="900" mi="3" ci="0"/>
+                  </sourcefile>
+                </package>
+              </report>
+              """,
+              "pre-existing untested code is not this pull request's business"),
+          arguments(
+              "every added line is covered",
+              """
+              <report name="r">
+                <package name="dev/thiagogonzaga/thrillhousebot/review">
+                  <sourcefile name="CiStatusEvaluator.java">
+                    <line nr="11" mi="0" ci="4"/>
+                    <line nr="12" mi="0" ci="4"/>
+                  </sourcefile>
+                </package>
+              </report>
+              """,
+              "nothing to say is said with nothing"));
     }
   }
 
