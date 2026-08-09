@@ -144,8 +144,17 @@ public class ConfigKeyContextResolver {
   /**
    * Trailing/leading dotted segments that mark a token as a hostname or a reverse-domain Java FQN
    * rather than a configuration key. A hostname trails with the TLD ({@code api.github.com}); a
-   * reverse-domain package name leads with it ({@code org.eclipse.microprofile.rest.client}). No
-   * real config key begins or ends with a bare TLD segment, so both ends are checked.
+   * reverse-domain package name leads with it ({@code org.eclipse.microprofile.rest.client}). Both
+   * ends are therefore checked.
+   *
+   * <p>This is a precision/recall trade-off, not a law: a legitimate reverse-domain <em>config</em>
+   * key ({@code com.example.service.timeout}, {@code io.micrometer.export.step}) also leads with a
+   * TLD segment and is dropped here too. Such a key cannot be told apart from a Java package name
+   * by shape alone — only by whether it resolves to a key-position definition rather than an {@code
+   * import} — and a mis-extracted FQN that <em>does</em> resolve (against an {@code import} line in
+   * a config source) would fill a rendered slot and crowd out the documented key. The trade-off
+   * deliberately favours dropping the ambiguous reverse-domain token; reverse-domain config keys
+   * are rare, and one dropped enrichment snippet is cheaper than a wrong one.
    */
   private static final Set<String> TLD_SEGMENTS =
       Set.of("com", "org", "net", "io", "co", "dev", "gov", "edu", "info", "app", "ai", "me", "us");
@@ -244,7 +253,8 @@ public class ConfigKeyContextResolver {
    * fully-qualified name that happens to share the dotted-lowercase shape and would otherwise
    * resolve against unrelated config lines and crowd out the actually-documented key. An {@code
    * UPPER_SNAKE} env name is always a key. A dotted property token is rejected when it sits inside
-   * a URL on the source line, or when its first or last segment is a common TLD.
+   * a URL on the source line, or when its first or last segment is a common TLD (see {@link
+   * #TLD_SEGMENTS} for the reverse-domain-config-key trade-off the leading-TLD check accepts).
    */
   private static boolean looksLikeConfigKey(String token, String line, int start) {
     if (token.indexOf('.') < 0) {

@@ -192,6 +192,54 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldRejectDottedTokensByTldPositionAndUrlWord() {
+      // Exercises each rejection reason on a non-URL token: last segment a TLD (hostname in prose),
+      // first segment a TLD (reverse-domain FQN, or the accepted reverse-domain-key trade-off), a
+      // www. word (URL without a scheme), and a token that is none of these (kept).
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(
+              List.of(
+                  docDiff(
+                      "README.md",
+                      "host service.example.com and package io.quarkus.arc but keep"
+                          + " `thrillhousebot.review.enabled` and see www.docs.internal for more")));
+
+      assertFalse(
+          tokens.contains("service.example.com"),
+          () -> "last segment is a TLD (a hostname), even in prose: " + tokens);
+      assertFalse(
+          tokens.contains("io.quarkus.arc"),
+          () -> "first segment is a TLD (reverse-domain shape): " + tokens);
+      assertFalse(
+          tokens.contains("www.docs.internal"),
+          () -> "a www. word is a URL, not a config key: " + tokens);
+      assertEquals(
+          List.of("thrillhousebot.review.enabled"),
+          tokens,
+          () ->
+              "only the token that is neither a hostname, an FQN, nor in a URL survives: "
+                  + tokens);
+    }
+
+    @Test
+    void shouldTreatAUrlAtTheVeryStartOfALineAsAUrl() {
+      // The URL begins at offset 0, so scanning back to find the word start reaches the string's
+      // start rather than a preceding space — the other side of that boundary walk.
+      var tokens =
+          ConfigKeyContextResolver.extractTokens(
+              List.of(
+                  docDiff(
+                      "README.md",
+                      "http://foo.example.internal/x is the base and `keep.this.key`")));
+
+      assertFalse(
+          tokens.contains("foo.example.internal"),
+          () -> "a host at the very start of the line is still inside a URL: " + tokens);
+      assertEquals(
+          List.of("keep.this.key"), tokens, () -> "the real key past the URL survives: " + tokens);
+    }
+
+    @Test
     void shouldNotMistakeFilenamesForPropertyKeys() {
       var tokens =
           ConfigKeyContextResolver.extractTokens(
@@ -401,6 +449,18 @@ class ConfigKeyContextResolverTest {
       assertTrue(
           ConfigKeyContextResolver.lineDefines(
               "x=${FOO_BAR:1}", ConfigKeyContextResolver.normalize("FOO_BAR")));
+    }
+
+    @Test
+    void shouldReportALineAsDefiningTheKeyThroughTheSuffixBranch() {
+      // No exact whole-key hit on this line, so lineDefines must fall through to the suffix branch:
+      // the derived @WithName env name matches with its two prefix segments dropped.
+      assertTrue(
+          ConfigKeyContextResolver.lineDefines(
+              "  @WithName(\"manual-trigger-allowed-logins\")",
+              ConfigKeyContextResolver.normalize(
+                  "THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS")),
+          "an exact match is absent, so the suffix branch is what makes this a definition");
     }
 
     @Test
