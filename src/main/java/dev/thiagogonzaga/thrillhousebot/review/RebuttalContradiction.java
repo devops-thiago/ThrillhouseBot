@@ -160,13 +160,48 @@ final class RebuttalContradiction {
     if (claim == null) {
       return Optional.empty();
     }
-    Matcher evidence = earliestMatch(CONCURRENT_DISPATCHES, reviewedCode);
+    // Match evidence only against right-side (added/context) code with line comments stripped: a
+    // dispatch the maintainer deleted this revision, or one that survives only in a comment, is not
+    // live code and must not reopen the finding by quoting a line the code no longer runs (F3).
+    var rightSide = rightSideCode(reviewedCode);
+    Matcher evidence = earliestMatch(CONCURRENT_DISPATCHES, rightSide);
     if (evidence == null) {
       return Optional.empty();
     }
     return Optional.of(
         new Contradiction(
-            sentenceAround(asserted, claim.start()), lineAround(reviewedCode, evidence.start())));
+            sentenceAround(asserted, claim.start()), lineAround(rightSide, evidence.start())));
+  }
+
+  /**
+   * The reviewed patch reduced to the code the revision actually runs: removed ({@code -}) lines
+   * are dropped and line comments are stripped, so a dispatch construct that was deleted or only
+   * mentioned in a comment cannot pose as live evidence. Added ({@code +}) and context lines are
+   * kept verbatim (including their leading marker, which {@link #clip} removes when quoting),
+   * across every file in the patch — cross-file evidence is intentional.
+   */
+  private static String rightSideCode(String reviewedCode) {
+    var kept = new ArrayList<String>();
+    for (var line : reviewedCode.split("\n", -1)) {
+      // A unified-diff removed line (and the "---" old-file header) starts with '-'.
+      if (line.startsWith("-")) {
+        continue;
+      }
+      kept.add(stripLineComment(line));
+    }
+    return String.join("\n", kept);
+  }
+
+  /**
+   * Drops a trailing {@code //} line comment, leaving any code before it intact. A {@code ://}
+   * sequence (a URL scheme) is not treated as a comment start.
+   */
+  private static String stripLineComment(String line) {
+    var idx = line.indexOf("//");
+    while (idx > 0 && line.charAt(idx - 1) == ':') {
+      idx = line.indexOf("//", idx + 2);
+    }
+    return idx < 0 ? line : line.substring(0, idx);
   }
 
   /**
@@ -186,12 +221,20 @@ final class RebuttalContradiction {
     return earliest;
   }
 
+  /**
+   * Lead-in of {@link Contradiction#note()}, shared with the review body surface ({@code
+   * ReviewPublisher.noIssuesBody}) so a reopened decline can be told apart from an ordinary
+   * unresolved note and rendered next to the "previous finding(s) remain unresolved" line (F6).
+   */
+  static final String NOTE_LEAD_IN = "Decline re-checked against the code and not accepted:";
+
   /** The quoted claim and the quoted code line that refutes it, both already trimmed for a note. */
   record Contradiction(String claim, String evidence) {
 
     /** One-line status note naming the contradiction, for {@code previous_findings_status}. */
     String note() {
-      return "Decline re-checked against the code and not accepted: the reply argues \""
+      return NOTE_LEAD_IN
+          + " the reply argues \""
           + claim
           + "\", but the reviewed code dispatches this path concurrently — \""
           + evidence

@@ -489,6 +489,7 @@ public class ReviewPublisher {
     if (unresolved > 0) {
       sb.append(ciHeld ? "\nAdditionally, " : "")
           .append(ReviewResult.unresolvedPreviousMessage(unresolved));
+      appendReopenedDeclineNotes(sb, result);
     }
     if (result.truncated()) {
       if (!sb.isEmpty()) {
@@ -497,6 +498,24 @@ public class ReviewPublisher {
       sb.append(result.truncationNotice().strip());
     }
     return sb.toString();
+  }
+
+  /**
+   * Appends the explanatory note of each unresolved previous finding whose decline the re-check
+   * overturned ({@link RebuttalContradiction}) — the reply's premise, the contradicting line, and
+   * the "reply again to keep the decline" escape hatch. Without this the maintainer sees only the
+   * generic "N previous finding(s) remain unresolved" line and no reason their decline was not
+   * honored (F6). Only the reopened-decline note is surfaced; the backstop's generic carry-over
+   * note and the model's own unresolved notes stay out of the review body.
+   */
+  private static void appendReopenedDeclineNotes(StringBuilder sb, ReviewResult result) {
+    for (var status : result.previousStatuses()) {
+      if ("unresolved".equalsIgnoreCase(status.status())
+          && status.note() != null
+          && status.note().startsWith(RebuttalContradiction.NOTE_LEAD_IN)) {
+        sb.append("\n\n").append(status.note().strip());
+      }
+    }
   }
 
   /**

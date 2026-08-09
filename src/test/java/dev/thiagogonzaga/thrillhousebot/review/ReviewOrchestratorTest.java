@@ -407,6 +407,44 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void reopenedDeclineBodySurfacesTheContradictionNote() {
+      // A maintainer's decline the code contradicts is reopened as unresolved carrying the
+      // contradiction note. The review body must surface that note next to the unresolved line so
+      // the maintainer sees why their decline was not honored, and how to keep it (F6).
+      var note =
+          RebuttalContradiction.NOTE_LEAD_IN
+              + " the reply argues \"only ever called from the command path\", but the reviewed"
+              + " code dispatches this path concurrently — \"executor.execute(() -> execute(ctx));"
+              + "\". A single call site does not serialize work handed to an executor or a new"
+              + " thread, so the premise does not refute the finding. Reply again to keep the"
+              + " decline.";
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", note)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
+      assertTrue(body.contains("Reply again to keep the decline."), body);
+      assertTrue(body.contains("executor.execute(() -> execute(ctx));"), body);
+    }
+
+    @Test
     void truncatedFirstReviewBodyNowDisclosesPartialReview() {
       var result =
           new ReviewResult(

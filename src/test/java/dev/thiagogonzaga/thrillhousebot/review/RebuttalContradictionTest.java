@@ -326,17 +326,43 @@ class RebuttalContradictionTest {
   }
 
   @Test
-  void shouldStripTheDiffMarkerFromAnEvidenceLineOnEitherSide() {
+  void shouldNotQuoteAConcurrentDispatchThatOnlyAppearsOnARemovedLine() {
+    // The maintainer deleted the dispatch in this revision, so the finding's premise is no longer
+    // refuted by live code. A removed (-) line must not be quoted as evidence, and clip() would
+    // otherwise strip the leading '-' and present the deleted line as if it still ran (F3).
     var removedDispatch =
         "diff --git a/Worker.java\n@@ -1,3 +1,2 @@\n-    pool.submit(task);\n+    run(task);\n";
 
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", removedDispatch).isEmpty(),
+        "a dispatch that survives only on a removed line is not live code and keeps the decline");
+  }
+
+  @Test
+  void shouldNotQuoteAConcurrentDispatchThatOnlyAppearsInALineComment() {
+    // The dispatch is mentioned only in a // comment on an added line — commented-out or
+    // explanatory text, not live code — so it must not refute the decline (F3).
+    var commentedDispatch =
+        "diff --git a/Worker.java\n@@ -1,2 +1,3 @@\n"
+            + "+    // executor.submit(() -> run(ctx)); removed, now synchronous\n"
+            + "+    run(ctx);\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", commentedDispatch).isEmpty(),
+        "a dispatch mentioned only in a line comment is not live code and keeps the decline");
+  }
+
+  @Test
+  void shouldQuoteAConcurrentDispatchThatSurvivesOnAContextLine() {
+    // The dispatch is on an unchanged context line (space-prefixed): still live code, so it refutes
+    // the decline and the marker is stripped from the quote.
+    var contextDispatch =
+        "diff --git a/Worker.java\n@@ -1,3 +1,3 @@\n     pool.submit(task);\n+    log(task);\n";
+
     var contradiction =
-        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", removedDispatch);
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", contextDispatch);
 
     assertTrue(contradiction.isPresent());
-    assertEquals(
-        "pool.submit(task);",
-        contradiction.get().evidence(),
-        "a leading -/+ diff marker is noise in the quote");
+    assertEquals("pool.submit(task);", contradiction.get().evidence());
   }
 }
