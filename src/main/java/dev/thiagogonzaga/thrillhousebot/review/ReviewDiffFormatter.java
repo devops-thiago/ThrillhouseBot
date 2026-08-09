@@ -163,6 +163,18 @@ public class ReviewDiffFormatter {
     return globalGlobs.matches(filename);
   }
 
+  /**
+   * Whether a set of file names holds this file's name, tolerating a null name the way {@link
+   * IgnoreGlobs#matches(String)} does — {@code filename()} on a Jackson-deserialized {@link
+   * GitHubPullRequestClient.FileDiff} is not validated at construction (its {@code patch} and
+   * {@code previousFilename} siblings are legitimately null), and the name sets these lookups run
+   * against are immutable, whose {@code contains(null)} throws instead of returning false. A file
+   * with no name is simply not in the set.
+   */
+  static boolean namesContain(Set<String> names, String filename) {
+    return filename != null && names.contains(filename);
+  }
+
   /** Matches `**`-prefixed patterns against the file name and every sub-path of the file. */
   private static boolean matchesSuffix(PathMatcher suffix, Path path) {
     if (suffix == null) {

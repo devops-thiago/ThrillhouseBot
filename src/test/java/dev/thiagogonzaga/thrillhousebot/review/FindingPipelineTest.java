@@ -652,6 +652,43 @@ class FindingPipelineTest {
     assertFalse(changedFiles.contains("b.java (modified, +2 -0 — partially"), changedFiles);
   }
 
+  /**
+   * #471 — {@code FileDiff.filename()} is not validated at construction, and the omitted/clipped
+   * lookups run against immutable sets whose {@code contains(null)} throws instead of answering
+   * false. An unnamed file must be treated as neither omitted nor clipped, matching the null guard
+   * the ignore globs already carry, rather than failing the whole review off the ack thread.
+   */
+  @Test
+  void anUnnamedReviewableFileIsNeitherOmittedNorClippedInTheSummaryOverview() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx =
+        reviewContext(
+            List.of(),
+            List.of(
+                new FileDiff(null, "modified", 7, 0, 7, ""),
+                new FileDiff("a.java", "modified", 3, 0, 3, "")),
+            null);
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java"), batch("b.java")), List.of("z.java"), List.of("a.java"), true);
+    when(budgetPlanner.perCallInputBudget()).thenReturn(1_000_000);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(
+        changedFiles.contains("(modified, +7 -0)\n"),
+        "the unnamed file is kept as an ordinary row: not skipped as omitted, not marked clipped");
+    assertTrue(changedFiles.contains("a.java (modified, +3 -0 — partially analyzed"), changedFiles);
+    assertTrue(changedFiles.contains("z.java (omitted"), changedFiles);
+  }
+
   @Test
   void summaryFindingsJsonIsClampedToThePerCallBudget() throws Exception {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");

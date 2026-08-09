@@ -745,6 +745,30 @@ class FollowUpAnalyzerTest {
     assertEquals(2, parsed.get(0).findings().size());
   }
 
+  /**
+   * #471 — a persisted body that is the JSON literal {@code null} is syntactically valid, so
+   * Jackson returns Java null without throwing and the response never reached the parse-failure
+   * fallback. The null element then went straight into {@code List.copyOf}, which rejects it,
+   * failing every later review of that PR on the async thread. Unusable prior state must degrade to
+   * the empty response so the review proceeds.
+   */
+  @Test
+  void persistedResponseOfTheJsonLiteralNullDegradesToTheEmptyResponse() {
+    var parsed = analyzer.parsePreviousResponses(List.of("null", PREVIOUS_JSON));
+
+    assertEquals(2, parsed.size());
+    assertNotNull(parsed.get(0), "a literal-null body must not leave a null in the parsed list");
+    assertTrue(parsed.get(0).findings().isEmpty());
+    assertTrue(parsed.get(0).previousFindingsStatus().isEmpty());
+    assertFalse(
+        FollowUpAnalyzer.isPersistedResponse(parsed.get(0)),
+        "a literal-null body is the same absence as an unparseable one");
+    assertEquals(2, parsed.get(1).findings().size(), "the readable rounds still parse");
+    assertTrue(
+        analyzer.previousFindingFilesById("null").isEmpty(),
+        "the by-id lookup reads the same response and must not dereference null");
+  }
+
   @Test
   void preParsedApisReuseFindingsWithoutReReadingJson() {
     var previous = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)).get(0).findings();

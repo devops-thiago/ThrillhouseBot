@@ -1245,15 +1245,22 @@ public class FollowUpAnalyzer {
 
   /**
    * Full persisted previous response, with empty (never null) findings and statuses on a missing or
-   * unparseable input — the backstop replay needs both lists, and the compact constructor of {@link
-   * ReviewResponse} guarantees non-null copies.
+   * unusable input — the backstop replay needs both lists, and the compact constructor of {@link
+   * ReviewResponse} guarantees non-null copies. Never returns null: a stored body that is the JSON
+   * literal {@code null} is syntactically valid, so Jackson returns Java null without throwing, and
+   * callers copy the result into immutable collections that reject null elements.
    */
   ReviewResponse parseResponse(String aiResponseJson) {
     if (aiResponseJson == null || aiResponseJson.isBlank()) {
       return EMPTY_RESPONSE;
     }
     try {
-      return mapper.readValue(aiResponseJson, ReviewResponse.class);
+      var parsed = mapper.readValue(aiResponseJson, ReviewResponse.class);
+      if (parsed == null) {
+        Log.warn("Previous AI response deserialized to null, falling back to review body context");
+        return EMPTY_RESPONSE;
+      }
+      return parsed;
     } catch (JsonProcessingException e) {
       Log.warn("Could not parse previous AI response, falling back to review body context", e);
       return EMPTY_RESPONSE;
