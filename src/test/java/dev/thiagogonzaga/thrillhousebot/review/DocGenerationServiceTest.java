@@ -886,6 +886,71 @@ class DocGenerationServiceTest {
     assertTrue(postedSummary().contains("Partial pass"), postedSummary());
   }
 
+  /** The doc the model returns for {@code src/Foo.java}, anchored to its declaration line. */
+  private static final String DOC_FOR_FOO =
+      """
+      {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar(int)",
+      "suggestion_old":"public int bar(int x) {",
+      "suggestion_new":"/** Doubles x. */\\npublic int bar(int x) {"}]}
+      """;
+
+  @Test
+  void postsOneCommentWhenTwoBatchesBothDocumentTheSameDeclaration() {
+    // Batches hold disjoint files, but a model can still document a file it only saw named in
+    // another batch's context. Two comments on one declaration line would be noise on the PR, so
+    // the merge across batches is keyed on file:line.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_FOO);
+
+    service.handle(task());
+
+    assertEquals(2, diffsSentToGenerator().size(), "both batches must have been called");
+    verify(reviewClient, times(1))
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    var summary = postedSummary();
+    assertTrue(summary.contains("**1**"), summary);
+    assertFalse(summary.contains("**2**"), summary);
+  }
+
+  @Test
+  void skipsABatchWhoseResponseWillNotParseAndKeepsTheOthers() {
+    // A batch whose reply is not usable JSON is skipped like a failed call: the batches that did
+    // parse still cover most of the PR, and the loss is disclosed rather than failing the run.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenAnswer(
+            call ->
+                call.<String>getArgument(0).contains("src/Other.java")
+                    ? "Sure! Here are the docs I came up with."
+                    : DOC_FOR_FOO);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals("src/Foo.java", inline.path());
+    var summary = postedSummary();
+    assertTrue(summary.contains("**1**"), summary);
+    assertTrue(summary.contains("Partial pass"), summary);
+    assertTrue(summary.contains("1 batch(es) of this PR could not be analyzed"), summary);
+  }
+
+  @Test
+  void reportsFailureWhenNoBatchResponseWillParse() {
+    // Nothing was salvaged from any batch, so the run has no partial result to present — the
+    // maintainer gets the failure notice rather than a "nothing to document" verdict.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("I could not do that.");
+
+    service.handle(task());
+
+    assertEquals(DocGenerationService.GENERATION_FAILED, postedSummary());
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
   @Test
   void reportsNoFilesWhenEveryChangedFileIsOutOfScopeForTheRepository() {
     when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
