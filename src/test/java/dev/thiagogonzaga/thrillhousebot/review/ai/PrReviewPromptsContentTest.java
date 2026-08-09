@@ -25,7 +25,8 @@ import org.junit.jupiter.api.Test;
  * parameter-nullability / unseen-caller guard (#107), the in-diff-test exercise gate (a green test
  * must demonstrably hit the claimed path before it can invalidate a finding — #116), the symmetric
  * exact-arithmetic / "test fails" cap (#97), the heuristic failure-mode characterization pass with
- * its verifier exemption (#123), the producer→consumer data-flow contract dimension (#117), and the
+ * its verifier exemption (#123), the producer→consumer data-flow contract dimension (#117), the
+ * config-key documentation-completeness claim class and its narrowing guards (#109), and the
  * summary call's whole-change-set grounding (#335). These assertions are intentionally coarse —
  * they check intent survives, not exact wording; an intentional rewording should update the
  * matching anchor.
@@ -391,6 +392,103 @@ class PrReviewPromptsContentTest {
         sys,
         "not for every local variable that crosses a hunk",
         "the self-check must scope the claim to the structure the change is about");
+  }
+
+  @Test
+  void generatorPromptReportsIncompleteConfigKeyDocumentation() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "CONFIG KEY DOCUMENTATION COMPLETENESS",
+        "the config-key documentation-completeness dimension must exist (#109)");
+    assertContains(
+        sys,
+        "Config key definitions from the repository",
+        "the dimension must name the context section #108 actually renders as its evidence");
+    assertContains(
+        sys,
+        "LIST/SEPARATOR semantics",
+        "list/comma semantics must be one of the format-critical facts a doc may not omit");
+    assertContains(
+        sys,
+        "Correct-but-incomplete IS a",
+        "a documented-but-incomplete config key must be reportable, not only a contradiction");
+    assertContains(
+        sys,
+        "lists sibling keys without listing the new",
+        "a key added with no doc entry beside its siblings must be reportable too");
+  }
+
+  @Test
+  void generatorPromptCarvesConfigDocGapsOutOfThePhrasingNitpickExclusion() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "a config-key documentation gap under dimension 10",
+        "the low-severity nitpick exclusion must carve out config-key documentation gaps (#109)");
+    assertContains(
+        sys,
+        "Prose style, tone and ordering remain nitpicks",
+        "the carve-out must leave ordinary documentation prose excluded");
+  }
+
+  @Test
+  void generatorPromptKeepsTheConfigDocClaimNarrowAndEvidenced() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "wording, tone, ordering, table formatting",
+        "the dimension must exclude prose-style omissions from the carve-out");
+    assertContains(
+        sys,
+        "config-key documentation-completeness claim (dimension 10) must quote",
+        "a self-check must require both the documented line and the definition to be quoted");
+    assertContains(
+        sys,
+        "fact is missing (type, separator, units, allowed values, default)",
+        "the self-check must enumerate the format-critical facts the claim may rest on");
+  }
+
+  @Test
+  void verifierPromptDoesNotDemoteConfigDocGapsAsFrameworkBehavior() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "A config-key documentation-completeness finding",
+        "verifier must judge config-doc-completeness findings on their own terms (#109)");
+    assertContains(
+        sys,
+        "Config key definitions from the repository",
+        "verifier must know the definition comes from a section built outside the diff");
+    assertContains(
+        sys,
+        "remembered framework behavior when that quoted definition",
+        "a quoted definition must not be treated as a remembered framework claim");
+    assertContains(
+        sys,
+        "THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS",
+        "verifier must keep the PR #104 comma-separated-list regression example");
+    assertContains(
+        sys,
+        "do not reject it as unverifiable framework behavior",
+        "an unshown definition must downgrade the claim to a verification request, not drop it");
+    assertContains(
+        sys,
+        "so that cap does not apply to it",
+        "severity calibration must exempt a definition-backed config-doc claim from the cap");
+  }
+
+  @Test
+  void verifierPromptStillRejectsDocumentationPhrasingNitpicks() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "no format-critical fact (wording, tone, ordering, a missing example",
+        "the verifier carve-out must not reopen the door to documentation phrasing nitpicks");
+    assertContains(
+        sys,
+        "when the documentation already states the fact",
+        "a documentation line that already carries the fact must be rejected, not confirmed");
   }
 
   @Test
