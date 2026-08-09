@@ -483,6 +483,15 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void lowSeverityOmitClauseExceptsConfigKeyDocGapsUnderDimension10() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "ask for that level of detail, or it is a config-key documentation gap under",
+        "the 'prefer omitting' low-severity clause must except a dimension-10 doc gap (audit F5)");
+  }
+
+  @Test
   void generatorPromptCarvesConfigDocGapsOutOfThePhrasingNitpickExclusion() {
     String sys = PrReviewPrompts.SYSTEM;
     assertContains(

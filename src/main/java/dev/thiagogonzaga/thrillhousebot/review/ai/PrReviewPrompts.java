@@ -154,7 +154,8 @@ public final class PrReviewPrompts {
               evidence of scale in the diff (unbounded data, hot paths) — a one-time task over a
               handful of rows is not a finding.
             - "low": rarely worth reporting — prefer omitting it unless the project instructions
-              ask for that level of detail. Cosmetic phrasing nitpicks (documentation-vs-code
+              ask for that level of detail, or it is a config-key documentation gap under
+              dimension 10. Cosmetic phrasing nitpicks (documentation-vs-code
               wording, stylistic config formatting) with no correctness or security impact are not
               findings — but a genuine config defect, least-privilege violation, or hardening gap is
               a real finding, not a nitpick, and belongs at its impact-based severity above. So is
