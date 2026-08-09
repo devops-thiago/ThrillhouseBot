@@ -166,6 +166,7 @@ public interface GitHubReviewClient {
       String event, // APPROVE, REQUEST_CHANGES, COMMENT
       List<ReviewComment> comments) {
     public CreateReviewRequest {
+      body = CommentBodyLimit.cap(body);
       comments = comments == null ? List.of() : List.copyOf(comments);
     }
   }
@@ -191,10 +192,18 @@ public interface GitHubReviewClient {
       int line,
       String side,
       @JsonProperty("start_line") Integer startLine,
-      @JsonProperty("start_side") String startSide) {}
+      @JsonProperty("start_side") String startSide) {
+    public CreatePullRequestCommentRequest {
+      body = CommentBodyLimit.cap(body);
+    }
+  }
 
   /** Reply posted into an existing review thread, keyed by the thread's root comment id in path. */
-  record ReplyToReviewCommentRequest(String body) {}
+  record ReplyToReviewCommentRequest(String body) {
+    public ReplyToReviewCommentRequest {
+      body = CommentBodyLimit.cap(body);
+    }
+  }
 
   record PullRequestCommentResponse(long id, String body, String path, Integer line) {}
 

@@ -16,6 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -24,6 +26,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.CreateCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -99,5 +102,57 @@ class GitHubCommentClientTest {
     when(client.listCommentsPage("auth", "json", "o", "r", 7, 100, 1)).thenReturn(null);
 
     assertEquals(0, client.listComments("auth", "json", "o", "r", 7).size());
+  }
+
+  // GitHub's hard comment-body limit and the notice the client appends when it truncates. Kept as
+  // literals here (not a reference to the production constants) so these tests pin the boundary and
+  // wording independently of the code under test.
+  private static final int MAX = 65_536;
+  private static final String NOTICE = "\n\n… (truncated at GitHub's 65,536-character limit)";
+
+  private static String repeat(char c, int n) {
+    return String.valueOf(c).repeat(n);
+  }
+
+  @Test
+  void createCommentBodyOverTheLimitIsTruncatedWithAnHonestNotice() {
+    var body = repeat('a', MAX + 5_000);
+
+    var capped = new CreateCommentRequest(body).body();
+
+    // The request must never carry more than GitHub's limit — otherwise the POST 422s and the
+    // fail-soft wrapper posts nothing.
+    assertEquals(MAX, capped.length(), "over-long body must be capped to exactly the limit");
+    assertTrue(capped.endsWith(NOTICE), "a truncated body must end with the truncation notice");
+    assertTrue(capped.startsWith("aaaa"), "the surviving prefix is the original content");
+  }
+
+  @Test
+  void createCommentBodyAtTheLimitIsNotTruncated() {
+    var body = repeat('a', MAX);
+
+    var capped = new CreateCommentRequest(body).body();
+
+    assertEquals(MAX, capped.length());
+    assertEquals(body, capped, "a body exactly at the limit passes through byte-identical");
+  }
+
+  @Test
+  void createCommentBodyOneOverTheLimitIsTruncated() {
+    var body = repeat('a', MAX + 1);
+
+    var capped = new CreateCommentRequest(body).body();
+
+    assertEquals(MAX, capped.length());
+    assertTrue(capped.endsWith(NOTICE));
+  }
+
+  @Test
+  void createCommentBodyUnderTheLimitPassesThroughUnchanged() {
+    var body = "a normal comment body";
+
+    var capped = new CreateCommentRequest(body).body();
+
+    assertSame(body, capped, "a body within the limit is returned untouched");
   }
 }
