@@ -79,6 +79,50 @@ class AiServicePromptRenderingTest {
   }
 
   @Test
+  void describeSynthesisPromptIncludesEveryContextVariable() {
+    // The reduce step of a batched /describe. It carries the partials in place of the diff; a
+    // dropped @V here would silently compose the description from less than the whole PR.
+    String user =
+        captureBlocking(
+            () ->
+                describeAssistant.synthesize(
+                    PromptTemplateEscaper.escape("PARTIALS_SENTINEL"),
+                    PromptTemplateEscaper.escape("TITLE_SENTINEL"),
+                    PromptTemplateEscaper.escape("DESC_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+
+    assertTrue(user.contains("PARTIALS_SENTINEL"), "partials missing");
+    assertTrue(user.contains("TITLE_SENTINEL"), "currentTitle missing");
+    assertTrue(user.contains("DESC_SENTINEL"), "currentDescription missing");
+    assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+    assertTrue(user.contains("## The partial descriptions"), "template did not render");
+  }
+
+  @Test
+  void changelogMergePromptIncludesEveryContextVariable() {
+    // The reduce step of a batched /changelog. The PR number lives in the system prompt, so it is
+    // asserted against the whole request rather than the user message.
+    ChatRequest request =
+        captureBlockingRequest(
+            () ->
+                changelogAssistant.merge(
+                    PromptTemplateEscaper.escape("CANDIDATES_SENTINEL"),
+                    "4242",
+                    PromptTemplateEscaper.escape("TITLE_SENTINEL"),
+                    PromptTemplateEscaper.escape("DESC_SENTINEL"),
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+    String user = userText(request);
+    String all = allText(request);
+
+    assertTrue(user.contains("CANDIDATES_SENTINEL"), "candidates missing");
+    assertTrue(all.contains("4242"), "prNumber missing");
+    assertTrue(user.contains("TITLE_SENTINEL"), "currentTitle missing");
+    assertTrue(user.contains("DESC_SENTINEL"), "currentDescription missing");
+    assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+    assertTrue(user.contains("## The candidate entries"), "template did not render");
+  }
+
+  @Test
   void changelogPromptIncludesEveryContextVariable() {
     ChatRequest request =
         captureBlockingRequest(

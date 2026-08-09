@@ -626,8 +626,8 @@ class PrImprovementServiceTest {
     var overhead =
         new TokenCounter()
             .estimateTokens(
-                PrImproveAssistantPrompts.SYSTEM
-                    + PrSuggestionPrompts.USER
+                PrImproveAssistantPrompts.systemPrompt()
+                    + PrSuggestionPrompts.userPrompt()
                     + PromptTemplateEscaper.fence(" ")
                     + "Title"
                     + "Body"
