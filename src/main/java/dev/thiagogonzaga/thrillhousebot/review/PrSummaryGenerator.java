@@ -185,12 +185,15 @@ public class PrSummaryGenerator {
       if (!keyFindings.isEmpty()) {
         sb.append("### Key Findings\n");
         for (Finding f : keyFindings) {
+          // Model-supplied title/path: flatten and neutralize break-outs (a newline, a "```", or a
+          // "</details>" in the title must not escape the bullet or the summary's <details>
+          // blocks).
           sb.append("- **")
               .append(f.risk().name())
               .append(":** ")
-              .append(f.title())
+              .append(MarkdownSafe.inline(f.title()))
               .append(" (`")
-              .append(f.file())
+              .append(MarkdownSafe.inlineCode(f.file()))
               .append(":")
               .append(f.line())
               .append("`)\n");
@@ -228,12 +231,14 @@ public class PrSummaryGenerator {
         .append("</summary>\n\n");
     for (Finding f : findings) {
       // By construction these findings are confidence LOW, so the disclaimer is always present.
+      // Model-supplied title/path is flattened and its break-outs neutralized so an embedded
+      // newline, "```", or "</details>" cannot escape this bullet or the enclosing <details>.
       sb.append("- **")
           .append(f.risk().name())
           .append(":** ")
-          .append(f.title())
+          .append(MarkdownSafe.inline(f.title()))
           .append(" (`")
-          .append(f.file())
+          .append(MarkdownSafe.inlineCode(f.file()))
           .append(":")
           .append(f.line())
           .append("`) ")
@@ -298,13 +303,13 @@ public class PrSummaryGenerator {
       String statusEmoji = check.isFailing() ? "❌ Failed" : "⏳ Pending";
       String detail = check.conclusion() != null ? check.conclusion() : "-";
       sb.append("| **")
-          .append(escapeTableCell(check.name()))
+          .append(MarkdownSafe.tableCell(check.name()))
           .append("** | ")
-          .append(escapeTableCell(check.type()))
+          .append(MarkdownSafe.tableCell(check.type()))
           .append(" | ")
           .append(statusEmoji)
           .append(" | ")
-          .append(escapeTableCell(detail))
+          .append(MarkdownSafe.tableCell(detail))
           .append(" |\n");
     }
     sb.append("\n");
@@ -391,11 +396,11 @@ public class PrSummaryGenerator {
     for (ChangedFile file : changedFiles.stream().limit(MAX_FILE_ROWS).toList()) {
       String summary = summaryByPath.getOrDefault(file.path(), "");
       sb.append("| `")
-          .append(escapeTableCell(file.path()))
+          .append(MarkdownSafe.tableCell(file.path()))
           .append("` | ")
           .append(changeTypeLabel(file.changeType()))
           .append(" | ")
-          .append(summary.isBlank() ? "-" : escapeTableCell(summary.strip()))
+          .append(summary.isBlank() ? "-" : MarkdownSafe.tableCell(summary.strip()))
           .append(" |\n");
     }
     int rowsShown = Math.min(changedFiles.size(), MAX_FILE_ROWS);
@@ -432,7 +437,7 @@ public class PrSummaryGenerator {
       case "renamed" -> "Renamed";
       case "copied" -> "Copied";
       case "changed", "modified" -> "Modified";
-      default -> escapeTableCell(status);
+      default -> MarkdownSafe.tableCell(status);
     };
   }
 
@@ -520,17 +525,5 @@ public class PrSummaryGenerator {
   /** Renders a signed line count, avoiding the awkward "+0"/"-0". */
   private static String signed(char sign, int count) {
     return count == 0 ? "0" : sign + Integer.toString(count);
-  }
-
-  /**
-   * Escapes a value for a single Markdown table cell: a literal {@code '|'} would break the column
-   * and a line break would break the whole row, so the pipe is escaped and any run of line breaks
-   * is folded into a single space (these are one-line cells).
-   */
-  private static String escapeTableCell(String value) {
-    if (value == null) {
-      return "-";
-    }
-    return value.replace("\\", "\\\\").replace("|", "\\|").replaceAll("[\r\n]+", " ");
   }
 }

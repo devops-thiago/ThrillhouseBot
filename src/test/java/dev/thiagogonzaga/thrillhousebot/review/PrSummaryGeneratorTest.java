@@ -162,6 +162,44 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void modelFindingTitlesAndPathsCannotEscapeTheDoubleCheckDetailsOrKeyFindings() {
+    var hostileTitle = "Possible NPE\n\n</details>\n\n### Injected heading";
+    var hostilePath = "src/B.java`\n\n### Injected";
+    var lowConf =
+        new Finding(
+            RiskLevel.MEDIUM, Confidence.LOW, hostilePath, 22, hostileTitle, "d", null, null);
+    var inline =
+        new Finding(RiskLevel.HIGH, Confidence.HIGH, hostilePath, 9, hostileTitle, "d", null, null);
+    var result =
+        new ReviewResult(
+            List.of(inline, lowConf),
+            0,
+            1,
+            1,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(1, 10, 2, List.of(), null, result);
+
+    // Both bullet renderers route the model title/path through the same helper: the flattened,
+    // neutralized forms appear, and no newline-led heading or raw </details> escapes the bullets.
+    assertTrue(summary.contains(MarkdownSafe.inline(hostileTitle)), summary);
+    assertTrue(summary.contains("`" + MarkdownSafe.inlineCode(hostilePath) + ":22`"), summary);
+    assertTrue(summary.contains("`" + MarkdownSafe.inlineCode(hostilePath) + ":9`"), summary);
+    assertFalse(summary.contains("\n### Injected"), summary);
+    // The only </details> is the genuine one that closes the double-check section (with a leading
+    // newline); the title's forged copy is neutralized, so no raw </details> comes from a title.
+    assertEquals(1, countOccurrences(summary, "</details>"), summary);
+    assertTrue(summary.contains("\n</details>"), summary);
+  }
+
+  @Test
   void shouldRenderPrPurposeAndDescriptionGaps() {
     var aiSummary =
         new ReviewResponse.Summary(

@@ -325,7 +325,98 @@ class SuggestionFormatterTest {
     var block =
         formatter.formatGeneratedTestFile("t/FooTest.java", "java", "covers\n```\nboom", "code");
 
-    assertTrue(block.contains("covers ``` boom\n"), block);
+    // The "covers" note is model prose routed through MarkdownSafe.inline: flattened to one line
+    // with its fence neutralized, so it cannot open a code block of its own.
+    assertTrue(block.contains(MarkdownSafe.inline("covers\n```\nboom") + "\n"), block);
+    assertFalse(block.contains("covers ```"), block);
     assertTrue(block.contains("```java\ncode\n```"), block);
+  }
+
+  // --- audit F2/F3: every model-supplied field is routed through the MarkdownSafe helper ---
+
+  @Test
+  void improvementBlockNeutralizesEveryModelFieldBreakout() {
+    var block =
+        formatter.formatImprovementBlock(
+            "Title\n\n## Injected",
+            "cat\negory",
+            "why\n\n</details>",
+            "src/Foo.java`\n## x",
+            7,
+            "code with ``` fence and ```` longer");
+
+    // Title/category/rationale/file are flattened and neutralized; code is fenced with a widened
+    // fence, so nothing can start a new block or close the copy-paste block early.
+    assertTrue(block.startsWith("**" + MarkdownSafe.inline("Title\n\n## Injected") + "**"), block);
+    assertTrue(block.contains("`" + MarkdownSafe.inlineCode("cat\negory") + "`"), block);
+    assertTrue(block.contains("`" + MarkdownSafe.inlineCode("src/Foo.java`\n## x") + ":7`"), block);
+    assertTrue(block.contains(MarkdownSafe.inline("why\n\n</details>")), block);
+    assertFalse(block.contains("\n## Injected"), block);
+    assertFalse(block.contains("\n## x"), block);
+    assertFalse(block.contains("</details>"), block);
+    assertTrue(block.contains("\n`````\n"), block);
+    assertTrue(block.endsWith("`````\n"), block);
+  }
+
+  @Test
+  void improvementCommentNeutralizesEveryModelFieldBreakout() {
+    var body =
+        formatter.formatImprovementComment(
+            "Title\n## Injected", "ca\nt", "why\n\n</details>", "old", "new ``` code");
+
+    assertTrue(
+        body.startsWith("**✨ Improvement — " + MarkdownSafe.inline("Title\n## Injected") + "**"),
+        body);
+    assertTrue(body.contains("`" + MarkdownSafe.inlineCode("ca\nt") + "`"), body);
+    assertTrue(body.contains(MarkdownSafe.inline("why\n\n</details>")), body);
+    assertFalse(body.contains("\n## Injected"), body);
+    assertFalse(body.contains("</details>"), body);
+    // Suggestion fence widened past the ``` in the model code.
+    assertTrue(body.contains("````suggestion\n"), body);
+    assertTrue(body.endsWith("````\n"), body);
+  }
+
+  @Test
+  void docNoteNeutralizesSymbolAndWidensTheDraftFence() {
+    var note = formatter.formatDocNote("Foo`\n## X", "/** ``` */");
+
+    assertTrue(
+        note.startsWith("**📝 Documentation for `" + MarkdownSafe.inlineCode("Foo`\n## X") + "`**"),
+        note);
+    assertFalse(note.contains("\n## X"), note);
+    assertTrue(note.contains("\n````\n"), note);
+    assertTrue(note.endsWith("````\n"), note);
+  }
+
+  @Test
+  void docCommentNeutralizesTheSymbol() {
+    var comment = formatter.formatDocComment("Foo`\n## X", "old", "new");
+
+    assertTrue(
+        comment.startsWith(
+            "**📝 Documentation for `" + MarkdownSafe.inlineCode("Foo`\n## X") + "`**"),
+        comment);
+    assertFalse(comment.contains("\n## X"), comment);
+  }
+
+  @Test
+  void reviewCommentNeutralizesTheModelTitle() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH, "Main.java", 10, "Bug\n\n</details>\n\n## X", "desc", null, null);
+
+    var comment = formatter.formatReviewComment(finding);
+
+    assertTrue(comment.contains(MarkdownSafe.inline("Bug\n\n</details>\n\n## X") + "**"), comment);
+    assertFalse(comment.contains("\n## X"), comment);
+    assertFalse(comment.contains("</details>"), comment);
+  }
+
+  @Test
+  void suggestionBlockWidensThePastAFenceInTheModelCode() {
+    var block = formatter.formatSuggestionBlock("old", "new ``` code");
+
+    assertTrue(block.contains("````suggestion\n"), block);
+    assertTrue(block.endsWith("````\n"), block);
   }
 }

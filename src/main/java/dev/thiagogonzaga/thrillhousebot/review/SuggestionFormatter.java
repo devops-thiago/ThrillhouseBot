@@ -24,33 +24,23 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 public class SuggestionFormatter {
 
-  /**
-   * A markdown code fence standing alone on its own line, with the blank-safe newline on each side.
-   * Used as BOTH the opening and the closing delimiter of a plain block — the leading newline ends
-   * whatever came before, the trailing one starts the block's first content line — so a block is
-   * written as {@code CODE_FENCE + body + CODE_FENCE}. (An opening fence that carries a language
-   * tag, like the committable {@code suggestion} block, spells itself out instead.)
-   */
-  private static final String CODE_FENCE = "\n```\n";
-
   private static final Pattern FINDING_MARKER_PATTERN =
       Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)\\s*-->");
 
   /** What a code-fence info string may look like — a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG_PATTERN = Pattern.compile("[a-z0-9+#._-]{1,20}");
 
-  /** Any whitespace run, including the line breaks that would restructure a rendered comment. */
-  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
-
   /**
-   * Wraps suggestion_old and suggestion_new in a GitHub suggestion block.
+   * Wraps suggestion_old and suggestion_new in a GitHub suggestion block. The model-supplied code
+   * is routed through {@link MarkdownSafe#suggestionBlock}, so a fence inside it widens the block
+   * rather than closing it early.
    *
    * <p>Example output: ```suggestion PreparedStatement stmt = conn.prepareStatement("SELECT * FROM
    * users WHERE id = ?"); stmt.setInt(1, userId); ```
    */
   public String formatSuggestionBlock(String suggestionOld, String suggestionNew) {
     if (suggestionOld == null || suggestionNew == null) return "";
-    return "\n```suggestion\n" + suggestionNew.stripTrailing() + CODE_FENCE;
+    return MarkdownSafe.suggestionBlock(suggestionNew);
   }
 
   /**
@@ -89,7 +79,7 @@ public class SuggestionFormatter {
   public String formatDocComment(String symbol, String suggestionOld, String suggestionNew) {
     var sb = new StringBuilder("**📝 Documentation");
     if (symbol != null && !symbol.isBlank()) {
-      sb.append(" for `").append(symbol.strip()).append("`");
+      sb.append(" for `").append(MarkdownSafe.inlineCode(symbol)).append("`");
     }
     sb.append("**\n");
     sb.append(formatSuggestionBlock(suggestionOld, suggestionNew));
@@ -105,13 +95,11 @@ public class SuggestionFormatter {
   public String formatDocNote(String symbol, String suggestionNew) {
     var sb = new StringBuilder("**📝 Documentation");
     if (symbol != null && !symbol.isBlank()) {
-      sb.append(" for `").append(symbol.strip()).append("`");
+      sb.append(" for `").append(MarkdownSafe.inlineCode(symbol)).append("`");
     }
     sb.append("**\n");
     sb.append("This symbol is missing documentation. Suggested:\n");
-    sb.append(CODE_FENCE)
-        .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
-        .append(CODE_FENCE);
+    sb.append(MarkdownSafe.fencedBlock(suggestionNew));
     return sb.toString();
   }
 
@@ -124,15 +112,15 @@ public class SuggestionFormatter {
       String title, String category, String rationale, String suggestionOld, String suggestionNew) {
     var sb = new StringBuilder("**✨ Improvement");
     if (title != null && !title.isBlank()) {
-      sb.append(" — ").append(title.strip());
+      sb.append(" — ").append(MarkdownSafe.inline(title));
     }
     sb.append("**");
     if (category != null && !category.isBlank()) {
-      sb.append(" `").append(category.strip()).append("`");
+      sb.append(" `").append(MarkdownSafe.inlineCode(category)).append("`");
     }
     sb.append("\n\n");
     if (rationale != null && !rationale.isBlank()) {
-      sb.append(rationale.strip()).append("\n");
+      sb.append(MarkdownSafe.inline(rationale)).append("\n");
     }
     sb.append(formatSuggestionBlock(suggestionOld, suggestionNew));
     return sb.toString();
@@ -151,20 +139,19 @@ public class SuggestionFormatter {
       int line,
       String suggestionNew) {
     var sb = new StringBuilder("**");
-    sb.append(title == null || title.isBlank() ? "Improvement" : title.strip()).append("**");
+    sb.append(title == null || title.isBlank() ? "Improvement" : MarkdownSafe.inline(title))
+        .append("**");
     if (category != null && !category.isBlank()) {
-      sb.append(" `").append(category.strip()).append("`");
+      sb.append(" `").append(MarkdownSafe.inlineCode(category)).append("`");
     }
     if (file != null && !file.isBlank()) {
-      sb.append(" — `").append(file.strip()).append(":").append(line).append("`");
+      sb.append(" — `").append(MarkdownSafe.inlineCode(file)).append(":").append(line).append("`");
     }
     sb.append("\n");
     if (rationale != null && !rationale.isBlank()) {
-      sb.append("\n").append(rationale.strip()).append("\n");
+      sb.append("\n").append(MarkdownSafe.inline(rationale)).append("\n");
     }
-    sb.append(CODE_FENCE)
-        .append(suggestionNew == null ? "" : suggestionNew.stripTrailing())
-        .append(CODE_FENCE);
+    sb.append(MarkdownSafe.fencedBlock(suggestionNew));
     return sb.toString();
   }
 
@@ -178,59 +165,18 @@ public class SuggestionFormatter {
    * comment on a diff line. So the source is presented as a copy-paste block headed by the exact
    * path it belongs at, rather than being forced into the inline-suggestion shape.
    *
-   * <p>The fence is widened past the longest backtick run in the source, so a test that itself
-   * contains a fenced block cannot break out of the comment. The path and the "covers" note are
-   * flattened to a single line for the same reason: every field here is model output, and a diff
-   * that prompt-injects the model must not be able to restructure the bot's comment.
+   * <p>Every field here is model output, so each is routed through {@link MarkdownSafe}: the source
+   * through {@link MarkdownSafe#fencedBlock(String, String)} (the fence widens past any backtick
+   * run so a fenced block inside the test cannot break out), the path through {@link
+   * MarkdownSafe#inlineCode} and the "covers" note through {@link MarkdownSafe#inline}, so a diff
+   * that prompt-injects the model cannot restructure the bot's comment.
    */
   public String formatGeneratedTestFile(String path, String language, String covers, String code) {
-    var sb = new StringBuilder("### `").append(headingPath(path)).append("`\n");
+    var sb = new StringBuilder("### `").append(MarkdownSafe.inlineCode(path)).append("`\n");
     if (covers != null && !covers.isBlank()) {
-      sb.append(oneLine(covers)).append('\n');
+      sb.append(MarkdownSafe.inline(covers)).append('\n');
     }
-    var body = code == null ? "" : code.stripTrailing();
-    var fence = fenceFor(body);
-    return sb.append('\n')
-        .append(fence)
-        .append(languageTag(language))
-        .append('\n')
-        .append(body)
-        .append('\n')
-        .append(fence)
-        .append('\n')
-        .toString();
-  }
-
-  /**
-   * The model-supplied target path as the heading's inline-code span: one line, with its backticks
-   * removed, so a path the model invented cannot close the span and inject markdown into the
-   * comment.
-   */
-  private static String headingPath(String path) {
-    return path == null ? "" : oneLine(path).replace("`", "");
-  }
-
-  /**
-   * Model-supplied prose flattened to a single line, so it cannot open a block of its own.
-   * Package-private so the generators that splice their own model-supplied prose into a comment
-   * body apply the same rule rather than restating it.
-   */
-  static String oneLine(String value) {
-    return WHITESPACE_RUN.matcher(value.strip()).replaceAll(" ");
-  }
-
-  /**
-   * A code fence at least one backtick longer than the longest backtick run in {@code code} (never
-   * shorter than the usual three), so fenced content inside the block cannot close it early.
-   */
-  private static String fenceFor(String code) {
-    int longest = 0;
-    int run = 0;
-    for (int i = 0; i < code.length(); i++) {
-      run = code.charAt(i) == '`' ? run + 1 : 0;
-      longest = Math.max(longest, run);
-    }
-    return "`".repeat(Math.max(3, longest + 1));
+    return sb.append(MarkdownSafe.fencedBlock(code, languageTag(language))).toString();
   }
 
   /**
@@ -244,6 +190,15 @@ public class SuggestionFormatter {
     }
     var tag = language.strip().toLowerCase(Locale.ROOT);
     return LANGUAGE_TAG_PATTERN.matcher(tag).matches() ? tag : "";
+  }
+
+  /**
+   * Model-supplied prose flattened to a single line. Retained as a thin delegate to {@link
+   * MarkdownSafe#oneLine} for the on-request generators that splice their own model prose into a
+   * comment body; new render sites should call {@link MarkdownSafe} directly.
+   */
+  static String oneLine(String value) {
+    return MarkdownSafe.oneLine(value);
   }
 
   /**
@@ -280,7 +235,7 @@ public class SuggestionFormatter {
         .append(" ")
         .append(finding.risk().name())
         .append(" — ")
-        .append(finding.title())
+        .append(MarkdownSafe.inline(finding.title()))
         .append("**");
     String disclaimer = confidenceDisclaimer(finding.confidence());
     if (!disclaimer.isEmpty()) {
