@@ -143,19 +143,24 @@ public class VerdictBuilder {
     // paths must not pay for a patch re-parse (#135).
     var rawStatuses = aiResponse.previousFindingsStatus();
     var currentRenameTargets = renameTargets(ctx.files());
+    // Ids a newer round already closed must not be re-superseded — that phantom supersede would
+    // pin hasSupersededPrevious on and re-post the summary every push (#470).
+    var settledIds = FollowUpAnalyzer.settledPreviousIds(ctx.priorAiResponses());
     var effectiveStatuses =
         followUpAnalyzer.supersedeVanished(
             ctx.previousAiResponseJson(),
             rawStatuses,
             rawStatuses.isEmpty() ? null : ctx.lineResolver(),
-            currentRenameTargets);
+            currentRenameTargets,
+            settledIds);
     if (ctx.hasContext()) {
       effectiveStatuses =
           followUpAnalyzer.addUnreportedVanished(
               ctx.previousFindingsList(),
               effectiveStatuses,
               ctx.lineResolver(),
-              currentRenameTargets);
+              currentRenameTargets,
+              settledIds);
     }
     // A maintainer's decline is a claim, not ground truth: a "justified" whose stated reason the
     // reviewed code plainly contradicts goes back to "unresolved" for one more round (#169).

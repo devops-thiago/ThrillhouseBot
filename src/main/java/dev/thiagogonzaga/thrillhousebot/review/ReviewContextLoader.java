@@ -249,6 +249,9 @@ public class ReviewContextLoader {
     // prior round parsed, the bot's own review prose must never stand in for structured findings.
     boolean previousResponsePersisted =
         priorAiResponses.stream().anyMatch(FollowUpAnalyzer::isPersistedResponse);
+    // Findings a round newer than the effective previous round already closed are settled: not
+    // re-shown to the model as still open, and never re-superseded downstream (#470).
+    var settledPreviousIds = FollowUpAnalyzer.settledPreviousIds(priorAiResponses);
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
@@ -257,7 +260,8 @@ public class ReviewContextLoader {
                 priorReviews,
                 inlineComments,
                 olderAiResponses,
-                botIdentity)
+                botIdentity,
+                settledPreviousIds)
             : "";
 
     var instructions =

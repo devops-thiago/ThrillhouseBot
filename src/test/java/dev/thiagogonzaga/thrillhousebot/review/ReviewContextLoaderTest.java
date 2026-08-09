@@ -1153,7 +1153,7 @@ class ReviewContextLoaderTest {
       when(followUpAnalyzer.parsePreviousResponses(List.of(priorJson, olderJson)))
           .thenReturn(parsed);
       when(followUpAnalyzer.buildPreviousFindingsContext(
-              anyList(), anyBoolean(), any(), any(), any(), any(BotIdentity.class)))
+              anyList(), anyBoolean(), any(), any(), any(), any(BotIdentity.class), any()))
           .thenReturn("ctx");
       stubLoad(
           List.of(
@@ -1176,7 +1176,8 @@ class ReviewContextLoaderTest {
               any(),
               any(),
               eq(parsed.subList(1, parsed.size())),
-              any(BotIdentity.class));
+              any(BotIdentity.class),
+              any());
     }
   }
 

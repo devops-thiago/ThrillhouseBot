@@ -158,7 +158,32 @@ public class FollowUpAnalyzer {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResponse> olderAiResponses,
       BotIdentity botIdentity) {
-    var structured = formatStructuredFindings(previousFindings, inlineComments, botIdentity);
+    return buildPreviousFindingsContext(
+        previousFindings,
+        previousResponsePersisted,
+        priorReviews,
+        inlineComments,
+        olderAiResponses,
+        botIdentity,
+        Set.of());
+  }
+
+  /**
+   * Variant that also skips prior findings a newer round already closed ({@code settledIds}, {@link
+   * #settledPreviousIds}) so the model is not re-shown a finding that has been settled and asked to
+   * re-account for it (#470). The settled entries keep their id slots — only their content is
+   * omitted — so the surviving ids do not shift.
+   */
+  public String buildPreviousFindingsContext(
+      List<ReviewResponse.Finding> previousFindings,
+      boolean previousResponsePersisted,
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<ReviewResponse> olderAiResponses,
+      BotIdentity botIdentity,
+      Set<Integer> settledIds) {
+    var structured =
+        formatStructuredFindings(previousFindings, inlineComments, botIdentity, settledIds);
     var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
     if (!structured.isEmpty() || previousResponsePersisted) {
       return structured + answered;
@@ -208,6 +233,42 @@ public class FollowUpAnalyzer {
       }
     }
     return -1;
+  }
+
+  /**
+   * Ids (1-based positions in the effective previous round) that a <em>newer</em> round already
+   * closed with a resolved/justified verdict, and that therefore must be treated as settled: not
+   * re-listed to the model as still open, and never re-emitted as {@code superseded} when their
+   * code later leaves the diff.
+   *
+   * <p>The effective previous round is the newest round that raised findings, so every round newer
+   * than it raised nothing and reports on it (ids reference that round). {@link
+   * #effectivePreviousFindings} returns that round's list <em>whole</em> — ids stay stable — so a
+   * later round's close is invisible to the id-keyed supersede/context passes; without this set
+   * {@link #addUnreportedVanished} re-supersedes a finding a newer round already resolved, which
+   * pins {@code hasSupersededPrevious} on and re-posts the summary every push while suppressing the
+   * follow-up delta (#470). This is the same {@code closeAddressed} replay the backstop does.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static Set<Integer> settledPreviousIds(List<ReviewResponse> priorAiResponses) {
+    var index = effectivePreviousRoundIndex(priorAiResponses);
+    if (index <= 0) {
+      return Set.of();
+    }
+    var settled = new HashSet<Integer>();
+    for (var i = 0; i < index; i++) {
+      var round = priorAiResponses.get(i);
+      if (round == null) {
+        continue;
+      }
+      for (var status : round.previousFindingsStatus()) {
+        if (isAddressedVerdict(status.status())) {
+          settled.add(status.id());
+        }
+      }
+    }
+    return settled;
   }
 
   /**
@@ -289,7 +350,8 @@ public class FollowUpAnalyzer {
   private String formatStructuredFindings(
       List<ReviewResponse.Finding> previous,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Set<Integer> settledIds) {
     if (previous == null || previous.isEmpty()) {
       return "";
     }
@@ -297,6 +359,12 @@ public class FollowUpAnalyzer {
     var sb = new StringBuilder();
     var id = 1;
     for (var finding : previous) {
+      // A finding a newer round already closed keeps its id slot (so the surviving ids do not
+      // shift) but is not re-shown as open for the model to re-account for (#470).
+      if (settledIds.contains(id)) {
+        id++;
+        continue;
+      }
       sb.append(id)
           .append(". [")
           .append(finding.risk() == null ? "UNKNOWN" : finding.risk().toUpperCase(Locale.ROOT))
@@ -747,6 +815,22 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
+    return supersedeVanished(
+        previousAiResponseJson, statuses, lineResolver, renameTargets, Set.of());
+  }
+
+  /**
+   * Rename- and settle-aware variant: a finding a newer round already closed ({@code settledIds},
+   * {@link #settledPreviousIds}) is left untouched rather than rewritten to {@code superseded} when
+   * its code later leaves the diff — the close already accounted for it, and a phantom supersede
+   * would pin {@code hasSupersededPrevious} on and re-post the summary every push (#470).
+   */
+  public List<ReviewResponse.PreviousFindingStatus> supersedeVanished(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      Set<Integer> settledIds) {
     if (statuses == null || statuses.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -756,7 +840,8 @@ public class FollowUpAnalyzer {
     }
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
-      if (hasVanished(status, previous, lineResolver, renameTargets)) {
+      if (!settledIds.contains(status.id())
+          && hasVanished(status, previous, lineResolver, renameTargets)) {
         Log.infof(
             "Superseding unresolved previous finding #%d — its targeted code is no longer in the"
                 + " current diff",
@@ -782,6 +867,22 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
+    return addUnreportedVanished(previous, statuses, lineResolver, renameTargets, Set.of());
+  }
+
+  /**
+   * Settle-aware variant: a prior finding a newer round already closed ({@code settledIds}, {@link
+   * #settledPreviousIds}) is not re-emitted here — neither superseded when its code left the diff
+   * nor held as unresolved — because the close already accounted for it. Re-superseding it pins
+   * {@code hasSupersededPrevious} on and re-posts the summary every push while suppressing the
+   * follow-up delta (#470). Its id slot is still skipped by position, so no id shifts.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> addUnreportedVanished(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      Set<Integer> settledIds) {
     if (previous == null || previous.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -793,7 +894,7 @@ public class FollowUpAnalyzer {
     for (int index = 0; index < previous.size(); index++) {
       var id = index + 1;
       var finding = previous.get(index);
-      if (reportedIds.contains(id) || finding.file() == null) {
+      if (reportedIds.contains(id) || settledIds.contains(id) || finding.file() == null) {
         continue;
       }
       var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());

@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -1017,6 +1018,82 @@ class FollowUpAnalyzerTest {
     assertEquals("superseded", statuses.get(2).status());
     assertEquals("unresolved", statuses.get(3).status());
     assertTrue(statuses.get(3).note().contains("renamed without content changes"));
+  }
+
+  @Test
+  void addUnreportedVanishedShouldNotResupersedeAFindingANewerRoundAlreadyClosed() {
+    // f2's code vanished, but a newer round already closed it (settled). Re-superseding it would
+    // pin hasSupersededPrevious on and re-post the summary every push while suppressing the delta
+    // (#470).
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "medium", "src/A.java", 1, "Open", "d", "openAnchor()", null),
+            new ReviewResponse.Finding(
+                "medium", "src/B.java", 2, "Closed", "d", "goneAnchor()", null));
+    var resolver =
+        new DiffLineResolver(Map.of("src/A.java", "@@ -1,1 +1,1 @@\n-old\n+openAnchor()"));
+
+    // Without the settled set, f2 (id 2) is superseded — the phantom the fix removes.
+    var naive = analyzer.addUnreportedVanished(previous, List.of(), resolver, Map.of());
+    assertEquals(List.of(2), naive.stream().map(s -> s.id()).toList());
+    assertEquals("superseded", naive.get(0).status());
+
+    var settled =
+        analyzer.addUnreportedVanished(previous, List.of(), resolver, Map.of(), Set.of(2));
+    assertTrue(
+        settled.stream().noneMatch(s -> s.id() == 2),
+        "a finding a newer round already closed must not be re-superseded");
+  }
+
+  @Test
+  void settledPreviousIdsShouldCollectClosuresFromRoundsNewerThanTheEffectiveOne() {
+    // newest-first: two zero-finding rounds close #1 (resolved) and #2 (justified); the effective
+    // previous round raised #1..#3. #3 stays open.
+    var roundC =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed")),
+            null);
+    var roundB =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "justified", "declined")),
+            null);
+    var roundA =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding("medium", "high", "src/A.java", 1, "1", "d", null, null),
+                new ReviewResponse.Finding("medium", "high", "src/B.java", 2, "2", "d", null, null),
+                new ReviewResponse.Finding(
+                    "medium", "high", "src/C.java", 3, "3", "d", null, null)),
+            List.of(),
+            null);
+
+    assertEquals(
+        Set.of(1, 2), FollowUpAnalyzer.settledPreviousIds(List.of(roundC, roundB, roundA)));
+    assertEquals(Set.of(), FollowUpAnalyzer.settledPreviousIds(List.of(roundA)));
+  }
+
+  @Test
+  void contextShouldOmitSettledFindingsButKeepTheirIdSlots() {
+    // Finding #2 was closed by a newer round; it must not be re-shown to the model, but #1 and #3
+    // must keep their original id numbers (no renumber) (#470).
+    var previous =
+        List.of(
+            new ReviewResponse.Finding(
+                "critical", "high", "src/A.java", 10, "First", "d", null, null),
+            new ReviewResponse.Finding(
+                "medium", "high", "src/B.java", 5, "Second", "d", null, null),
+            new ReviewResponse.Finding("high", "high", "src/C.java", 7, "Third", "d", null, null));
+
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            previous, true, List.of(), List.of(), List.of(), BOT_ID, Set.of(2));
+
+    assertTrue(context.contains("1. [CRITICAL] src/A.java:10 — First"), context);
+    assertFalse(context.contains("Second"), context);
+    assertTrue(context.contains("3. [HIGH] src/C.java:7 — Third"), context);
   }
 
   @Test
