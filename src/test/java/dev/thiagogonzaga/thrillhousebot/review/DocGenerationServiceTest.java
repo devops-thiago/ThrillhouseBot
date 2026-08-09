@@ -398,7 +398,8 @@ class DocGenerationServiceTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("unpostableSuggestions")
-  void doesNotPostSuggestionThatCannotAnchorCleanly(String reason, String docsJson) {
+  void doesNotPostSuggestionThatCannotAnchorCleanly(
+      String reason, String docsJson, String expectedSummary) {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any())).thenReturn(docsJson);
 
@@ -406,43 +407,52 @@ class DocGenerationServiceTest {
 
     verify(reviewClient, never())
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
-    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+    assertEquals(expectedSummary, postedSummary());
   }
 
   static Stream<Arguments> unpostableSuggestions() {
+    // A postable doc the anchor resolver cannot place yields COULD_NOT_PLACE — real documentation
+    // was generated but did not map onto the diff. A non-postable (malformed) entry never reaches
+    // the merged list at all, so the run is empty of usable docs and reports NOTHING_TO_DOCUMENT
+    // rather than the force-push wording, which would misdescribe a simply malformed reply.
     return Stream.of(
         arguments(
             "declaration line is not in the diff",
             """
             {"docs":[{"file":"src/Foo.java","line":99,"symbol":"ghost",
             "suggestion_old":"whatever","suggestion_new":"/** x */\\nwhatever"}]}
-            """),
+            """,
+            DocGenerationService.COULD_NOT_PLACE),
         arguments(
             "replacement would drop the existing declaration line",
             """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** just a docstring, no code */"}]}
-            """),
+            """,
+            DocGenerationService.COULD_NOT_PLACE),
         arguments(
             "suggestion_new is blank (not postable)",
             """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
-            """),
+            """,
+            DocGenerationService.NOTHING_TO_DOCUMENT),
         arguments(
             "suggestion_old is omitted (no anchor to verify against)",
             """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"","suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """),
+            """,
+            DocGenerationService.NOTHING_TO_DOCUMENT),
         arguments(
             "file is not part of the diff",
             """
             {"docs":[{"file":"src/Other.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """));
+            """,
+            DocGenerationService.COULD_NOT_PLACE));
   }
 
   @Test
@@ -965,6 +975,60 @@ class DocGenerationServiceTest {
 
     assertEquals(DocGenerationService.NO_FILES, postedSummary());
     verifyNoInteractions(docGenerator);
+  }
+
+  @Test
+  void postsTheValidDocWhenAnEarlierEntryInTheSameBatchOmitsItsFile() {
+    // A reply that omits "file" on one entry leaves that field null; the cross-batch merge must
+    // consult isPostable() before keying on file:line, or the .strip() throws an NPE that the outer
+    // catch swallows with only a log line — losing every valid entry in the same reply and posting
+    // no comment at all. The malformed entry is dropped; the valid one is still posted.
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[
+              {"line":1,"symbol":"bar",
+               "suggestion_old":"public int bar(int x) {",
+               "suggestion_new":"/** a */\\npublic int bar(int x) {"},
+              {"file":"src/Foo.java","line":4,"symbol":"baz",
+               "suggestion_old":"public int baz(int y) {",
+               "suggestion_new":"/** b */\\npublic int baz(int y) {"}]}
+            """);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals("src/Foo.java", inline.path());
+    assertEquals(4, inline.line());
+    assertTrue(inline.body().contains("```suggestion"), inline.body());
+    assertTrue(postedSummary().contains("**1**"), postedSummary());
+  }
+
+  @Test
+  void aNonPostableEntryDoesNotConsumeTheDedupeKeyForALaterBatchsValidOne() {
+    // A non-postable doc for a declaration line must not reach the dedupe set: if it did, it would
+    // consume file:line and block a later batch's postable suggestion for the same declaration, and
+    // it would itself land in the merged list, making the summary report COULD_NOT_PLACE for a
+    // reply that was simply malformed. isPostable() gates the key, so the valid one still posts.
+    budgetWithDiffRoom(40);
+    prWithFiles(fooWithPatch(), otherFile());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            """
+            {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
+            """)
+        .thenReturn(DOC_FOR_FOO);
+
+    service.handle(task());
+
+    var inline = capturedInlineComment();
+    assertEquals("src/Foo.java", inline.path());
+    assertEquals(1, inline.line());
+    var summary = postedSummary();
+    assertTrue(summary.contains("**1**"), summary);
+    assertNotEquals(DocGenerationService.COULD_NOT_PLACE, summary);
   }
 
   @Test
