@@ -84,8 +84,10 @@ final class FollowUpDeltaSummary {
             + result.unresolvedPreviousCount()
             + "\n"
             // Same partial-coverage wording the on-demand commands use: these counts cover only the
-            // reviewed portion of a truncated diff, so the comment has to say so.
-            + ReviewResult.truncationDisclosure(result.omittedFiles());
+            // reviewed portion of a truncated diff, so the comment has to say so. Pass the
+            // truncation detail, not just the count — on the budgeted path the count folds in
+            // clipped files, which are partially analyzed, not omitted (F8).
+            + ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
     return Optional.of(body);
   }
 }

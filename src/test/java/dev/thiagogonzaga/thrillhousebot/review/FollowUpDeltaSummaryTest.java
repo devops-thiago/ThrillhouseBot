@@ -116,6 +116,37 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
+  void budgetedReviewDescribesClippedFilesAsPartiallyAnalyzedNotOmitted() {
+    // On the budgeted path omittedFiles folds in clipped files. Passing only the count would
+    // describe a clipped (partially analyzed) file as omitted; the detail must distinguish them
+    // (F8).
+    var truncation =
+        new ReviewResult.TruncationDetail(List.of("omitted.java"), List.of("clipped.java"));
+    var result =
+        new ReviewResult(
+            List.of(finding("a.java")),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            2,
+            false,
+            true,
+            truncation);
+
+    var body = FollowUpDeltaSummary.render(result).orElseThrow();
+
+    assertTrue(body.contains("only partially analyzed (clipped.java)"), body);
+    assertTrue(body.contains("omitted entirely (omitted.java)"), body);
+  }
+
+  @Test
   void untruncatedReviewCarriesNoDisclosure() {
     var body = FollowUpDeltaSummary.render(followUp(List.of(finding("a.java")), List.of(), 0));
 
