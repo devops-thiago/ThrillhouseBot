@@ -36,4 +36,17 @@ public interface PrDescribeAssistant {
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,
       @V("repoInstructions") String repoInstructions);
+
+  /**
+   * Composes the per-batch partial descriptions of one PR into a single description. Only used when
+   * the PR needed more than one batch: a description assembled by concatenating partials would
+   * repeat itself and read as several pull requests, so the reduce step is a real model call.
+   */
+  @SystemMessage(PrDescribeAssistantPrompts.SYNTHESIS_SYSTEM)
+  @UserMessage(PrDescribeAssistantPrompts.SYNTHESIS_USER)
+  String synthesize(
+      @V("partials") String partials,
+      @V("currentTitle") String currentTitle,
+      @V("currentDescription") String currentDescription,
+      @V("repoInstructions") String repoInstructions);
 }

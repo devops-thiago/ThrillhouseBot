@@ -1,0 +1,16 @@
+{
+  "kind": "verifier",
+  "sourcePr": 104,
+  "why": "Dogfood miss from PR #104, recorded in issues #108 and #109: the PR documented THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS without stating that the value is a comma-separated list, and the bot returned 'No issues found'. The doc rows are reproduced here in that incomplete form. The candidate finding quotes the @WithName Optional<List<String>> definition that #108's 'Config key definitions from the repository' section supplies to the review pass; that definition lives outside the diff, so the verifier must not drop the finding as unverifiable framework behavior or as a quote absent from the diff. The verifier call is not itself handed that section (it receives findings, diff, project stack and previous findings only), so downgrading it to a confidence-'low' verification request is the honest ceiling — both non-dropping verdicts pass and 'rejected' is the regression this case exists to catch.",
+  "expectedVerdicts": ["confirmed", "downgraded"],
+  "finding": {
+    "risk": "low",
+    "confidence": "medium",
+    "file": "README.md",
+    "line": 159,
+    "title": "Documented config key omits its comma-separated list format",
+    "description": "The added README row reads `| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |` and never states the value's format. The config-key definitions section supplies the definition site: `@WithName(\"manual-trigger-allowed-logins\")` / `Optional<List<String>> manualTriggerAllowedLogins();` in ThrillhouseConfig.java — a List-typed binding, which SmallRye/Quarkus config populates by splitting the raw value on commas. The missing format-critical fact is the list separator: a maintainer reading this row can reasonably set a space- or semicolon-separated value, which binds as one entry that matches no login, and the manual `/review` stays denied with no error. The `.env.example` comment added in the same PR has the same gap.",
+    "suggestion_old": "| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |",
+    "suggestion_new": "| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |"
+  }
+}
