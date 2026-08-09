@@ -71,4 +71,24 @@ class AiPricingConfigTest {
     assertEquals(0.00014, pricing.inputPer1k(), 1e-9);
     assertEquals(0.00028, pricing.outputPer1k(), 1e-9);
   }
+
+  @Test
+  void shouldPriceDeepSeekV4FlashAtItsPublishedRate() {
+    // $0.14 per 1M input / $0.28 per 1M output, expressed per 1K. Pinned because a wrong factor of
+    // ten here is invisible — every session still gets a cost, just the wrong one.
+    var pricing = config.ai().pricing().get("deepseek-v4-flash");
+    assertNotNull(pricing, "deepseek-v4-flash pricing must resolve");
+    assertEquals(0.00014, pricing.inputPer1k(), 1e-9);
+    assertEquals(0.00028, pricing.outputPer1k(), 1e-9);
+  }
+
+  @Test
+  void shouldShipDeepSeekV4FlashContextAndOutputCaps() {
+    // Unlike the other entries in the models map, deepseek-v4-flash ships real values rather than
+    // an empty binding stub, so the caps are a shipped default a deployment inherits silently.
+    var settings = config.ai().models().get("deepseek-v4-flash");
+    assertNotNull(settings, "deepseek-v4-flash model settings must resolve");
+    assertEquals(1_000_000, settings.maxInputTokens().orElseThrow());
+    assertEquals(384_000, settings.maxOutputTokens().orElseThrow());
+  }
 }
