@@ -119,4 +119,69 @@ class StreamingChatModelListenerOrderingTest {
             + " deregisters the attempt when the future resolves; observed order: "
             + order);
   }
+
+  @Test
+  void usageRecordedByTheListenerIsOnTheLedgerBeforeTheCompletionHandlerReturns() {
+    // The #499 spend-ceiling gate runs at the top of each retry attempt, strictly AFTER the
+    // previous attempt's completion handler resolved the result future. This pins the property
+    // that ordering guarantee gives the gate: usage a ChatModelListener records into the
+    // ReviewTokenLedger is already observable at the moment the user-level completion handler
+    // runs — so the next gate can never read a ledger that has not seen the prior billed attempt.
+    var config =
+        org.mockito.Mockito.mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+    var review =
+        org.mockito.Mockito.mock(
+            dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+    org.mockito.Mockito.when(config.review()).thenReturn(review);
+    org.mockito.Mockito.when(review.maxTokensPerReview()).thenReturn(100_000L);
+    var ledger = new ReviewTokenLedger(config);
+    ledger.open(7L);
+
+    var spentSeenAtCompletion = new java.util.concurrent.atomic.AtomicLong(-1);
+    var ceilingSeenAtCompletion = new AtomicReference<Boolean>();
+
+    var listener =
+        new ChatModelListener() {
+          @Override
+          public void onResponse(ChatModelResponseContext ctx) {
+            ledger.recordUsage(7L, 60_000, 50_000);
+          }
+        };
+
+    var model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            handler.onCompleteResponse(
+                ChatResponse.builder().aiMessage(AiMessage.from("done")).build());
+          }
+
+          @Override
+          public List<ChatModelListener> listeners() {
+            return List.of(listener);
+          }
+        };
+
+    model.chat(
+        ChatRequest.builder().messages(UserMessage.from("hi")).build(),
+        new StreamingChatResponseHandler() {
+          @Override
+          public void onPartialResponse(String partialResponse) {}
+
+          @Override
+          public void onCompleteResponse(ChatResponse completeResponse) {
+            spentSeenAtCompletion.set(ledger.tokensSpent(7L));
+            ceilingSeenAtCompletion.set(ledger.ceilingReached(7L));
+          }
+
+          @Override
+          public void onError(Throwable error) {}
+        });
+
+    assertEquals(
+        110_000L,
+        spentSeenAtCompletion.get(),
+        "the billed attempt's usage must be on the ledger before the completion handler runs");
+    assertEquals(Boolean.TRUE, ceilingSeenAtCompletion.get());
+  }
 }
