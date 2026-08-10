@@ -216,27 +216,7 @@ public class FindingPipeline {
                                   i, batches, session, promptInputs, plan, previousFilesById),
                           executor))
               .toList();
-      var ceilingBlockedBatches =
-          joinBatchOutcomes(futures, batches, plan, session, outcomesByIndex, failedIndices);
-      if (ceilingBlockedBatches == batches.size()
-          && tokenLedger.tokensSpent(ledgerSessionId(session)) == 0) {
-        // Every batch was refused before its first attempt AND nothing was billed: this review
-        // made zero AI calls and has no paid findings to keep, so a "partial review" disclosure
-        // would dress up an empty one. Fail typed instead, naming the knob. A billed-then-refused
-        // review (attempts crossed the ceiling, retries refused) deliberately falls through — its
-        // spend is real, the message would lie, and the disclosure/counts-only paths below say
-        // honestly what the ceiling skipped.
-        throw new TokenSpendCeilingExceededException(
-            "Review made no AI calls: its token spend ceiling was already reached before the first"
-                + " call ("
-                + tokenLedger.tokensSpent(ledgerSessionId(session))
-                + " tokens >= "
-                + tokenLedger.ceiling()
-                + " — REVIEW_MAX_TOKENS_PER_REVIEW /"
-                + " thrillhousebot.review.max-tokens-per-review)",
-            tokenLedger.tokensSpent(ledgerSessionId(session)),
-            tokenLedger.ceiling());
-      }
+      joinBatchOutcomes(futures, batches, plan, session, outcomesByIndex, failedIndices);
     }
 
     for (int index : failedIndices) {
@@ -364,17 +344,18 @@ public class FindingPipeline {
   /**
    * Joins the parallel batch futures, classifying each failure: a truncation is disclosed at once
    * (its retry would cut identically), a ceiling refusal is disclosed with the ceiling as the
-   * reason, and anything else queues for the sequential retry pass. Returns how many batches the
-   * ceiling refused before their first attempt, so the caller can detect the zero-call review.
+   * reason, and anything else queues for the sequential retry pass. A genuine ceiling refusal
+   * always follows billed spend — the ledger opens fresh per review and only refuses once spent
+   * reaches a positive ceiling — so an all-refused review still falls through to the disclosure and
+   * counts-only summary paths; there is no reachable zero-call state to special-case.
    */
-  private int joinBatchOutcomes(
+  private void joinBatchOutcomes(
       List<CompletableFuture<BatchOutcome>> futures,
       List<DiffBudgetPlanner.DiffBatch> batches,
       DiffBudgetPlanner.BudgetPlan plan,
       ReviewSession session,
       BatchOutcome[] outcomesByIndex,
       List<Integer> failedIndices) {
-    var ceilingBlockedBatches = 0;
     for (int i = 0; i < futures.size(); i++) {
       try {
         outcomesByIndex[i] = futures.get(i).join();
@@ -393,7 +374,6 @@ public class FindingPipeline {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
           // as the reason — instead of paying nothing and losing the batches that succeeded.
-          ceilingBlockedBatches++;
           Log.warnf(
               "Batch %d/%d skipped at the review's token spend ceiling (%d tokens spent, ceiling"
                   + " %d — REVIEW_MAX_TOKENS_PER_REVIEW); disclosing its files as not reviewed",
@@ -412,7 +392,6 @@ public class FindingPipeline {
         }
       }
     }
-    return ceilingBlockedBatches;
   }
 
   private BatchOutcome processBatch(

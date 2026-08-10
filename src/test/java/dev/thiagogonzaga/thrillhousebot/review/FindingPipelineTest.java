@@ -20,7 +20,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -880,6 +879,8 @@ class FindingPipelineTest {
     when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
     when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    // ceilingReached=true implies spent >= a positive ceiling — stub the state consistently.
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
     lenient()
         .when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -909,6 +910,8 @@ class FindingPipelineTest {
     when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
     when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    // ceilingReached=true implies spent >= a positive ceiling — stub the state consistently.
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
     lenient()
         .when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -999,31 +1002,6 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
-  }
-
-  @Test
-  void multiCallFailsTypedWhenTheCeilingBlockedEveryBatchBeforeAnyCall() {
-    // #499: a review that made zero AI calls has nothing to disclose a partial review around —
-    // it must fail with the typed error naming the knob, not post an empty review that reads as
-    // one.
-    var session = persistedSession();
-    var ctx = reviewContext();
-    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
-    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
-    lenient()
-        .when(aiReviewService.summarize(eq(session), any()))
-        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-
-    var plan = multiBatchPlan();
-    var resolver = new DiffLineResolver(Map.of());
-    var thrown =
-        assertThrows(
-            TokenSpendCeilingExceededException.class,
-            () -> pipeline.run(session, template, ctx, plan, resolver));
-
-    assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
   }
 
   @Test
