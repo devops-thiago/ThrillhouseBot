@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -578,6 +579,31 @@ class FindingPipelineTest {
 
     assertEquals("raw legacy diff", captor.getValue().diff());
     verify(quoteValidator).validate(any(), eq("raw legacy diff"));
+  }
+
+  @Test
+  void singleCallCeilingRefusalPropagatesForTheOrchestratorToFailSoft() {
+    // Characterization of the single-call contract: a mid-retry ceiling refusal has no paid batch
+    // findings to keep, so the pipeline does not degrade — the typed exception escapes run() and
+    // ReviewOrchestrator.review's catch (RuntimeException) fails the review soft (failure notice,
+    // FAILED check run, session error), with ReviewDispatcher as the backstop. Nothing reaches the
+    // webhook boundary. The multi-call path, which does hold paid findings, degrades instead.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), List.of(), false);
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+
+    var resolver = new DiffLineResolver(Map.of());
+    var thrown =
+        assertThrows(
+            TokenSpendCeilingExceededException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver));
+
+    assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
+    assertNull(session.getAiResponseJson(), "a refused single-call review persists nothing");
   }
 
   @Test
