@@ -372,8 +372,8 @@ class DiffBudgetPlannerTest {
     assertTrue(plan.runtimeUncoveredFiles().isEmpty());
     assertTrue(plan.effectiveOmittedFiles().isEmpty());
     assertTrue(plan.truncated());
-    assertThrows(
-        UnsupportedOperationException.class, () -> plan.responseCutFiles().add("escaped.java"));
+    var cutFiles = plan.responseCutFiles();
+    assertThrows(UnsupportedOperationException.class, () -> cutFiles.add("escaped.java"));
   }
 
   @Test

@@ -106,7 +106,11 @@ public class TruncatedResponseSalvager {
     var findings = new ArrayList<ReviewResponse.Finding>();
     var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
     ReviewResponse.Summary summary = null;
-    try (JsonParser parser = mapper.createParser(json)) {
+    // Deliberately not try-with-resources: the parser reads a String, holds no OS resource, and
+    // the compiler's close-on-exception desugaring adds unreachable branches for a reader that
+    // cannot fail to close. The success path closes explicitly; the cut path abandons the parser.
+    try {
+      JsonParser parser = mapper.createParser(json);
       if (parser.nextToken() != JsonToken.START_OBJECT) {
         return Salvaged.NOTHING;
       }
@@ -125,6 +129,7 @@ public class TruncatedResponseSalvager {
           default -> parser.skipChildren();
         }
       }
+      parser.close();
     } catch (IOException e) {
       // The cut point (or trailing garbage): everything that closed before it is already
       // collected, and the partial trailing value was never added. This is the expected way for
@@ -175,7 +180,7 @@ public class TruncatedResponseSalvager {
     }
     try {
       return mapper.treeToValue(node, type);
-    } catch (JsonProcessingException e) {
+    } catch (JsonProcessingException _) {
       Log.debugf("Skipping a salvaged element that does not map onto %s", type.getSimpleName());
       return null;
     }

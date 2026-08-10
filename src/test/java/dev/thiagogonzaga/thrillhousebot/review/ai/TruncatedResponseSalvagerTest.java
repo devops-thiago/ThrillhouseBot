@@ -245,4 +245,38 @@ class TruncatedResponseSalvagerTest {
 
     assertFalse(salvager.salvage(runaway).hasFindingsOrStatuses());
   }
+
+  @Test
+  void statusesAloneMakeTheSalvageWorthDisclosing() {
+    // A body cut after the statuses but before any finding closed: findings stay empty, yet the
+    // salvage is still worth a partially-reviewed disclosure — the right-hand side of
+    // hasFindingsOrStatuses carries it.
+    var salvaged =
+        salvager.salvage(
+            """
+            {"findings": [],
+             "previous_findings_status": [{"id": 1, "status": "resolved", "note": "done"}],
+             "summary": {"total_findi""");
+
+    assertTrue(salvaged.findings().isEmpty());
+    assertEquals(1, salvaged.previousFindingsStatus().size());
+    assertTrue(salvaged.hasFindingsOrStatuses());
+  }
+
+  @Test
+  void aLengthStoppedButCompleteBodySalvagesEverythingWithoutHittingACut() {
+    // finish_reason=length does not guarantee a syntactic cut: production has produced complete
+    // JSON that still stopped on the cap. The salvage pass must run to the body's natural end —
+    // the no-IOException side of the cut handling — and keep everything.
+    var salvaged =
+        salvager.salvage(
+            """
+            {"findings": [{"risk": "low", "confidence": "low", "file": "f", "line": 1,
+              "title": "t", "description": "d"}],
+             "previous_findings_status": [{"id": 2, "status": "unresolved", "note": "n"}]}""");
+
+    assertEquals(1, salvaged.findings().size());
+    assertEquals(1, salvaged.previousFindingsStatus().size());
+    assertTrue(salvaged.hasFindingsOrStatuses());
+  }
 }

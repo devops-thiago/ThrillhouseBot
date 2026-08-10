@@ -1171,12 +1171,9 @@ class AiReviewServiceTest {
             anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(invocation -> new TruncatedTokenStream(partial, starts));
 
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
     var thrown =
-        assertThrows(
-            AiResponseTruncatedException.class,
-            () ->
-                service.summarize(
-                    session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "")));
+        assertThrows(AiResponseTruncatedException.class, () -> service.summarize(session, inputs));
 
     assertEquals(1, starts.get(), "no-retry must hold on the summary lane too");
     assertTrue(thrown.conciseModelImplicated());

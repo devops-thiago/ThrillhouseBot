@@ -245,41 +245,7 @@ public class FindingPipeline {
         plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
         continue;
       }
-      try {
-        outcomesByIndex[index] =
-            processBatch(index, batches, session, promptInputs, plan, previousFilesById);
-        Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
-      } catch (TokenSpendCeilingExceededException e) {
-        // The gate above passed but a concurrent late callback (e.g. a timed-out attempt's usage)
-        // pushed the ledger over before the attempt started, or a mid-retry attempt was refused.
-        Log.warnf(
-            "Batch %d/%d retry refused at the review's token spend ceiling; disclosing its files"
-                + " as not reviewed. %s",
-            index + 1, batches.size(), e.getMessage());
-        plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
-      } catch (RuntimeException e) {
-        var truncation = AiResponseTruncatedException.findIn(e);
-        if (truncation.isPresent()) {
-          // The parallel attempt failed transiently and the retry hit the length cap: same
-          // salvage-or-disclose step as a parallel-pass truncation, and no further retry (#495).
-          outcomesByIndex[index] =
-              salvageTruncatedBatch(
-                  index, batches, promptInputs, plan, previousFilesById, truncation.get());
-          continue;
-        }
-        // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
-        // one batch that never succeeds must not discard the batches that did. Keep their
-        // findings, record this batch's files as uncovered on the shared plan so the verdict holds
-        // APPROVE and the summary discloses the gap, and let the review proceed (outcome stays
-        // null and is skipped below).
-        Log.warnf(
-            e,
-            "Batch %d/%d failed after its retry; keeping the successful batches and disclosing its"
-                + " files as not reviewed rather than failing the whole review",
-            index + 1,
-            batches.size());
-        plan.recordUncoveredFiles(filenamesOf(batches.get(index).files()));
-      }
+      retryBatch(index, batches, session, promptInputs, plan, previousFilesById, outcomesByIndex);
     }
 
     var outcomes =
@@ -399,6 +365,56 @@ public class FindingPipeline {
    */
   private static long ledgerSessionId(ReviewSession session) {
     return ReviewTokenLedger.keyFor(session);
+  }
+
+  /**
+   * One batch's sequential retry: a fresh billed attempt whose failure classifications mirror the
+   * parallel pass — a mid-retry ceiling refusal or a truncation goes to disclosure (the truncation
+   * salvaging first), anything else soft-fails the batch as not reviewed.
+   */
+  private void retryBatch(
+      int index,
+      List<DiffBudgetPlanner.DiffBatch> batches,
+      ReviewSession session,
+      AiReviewService.PromptInputs promptInputs,
+      DiffBudgetPlanner.BudgetPlan plan,
+      Map<Integer, String> previousFilesById,
+      BatchOutcome[] outcomesByIndex) {
+    try {
+      outcomesByIndex[index] =
+          processBatch(index, batches, session, promptInputs, plan, previousFilesById);
+      Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
+    } catch (TokenSpendCeilingExceededException e) {
+      // The gate above passed but a concurrent late callback (e.g. a timed-out attempt's usage)
+      // pushed the ledger over before the attempt started, or a mid-retry attempt was refused.
+      Log.warnf(
+          "Batch %d/%d retry refused at the review's token spend ceiling; disclosing its files"
+              + " as not reviewed. %s",
+          index + 1, batches.size(), e.getMessage());
+      plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
+    } catch (RuntimeException e) {
+      var truncation = AiResponseTruncatedException.findIn(e);
+      if (truncation.isPresent()) {
+        // The parallel attempt failed transiently and the retry hit the length cap: same
+        // salvage-or-disclose step as a parallel-pass truncation, and no further retry (#495).
+        outcomesByIndex[index] =
+            salvageTruncatedBatch(
+                index, batches, promptInputs, plan, previousFilesById, truncation.get());
+        return;
+      }
+      // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
+      // one batch that never succeeds must not discard the batches that did. Keep their
+      // findings, record this batch's files as uncovered on the shared plan so the verdict holds
+      // APPROVE and the summary discloses the gap, and let the review proceed (outcome stays
+      // null and is skipped below).
+      Log.warnf(
+          e,
+          "Batch %d/%d failed after its retry; keeping the successful batches and disclosing its"
+              + " files as not reviewed rather than failing the whole review",
+          index + 1,
+          batches.size());
+      plan.recordUncoveredFiles(filenamesOf(batches.get(index).files()));
+    }
   }
 
   /**
