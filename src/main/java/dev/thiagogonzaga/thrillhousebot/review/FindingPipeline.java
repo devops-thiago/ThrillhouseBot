@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -54,6 +55,9 @@ public class FindingPipeline {
 
   /** Directory rows listed in the scope header before the remainder is rolled up by count. */
   private static final int MAX_SCOPE_DIRECTORIES = 10;
+
+  /** Cause-chain links inspected before giving up, so a cyclic chain cannot spin. */
+  private static final int MAX_CAUSE_DEPTH = 16;
 
   private record BatchOutcome(
       int index,
@@ -195,12 +199,24 @@ public class FindingPipeline {
         try {
           outcomesByIndex[i] = futures.get(i).join();
         } catch (CompletionException e) {
-          failedIndices.add(i);
-          Log.warnf(
-              e,
-              "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
-              i + 1,
-              batches.size());
+          if (isResponseTruncated(e)) {
+            // The batch's own retry below would re-send the identical prompt against the identical
+            // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
+            Log.warnf(
+                e,
+                "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
+                    + " files as not reviewed",
+                i + 1,
+                batches.size());
+            plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
+          } else {
+            failedIndices.add(i);
+            Log.warnf(
+                e,
+                "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
+                i + 1,
+                batches.size());
+          }
         }
       }
     }
@@ -293,6 +309,29 @@ public class FindingPipeline {
 
   private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
+  }
+
+  /**
+   * Whether a batch failure was the model hitting its response-length cap. Walks the cause chain
+   * because the failure arrives wrapped — {@link CompletionException} over the {@link
+   * dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException} the service threw, so depth 2 in
+   * practice.
+   *
+   * <p>Bounded rather than walked to {@code null}: a cause chain can cycle — a {@link Throwable}
+   * overriding {@code getCause()}, or plain {@code A caused-by B caused-by A} — and an unbounded
+   * walk would spin forever on the review thread. The bound is far above any real chain, so a
+   * truncation is never missed for depth.
+   */
+  private static boolean isResponseTruncated(Throwable failure) {
+    var cause = failure;
+    for (var depth = 0;
+        cause != null && depth < MAX_CAUSE_DEPTH;
+        depth++, cause = cause.getCause()) {
+      if (cause instanceof AiResponseTruncatedException) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

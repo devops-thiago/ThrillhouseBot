@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -35,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -194,6 +196,95 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
     assertEquals(List.of(batchTwoStatus), result.previousFindingsStatus());
+  }
+
+  @Test
+  void multiCallDoesNotRetryABatchTruncatedAtTheModelsLengthCap() {
+    // #492: a length stop is deterministic — re-sending the identical prompt against the identical
+    // cap is cut at the identical point. The generic soft-fail path retries once before giving up,
+    // which for a truncation is a second guaranteed-futile billed call. It must go straight to the
+    // disclosure instead, exactly once.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length"));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1))
+        .reviewBatch(eq(session), any(), eq(1), anyInt()); // no second, futile call
+
+    // The rest of the soft-fail contract is unchanged: the successful batch keeps its findings and
+    // the truncated batch's files are disclosed rather than silently dropped.
+    assertEquals(1, result.findings().size());
+    assertEquals("B", result.findings().get(0).title());
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertTrue(plan.truncated());
+    assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
+  @Test
+  void multiCallSurvivesACyclicCauseChainOnAFailedBatch() {
+    // The truncation check walks the cause chain, and a cycle (here A caused-by B caused-by A)
+    // would spin forever on the review thread if the walk were unbounded. The batch must instead
+    // fall through to the ordinary soft-fail path — retried once, then disclosed.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var cyclic = cyclicFailure();
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(cyclic);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result =
+        assertTimeoutPreemptively(
+            java.time.Duration.ofSeconds(10),
+            () -> pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of())));
+
+    // Not a truncation, so the generic path applies: tried once, retried once, then disclosed.
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    assertEquals(1, result.findings().size());
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+  }
+
+  /**
+   * A cause chain that genuinely loops: {@code a -> b -> a -> b -> ...}, never reaching {@code
+   * null}. Built through a holder because the two exceptions have to reference each other.
+   *
+   * <p>An earlier version of this helper ended in a plain exception, so the walk terminated on
+   * {@code cause != null} and the depth bound was never exercised — the test passed without testing
+   * anything. Coverage caught it.
+   */
+  private static RuntimeException cyclicFailure() {
+    var forward = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+    var a =
+        new RuntimeException("a") {
+          @Override
+          public synchronized Throwable getCause() {
+            return forward.get();
+          }
+        };
+    var b =
+        new RuntimeException("b") {
+          @Override
+          public synchronized Throwable getCause() {
+            return a;
+          }
+        };
+    forward.set(b);
+    return a;
   }
 
   @Test

@@ -929,6 +929,59 @@ class AiReviewServiceTest {
     assertNull(service.streamingHandleOf(new FakeTokenStream("{\"findings\":[]}")));
   }
 
+  @Test
+  void shouldNotRetryAResponseTruncatedAtTheLengthCap() {
+    // A length stop is deterministic: the same prompt against the same cap is cut at the same
+    // point. Retrying it bills maxAiRetries identical failures, so exactly one call must be made.
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(invocation -> new TruncatedTokenStream("{\"findings\":[{\"file\":\"A", starts));
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertEquals(1, starts.get(), "a deterministic truncation must be attempted exactly once");
+    assertTrue(
+        thrown.getMessage().contains("max-output-tokens"),
+        "the message must name the knob an operator has to change: " + thrown.getMessage());
+    verify(parser, never()).parse(anyString());
+  }
+
+  @Test
+  void shouldNotBroadcastRetryEventsForATruncatedResponse() {
+    // The dashboard must not show a retry that never happens.
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(invocation -> new TruncatedTokenStream("{\"findings\":[", starts));
+
+    assertThrows(AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    verify(broadcaster, never())
+        .broadcast(
+            argThat(
+                event ->
+                    SessionEventBroadcaster.SessionEvent.TYPE_RETRY.equals(event.type())
+                        || SessionEventBroadcaster.SessionEvent.TYPE_STREAM_FAILED.equals(
+                            event.type())));
+  }
+
   private static ReviewSession reviewSession() {
     var session = new ReviewSession();
     session.id = 42L;
