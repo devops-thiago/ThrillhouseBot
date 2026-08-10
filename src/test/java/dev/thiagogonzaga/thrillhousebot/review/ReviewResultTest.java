@@ -265,9 +265,65 @@ class ReviewResultTest {
 
   @Test
   void truncationDetailNormalizesNullListsToEmpty() {
-    var detail = new ReviewResult.TruncationDetail(null, null, null);
+    var detail = new ReviewResult.TruncationDetail(null, null, null, null);
     assertTrue(detail.isEmpty());
     assertEquals(List.of(), detail.spendCeilingSkippedFileNames());
+    assertEquals(List.of(), detail.responseCutFileNames());
+  }
+
+  @Test
+  void coverageGapClauseNamesTheResponseCutClassWithTheCapAndTheKeptFindings() {
+    // #500: a salvaged batch's files were reviewed up to the cut — the clause must say the
+    // response was cut (naming the cap) and that the findings up to the cut were kept, not fold
+    // them into the budget or ceiling wording.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"), List.of(), List.of(), List.of("cut.java"));
+
+    var clause = ReviewResult.coverageGapClause(2, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "1 file(s) were only partially reviewed because the model's response was cut at its"
+                + " length cap (max-output-tokens) — findings up to the cut were kept (cut.java)"),
+        clause);
+  }
+
+  @Test
+  void coverageGapBriefCountsResponseCutFilesAsTheirOwnClass() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of(), List.of(), List.of(), List.of("cut.java")));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(
+        brief.contains("1 file(s) partially reviewed (response cut at the length cap)"), brief);
+  }
+
+  @Test
+  void truncationDetailWithOnlyResponseCutFilesIsNotEmpty() {
+    var detail =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of("cut.java"));
+    assertFalse(detail.isEmpty());
+    // The three-list convenience constructor keeps the pre-#500 shape: no response-cut files.
+    assertTrue(new ReviewResult.TruncationDetail(List.of(), List.of(), List.of()).isEmpty());
   }
 
   @Test

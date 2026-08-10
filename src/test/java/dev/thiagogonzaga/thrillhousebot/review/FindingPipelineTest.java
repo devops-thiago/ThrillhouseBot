@@ -87,7 +87,9 @@ class FindingPipelineTest {
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             budgetPlanner,
             new TokenCounter(),
-            tokenLedger);
+            tokenLedger,
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+                new ObjectMapper()));
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -236,6 +238,197 @@ class FindingPipelineTest {
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
     assertTrue(plan.truncated());
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
+  /** One complete finding element for a stubbed partial body, anchored in batch 1's file. */
+  private static String bodyFinding(String title) {
+    return "{\"risk\":\"medium\",\"confidence\":\"high\",\"file\":\"a.java\",\"line\":1,"
+        + ("\"title\":\"" + title + "\",\"description\":\"desc\",")
+        + "\"suggestion_old\":\"old line\",\"suggestion_new\":\"new line\"}";
+  }
+
+  /** A batch response cut at the length cap: 3 complete findings, 1 complete status, then a cut. */
+  private static String partialBatchBody() {
+    return "{\"findings\":["
+        + bodyFinding("S1")
+        + ","
+        + bodyFinding("S2")
+        + ","
+        + bodyFinding("S3")
+        + "],\"previous_findings_status\":[{\"id\":1,\"status\":\"unresolved\",\"note\":\"n\"},"
+        + "{\"id\":2,\"status\":\"resol";
+  }
+
+  @Test
+  void multiCallSalvagesTheCompleteFindingsFromATruncatedBatchResponse() {
+    // #500(a): the partial body travels with the truncation and is well-formed up to the cut. The
+    // complete leading findings must be salvaged through the normal validate/verify chain and the
+    // batch's files disclosed as PARTIALLY reviewed — not dropped and disclosed as not reviewed.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(
+            new AiResponseTruncatedException("finish_reason=length", partialBatchBody(), false));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(4, 0, 0, 4, 0, "ok", "does things", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    // #495's no-retry stands: salvage replaces the disclose step, never re-enters the retry lane.
+    verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    // The salvaged findings run the same validate/verify chain as any batch's.
+    verify(findingVerificationService, times(2)).verify(any(), any(), any(), any());
+
+    assertEquals(4, result.findings().size());
+    assertEquals("S1", result.findings().get(0).title());
+    assertEquals("S3", result.findings().get(2).title());
+    assertEquals("B", result.findings().get(3).title());
+    // The complete status before the cut is kept too; the cut-off one is dropped.
+    assertEquals(1, result.previousFindingsStatus().size());
+    assertEquals(1, result.previousFindingsStatus().get(0).id());
+
+    // Partially reviewed — a distinct, honest state: not in the not-reviewed set, named in the
+    // response-cut set, still holding APPROVE back.
+    assertEquals(List.of("a.java"), plan.responseCutFiles());
+    assertTrue(plan.runtimeUncoveredFiles().isEmpty());
+    assertTrue(plan.truncated());
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(changedFiles.contains("a.java (modified"), changedFiles);
+    assertTrue(
+        changedFiles.contains("partially reviewed: the model's response was cut"), changedFiles);
+    assertFalse(changedFiles.contains("a.java (not reviewed"), changedFiles);
+  }
+
+  @Test
+  void multiCallFallsBackToNotReviewedWhenTheCutPrecedesTheFirstCompleteFinding() {
+    // #500(b): a cut before the first element closed leaves nothing to salvage — the batch falls
+    // back to today's behaviour, disclosed as not reviewed. Green-only by necessity: this IS the
+    // pre-#500 disclosure, so no assertion here could have failed before the change; the guard
+    // pins that salvage never invents a "partially reviewed" claim out of an empty salvage.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(
+            new AiResponseTruncatedException(
+                "finish_reason=length", "{\"findings\":[{\"risk\":\"hi", false));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    assertEquals(1, result.findings().size());
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertTrue(plan.responseCutFiles().isEmpty());
+    assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
+  @Test
+  void multiCallSalvagesATruncationThrownOnTheSequentialRetry() {
+    // A batch can fail transiently in the parallel pass and then truncate on its sequential retry.
+    // The retry's truncation must land in the same salvage-or-disclose step, not the generic
+    // soft-fail that discards the partial output.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(new AiReviewException("transient", 1, null))
+        .thenThrow(
+            new AiResponseTruncatedException("finish_reason=length", partialBatchBody(), false));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(4, 0, 0, 4, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    assertEquals(4, result.findings().size());
+    assertEquals(List.of("a.java"), plan.responseCutFiles());
+    assertTrue(plan.runtimeUncoveredFiles().isEmpty());
+  }
+
+  @Test
+  void multiCallKeepsTheFindingsWhenTheSummaryResponseIsTruncated() {
+    // #500 scope A: every batch call succeeded and was billed; a summary truncated at the concise
+    // cap must degrade to the counts-only summary (the same shape as the ceiling-tripped path),
+    // with the findings persisted — not throw the whole paid review away.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length", "{\"summ", true));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1)).summarize(eq(session), any());
+    assertEquals(2, result.findings().size());
+    assertNull(result.summary());
+    assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
+  }
+
+  @Test
+  void multiCallSalvagesTheSummaryObjectWhenItClosedBeforeTheCut() {
+    // Scope A's better half: when the summary object itself completed before the cut, it is
+    // salvaged rather than degraded to counts-only.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var partial =
+        "{\"findings\":[],\"summary\":{\"total_findings\":2,\"critical\":0,\"high\":1,"
+            + "\"medium\":1,\"low\":0,\"overall_assessment\":\"solid\",\"pr_purpose\":\"adds\","
+            + "\"description_gaps\":[]},\"previous_findings_status\":[{\"id\":7,\"status\":\"res";
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length", partial, true));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertEquals(2, result.findings().size());
+    assertNotNull(result.summary());
+    assertEquals("solid", result.summary().overallAssessment());
+    assertNotNull(session.getAiResponseJson());
+  }
+
+  @Test
+  void summarizeWithoutReviewDegradesToCountsOnlyWhenTheSummaryIsTruncated() {
+    // The degenerate all-omitted plan makes exactly one AI call — the summary. A truncation there
+    // must not fail the review either: same counts-only degradation, empty findings, persisted.
+    var session = persistedSession();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java", "b.java"), List.of(), true);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length", null, true));
+
+    var result =
+        pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    assertTrue(result.findings().isEmpty());
+    assertNull(result.summary());
+    assertNotNull(session.getAiResponseJson());
   }
 
   @Test
@@ -1076,7 +1269,9 @@ class FindingPipelineTest {
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             budgetPlanner,
             new TokenCounter(),
-            realLedger);
+            realLedger,
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+                new ObjectMapper()));
     var session = persistedSession();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -1189,7 +1384,9 @@ class FindingPipelineTest {
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             budgetPlanner,
             new TokenCounter(),
-            tokenLedger);
+            tokenLedger,
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+                new ObjectMapper()));
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))

@@ -119,18 +119,24 @@ public class VerdictBuilder {
     // into the omitted set (effective*); legacy: line-cap count — never sum both. Files skipped at
     // the token spend ceiling gate approval through the same omitted set but are pulled out into
     // their own class here, so the disclosure names the ceiling — a different cause with a
-    // different fix — instead of blaming the diff budget (and never lists a file twice).
+    // different fix — instead of blaming the diff budget (and never lists a file twice). Files
+    // whose batch response was cut but salvaged (#500) are a further class: partially reviewed,
+    // holding approval like the others, disclosed with the response cut as the reason — and a file
+    // both clipped and response-cut is disclosed once, under the stronger (output-side) statement.
     var ceilingSkipped = plan.spendCeilingSkippedFiles();
+    var responseCut = plan.responseCutFiles();
+    var clipped = withoutNames(plan.effectiveClippedFiles(), responseCut);
     var truncation =
         plan.budgeted()
             ? new ReviewResult.TruncationDetail(
                 withoutNames(plan.effectiveOmittedFiles(), ceilingSkipped),
-                plan.effectiveClippedFiles(),
-                ceilingSkipped)
+                clipped,
+                ceilingSkipped,
+                responseCut)
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
         plan.budgeted()
-            ? plan.effectiveOmittedFiles().size() + plan.effectiveClippedFiles().size()
+            ? plan.effectiveOmittedFiles().size() + clipped.size() + responseCut.size()
             : ctx.omittedFiles();
     // GitHub PR-level totals when available; ignore-glob drops can undercount diff-derived stats.
     // Pure renames are excluded from reviewableFiles for AI budget (#386) but still belong in the

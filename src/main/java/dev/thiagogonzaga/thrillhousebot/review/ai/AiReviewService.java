@@ -99,16 +99,24 @@ public class AiReviewService {
    * concise cap rather than the batch review's response allowance.
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
-    return runWithRetries(
-        session,
-        () ->
-            prSummarizer.summarizeStream(
-                inputs.prContext(),
-                inputs.findings(),
-                inputs.changedFiles(),
-                inputs.previousFindings(),
-                inputs.repoInstructions()),
-        false);
+    try {
+      return runWithRetries(
+          session,
+          () ->
+              prSummarizer.summarizeStream(
+                  inputs.prContext(),
+                  inputs.findings(),
+                  inputs.changedFiles(),
+                  inputs.previousFindings(),
+                  inputs.repoInstructions()),
+          false);
+    } catch (AiResponseTruncatedException e) {
+      // This call runs on the concise named model, so the cap that cut it is
+      // REVIEW_CONCISE_MAX_OUTPUT_TOKENS — mark the failure so downstream copy names that knob
+      // instead of only the active model's max-output-tokens. Rethrown outside the retry loop,
+      // which already declined to retry, so the no-retry contract is untouched.
+      throw e.implicatingConciseModel();
+    }
   }
 
   private TokenStream reviewStream(PromptInputs inputs) {
@@ -280,12 +288,17 @@ public class AiReviewService {
       // the transient-retry path below — parsing it first would surface only "not valid review
       // JSON", which is indistinguishable from a malformed response and gets retried.
       if (response.finishReason() == FinishReason.LENGTH) {
+        // The buffered partial text travels with the exception: it is well-formed up to the cut,
+        // and the disclose step can salvage its complete leading elements (#500) instead of
+        // discarding output that was already paid for.
         result.completeExceptionally(
             new AiResponseTruncatedException(
                 "Model stopped at its response-length cap (finish_reason=length) after "
                     + text.length()
                     + " characters, so the response is incomplete. Raise the active model's"
-                    + " max-output-tokens, or leave it unset to use the provider default."));
+                    + " max-output-tokens, or leave it unset to use the provider default.",
+                text,
+                false));
         return;
       }
       result.complete(parser.parse(text));

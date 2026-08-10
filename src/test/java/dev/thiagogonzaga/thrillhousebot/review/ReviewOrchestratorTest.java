@@ -150,7 +150,8 @@ class ReviewOrchestratorTest {
             new DiffBudgetPlanner(
                 diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
             new TokenCounter(),
-            mock(ReviewTokenLedger.class));
+            mock(ReviewTokenLedger.class),
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper));
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -2986,6 +2987,188 @@ class ReviewOrchestratorTest {
           .createComment(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(42), any());
       verify(sessionPersistence).update(eq(2L), any());
     }
+
+    private ReviewSession failureSession() {
+      var session = new ReviewSession();
+      session.id = 5L;
+      session.setRepository("owner/repo");
+      session.setPrNumber(42);
+      session.setPrTitle("Test PR");
+      session.setCommitSha("abcdefgh");
+      session.setTimestamp(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      return session;
+    }
+
+    @Test
+    void aTruncationFailurePostsTheCapNamingNoticeInsteadOfTheBareRetryAdvice() {
+      // #500 scope B: a truncation is deterministic — advising a bare `/review` retry is exactly
+      // the knowably-futile call #495 exists to prevent. The notice must name the cap and the
+      // max-output-tokens knob instead.
+      var session = failureSession();
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          session,
+          99L,
+          new dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException(
+              "Model stopped at its response-length cap (finish_reason=length)"));
+
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      var body = commentCaptor.getValue().body();
+      assertTrue(body.contains("response-length cap"), body);
+      assertTrue(body.contains("max-output-tokens"), body);
+      assertFalse(body.contains("reply with `/review`"), body);
+
+      // The FAILED check run must say the same instead of the null title/summary it sends today.
+      var checkCaptor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+      verify(checkRunClient)
+          .updateCheckRun(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(99L),
+              checkCaptor.capture());
+      var output = checkCaptor.getValue().output();
+      assertNotNull(output, "the FAILED check run must carry a truncation title/summary");
+      assertTrue(output.title().contains("length cap"), output.title());
+      assertTrue(output.summary().contains("max-output-tokens"), output.summary());
+    }
+
+    @Test
+    void aConciseModelTruncationFailureNamesTheConciseKnobToo() {
+      var session = failureSession();
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          session,
+          99L,
+          new dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException(
+                  "Model stopped at its response-length cap (finish_reason=length)")
+              .implicatingConciseModel());
+
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      assertTrue(
+          commentCaptor.getValue().body().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+          commentCaptor.getValue().body());
+
+      var checkCaptor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+      verify(checkRunClient)
+          .updateCheckRun(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(99L),
+              checkCaptor.capture());
+      assertNotNull(checkCaptor.getValue().output());
+      assertTrue(
+          checkCaptor.getValue().output().summary().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+          checkCaptor.getValue().output().summary());
+    }
+
+    @Test
+    void aTruncationBuriedInTheCauseChainStillGetsTheCapNamingNotice() {
+      // The single-call lane can wrap the truncation (e.g. IllegalStateException over it); the
+      // orchestrator must walk the cause chain, not instanceof-check the top failure.
+      var session = failureSession();
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          session,
+          0L,
+          new IllegalStateException(
+              "wrapped",
+              new dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException(
+                  "Model stopped at its response-length cap (finish_reason=length)")));
+
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      assertTrue(
+          commentCaptor.getValue().body().contains("max-output-tokens"),
+          commentCaptor.getValue().body());
+    }
+
+    @Test
+    void aFailedTruncationNoticePostIsSwallowedAndTheFailureFlowCompletes() {
+      // The truncation notice shares the generic notice's best-effort contract: a comment API
+      // failure is logged, and the session still lands in FAILED.
+      var session = failureSession();
+      when(commentClient.createComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(new RuntimeException("comment 500"));
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          session,
+          0L,
+          new dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException(
+              "Model stopped at its response-length cap (finish_reason=length)"));
+
+      verify(sessionPersistence).update(eq(5L), any());
+      assertEquals(ReviewSession.STATUS_FAILED, session.getStatus());
+    }
+
+    @Test
+    void aGenericFailureKeepsTheGenericRetryNoticeAndBareCheckRun() {
+      // Every other failure is (potentially) transient: the `/review` retry advice stays, and the
+      // check run keeps its bare conclusion-only shape.
+      var session = failureSession();
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok", reviewRequest(), session, 99L, new RuntimeException("boom"));
+
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      var body = commentCaptor.getValue().body();
+      assertTrue(body.contains("reply with `/review`"), body);
+      assertFalse(body.contains("max-output-tokens"), body);
+
+      var checkCaptor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+      verify(checkRunClient)
+          .updateCheckRun(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(99L),
+              checkCaptor.capture());
+      assertNull(checkCaptor.getValue().output(), "generic failures keep the bare check run");
+    }
   }
 
   @Nested
@@ -4207,7 +4390,8 @@ class ReviewOrchestratorTest {
               new DiffBudgetPlanner(
                   diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
               new TokenCounter(),
-              mock(ReviewTokenLedger.class));
+              mock(ReviewTokenLedger.class),
+              new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper));
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

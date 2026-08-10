@@ -92,7 +92,8 @@ public class DiffBudgetPlanner {
       List<String> clippedFiles,
       boolean budgeted,
       List<String> runtimeUncoveredFiles,
-      List<String> spendCeilingSkippedFiles) {
+      List<String> spendCeilingSkippedFiles,
+      List<String> responseCutFiles) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -105,6 +106,7 @@ public class DiffBudgetPlanner {
           spendCeilingSkippedFiles == null
               ? new CopyOnWriteArrayList<>()
               : spendCeilingSkippedFiles;
+      responseCutFiles = responseCutFiles == null ? new CopyOnWriteArrayList<>() : responseCutFiles;
     }
 
     /**
@@ -134,6 +136,24 @@ public class DiffBudgetPlanner {
           new CopyOnWriteArrayList<>());
     }
 
+    /** Back-compat convenience predating {@code responseCutFiles}; starts it empty. */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          new CopyOnWriteArrayList<>());
+    }
+
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
     @Override
     public List<String> runtimeUncoveredFiles() {
@@ -144,6 +164,12 @@ public class DiffBudgetPlanner {
     @Override
     public List<String> spendCeilingSkippedFiles() {
       return List.copyOf(spendCeilingSkippedFiles);
+    }
+
+    /** Defensive copy, like {@link #runtimeUncoveredFiles()}. */
+    @Override
+    public List<String> responseCutFiles() {
+      return List.copyOf(responseCutFiles);
     }
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
@@ -171,10 +197,29 @@ public class DiffBudgetPlanner {
       }
     }
 
+    /**
+     * Records files whose batch response the model cut at its length cap but whose complete leading
+     * findings were salvaged (#500) — partially reviewed, a state distinct from {@link
+     * #recordUncoveredFiles not reviewed}: the salvaged findings are kept and the disclosure says
+     * the response was cut, not that the files were never seen. Deliberately <em>not</em> folded
+     * into {@code runtimeUncoveredFiles}: these files keep their walkthrough rows and partial
+     * findings; only approval is withheld ({@link #truncated()}).
+     */
+    void recordResponseCutFiles(List<String> filenames) {
+      for (var name : filenames) {
+        if (name != null && !responseCutFiles.contains(name)) {
+          responseCutFiles.add(name);
+        }
+      }
+    }
+
     public boolean truncated() {
-      // Clipped unseen hunks and files a failed batch never covered withhold coverage like omitted
-      // files — all three hold APPROVE.
-      return !omittedFiles.isEmpty() || !clippedFiles.isEmpty() || !runtimeUncoveredFiles.isEmpty();
+      // Clipped unseen hunks, files a failed batch never covered, and files whose response was
+      // cut mid-body all withhold coverage like omitted files — each holds APPROVE.
+      return !omittedFiles.isEmpty()
+          || !clippedFiles.isEmpty()
+          || !runtimeUncoveredFiles.isEmpty()
+          || !responseCutFiles.isEmpty();
     }
 
     /**

@@ -219,6 +219,51 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void responseCutFilesAreDisclosedAsPartiallyReviewedAndHoldApproval() {
+    // #500: a batch whose response was cut but salvaged is a third kind of partial coverage — the
+    // files were reviewed up to the cut and the findings kept, so the disclosure must say the
+    // response was cut (naming the cap), hold approval, and NOT list the files as "not reviewed".
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    plan.recordResponseCutFiles(List.of("cut.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(1, result.omittedFiles());
+    assertTrue(result.truncated());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(List.of("cut.java"), result.truncation().responseCutFileNames());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains(
+                "1 file(s) were only partially reviewed because the model's response was cut at"
+                    + " its length cap (max-output-tokens) — findings up to the cut were kept"
+                    + " (cut.java)"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("1 file(s) partially reviewed (response cut at the length cap)"),
+        checkSummary);
+  }
+
+  @Test
+  void aResponseCutFileThatWasAlsoClippedIsDisclosedOnceAsPartiallyReviewed() {
+    // A clipped file's batch can also have its response cut. One file, one disclosure: the
+    // stronger (output-side) statement wins, and the file is never counted twice.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("c.java"), true);
+    plan.recordResponseCutFiles(List.of("c.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(1, result.omittedFiles());
+    assertEquals(List.of(), result.truncation().clippedFileNames());
+    assertEquals(List.of("c.java"), result.truncation().responseCutFileNames());
+    assertFalse(result.summaryMarkdown().contains("partially analyzed"), result.summaryMarkdown());
+  }
+
+  @Test
   void clippedOnlyReviewIsDisclosedAsPartialAndHoldsApproval() {
     var ctx = contextWithLineCapOmissions(0);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("huge.java"), true);
