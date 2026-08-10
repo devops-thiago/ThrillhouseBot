@@ -16,6 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -127,13 +129,10 @@ class StreamingChatModelListenerOrderingTest {
     // that ordering guarantee gives the gate: usage a ChatModelListener records into the
     // ReviewTokenLedger is already observable at the moment the user-level completion handler
     // runs — so the next gate can never read a ledger that has not seen the prior billed attempt.
-    var config =
-        org.mockito.Mockito.mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
-    var review =
-        org.mockito.Mockito.mock(
-            dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
-    org.mockito.Mockito.when(config.review()).thenReturn(review);
-    org.mockito.Mockito.when(review.maxTokensPerReview()).thenReturn(100_000L);
+    var config = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+    var review = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.maxTokensPerReview()).thenReturn(100_000L);
     var ledger = new ReviewTokenLedger(config);
     ledger.open(7L);
 
