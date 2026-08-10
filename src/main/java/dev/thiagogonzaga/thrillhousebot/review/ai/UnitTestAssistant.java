@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -33,7 +34,7 @@ public interface UnitTestAssistant {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage(UnitTestAssistantPrompts.SYSTEM)
   @UserMessage(UnitTestAssistantPrompts.USER)
-  String generate(
+  Result<String> generate(
       @V("diff") String diff,
       @V("prContext") String prContext,
       @V("projectStack") String projectStack,

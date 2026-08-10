@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -31,7 +32,7 @@ public interface PrDescribeAssistant {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage(PrDescribeAssistantPrompts.SYSTEM)
   @UserMessage(PrSuggestionPrompts.USER)
-  String describe(
+  Result<String> describe(
       @V("diff") String diff,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,
@@ -44,7 +45,7 @@ public interface PrDescribeAssistant {
    */
   @SystemMessage(PrDescribeAssistantPrompts.SYNTHESIS_SYSTEM)
   @UserMessage(PrDescribeAssistantPrompts.SYNTHESIS_USER)
-  String synthesize(
+  Result<String> synthesize(
       @V("partials") String partials,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -126,7 +127,7 @@ class PrDescriptionGeneratorTest {
   }
 
   private void describeReturns(String partial) {
-    when(describeAssistant.describe(any(), any(), any(), any())).thenReturn(partial);
+    when(describeAssistant.describe(any(), any(), any(), any())).thenReturn(aiOk(partial));
   }
 
   private String generate() {
@@ -332,11 +333,12 @@ class PrDescriptionGeneratorTest {
     when(describeAssistant.describe(any(), any(), any(), any()))
         .thenAnswer(
             call ->
-                call.<String>getArgument(0).contains("src/Other.java")
-                    ? "### Suggested title\n`retry work`"
-                    : "### Suggested title\n`stream work`");
+                aiOk(
+                    call.<String>getArgument(0).contains("src/Other.java")
+                        ? "### Suggested title\n`retry work`"
+                        : "### Suggested title\n`stream work`"));
     when(describeAssistant.synthesize(any(), any(), any(), any()))
-        .thenReturn("### Suggested title\n`feat: stream and retry`");
+        .thenReturn(aiOk("### Suggested title\n`feat: stream and retry`"));
 
     String body = generate();
 
@@ -374,7 +376,7 @@ class PrDescriptionGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile(), thirdFile());
     describeReturns("### Suggested title\n`x`");
-    when(describeAssistant.synthesize(any(), any(), any(), any())).thenReturn("### merged");
+    when(describeAssistant.synthesize(any(), any(), any(), any())).thenReturn(aiOk("### merged"));
 
     generate();
 
@@ -445,7 +447,7 @@ class PrDescriptionGeneratorTest {
               if (call.<String>getArgument(0).contains("src/Other.java")) {
                 throw new RuntimeException("model down");
               }
-              return "### Suggested title\n`stream work`";
+              return aiOk("### Suggested title\n`stream work`");
             });
 
     String body = generate();

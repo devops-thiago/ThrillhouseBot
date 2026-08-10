@@ -15,11 +15,14 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import io.quarkus.logging.Log;
 import java.util.List;
 import java.util.function.Supplier;
@@ -289,14 +292,20 @@ public abstract class AbstractPrSuggestionGenerator {
    * stripped. {@code command} labels the operation in logs (e.g. {@code "/describe"}). Subclasses
    * supply the actual call (and apply any command-specific post-filtering to the result).
    */
-  protected String callAssistant(String command, Supplier<String> assistantCall) {
+  protected String callAssistant(String command, Supplier<Result<String>> assistantCall) {
     try {
-      String suggestion = assistantCall.get();
+      String suggestion =
+          AiResponses.textOrThrowOnTruncation(assistantCall.get(), command + " assistant");
       if (suggestion == null || suggestion.isBlank()) {
         Log.debugf("%s assistant produced an empty suggestion — posting nothing", command);
         return null;
       }
       return suggestion.strip();
+    } catch (AiResponseTruncatedException e) {
+      // Distinct from the generic failure below on purpose: "call failed" sends an operator looking
+      // for a provider error, when the cause is a cap they set and can raise.
+      Log.warnf("%s — posting nothing. %s", command, e.getMessage());
+      return null;
     } catch (RuntimeException e) {
       Log.warnf(e, "%s assistant call failed — posting nothing", command);
       return null;

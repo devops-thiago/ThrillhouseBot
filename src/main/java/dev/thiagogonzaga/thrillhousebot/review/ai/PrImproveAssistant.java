@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -33,7 +34,7 @@ public interface PrImproveAssistant {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage(PrImproveAssistantPrompts.SYSTEM)
   @UserMessage(PrSuggestionPrompts.USER)
-  String improve(
+  Result<String> improve(
       @V("diff") String diff,
       @V("currentTitle") String currentTitle,
       @V("currentDescription") String currentDescription,

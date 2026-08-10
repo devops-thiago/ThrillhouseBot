@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -32,7 +33,7 @@ public interface ChangelogAssistant {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage(ChangelogAssistantPrompts.SYSTEM)
   @UserMessage(PrSuggestionPrompts.USER)
-  String draft(
+  Result<String> draft(
       @V("diff") String diff,
       @V("prNumber") String prNumber,
       @V("currentTitle") String currentTitle,
@@ -46,7 +47,7 @@ public interface ChangelogAssistant {
    */
   @SystemMessage(ChangelogAssistantPrompts.MERGE_SYSTEM)
   @UserMessage(ChangelogAssistantPrompts.MERGE_USER)
-  String merge(
+  Result<String> merge(
       @V("candidates") String candidates,
       @V("prNumber") String prNumber,
       @V("currentTitle") String currentTitle,

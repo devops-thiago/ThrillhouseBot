@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.*;
@@ -196,11 +197,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar(int)",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** Doubles x. */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -226,11 +228,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch(), otherFile());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar(int)",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** Doubles x. */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -247,11 +250,12 @@ class DocGenerationServiceTest {
     prWithFiles(new FileDiff("src/Wrap.java", "added", 5, 0, 5, WRAP_PATCH));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Wrap.java","line":1,"symbol":"wrap",
             "suggestion_old":"public int wrap(\\n    int x,\\n    int y) {",
             "suggestion_new":"/** Adds x and y. */\\npublic int wrap(\\n    int x,\\n    int y) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -266,11 +270,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {\\n  return x * 99;",
             "suggestion_new":"/** Doubles. */\\npublic int bar(int x) {\\n  return x * 99;"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -297,11 +302,12 @@ class DocGenerationServiceTest {
     prWithFiles(new FileDiff("src/Wrap.java", "added", 3, 0, 3, patch));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Wrap.java","line":10,"symbol":"wrap",
             "suggestion_old":"public int wrap(\\n    int x,\\n    int y) {",
             "suggestion_new":"/** Adds x and y. */\\npublic int wrap(\\n    int x,\\n    int y) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -316,11 +322,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {\\n  return x * 99;",
             "suggestion_new":"/** d */\\npublic int bar(int x) {\\n  return x * 99;"}]}
-            """);
+            """));
     doThrow(new RuntimeException("422 Unprocessable Entity"))
         .when(reviewClient)
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
@@ -335,7 +342,8 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[
               {"file":"src/Foo.java","line":1,"symbol":"bar",
                "suggestion_old":"public int bar(int x) {",
@@ -343,7 +351,7 @@ class DocGenerationServiceTest {
               {"file":"src/Foo.java","line":4,"symbol":"baz",
                "suggestion_old":"public int baz(int y) {\\n  return y + 99;",
                "suggestion_new":"/** b */\\npublic int baz(int y) {\\n  return y + 99;"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -358,7 +366,8 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[
               {"file":"src/Foo.java","line":1,"symbol":"bar",
                "suggestion_old":"public int bar(int x) {",
@@ -366,7 +375,7 @@ class DocGenerationServiceTest {
               {"file":"src/Foo.java","line":4,"symbol":"baz",
                "suggestion_old":"public int baz(int y) {",
                "suggestion_new":"/** b */\\npublic int baz(int y) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -382,11 +391,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
              "suggestion_old":"public int bar(int x) {",
              "suggestion_new":"/** a */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -401,7 +411,7 @@ class DocGenerationServiceTest {
   void doesNotPostSuggestionThatCannotAnchorCleanly(
       String reason, String docsJson, String expectedSummary) {
     prWithFiles(fooWithPatch());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(docsJson);
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk(docsJson));
 
     service.handle(task());
 
@@ -458,7 +468,7 @@ class DocGenerationServiceTest {
   @Test
   void reportsNothingToDocumentOnEmptyResult() {
     prWithFiles(fooWithPatch());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"docs\":[]}"));
 
     service.handle(task());
 
@@ -545,7 +555,7 @@ class DocGenerationServiceTest {
                 "Use British spelling.", ".github/thrillhousebot.md"));
     when(projectStackResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn("Maven artifacts: quarkus-core");
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"docs\":[]}"));
 
     service.handle(task());
 
@@ -564,11 +574,12 @@ class DocGenerationServiceTest {
         .thenThrow(new RuntimeException("stack down"));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -581,7 +592,7 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenThrow(new RuntimeException("instructions down"));
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"docs\":[]}"));
 
     service.handle(task());
 
@@ -596,11 +607,12 @@ class DocGenerationServiceTest {
         .thenReturn(List.of(fooWithPatch()));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -660,11 +672,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
+            """));
     when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
         .thenThrow(new RuntimeException("422 line outside diff"));
 
@@ -679,7 +692,7 @@ class DocGenerationServiceTest {
         .thenReturn(new PullRequestDetails("  ", "  ", new Ref(HEAD_SHA), new Ref("base")));
     when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(fooWithPatch()));
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"docs\":[]}"));
 
     service.handle(task());
 
@@ -705,11 +718,12 @@ class DocGenerationServiceTest {
         new FileDiff("src/Empty.java", "modified", 0, 0, 0, "  "));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -734,7 +748,7 @@ class DocGenerationServiceTest {
         .thenReturn(
             new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
     prWithFiles(fooWithPatch(), otherFile());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_OTHER);
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk(DOC_FOR_OTHER));
 
     service.handle(task());
 
@@ -755,11 +769,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch(), new FileDiff("docs/README.md", "modified", 1, 0, 1, "@@\n+hi"));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     globalService.handle(task());
 
@@ -778,7 +793,7 @@ class DocGenerationServiceTest {
     var tinyLineCap = new ReviewDiffFormatter(List.of(), 8);
     var cappedService = serviceWith(tinyLineCap);
     prWithFiles(fooWithPatch(), otherFile());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_OTHER);
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk(DOC_FOR_OTHER));
 
     cappedService.handle(task());
 
@@ -795,7 +810,7 @@ class DocGenerationServiceTest {
   void plansOneBatchPerSliceOfTheChangeSetRatherThanOneCallOverTheWholeRender() {
     budgetWithDiffRoom(40);
     prWithFiles(fooWithPatch(), otherFile());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("{\"docs\":[]}");
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"docs\":[]}"));
 
     service.handle(task());
 
@@ -817,17 +832,19 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch(), otherFile());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """)
+            """))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Other.java","line":1,"symbol":"hop",
             "suggestion_old":"public int hop(int n) {",
             "suggestion_new":"/** just a docstring, no code */"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -843,12 +860,13 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch(), otherFile());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """)
-        .thenReturn(DOC_FOR_OTHER);
+            """))
+        .thenReturn(aiOk(DOC_FOR_OTHER));
 
     service.handle(task());
 
@@ -883,11 +901,12 @@ class DocGenerationServiceTest {
               if (call.<String>getArgument(0).contains("src/Other.java")) {
                 throw new RuntimeException("model down");
               }
-              return """
+              return aiOk(
+                  """
                   {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
                   "suggestion_old":"public int bar(int x) {",
                   "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-                  """;
+                  """);
             });
 
     service.handle(task());
@@ -911,7 +930,7 @@ class DocGenerationServiceTest {
     // the merge across batches is keyed on file:line.
     budgetWithDiffRoom(40);
     prWithFiles(fooWithPatch(), otherFile());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(DOC_FOR_FOO);
+    when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk(DOC_FOR_FOO));
 
     service.handle(task());
 
@@ -932,9 +951,10 @@ class DocGenerationServiceTest {
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenAnswer(
             call ->
-                call.<String>getArgument(0).contains("src/Other.java")
-                    ? "Sure! Here are the docs I came up with."
-                    : DOC_FOR_FOO);
+                aiOk(
+                    call.<String>getArgument(0).contains("src/Other.java")
+                        ? "Sure! Here are the docs I came up with."
+                        : DOC_FOR_FOO));
 
     service.handle(task());
 
@@ -952,7 +972,8 @@ class DocGenerationServiceTest {
     // maintainer gets the failure notice rather than a "nothing to document" verdict.
     budgetWithDiffRoom(40);
     prWithFiles(fooWithPatch(), otherFile());
-    when(docGenerator.generate(any(), any(), any(), any())).thenReturn("I could not do that.");
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(aiOk("I could not do that."));
 
     service.handle(task());
 
@@ -986,7 +1007,8 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[
               {"line":1,"symbol":"bar",
                "suggestion_old":"public int bar(int x) {",
@@ -994,7 +1016,7 @@ class DocGenerationServiceTest {
               {"file":"src/Foo.java","line":4,"symbol":"baz",
                "suggestion_old":"public int baz(int y) {",
                "suggestion_new":"/** b */\\npublic int baz(int y) {"}]}
-            """);
+            """));
 
     service.handle(task());
 
@@ -1015,11 +1037,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch(), otherFile());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
-            """)
-        .thenReturn(DOC_FOR_FOO);
+            """))
+        .thenReturn(aiOk(DOC_FOR_FOO));
 
     service.handle(task());
 
@@ -1040,11 +1063,12 @@ class DocGenerationServiceTest {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {",
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
-            """);
+            """));
 
     service.handle(task());
 

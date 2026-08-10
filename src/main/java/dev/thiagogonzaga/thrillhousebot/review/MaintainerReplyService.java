@@ -20,6 +20,8 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
@@ -219,18 +221,25 @@ public class MaintainerReplyService {
       String question, String prContext, String finding, String codeContext, String thread) {
     try {
       String reply =
-          replyAssistant.reply(
-              PromptTemplateEscaper.escape(question),
-              PromptTemplateEscaper.escape(prContext),
-              PromptTemplateEscaper.escape(finding),
-              // codeContext is the diff/hunk under discussion: fence it byte-exact.
-              PromptTemplateEscaper.fence(codeContext),
-              PromptTemplateEscaper.escape(thread));
+          AiResponses.textOrThrowOnTruncation(
+              replyAssistant.reply(
+                  PromptTemplateEscaper.escape(question),
+                  PromptTemplateEscaper.escape(prContext),
+                  PromptTemplateEscaper.escape(finding),
+                  // codeContext is the diff/hunk under discussion: fence it byte-exact.
+                  PromptTemplateEscaper.fence(codeContext),
+                  PromptTemplateEscaper.escape(thread)),
+              "Maintainer reply");
       if (reply == null || reply.isBlank()) {
         Log.debug("Reply assistant produced an empty reply — posting nothing");
         return null;
       }
       return reply.strip();
+    } catch (AiResponseTruncatedException e) {
+      // Named separately from the generic failure: the cause is a cap the operator set, not a
+      // provider error, and the message says which knob to raise.
+      Log.warnf("Reply assistant — posting nothing. %s", e.getMessage());
+      return null;
     } catch (RuntimeException e) {
       Log.warn("Reply assistant call failed — posting nothing", e);
       return null;
