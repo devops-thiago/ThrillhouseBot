@@ -269,6 +269,40 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void shouldPassThroughALiteralNullDescriptionGaps() {
+    // A model may emit "description_gaps": null rather than omitting the field. The normalizer
+    // must leave it alone (the Summary constructor already drops nulls), not wrap it in an array.
+    var response =
+        parser.parse(
+            """
+            {"findings": [],
+             "summary": {"total_findings": 0, "critical": 0, "high": 0, "medium": 0, "low": 0,
+               "overall_assessment": "fine", "pr_purpose": "p", "description_gaps": null}}
+            """);
+
+    assertNotNull(response.summary());
+    assertEquals(java.util.List.of(), response.summary().descriptionGaps());
+  }
+
+  @Test
+  void shouldSkipANonTextualClaimWhenFlatteningAGapObject() {
+    // The "claim"-first ordering guard must not blow up (or emit "42") when a model puts a
+    // non-string value under "claim" — the remaining string-valued fields still carry the gap.
+    var response =
+        parser.parse(
+            """
+            {"findings": [],
+             "summary": {"total_findings": 0, "critical": 0, "high": 0, "medium": 0, "low": 0,
+               "overall_assessment": "fine", "pr_purpose": "p",
+               "description_gaps": [{"claim": 42, "code": "the stated cap is never sent"}]}}
+            """);
+
+    assertNotNull(response.summary());
+    assertEquals(
+        java.util.List.of("the stated cap is never sent"), response.summary().descriptionGaps());
+  }
+
+  @Test
   void shouldFlattenObjectDescriptionGapsToStrings() {
     // The exact production shape from issue #508: deepseek-v4-flash emitted description_gaps
     // elements as {"claim": …, "code": …} objects instead of the strings the schema asks for,
