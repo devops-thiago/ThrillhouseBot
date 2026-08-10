@@ -23,6 +23,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -146,7 +147,11 @@ public class VerdictBuilder {
     var diffStats =
         DiffStats.fromFiles(overviewFiles, omitted, truncation)
             .withAuthoritativeTotals(ctx.prTotals());
-    var omittedNames = Set.copyOf(truncation.omittedFileNames());
+    // Rows are dropped for every never-reviewed class — planned/runtime omissions AND ceiling
+    // skips (the detail keeps them separate only so the disclosure names the ceiling) — while
+    // clipped and response-cut files keep theirs: those were partially reviewed.
+    var omittedNames = new HashSet<>(truncation.omittedFileNames());
+    omittedNames.addAll(truncation.spendCeilingSkippedFileNames());
     var changedFiles =
         toChangedFiles(
             overviewFiles.stream()

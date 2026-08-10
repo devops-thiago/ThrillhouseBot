@@ -389,6 +389,32 @@ class VerdictBuilderTest {
     assertTrue(rowsCaptor.getValue().isEmpty(), rowsCaptor.getValue().toString());
   }
 
+  @Test
+  void ceilingSkippedFilesAreDroppedFromTheWalkthroughRowsLikeOtherNotReviewedFiles() {
+    // #515 — a file skipped at the token spend ceiling was never reviewed at all: the banner says
+    // so and the model-facing overview lists it as not reviewed, so its walkthrough row must be
+    // dropped like every other not-reviewed class — only partially reviewed files (clipped,
+    // response-cut) keep their rows.
+    var ctx =
+        contextWithLineCapOmissions(
+            0,
+            List.of(
+                new FileDiff("reviewed.java", "modified", 1, 0, 1, ""),
+                new FileDiff("skipped.java", "modified", 1, 0, 1, "")));
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    plan.recordSpendCeilingSkippedFiles(List.of("skipped.java"));
+    var rowsCaptor = ArgumentCaptor.forClass(List.class);
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    verify(summaryGenerator)
+        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
+    assertEquals(
+        List.of(new PrSummaryGenerator.ChangedFile("reviewed.java", "modified")),
+        rowsCaptor.getValue(),
+        "a ceiling-skipped (never reviewed) file must not keep its walkthrough row");
+  }
+
   /**
    * #471 — the walkthrough filter is the third site that asks an immutable name set whether it
    * holds a {@code FileDiff.filename()} that Jackson never validated. {@code contains(null)} throws
