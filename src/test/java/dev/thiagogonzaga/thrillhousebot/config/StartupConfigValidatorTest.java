@@ -15,12 +15,19 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 
+import io.smallrye.config.ConfigMapping;
+import io.smallrye.config.PropertiesConfigSource;
+import io.smallrye.config.SmallRyeConfigBuilder;
+import io.smallrye.config.WithName;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -160,6 +167,11 @@ class StartupConfigValidatorTest {
 
     ConfigBuilder conciseMaxOutputTokens(Optional<Integer> v) {
       this.conciseMaxOutputTokens = v;
+      return this;
+    }
+
+    ConfigBuilder modelName(String v) {
+      this.modelName = v;
       return this;
     }
 
@@ -332,6 +344,70 @@ class StartupConfigValidatorTest {
     // An operator may clear REVIEW_CONCISE_MAX_OUTPUT_TOKENS (empty value) so the concise calls
     // fall back to the provider default; absence is not a misconfiguration.
     new ConfigBuilder().conciseMaxOutputTokens(Optional.empty()).build().validate();
+  }
+
+  @Test
+  void failsFastWhenTheConciseCapExceedsTheBufferOnASharedWindow() {
+    // #517: post-#507 the summary/verifier/reply calls send REVIEW_CONCISE_MAX_OUTPUT_TOKENS as
+    // max_tokens against the same shared window the budgeter packed to budget - buffer, so the
+    // concise cap is held to the same reservation rule as the active model's own response cap:
+    // 384000 on the active cap refuses boot, and the identical value on the concise cap must too.
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder().conciseMaxOutputTokens(Optional.of(384_000)).build());
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "effective output buffer (8192) must be >= REVIEW_CONCISE_MAX_OUTPUT_TOKENS"
+                    + " (384000"),
+        ex.getMessage());
+    // The message has to hand the operator every way out, in the active-model rule's style.
+    assertTrue(ex.getMessage().contains("REVIEW_OUTPUT_BUFFER_TOKENS"), ex.getMessage());
+    assertTrue(
+        ex.getMessage()
+            .contains("thrillhousebot.ai.models.\"deepseek-chat\".separate-output-budget=true"),
+        "the failure must point at the escape hatch: " + ex.getMessage());
+  }
+
+  @Test
+  void allowsAConciseCapAboveTheBufferWhenTheOutputBudgetIsSeparate() {
+    // On a separate-output-budget model nothing is reserved out of the window for responses, so
+    // the shared-window rule does not apply to the concise cap either — the deepseek-v4-flash
+    // shape (384000 out against an 8192 buffer) must keep booting.
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(1_000_000));
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(true));
+
+    new ConfigBuilder()
+        .model("deepseek-chat", settings)
+        .conciseMaxOutputTokens(Optional.of(384_000))
+        .build()
+        .validate();
+  }
+
+  @Test
+  void allowsAConciseCapAboveTheBufferWhenTokenBudgetingIsDisabled() {
+    // With budgeting off there is no packed prompt to overrun, so — exactly like the active-model
+    // rule — the concise reservation check does not apply.
+    new ConfigBuilder()
+        .maxInputTokens(0)
+        .conciseMaxOutputTokens(Optional.of(384_000))
+        .build()
+        .validate();
+  }
+
+  @Test
+  void holdsTheConciseCapToTheActiveModelsEffectiveBuffer() {
+    // The reservation the rule compares against is the active model's resolved buffer — a
+    // per-model output-buffer override that covers the concise cap must boot.
+    var settings = emptyModelSettings();
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(16_384));
+
+    new ConfigBuilder()
+        .model("deepseek-chat", settings)
+        .conciseMaxOutputTokens(Optional.of(16_384))
+        .build()
+        .validate();
   }
 
   @Test
@@ -515,7 +591,13 @@ class StartupConfigValidatorTest {
     lenient().when(settings.frequencyPenalty()).thenReturn(Optional.of(-2.0));
     lenient().when(settings.presencePenalty()).thenReturn(Optional.of(2.0));
     lenient().when(settings.seed()).thenReturn(Optional.of(42));
-    new ConfigBuilder().model("deepseek-chat", settings).build().validate();
+    // The 4096 buffer override shrinks the shared-window reservation, so the concise cap must fit
+    // inside it too (#517) — this test's subject is the per-model entry, not that rule.
+    new ConfigBuilder()
+        .conciseMaxOutputTokens(Optional.of(4_096))
+        .model("deepseek-chat", settings)
+        .build()
+        .validate();
   }
 
   @Test
@@ -534,8 +616,11 @@ class StartupConfigValidatorTest {
     // override restores headroom, so the boot must succeed.
     var settings = emptyModelSettings();
     lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(1_000));
+    // The 1000 buffer override also shrinks the shared-window reservation below the default
+    // concise cap, so the cap is lowered with it (#517) — this test pins the repair, not that rule.
     new ConfigBuilder()
         .outputBufferTokens(45_000)
+        .conciseMaxOutputTokens(Optional.of(1_000))
         .model("deepseek-chat", settings)
         .build()
         .validate();
@@ -671,6 +756,83 @@ class StartupConfigValidatorTest {
     assertEquals(
         StartupConfigValidator.DashboardOauthStatus.PARTIAL,
         StartupConfigValidator.dashboardOauthStatus(false, true));
+  }
+
+  @Nested
+  class ShippedDefaults {
+
+    /**
+     * Budget-relevant subset of the shipped per-model table, bound straight from {@code
+     * src/main/resources/application.properties} (no env source, so every {@code ${VAR:default}}
+     * resolves to its shipped default).
+     */
+    @ConfigMapping(prefix = "thrillhousebot.ai")
+    interface ShippedModelsProbe {
+      Map<String, ModelProbe> models();
+
+      interface ModelProbe {
+        @WithName("max-input-tokens")
+        Optional<Integer> maxInputTokens();
+
+        @WithName("max-output-tokens")
+        Optional<Integer> maxOutputTokens();
+
+        @WithName("output-buffer-tokens")
+        Optional<Integer> outputBufferTokens();
+
+        @WithName("separate-output-budget")
+        Optional<Boolean> separateOutputBudget();
+      }
+    }
+
+    @Test
+    void everyShippedModelBootsUnderTheShippedConciseCap() throws Exception {
+      // The #502 lesson: the concise reservation rule only fires for the ACTIVE model, so a bad
+      // shipped combination (a concise default above some model's effective buffer) would pass
+      // every fixed-model test and refuse boot only for deployments naming that model. Walk the
+      // whole shipped table with each entry active instead of trusting the defaults.
+      var shipped =
+          new SmallRyeConfigBuilder()
+              .addDefaultInterceptors() // ${VAR:default} expansion, as at runtime
+              .withValidateUnknown(false)
+              .withMapping(ShippedModelsProbe.class)
+              .withSources(
+                  new PropertiesConfigSource(
+                      Paths.get("src/main/resources/application.properties").toUri().toURL()))
+              .build();
+      var conciseCap =
+          shipped.getValue(
+              "quarkus.langchain4j.openai.concise.chat-model.max-tokens", Integer.class);
+      var reviewBuffer = shipped.getValue("thrillhousebot.review.output-buffer-tokens", int.class);
+      var reviewBudget = shipped.getValue("thrillhousebot.review.max-input-tokens", int.class);
+      var models = shipped.getConfigMapping(ShippedModelsProbe.class).models();
+      assertFalse(models.isEmpty(), "the shipped model table must resolve");
+
+      models.forEach(
+          (name, probe) -> {
+            var settings = emptyModelSettings();
+            lenient().when(settings.maxInputTokens()).thenReturn(probe.maxInputTokens());
+            lenient().when(settings.maxOutputTokens()).thenReturn(probe.maxOutputTokens());
+            lenient().when(settings.outputBufferTokens()).thenReturn(probe.outputBufferTokens());
+            lenient()
+                .when(settings.separateOutputBudget())
+                .thenReturn(probe.separateOutputBudget());
+            var validator =
+                new ConfigBuilder()
+                    .modelName(name)
+                    .maxInputTokens(reviewBudget)
+                    .outputBufferTokens(reviewBuffer)
+                    .conciseMaxOutputTokens(Optional.of(conciseCap))
+                    .model(name, settings)
+                    .build();
+            assertDoesNotThrow(
+                validator::validate,
+                "shipped defaults must boot with model '"
+                    + name
+                    + "' active under the shipped concise cap "
+                    + conciseCap);
+          });
+    }
   }
 
   @Nested
