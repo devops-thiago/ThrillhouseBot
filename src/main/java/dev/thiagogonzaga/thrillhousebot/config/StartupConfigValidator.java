@@ -378,12 +378,15 @@ public class StartupConfigValidator {
       var presencePenalty = orProviderDefault(activeModel.presencePenalty());
       var seed = activeModel.seed().map(String::valueOf).orElse("none");
       log.info(
-          "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={},"
-              + " token-safety-margin={}, temperature={}, top-p={}, max-output-tokens={},"
-              + " frequency-penalty={}, presence-penalty={}, seed={}",
+          "Per-model AI settings active for '{}': max-input-tokens={}, output-buffer-tokens={}"
+              + " (reserved={}), separate-output-budget={}, token-safety-margin={}, temperature={},"
+              + " top-p={}, max-output-tokens={}, frequency-penalty={}, presence-penalty={},"
+              + " seed={}",
           activeModel.modelName(),
           activeModel.maxInputTokens(),
           activeModel.outputBufferTokens(),
+          activeModel.reservedOutputTokens(),
+          activeModel.separateOutputBudget(),
           activeModel.tokenSafetyMargin(),
           temperature,
           topP,

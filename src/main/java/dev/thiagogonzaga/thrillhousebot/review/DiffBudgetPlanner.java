@@ -201,11 +201,13 @@ public class DiffBudgetPlanner {
 
   /**
    * The per-call input-token budget every review-path AI call must fit — {@code max-input-tokens *
-   * token-safety-margin - output-buffer-tokens} — or {@link Integer#MAX_VALUE} when budgeting is
+   * token-safety-margin - reserved-output-tokens} — or {@link Integer#MAX_VALUE} when budgeting is
    * disabled. Each term is the active model's effective value ({@link ActiveModelSettings}): the
-   * max input tokens are the global budget bounded by the model's input cap, and the margin and
-   * output buffer honor per-model overrides. Shared with the pipeline so the summary call is
-   * bounded by the same ceiling as the batch calls.
+   * max input tokens are the global budget bounded by the model's input cap, the margin honors the
+   * per-model override, and the reservation is the (per-model-overridable) output buffer on a
+   * shared window but zero for a model marked {@code separate-output-budget} — its response never
+   * draws on this pool. Shared with the pipeline so the summary call is bounded by the same ceiling
+   * as the batch calls.
    */
   public int perCallInputBudget() {
     var maxInputTokens = activeModel.maxInputTokens();

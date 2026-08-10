@@ -165,8 +165,10 @@ public interface ThrillhouseConfig {
     /**
      * Per-call input-token budget for the review prompt. The diff is split into batches that each
      * fit this budget after the shared prompt overhead and {@link #outputBufferTokens()} are
-     * subtracted; a PR whose diff exceeds one batch is reviewed in multiple calls. Sized for the
-     * model's context window — keep headroom for output. 0 disables token budgeting (single call).
+     * subtracted (the buffer only on a shared window — a model marked {@code
+     * separate-output-budget} reserves nothing); a PR whose diff exceeds one batch is reviewed in
+     * multiple calls. Sized for the model's context window — keep headroom for output. 0 disables
+     * token budgeting (single call).
      */
     @WithDefault("48000")
     @WithName("max-input-tokens")
