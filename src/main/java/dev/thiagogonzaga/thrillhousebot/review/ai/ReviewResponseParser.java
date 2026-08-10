@@ -15,17 +15,24 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
+import java.util.ArrayList;
 
 @ApplicationScoped
 public class ReviewResponseParser {
 
   private static final String PREVIOUS_FINDINGS_STATUS = "previous_findings_status";
+  private static final String SUMMARY = "summary";
+  private static final String DESCRIPTION_GAPS = "description_gaps";
 
   private final ObjectMapper mapper;
 
@@ -38,13 +45,61 @@ public class ReviewResponseParser {
     if (raw == null || raw.isBlank()) {
       throw new IllegalArgumentException("Model returned an empty response");
     }
+    JsonNode root;
     try {
-      var root = mapper.readTree(extractJson(raw));
-      normalizePreviousFindingsStatus(root);
-      return mapper.treeToValue(root, ReviewResponse.class);
+      root = mapper.readTree(extractJson(raw));
     } catch (IOException e) {
       throw new IllegalArgumentException("Model response is not valid review JSON", e);
     }
+    normalizePreviousFindingsStatus(root);
+    normalizeDescriptionGaps(root);
+    try {
+      return mapper.treeToValue(root, ReviewResponse.class);
+    } catch (JsonProcessingException e) {
+      return parseWithoutSummary(root, e);
+    }
+  }
+
+  /**
+   * Last-resort salvage for valid JSON that still fails schema mapping after normalization: a
+   * mapping failure confined to the {@code summary} node must not discard findings (and previous
+   * finding statuses) that mapped cleanly — that would throw away a fully paid review and force a
+   * full-cost retry. Retry the mapping with {@code summary} removed; every consumer of {@link
+   * ReviewResponse#summary()} null-guards it. If the failure was not confined to the summary,
+   * report the original mapping error.
+   */
+  private ReviewResponse parseWithoutSummary(JsonNode root, JsonProcessingException cause) {
+    if (root instanceof ObjectNode rootObject && rootObject.hasNonNull(SUMMARY)) {
+      var withoutSummary = rootObject.deepCopy();
+      withoutSummary.remove(SUMMARY);
+      try {
+        var salvaged = mapper.treeToValue(withoutSummary, ReviewResponse.class);
+        Log.warnf(
+            "Review response summary did not match the schema — dropped the 'summary' node and"
+                + " kept %d finding(s). Mapping error: %s",
+            salvaged.findings().size(), cause.getMessage());
+        return salvaged;
+      } catch (JsonProcessingException _) {
+        // The failure was not confined to the summary — fall through to the original error.
+      }
+    }
+    throw schemaMismatch(cause);
+  }
+
+  /**
+   * A Jackson databind failure means the JSON itself was valid but did not fit the review schema —
+   * a (near-)deterministic model-output shape problem, not a transient parse failure. Keep the
+   * exception type callers catch, but say so in the message (with the failing path) so the two
+   * failure classes are distinguishable in the logs.
+   */
+  static IllegalArgumentException schemaMismatch(JsonProcessingException cause) {
+    if (cause instanceof JsonMappingException mapping) {
+      return new IllegalArgumentException(
+          "Model response was valid JSON but did not match the review schema at "
+              + mapping.getPathReference(),
+          cause);
+    }
+    return new IllegalArgumentException("Model response is not valid review JSON", cause);
   }
 
   /**
@@ -92,6 +147,79 @@ public class ReviewResponseParser {
   private static int parseFindingId(String key) {
     var digits = key.replaceAll("\\D", "");
     return digits.isEmpty() ? 0 : Integer.parseInt(digits);
+  }
+
+  /**
+   * Models sometimes emit {@code summary.description_gaps} elements as objects — e.g. {@code
+   * {"claim": …, "code": …}} — instead of the plain strings the schema asks for. Normalize each
+   * element to a string so the shape mismatch does not fail the whole review (and force a full-cost
+   * retry). Elements that are already strings (or null, which the {@code Summary} constructor
+   * drops) pass through unchanged; a bare string or single object in place of the array is wrapped
+   * into a one-element array.
+   */
+  private void normalizeDescriptionGaps(JsonNode root) {
+    if (!(root instanceof ObjectNode rootObject)
+        || !(rootObject.get(SUMMARY) instanceof ObjectNode summary)) {
+      return;
+    }
+    var gaps = summary.get(DESCRIPTION_GAPS);
+    if (gaps == null || gaps.isNull()) {
+      return;
+    }
+    var normalized = mapper.createArrayNode();
+    if (gaps.isArray()) {
+      if (!flattenInto(normalized, gaps)) {
+        // Already-conforming arrays stay untouched
+        return;
+      }
+    } else if (gaps.isTextual()) {
+      normalized.add(gaps);
+    } else {
+      normalized.add(flattenGap(gaps));
+    }
+    summary.set(DESCRIPTION_GAPS, normalized);
+  }
+
+  /**
+   * Copies {@code gaps} into {@code normalized}, flattening every non-string element. Returns
+   * whether anything needed flattening — {@code false} means the array already conformed and the
+   * caller should keep the original node untouched.
+   */
+  private static boolean flattenInto(ArrayNode normalized, JsonNode gaps) {
+    var changed = false;
+    for (var gap : gaps) {
+      if (gap.isTextual() || gap.isNull()) {
+        normalized.add(gap);
+      } else {
+        normalized.add(flattenGap(gap));
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Flattens one mis-shaped gap element to a string: objects join their string-valued fields {@code
+   * ": "}-separated in a stable order — {@code "claim"} first when present (the field the
+   * production shape led with), then the rest in emission order; non-string scalars flatten via
+   * {@code asText()}; arrays, and objects without any string-valued field, degrade to their JSON
+   * text so no content is silently lost.
+   */
+  private static String flattenGap(JsonNode gap) {
+    if (!gap.isObject()) {
+      return gap.isValueNode() ? gap.asText() : gap.toString();
+    }
+    var parts = new ArrayList<String>();
+    var claim = gap.get("claim");
+    if (claim != null && claim.isTextual()) {
+      parts.add(claim.asText());
+    }
+    for (var entry : gap.properties()) {
+      if (entry.getValue().isTextual() && !"claim".equals(entry.getKey())) {
+        parts.add(entry.getValue().asText());
+      }
+    }
+    return parts.isEmpty() ? gap.toString() : String.join(": ", parts);
   }
 
   /** Strips optional markdown fences and leading noise before the JSON object/array. */
