@@ -230,8 +230,35 @@ public interface GitHubCheckRunClient {
       @JsonProperty("completed_at") String completedAt,
       @JsonProperty("details_url") String detailsUrl,
       Output output) {
+    /**
+     * The check-run output panel. Each field is bounded at its own GitHub limit in the compact
+     * constructor — they are not the same number — because GitHub rejects an over-long output with
+     * a 422 and the fail-soft update wrapper swallows it, leaving the check run silently stale
+     * exactly when the review is largest and the check matters most.
+     */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Output(String title, String summary, String text) {}
+    public record Output(String title, String summary, String text) {
+
+      /**
+       * Maximum title length. GitHub's REST reference states no length for {@code output.title}
+       * itself; 255 is the limit documented for the sibling {@code output.annotations[].title} and
+       * the value the API enforces in practice. A check-run title is a one-line verdict, so a cap
+       * here only ever bites on a pathological title.
+       */
+      static final int MAX_TITLE_LENGTH = 255;
+
+      /** Maximum summary length, per GitHub's documented {@code maxLength} for the field. */
+      static final int MAX_SUMMARY_LENGTH = 65_535;
+
+      /** Maximum details-text length, per GitHub's documented {@code maxLength} for the field. */
+      static final int MAX_TEXT_LENGTH = 65_535;
+
+      public Output {
+        title = CommentBodyLimit.cap(title, MAX_TITLE_LENGTH);
+        summary = CommentBodyLimit.cap(summary, MAX_SUMMARY_LENGTH);
+        text = CommentBodyLimit.cap(text, MAX_TEXT_LENGTH);
+      }
+    }
   }
 
   record CheckRunResponse(long id, @JsonProperty("html_url") String htmlUrl) {}

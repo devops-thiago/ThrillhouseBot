@@ -93,4 +93,30 @@ class CommentBodyLimitTest {
         Character.isLowSurrogate(capped.charAt(keep - 1)),
         "the pair ends on the last kept character, so nothing is trimmed");
   }
+
+  @Test
+  void keepsTheCommentNoticeWordingItHasAlwaysHad() {
+    // The notice is now derived from the limit rather than written out; pin the exact wording so
+    // the comment path stays byte-identical (a locale-sensitive grouping separator would break it).
+    assertEquals(
+        "\n\n… (truncated at GitHub's 65,536-character limit)", CommentBodyLimit.TRUNCATION_NOTICE);
+  }
+
+  @Test
+  void capsAtAnExplicitLimitAndNamesItInTheNotice() {
+    var capped = CommentBodyLimit.cap("x".repeat(300), 255);
+
+    assertEquals(255, capped.length());
+    assertTrue(
+        capped.endsWith("\n\n… (truncated at GitHub's 255-character limit)"),
+        "the notice must name the limit that actually cut the value");
+  }
+
+  @Test
+  void returnsAValueExactlyOnAnExplicitLimitByIdentity() {
+    var value = "x".repeat(255);
+
+    assertSame(value, CommentBodyLimit.cap(value, 255));
+    assertNull(CommentBodyLimit.cap(null, 255));
+  }
 }
