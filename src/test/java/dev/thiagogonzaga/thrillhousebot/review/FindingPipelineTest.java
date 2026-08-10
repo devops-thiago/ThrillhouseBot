@@ -584,10 +584,10 @@ class FindingPipelineTest {
   @Test
   void singleCallCeilingRefusalPropagatesForTheOrchestratorToFailSoft() {
     // Characterization of the single-call contract: a mid-retry ceiling refusal has no paid batch
-    // findings to keep, so the pipeline does not degrade — the typed exception escapes run() and
-    // ReviewOrchestrator.review's catch (RuntimeException) fails the review soft (failure notice,
-    // FAILED check run, session error), with ReviewDispatcher as the backstop. Nothing reaches the
-    // webhook boundary. The multi-call path, which does hold paid findings, degrades instead.
+    // findings to keep, so the pipeline does not degrade. The typed exception escapes the pipeline
+    // and ReviewOrchestrator's RuntimeException handling fails the review soft — failure notice,
+    // FAILED check run, session error — with ReviewDispatcher as the backstop, so nothing reaches
+    // the webhook boundary. The multi-call path, which does hold paid findings, degrades instead.
     var session = persistedSession();
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
