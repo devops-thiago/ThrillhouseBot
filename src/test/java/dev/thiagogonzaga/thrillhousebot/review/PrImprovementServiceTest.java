@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.*;
@@ -145,7 +146,7 @@ class PrImprovementServiceTest {
   }
 
   private void assistantReturns(String json) {
-    when(improveAssistant.improve(any(), any(), any(), any())).thenReturn(json);
+    when(improveAssistant.improve(any(), any(), any(), any())).thenReturn(aiOk(json));
   }
 
   private String postedSummary() {
@@ -781,12 +782,13 @@ class PrImprovementServiceTest {
     when(improveAssistant.improve(any(), any(), any(), any()))
         .thenThrow(new RuntimeException("provider 503"))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"improvements":[{"file":"src/Foo.java","line":1,"title":"Close the stream",
             "category":"error-handling","rationale":"Leaks a handle.",
             "suggestion_old":"var in = Files.newInputStream(path);",
             "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
-            """);
+            """));
 
     service.handle(task(), AUTH);
 
@@ -866,9 +868,10 @@ class PrImprovementServiceTest {
     when(improveAssistant.improve(any(), any(), any(), any()))
         .thenAnswer(
             call ->
-                call.<String>getArgument(0).contains("src/Late.java")
-                    ? LATE_IMPROVEMENT
-                    : "{\"improvements\":[]}");
+                aiOk(
+                    call.<String>getArgument(0).contains("src/Late.java")
+                        ? LATE_IMPROVEMENT
+                        : "{\"improvements\":[]}"));
 
     service.handle(task(), AUTH);
 

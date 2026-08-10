@@ -72,14 +72,20 @@ public class FindingVerificationService {
     }
     try {
       var raw =
-          verifier.verify(
-              PromptTemplateEscaper.escape(renderCandidates(screened.findings())),
-              diff,
-              projectStack,
-              previousFindings == null ? "" : previousFindings);
+          AiResponses.textOrThrowOnTruncation(
+              verifier.verify(
+                  PromptTemplateEscaper.escape(renderCandidates(screened.findings())),
+                  diff,
+                  projectStack,
+                  previousFindings == null ? "" : previousFindings),
+              "Finding verification");
       var verdicts =
           mapper.readValue(ReviewResponseParser.extractJson(raw), VerificationResponse.class);
       return apply(screened, verdicts);
+    } catch (AiResponseTruncatedException e) {
+      // The verifier fails open by design; say why so a cap is not mistaken for a provider fault.
+      Log.warnf("Finding verification — keeping unverified findings. %s", e.getMessage());
+      return screened;
     } catch (IOException | RuntimeException e) {
       Log.warn("Finding verification failed — keeping unverified findings", e);
       return screened;

@@ -15,6 +15,8 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -126,7 +128,7 @@ class ChangelogEntryGeneratorTest {
   }
 
   private void draftReturns(String entry) {
-    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(entry);
+    when(changelogAssistant.draft(any(), any(), any(), any(), any())).thenReturn(aiOk(entry));
   }
 
   private String generate() {
@@ -249,6 +251,17 @@ class ChangelogEntryGeneratorTest {
   }
 
   @Test
+  void postsNothingWhenTheAssistantResponseIsCutShortAtTheLengthCap() {
+    // #497: a length stop used to reach the parser and be reported as malformed JSON. It is now a
+    // named failure, so the command declines to post rather than posting a half-built entry.
+    prWithFiles(foo());
+    when(changelogAssistant.draft(any(), any(), any(), any(), any()))
+        .thenReturn(aiTruncated("### Added\n- Streams are clo"));
+
+    assertNull(generate());
+  }
+
+  @Test
   void stillDraftsWhenPrDetailsFetchFails() {
     when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
@@ -359,11 +372,12 @@ class ChangelogEntryGeneratorTest {
     when(changelogAssistant.draft(any(), any(), any(), any(), any()))
         .thenAnswer(
             call ->
-                call.<String>getArgument(0).contains("src/Other.java")
-                    ? "### Added\n- Retries are bounded (#7)"
-                    : "### Added\n- Streams are closed (#7)");
+                aiOk(
+                    call.<String>getArgument(0).contains("src/Other.java")
+                        ? "### Added\n- Retries are bounded (#7)"
+                        : "### Added\n- Streams are closed (#7)"));
     when(changelogAssistant.merge(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- **Reliability**: bounded retries and closed streams (#7)");
+        .thenReturn(aiOk("### Added\n- **Reliability**: bounded retries and closed streams (#7)"));
 
     String body = generate();
 
@@ -403,9 +417,10 @@ class ChangelogEntryGeneratorTest {
     when(changelogAssistant.draft(any(), any(), any(), any(), any()))
         .thenAnswer(
             call ->
-                call.<String>getArgument(0).contains("src/Other.java")
-                    ? "NONE"
-                    : "### Added\n- Streams are closed (#7)");
+                aiOk(
+                    call.<String>getArgument(0).contains("src/Other.java")
+                        ? "NONE"
+                        : "### Added\n- Streams are closed (#7)"));
 
     String body = generate();
 
@@ -431,7 +446,7 @@ class ChangelogEntryGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     draftReturns("### Added\n- x (#7)");
-    when(changelogAssistant.merge(any(), any(), any(), any(), any())).thenReturn("**NONE**");
+    when(changelogAssistant.merge(any(), any(), any(), any(), any())).thenReturn(aiOk("**NONE**"));
 
     assertNull(generate());
   }
@@ -445,7 +460,7 @@ class ChangelogEntryGeneratorTest {
     prWithFiles(foo(), otherFile(), thirdFile());
     draftReturns("### Added\n- x (#7)");
     when(changelogAssistant.merge(any(), any(), any(), any(), any()))
-        .thenReturn("### Added\n- merged (#7)");
+        .thenReturn(aiOk("### Added\n- merged (#7)"));
 
     generate();
 
@@ -516,7 +531,7 @@ class ChangelogEntryGeneratorTest {
               if (call.<String>getArgument(0).contains("src/Other.java")) {
                 throw new RuntimeException("model down");
               }
-              return "### Added\n- Streams are closed (#7)";
+              return aiOk("### Added\n- Streams are closed (#7)");
             });
 
     String body = generate();

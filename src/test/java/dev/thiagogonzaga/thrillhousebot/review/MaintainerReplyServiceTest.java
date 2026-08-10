@@ -15,6 +15,8 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -159,7 +161,7 @@ class MaintainerReplyServiceTest {
                 comment(500L, 99L, "maintainer", "are you sure?"),
                 comment(1000L, 99L, "octocat", "Why is this flagged?")));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
-        .thenReturn("Because foo can be null.");
+        .thenReturn(aiOk("Because foo can be null."));
 
     service.handle(reviewThreadTask(false));
 
@@ -218,7 +220,7 @@ class MaintainerReplyServiceTest {
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of(comment(99L, null, "someone", "what does the bot think?")));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
-        .thenReturn("My take: looks fine.");
+        .thenReturn(aiOk("My take: looks fine."));
 
     service.handle(reviewThreadTask(true));
 
@@ -240,7 +242,7 @@ class MaintainerReplyServiceTest {
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("diff --git a/Foo b/Foo", 0));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
-        .thenReturn("It is safe because...");
+        .thenReturn(aiOk("It is safe because..."));
 
     service.handle(mentionTask());
 
@@ -261,7 +263,7 @@ class MaintainerReplyServiceTest {
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("   ");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("   "));
 
     service.handle(reviewThreadTask(false));
 
@@ -277,6 +279,23 @@ class MaintainerReplyServiceTest {
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
     when(replyAssistant.reply(any(), any(), any(), any(), any()))
         .thenThrow(new RuntimeException("model down"));
+
+    assertDoesNotThrow(() -> service.handle(reviewThreadTask(false)));
+
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void truncatedReplyIsSwallowedRatherThanPostedHalfWritten() {
+    // #497: same swallow as any other failure, but reached by a distinct path — the reply was cut
+    // at the model's cap, not rejected by the provider, and the log says so.
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any()))
+        .thenReturn(aiTruncated("You are right that the retry loop"));
 
     assertDoesNotThrow(() -> service.handle(reviewThreadTask(false)));
 
@@ -318,7 +337,7 @@ class MaintainerReplyServiceTest {
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenThrow(new RuntimeException("GitHub 503"));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Still here.");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Still here."));
 
     service.handle(reviewThreadTask(true));
 
@@ -333,7 +352,7 @@ class MaintainerReplyServiceTest {
     authorize();
     when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenThrow(new RuntimeException("files 500"));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
 
     // Null title and description exercise the blank-PR-context branches.
     var task =
@@ -369,7 +388,7 @@ class MaintainerReplyServiceTest {
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("answer");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("answer"));
     doThrow(new RuntimeException("GitHub 422"))
         .when(reviewClient)
         .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
@@ -386,7 +405,7 @@ class MaintainerReplyServiceTest {
     when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("diff", 0));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk(""));
 
     service.handle(mentionTask());
 
@@ -399,7 +418,7 @@ class MaintainerReplyServiceTest {
     when(reviewClient.listPullRequestComments(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("ok"));
     var task =
         new MaintainerReplyService.ReplyTask(
             "owner", "repo", 42, 12345L, "octocat", "OWNER", "why?", "t", "b", true, 99L, 1000L,
@@ -426,7 +445,7 @@ class MaintainerReplyServiceTest {
                 commentNoUser(500L, 99L, "anon reply"), // no user object → rendered as @unknown
                 comment(600L, 77L, "x", "different thread reply"), // belongs to another root (77)
                 comment(1000L, 99L, "octocat", "Why?"))); // the triggering comment
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("ok"));
 
     service.handle(reviewThreadTask(false));
 
@@ -482,7 +501,7 @@ class MaintainerReplyServiceTest {
             List.of(
                 comment(500L, 88L, "x", "unrelated thread"),
                 comment(99L, null, BOT, "**finding**")));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("ok"));
 
     service.handle(reviewThreadTask(false));
 
@@ -499,7 +518,7 @@ class MaintainerReplyServiceTest {
     when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
         .thenReturn(new ReviewDiffFormatter.FormattedDiff("d", 0));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("ok");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("ok"));
     // Whitespace-only (non-null) title and description exercise the !isBlank() branch.
     var task =
         new MaintainerReplyService.ReplyTask(
@@ -539,7 +558,7 @@ class MaintainerReplyServiceTest {
                 fileDiff("vendor/secret.txt", "@@ -0,0 +1 @@\n+TOPSECRET_VENDORED_KEY", 1)));
     when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
         .thenReturn(new RepoSettings(List.of("vendor/**"), List.of(), "src"));
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
 
     realService.handle(mentionTask());
 
@@ -564,7 +583,7 @@ class MaintainerReplyServiceTest {
     // No repo config: resolver returns EMPTY (the default mock returns null → SoftLoaders → EMPTY).
     when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
         .thenReturn(RepoSettings.EMPTY);
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
 
     realService.handle(mentionTask());
 
@@ -590,7 +609,7 @@ class MaintainerReplyServiceTest {
                 fileDiff("src/C.java", "@@ -1 +1 @@\n-c\n+cc\n+ccc\n+cccc", 3)));
     when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
         .thenReturn(RepoSettings.EMPTY);
-    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn("Answer.");
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
 
     realService.handle(mentionTask());
 

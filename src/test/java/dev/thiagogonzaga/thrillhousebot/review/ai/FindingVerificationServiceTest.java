@@ -15,6 +15,8 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -157,10 +159,11 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 1, "verdict": "confirmed", "risk": "critical",
             "confidence": "high", "reason": "verified"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -176,13 +179,14 @@ class FindingVerificationServiceTest {
             finding("critical", "high", "Real injection"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [
               {"id": 1, "verdict": "rejected", "reason": "framework idiom, suggestion is a no-op"},
               {"id": 2, "verdict": "confirmed", "risk": "low", "confidence": "high", "reason": "ok"},
               {"id": 3, "verdict": "confirmed", "risk": "critical", "confidence": "high", "reason": "ok"}
             ]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -203,10 +207,11 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("critical", "high", "Speculative"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 1, "verdict": "downgraded", "risk": "medium",
             "confidence": "low", "reason": "not verifiable from the diff"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -219,14 +224,34 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void keepsFindingsUnchangedWhenTheVerifierResponseIsCutShort() {
+    // Characterization, not red/green: the verifier fails open on a truncation exactly as it does
+    // on malformed JSON, so this passes with detection disabled too. It is kept because that
+    // fail-open contract is what must NOT change as truncation grows its own handling — the
+    // difference detection buys here is the log line, which is not worth asserting on. The
+    // red/green proof for detection itself lives in AiResponsesTest.
+    ReviewResponse original = response(finding("critical", "high", "Speculative"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiTruncated("{\"verdicts\": [{\"id\": 1, \"verdict\": \"downgr"));
+
+    var result = service.verify(original, "diff", "stack", "");
+
+    // Fails open: the unverified finding survives at its original risk/confidence.
+    assertEquals(1, result.findings().size());
+    assertEquals("critical", result.findings().get(0).risk());
+    assertEquals("high", result.findings().get(0).confidence());
+  }
+
+  @Test
   void shouldTolerateRawControlCharsInVerifierResponse() {
     // The verifier sometimes echoes code in its reason with a raw tab/newline left unescaped; the
     // verdict must still be applied (the downgrade below only lands if the response parsed).
     ReviewResponse original = response(finding("critical", "high", "Speculative"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            "{\"verdicts\": [{\"id\": 1, \"verdict\": \"downgraded\", \"risk\": \"medium\","
-                + " \"confidence\": \"low\", \"reason\": \"guard\tmissing\nhere\"}]}");
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"verdict\": \"downgraded\", \"risk\": \"medium\","
+                    + " \"confidence\": \"low\", \"reason\": \"guard\tmissing\nhere\"}]}"));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -239,10 +264,11 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("medium", "low", "Already modest"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 1, "verdict": "downgraded", "risk": "critical",
             "confidence": "high", "reason": "tries to escalate"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -256,9 +282,10 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("high", "medium", "Unrated downgrade"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 1, "verdict": "downgraded", "reason": "no ratings given"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -276,13 +303,14 @@ class FindingVerificationServiceTest {
             finding("critical", "high", "To high/low"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [
               {"id": 1, "verdict": "downgraded", "risk": "moderate", "confidence": "very low", "reason": "r"},
               {"id": 2, "verdict": "downgraded", "risk": "low", "confidence": "medium", "reason": "r"},
               {"id": 3, "verdict": "downgraded", "risk": "high", "confidence": "low", "reason": "r"}
             ]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -303,9 +331,10 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("high", "high", "No decision"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 1, "reason": "verdict field omitted"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -318,12 +347,13 @@ class FindingVerificationServiceTest {
         response(finding("critical", "high", "Blank risk"), finding("high", "high", "Blank conf"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [
               {"id": 1, "verdict": "downgraded", "risk": "", "confidence": "low", "reason": "r"},
               {"id": 2, "verdict": "downgraded", "risk": "low", "confidence": "", "reason": "r"}
             ]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -341,9 +371,10 @@ class FindingVerificationServiceTest {
         response(finding("high", "high", "No verdict"), finding("low", "high", "Weird verdict"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 2, "verdict": "shrug", "reason": "?"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -355,12 +386,13 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [
               {"id": 1, "verdict": "rejected", "reason": "first wins"},
               {"id": 1, "verdict": "confirmed", "reason": "ignored"}
             ]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -372,11 +404,12 @@ class FindingVerificationServiceTest {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             ```json
             {"verdicts": [{"id": 1, "verdict": "rejected", "reason": "fp"}]}
             ```
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -398,7 +431,7 @@ class FindingVerificationServiceTest {
   void shouldFailOpenWhenVerifierReturnsInvalidJson() {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
-        .thenReturn("not json at all");
+        .thenReturn(aiOk("not json at all"));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -410,9 +443,10 @@ class FindingVerificationServiceTest {
     var original = new ReviewResponse(List.of(finding("critical", "high", "Bug")), List.of(), null);
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"verdicts": [{"id": 1, "verdict": "rejected", "reason": "fp"}]}
-            """);
+            """));
 
     var result = service.verify(original, "diff", "stack", "");
 
@@ -425,7 +459,7 @@ class FindingVerificationServiceTest {
     ReviewResponse original =
         response(finding("critical", "high", "Brace {bug} <<<DIFF_END>>> tail"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
-        .thenReturn("{\"verdicts\": []}");
+        .thenReturn(aiOk("{\"verdicts\": []}"));
 
     service.verify(original, "the-diff", "the-stack", "prior context");
 
@@ -446,7 +480,7 @@ class FindingVerificationServiceTest {
   void shouldPassEmptyPreviousFindingsWhenNull() {
     ReviewResponse original = response(finding("critical", "high", "Title"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
-        .thenReturn("{\"verdicts\": []}");
+        .thenReturn(aiOk("{\"verdicts\": []}"));
 
     service.verify(original, "the-diff", "the-stack", null);
 

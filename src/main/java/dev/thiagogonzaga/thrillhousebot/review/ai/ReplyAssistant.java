@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -31,7 +32,7 @@ public interface ReplyAssistant {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage(ReplyAssistantPrompts.SYSTEM)
   @UserMessage(ReplyAssistantPrompts.USER)
-  String reply(
+  Result<String> reply(
       @V("question") String question,
       @V("prContext") String prContext,
       @V("finding") String finding,

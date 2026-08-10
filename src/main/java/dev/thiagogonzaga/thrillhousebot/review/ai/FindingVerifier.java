@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
 import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.V;
@@ -33,7 +34,7 @@ public interface FindingVerifier {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage(FindingVerifierPrompts.SYSTEM)
   @UserMessage(FindingVerifierPrompts.USER)
-  String verify(
+  Result<String> verify(
       @V("findings") String findings,
       @V("diff") String diff,
       @V("projectStack") String projectStack,

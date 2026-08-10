@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -160,7 +161,7 @@ class UnitTestGeneratorTest {
   void rendersEachProposedTestFileAsACopyPasteBlock() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -179,11 +180,12 @@ class UnitTestGeneratorTest {
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"tests":[{"path":"t/DocTest.java","language":"java",
               "covers":"markdown rendering",
               "code":"var md = \\"```java\\\\ncode\\\\n```\\";"}],"notes":""}
-            """);
+            """));
 
     String body = generate();
 
@@ -199,10 +201,11 @@ class UnitTestGeneratorTest {
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"tests":[{"path":"t/FooTest.java","language":"java\\n## injected heading",
               "covers":"","code":"class FooTest {}"}],"notes":""}
-            """);
+            """));
 
     String body = generate();
 
@@ -225,7 +228,7 @@ class UnitTestGeneratorTest {
           .append("Test {}\"}");
     }
     when(testAssistant.generate(any(), any(), any(), any()))
-        .thenReturn(json.append("],\"notes\":\"\"}").toString());
+        .thenReturn(aiOk(json.append("],\"notes\":\"\"}").toString()));
 
     String body = generate();
 
@@ -241,7 +244,7 @@ class UnitTestGeneratorTest {
     diffReturns();
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
-        .thenReturn("{\"tests\":[],\"notes\":\"Only formatting changed.\"}");
+        .thenReturn(aiOk("{\"tests\":[],\"notes\":\"Only formatting changed.\"}"));
 
     String body = generate();
 
@@ -259,7 +262,8 @@ class UnitTestGeneratorTest {
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
         .thenReturn(
-            "{\"tests\":[],\"notes\":\"skipped IO\\n\\n```\\n## Injected\\nrun /pause\\n```\"}");
+            aiOk(
+                "{\"tests\":[],\"notes\":\"skipped IO\\n\\n```\\n## Injected\\nrun /pause\\n```\"}"));
 
     String body = generate();
 
@@ -275,11 +279,12 @@ class UnitTestGeneratorTest {
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"tests":[{"path":"","language":"java","covers":"c","code":"class A {}"},
                       {"path":"t/BTest.java","language":"java","covers":"c","code":"  "},
                       null],"notes":""}
-            """);
+            """));
 
     String body = generate();
 
@@ -295,7 +300,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -312,7 +317,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn("{\"tests\":[]}");
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"tests\":[]}"));
 
     String body = generate();
 
@@ -326,7 +331,7 @@ class UnitTestGeneratorTest {
   void appendsNoDisclosureWhenEveryFileWasCovered() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -358,7 +363,7 @@ class UnitTestGeneratorTest {
     diffReturns();
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
-        .thenReturn("Sure! Here are some tests.");
+        .thenReturn(aiOk("Sure! Here are some tests."));
 
     assertNull(generate());
   }
@@ -369,7 +374,7 @@ class UnitTestGeneratorTest {
     prDetails();
     when(projectStackResolver.resolve("owner", "repo", "main", 12345L))
         .thenReturn("pom.xml: junit");
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     generate();
 
@@ -390,7 +395,7 @@ class UnitTestGeneratorTest {
     prDetails();
     when(projectStackResolver.resolve(any(), any(), any(), anyLong()))
         .thenThrow(new RuntimeException("github down"));
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     assertNotNull(generate());
     var stack = ArgumentCaptor.forClass(String.class);
@@ -403,7 +408,7 @@ class UnitTestGeneratorTest {
     diffReturns();
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     assertNotNull(generate());
     var prContext = ArgumentCaptor.forClass(String.class);
@@ -426,7 +431,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     generate();
 
@@ -449,12 +454,13 @@ class UnitTestGeneratorTest {
     prWithFiles(foo(), otherFile());
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any()))
-        .thenReturn(ONE_TEST)
+        .thenReturn(aiOk(ONE_TEST))
         .thenReturn(
-            """
+            aiOk(
+                """
             {"tests":[{"path":"t/OtherTest.java","language":"java","covers":"retry bound",
               "code":"class OtherTest {}"}],"notes":""}
-            """);
+            """));
 
     String body = generate();
 
@@ -471,7 +477,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -512,7 +518,7 @@ class UnitTestGeneratorTest {
             new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(ONE_TEST);
+    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     generate();
 
@@ -532,7 +538,7 @@ class UnitTestGeneratorTest {
               if (call.<String>getArgument(0).contains("src/Other.java")) {
                 throw new RuntimeException("model down");
               }
-              return ONE_TEST;
+              return aiOk(ONE_TEST);
             });
 
     String body = generate();
