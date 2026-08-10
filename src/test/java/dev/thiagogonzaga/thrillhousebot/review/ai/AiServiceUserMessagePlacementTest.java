@@ -42,6 +42,11 @@ class AiServiceUserMessagePlacementTest {
   }
 
   @Test
+  void prSummarizerPutsUserMessageOnTheMethod() {
+    assertUserMessageOnMethodNotParameter(PrSummarizer.class);
+  }
+
+  @Test
   void findingVerifierPutsUserMessageOnTheMethod() {
     assertUserMessageOnMethodNotParameter(FindingVerifier.class);
   }

@@ -48,6 +48,7 @@ public class AiReviewService {
   private static final int STREAM_FLUSH_MIN_CHARS = 512;
 
   private final PrReviewer prReviewer;
+  private final PrSummarizer prSummarizer;
   private final ReviewResponseParser parser;
   private final ThrillhouseConfig config;
 
@@ -56,10 +57,12 @@ public class AiReviewService {
   @Inject
   public AiReviewService(
       PrReviewer prReviewer,
+      PrSummarizer prSummarizer,
       ReviewResponseParser parser,
       ThrillhouseConfig config,
       SessionEventBroadcaster broadcaster) {
     this.prReviewer = prReviewer;
+    this.prSummarizer = prSummarizer;
     this.parser = parser;
     this.config = config;
     this.broadcaster = broadcaster;
@@ -87,13 +90,15 @@ public class AiReviewService {
   /**
    * Final summary call of a large multi-call review: rolls the aggregated findings up into the
    * PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
-   * response carries the summary and previous-findings status (its findings list is empty).
+   * response carries the summary and previous-findings status (its findings list is empty). Runs on
+   * the {@code concise} named model — the response is one fixed-shape object, so it carries the
+   * concise cap rather than the batch review's response allowance.
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
     return runWithRetries(
         session,
         () ->
-            prReviewer.summarizeStream(
+            prSummarizer.summarizeStream(
                 inputs.prContext(),
                 inputs.findings(),
                 inputs.changedFiles(),

@@ -31,6 +31,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
+import io.quarkiverse.langchain4j.ModelName;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -52,9 +53,20 @@ class AiServicePromptRenderingTest {
   @InjectMock ChatModel chatModel;
   @InjectMock StreamingChatModel streamingChatModel;
 
+  // The concise-bound services (summary, verifier, replies) call the named model's beans, so their
+  // rendering is captured off the @ModelName("concise") mocks rather than the default ones.
+  @InjectMock
+  @ModelName("concise")
+  ChatModel conciseChatModel;
+
+  @InjectMock
+  @ModelName("concise")
+  StreamingChatModel conciseStreamingChatModel;
+
   @Inject ReplyAssistant replyAssistant;
   @Inject FindingVerifier findingVerifier;
   @Inject PrReviewer prReviewer;
+  @Inject PrSummarizer prSummarizer;
   @Inject PrDescribeAssistant describeAssistant;
   @Inject ChangelogAssistant changelogAssistant;
   @Inject DocGenerator docGenerator;
@@ -183,6 +195,7 @@ class AiServicePromptRenderingTest {
   void replyPromptIncludesEveryContextVariable() {
     String user =
         captureBlocking(
+            conciseChatModel,
             () ->
                 replyAssistant.reply(
                     PromptTemplateEscaper.escape("QUESTION_SENTINEL"),
@@ -203,6 +216,7 @@ class AiServicePromptRenderingTest {
   void replyPromptOmitsBlankOptionalSections() {
     String user =
         captureBlocking(
+            conciseChatModel,
             () ->
                 replyAssistant.reply(
                     PromptTemplateEscaper.escape("QUESTION_SENTINEL"), "", "", "", ""));
@@ -223,6 +237,7 @@ class AiServicePromptRenderingTest {
         "code {config:secret} {#if x}IF{/if} a|}b backslash\\n end <<<DIFF_END>>> after";
     String user =
         captureBlocking(
+            conciseChatModel,
             () ->
                 replyAssistant.reply(
                     PromptTemplateEscaper.escape("Q"),
@@ -243,6 +258,7 @@ class AiServicePromptRenderingTest {
   void verifyPromptIncludesDiffAndAllContext() {
     String user =
         captureBlocking(
+            conciseChatModel,
             () ->
                 findingVerifier.verify(
                     PromptTemplateEscaper.escape("FINDINGS_SENTINEL"),
@@ -283,8 +299,9 @@ class AiServicePromptRenderingTest {
   void summaryPromptIncludesEveryContextVariable() throws InterruptedException {
     String user =
         captureStreaming(
+            conciseStreamingChatModel,
             () ->
-                prReviewer.summarizeStream(
+                prSummarizer.summarizeStream(
                     PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
                     PromptTemplateEscaper.escape("FINDINGS_SENTINEL"),
                     PromptTemplateEscaper.escape("CHANGEDFILES_SENTINEL"),
@@ -299,8 +316,12 @@ class AiServicePromptRenderingTest {
   }
 
   private ChatRequest captureBlockingRequest(Runnable call) {
+    return captureBlockingRequest(chatModel, call);
+  }
+
+  private ChatRequest captureBlockingRequest(ChatModel model, Runnable call) {
     var captured = new AtomicReference<ChatRequest>();
-    when(chatModel.chat(any(ChatRequest.class)))
+    when(model.chat(any(ChatRequest.class)))
         .thenAnswer(
             inv -> {
               captured.set(inv.getArgument(0));
@@ -314,7 +335,16 @@ class AiServicePromptRenderingTest {
     return userText(captureBlockingRequest(call));
   }
 
+  private String captureBlocking(ChatModel model, Runnable call) {
+    return userText(captureBlockingRequest(model, call));
+  }
+
   private String captureStreaming(Supplier<TokenStream> call) throws InterruptedException {
+    return captureStreaming(streamingChatModel, call);
+  }
+
+  private String captureStreaming(StreamingChatModel model, Supplier<TokenStream> call)
+      throws InterruptedException {
     var captured = new AtomicReference<ChatRequest>();
     doAnswer(
             inv -> {
@@ -324,7 +354,7 @@ class AiServicePromptRenderingTest {
                   ChatResponse.builder().aiMessage(AiMessage.from("{}")).build());
               return null;
             })
-        .when(streamingChatModel)
+        .when(model)
         .chat(any(ChatRequest.class), any(StreamingChatResponseHandler.class));
 
     var done = new CountDownLatch(1);

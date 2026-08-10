@@ -23,30 +23,27 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Stateless streaming AI service for the PR review call, whose response scales with finding count
- * and therefore carries the default model's response cap. The final summary call lives on {@link
- * PrSummarizer}, bound to the {@code concise} named model, so its fixed-shape response gets a
- * tighter cap. Application-scoped because there is no chat memory / {@code @MemoryId} — request
- * scope would break parallel map-reduce batches that run on virtual threads without an inherited
- * CDI request context.
+ * Stateless streaming AI service for the final summary call of a multi-call review. Split out of
+ * {@link PrReviewer} because one {@code @RegisterAiService} interface is one model binding, and the
+ * summary must not share the batch review's response cap: a batch response scales with finding
+ * count, while the summary returns one fixed-shape object plus {@code previous_findings_status}, so
+ * it binds to the {@code concise} named model whose {@code max-tokens} is sized for fixed-shape
+ * output ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}). Application-scoped for the same reason as
+ * {@link PrReviewer}: there is no chat memory / {@code @MemoryId}, and request scope would break
+ * callers on virtual threads without an inherited CDI request context.
  */
 @ApplicationScoped
-@RegisterAiService
-public interface PrReviewer {
+@RegisterAiService(modelName = "concise")
+public interface PrSummarizer {
 
-  // {{repoInstructions}} carries the pre-rendered trailing guidance: available repository labels
-  // (when labelling is on) followed by any repo instructions file.
-  //
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
   // parameter's raw value and silently drops every other @V.
-  @SystemMessage(PrReviewPrompts.SYSTEM)
-  @UserMessage(PrReviewPrompts.USER)
-  TokenStream reviewStream(
-      @V("diff") String diff,
+  @SystemMessage(PrReviewPrompts.SUMMARY_SYSTEM)
+  @UserMessage(PrReviewPrompts.SUMMARY_USER)
+  TokenStream summarizeStream(
       @V("prContext") String prContext,
-      @V("baseComparison") String baseComparison,
-      @V("projectStack") String projectStack,
-      @V("relatedTests") String relatedTests,
+      @V("findings") String findings,
+      @V("changedFiles") String changedFiles,
       @V("previousFindings") String previousFindings,
       @V("repoInstructions") String repoInstructions);
 }

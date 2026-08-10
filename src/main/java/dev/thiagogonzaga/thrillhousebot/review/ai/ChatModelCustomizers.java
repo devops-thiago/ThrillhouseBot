@@ -20,6 +20,7 @@ import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import io.quarkiverse.langchain4j.ModelBuilderCustomizer;
+import io.quarkiverse.langchain4j.ModelName;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.Optional;
 
@@ -36,6 +37,17 @@ import java.util.Optional;
  * only applied to the blocking {@code ChatModel} — the streaming builder never reads them, which
  * would silently skip the main review call ({@link PrReviewer#reviewStream}). Setting the builders'
  * own parameters covers both models and leaves every other default request parameter untouched.
+ *
+ * <p>Customizers bind to models by CDI qualifier: {@code ModelBuilderCustomizer.applyCustomizers}
+ * selects {@code @Default}-qualified beans for the default model and {@code @ModelName}-qualified
+ * beans for a named one, with no inheritance either way, and runs them after the extension's config
+ * properties, immediately before {@code build()} — so a customizer wins over config. That is why
+ * the {@code concise} named model (#498: summary, verifier, replies) has customizers of its own:
+ * without them it would silently lose the reasoning/temperature tuning, and with the unqualified
+ * ones it would have its response cap ({@code
+ * quarkus.langchain4j.openai.concise.chat-model.max-tokens}, aliased to {@code
+ * REVIEW_CONCISE_MAX_OUTPUT_TOKENS}) stomped by the active model's {@code max-output-tokens}. The
+ * concise pair therefore applies every shared parameter except the response cap.
  */
 public final class ChatModelCustomizers {
 
@@ -97,6 +109,65 @@ public final class ChatModelCustomizers {
       activeModel.temperature().ifPresent(builder::temperature);
       activeModel.topP().ifPresent(builder::topP);
       activeModel.maxOutputTokens().ifPresent(builder::maxTokens);
+      activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
+      activeModel.presencePenalty().ifPresent(builder::presencePenalty);
+      activeModel.seed().ifPresent(builder::seed);
+    }
+  }
+
+  /**
+   * Tuning for the concise named model's blocking bean (verifier, replies). Applies the same
+   * reasoning and generation parameters as the default model's customizer, but never {@code
+   * maxTokens}: the concise response cap comes from the named config block and applying the active
+   * model's {@code max-output-tokens} here would overwrite it — customizers run after config
+   * properties.
+   */
+  @ApplicationScoped
+  @ModelName("concise")
+  static class ConciseChatModelCustomizer
+      implements ModelBuilderCustomizer<OpenAiChatModel.OpenAiChatModelBuilder> {
+
+    private final ThrillhouseConfig config;
+    private final ActiveModelSettings activeModel;
+
+    ConciseChatModelCustomizer(ThrillhouseConfig config, ActiveModelSettings activeModel) {
+      this.config = config;
+      this.activeModel = activeModel;
+    }
+
+    @Override
+    public void customize(OpenAiChatModel.OpenAiChatModelBuilder builder) {
+      reasoningEffort(config).ifPresent(builder::reasoningEffort);
+      activeModel.temperature().ifPresent(builder::temperature);
+      activeModel.topP().ifPresent(builder::topP);
+      activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
+      activeModel.presencePenalty().ifPresent(builder::presencePenalty);
+      activeModel.seed().ifPresent(builder::seed);
+    }
+  }
+
+  /**
+   * Tuning for the concise named model's streaming bean (the final summary call). Same contract as
+   * {@link ConciseChatModelCustomizer}: everything shared, never {@code maxTokens}.
+   */
+  @ApplicationScoped
+  @ModelName("concise")
+  static class ConciseStreamingChatModelCustomizer
+      implements ModelBuilderCustomizer<OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder> {
+
+    private final ThrillhouseConfig config;
+    private final ActiveModelSettings activeModel;
+
+    ConciseStreamingChatModelCustomizer(ThrillhouseConfig config, ActiveModelSettings activeModel) {
+      this.config = config;
+      this.activeModel = activeModel;
+    }
+
+    @Override
+    public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
+      reasoningEffort(config).ifPresent(builder::reasoningEffort);
+      activeModel.temperature().ifPresent(builder::temperature);
+      activeModel.topP().ifPresent(builder::topP);
       activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
       activeModel.presencePenalty().ifPresent(builder::presencePenalty);
       activeModel.seed().ifPresent(builder::seed);

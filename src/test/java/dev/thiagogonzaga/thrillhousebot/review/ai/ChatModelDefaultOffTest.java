@@ -22,21 +22,32 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
+import io.quarkiverse.langchain4j.ModelName;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 /**
  * Default profile: reasoning is off and no per-model settings entry exists, so no {@code
- * reasoning_effort} and no {@code max_tokens} reach either model, and temperature/top-p stay at the
- * quarkus-langchain4j extension defaults (1.0/1.0) — today's behavior is preserved for untuned
- * deployments.
+ * reasoning_effort} and no {@code max_tokens} reach either default model, and temperature/top-p
+ * stay at the quarkus-langchain4j extension defaults (1.0/1.0) — today's behavior is preserved for
+ * untuned deployments. The {@code concise} named model differs in exactly one way: it always
+ * carries its response cap ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}, default 8192), because the
+ * summary/verifier/reply responses are fixed-shape and must not run unbounded.
  */
 @QuarkusTest
 class ChatModelDefaultOffTest {
 
   @Inject ChatModel chatModel;
   @Inject StreamingChatModel streamingChatModel;
+
+  @Inject
+  @ModelName("concise")
+  ChatModel conciseChatModel;
+
+  @Inject
+  @ModelName("concise")
+  StreamingChatModel conciseStreamingChatModel;
 
   @Test
   void noTuningIsSentByDefault() {
@@ -52,6 +63,26 @@ class ChatModelDefaultOffTest {
             OpenAiChatRequestParameters.class, streamingChatModel.defaultRequestParameters());
     assertNull(streaming.reasoningEffort());
     assertNull(streaming.maxOutputTokens());
+    assertEquals(1.0, streaming.temperature());
+    assertEquals(1.0, streaming.topP());
+  }
+
+  @Test
+  void conciseModelsCarryOnlyTheirResponseCapByDefault() {
+    var blocking =
+        assertInstanceOf(
+            OpenAiChatRequestParameters.class, conciseChatModel.defaultRequestParameters());
+    assertEquals(8192, blocking.maxOutputTokens(), "the concise default cap must apply");
+    assertNull(blocking.reasoningEffort());
+    assertEquals(1.0, blocking.temperature());
+    assertEquals(1.0, blocking.topP());
+
+    var streaming =
+        assertInstanceOf(
+            OpenAiChatRequestParameters.class,
+            conciseStreamingChatModel.defaultRequestParameters());
+    assertEquals(8192, streaming.maxOutputTokens(), "the concise default cap must apply");
+    assertNull(streaming.reasoningEffort());
     assertEquals(1.0, streaming.temperature());
     assertEquals(1.0, streaming.topP());
   }

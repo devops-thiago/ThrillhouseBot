@@ -78,6 +78,7 @@ class StartupConfigValidatorTest {
     private String reasoningEffort = "low";
     private String blockingStrictness = "balanced";
     private String modelName = "deepseek-chat";
+    private Optional<Integer> conciseMaxOutputTokens = Optional.of(8192);
     private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
         new HashMap<>();
 
@@ -151,6 +152,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder conciseMaxOutputTokens(Optional<Integer> v) {
+      this.conciseMaxOutputTokens = v;
+      return this;
+    }
+
     ConfigBuilder model(String name, ThrillhouseConfig.AiPricingConfig.ModelSettings settings) {
       this.models.put(name, settings);
       return this;
@@ -183,7 +189,7 @@ class StartupConfigValidatorTest {
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
       return new StartupConfigValidator(
-          config, aiApiKey, new ActiveModelSettings(config, modelName));
+          config, aiApiKey, new ActiveModelSettings(config, modelName), conciseMaxOutputTokens);
     }
   }
 
@@ -283,6 +289,27 @@ class StartupConfigValidatorTest {
   void failsFastWhenMaxAiCallsBelowOne() {
     var ex = assertFailsValidation(new ConfigBuilder().maxAiCalls(0).build());
     assertTrue(ex.getMessage().contains("REVIEW_MAX_AI_CALLS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenConciseResponseCapBelowOne() {
+    // Same fail-fast contract as the other budget keys: a degenerate cap on the concise model
+    // (summary/verifier/replies) must be rejected at boot, naming the env var.
+    for (var cap : new int[] {0, -1}) {
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder().conciseMaxOutputTokens(Optional.of(cap)).build());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS must be >= 1"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void bootsWhenTheConciseResponseCapIsUnset() {
+    // An operator may clear REVIEW_CONCISE_MAX_OUTPUT_TOKENS (empty value) so the concise calls
+    // fall back to the provider default; absence is not a misconfiguration.
+    new ConfigBuilder().conciseMaxOutputTokens(Optional.empty()).build().validate();
   }
 
   @Test

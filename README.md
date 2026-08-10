@@ -297,6 +297,7 @@ will change per provider:
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Changed lines (additions + deletions) at or above which the nudge applies; either dimension triggers it on its own. `0` switches this dimension off — with both at `0` the nudge never fires | `1000` |
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
+| `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the fixed-shape/short AI calls — the final summary of a multi-call review, the finding verifier, and maintainer replies — which run on the `concise` named model so they don't share a cap sized for batch review output (see [Per-model AI settings](#per-model-ai-settings)). Hitting it surfaces as a truncation error naming this variable, never as a silently cut summary; set it empty to drop the cap and use the provider default | `8192` |
 | `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
 | `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests`, `/add-docs` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
@@ -457,6 +458,18 @@ Notes:
   `application.properties` or `-D`) alongside the env var.
 - **`top_k` is not available** on the OpenAI-compatible wire; it becomes
   relevant only with native provider integrations.
+- **`max-output-tokens` no longer caps every call.** The final summary of a
+  multi-call review, the finding verifier, and maintainer replies run on a
+  second model binding — the `concise` named model
+  (`quarkus.langchain4j.openai.concise.*`) — that points at the same provider,
+  credentials, and model through the same `AI_*` variables and follows the
+  active model's temperature/reasoning tuning, but carries its own response
+  cap, `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` (default `8192`). Those responses are
+  fixed-shape or short, so they don't need — and shouldn't be licensed to
+  spend — a cap sized for batch review output. The review itself and the
+  command generators (`/describe`, `/changelog`, `/add-docs`, `/improve`,
+  `/generate-tests`), whose outputs scale with the diff, stay on the default
+  model and its `max-output-tokens`.
 - **`max-output-tokens` vs `output-buffer-tokens`**: `max-output-tokens` is the
   hard response-length cap sent to the provider; `output-buffer-tokens` only
   reserves input-budget headroom for the map-reduce budgeter. On a shared-window

@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
+import io.quarkiverse.langchain4j.ModelName;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -38,6 +39,13 @@ import org.junit.jupiter.api.Test;
  * quarkus.langchain4j.openai.chat-model.*} properties are applied to the blocking model only, so
  * this test pins that the {@link ChatModelCustomizers} route reaches the streaming model used by
  * the main PR review call. It would fail if the wiring ever regressed to the config properties.
+ *
+ * <p>The {@code concise} named model (summary, verifier, replies — #498) is pinned separately:
+ * customizers bind by CDI qualifier ({@code applyCustomizers} selects {@code @Default} beans for
+ * the default model and {@code @ModelName}-qualified beans for a named one), so these assertions
+ * prove the named model carries its own response cap ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}
+ * default 8192) instead of the active model's {@code max-output-tokens}, while still receiving the
+ * shared reasoning/temperature tuning — and that the batch-review models keep theirs.
  */
 @QuarkusTest
 @TestProfile(ChatModelWiringTest.TuningEnabled.class)
@@ -45,6 +53,14 @@ class ChatModelWiringTest {
 
   @Inject ChatModel chatModel;
   @Inject StreamingChatModel streamingChatModel;
+
+  @Inject
+  @ModelName("concise")
+  ChatModel conciseChatModel;
+
+  @Inject
+  @ModelName("concise")
+  StreamingChatModel conciseStreamingChatModel;
 
   @Test
   void blockingModelCarriesConfiguredTuning() {
@@ -65,6 +81,42 @@ class ChatModelWiringTest {
     assertEquals(0.3, params.temperature());
     assertEquals(0.95, params.topP());
     assertEquals(4096, params.maxOutputTokens());
+  }
+
+  @Test
+  void conciseBlockingModelCarriesTheConciseCapAndTheSharedTuning() {
+    var params =
+        assertInstanceOf(
+            OpenAiChatRequestParameters.class, conciseChatModel.defaultRequestParameters());
+    assertEquals(
+        8192,
+        params.maxOutputTokens(),
+        "the concise response cap must apply, not the active model's max-output-tokens");
+    assertEquals(
+        "medium",
+        params.reasoningEffort(),
+        "the concise model must not silently lose the reasoning setting");
+    assertEquals(0.3, params.temperature());
+    assertEquals(0.95, params.topP());
+  }
+
+  @Test
+  void conciseStreamingModelCarriesTheConciseCapAndTheSharedTuning() {
+    // The summary call streams, so the named model's streaming bean is the one that matters.
+    var params =
+        assertInstanceOf(
+            OpenAiChatRequestParameters.class,
+            conciseStreamingChatModel.defaultRequestParameters());
+    assertEquals(
+        8192,
+        params.maxOutputTokens(),
+        "the concise response cap must apply, not the active model's max-output-tokens");
+    assertEquals(
+        "medium",
+        params.reasoningEffort(),
+        "the concise model must not silently lose the reasoning setting");
+    assertEquals(0.3, params.temperature());
+    assertEquals(0.95, params.topP());
   }
 
   public static class TuningEnabled implements QuarkusTestProfile {

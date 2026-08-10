@@ -44,6 +44,8 @@ class AiReviewServiceTest {
 
   @Mock private PrReviewer prReviewer;
 
+  @Mock private PrSummarizer prSummarizer;
+
   @Mock private ReviewResponseParser parser;
 
   @Mock private ThrillhouseConfig config;
@@ -181,7 +183,7 @@ class AiReviewServiceTest {
   @Test
   void summarizeCallsSummaryStreamBlockingAndReturnsParsedResponse() {
     ReviewSession session = reviewSession();
-    when(prReviewer.summarizeStream(
+    when(prSummarizer.summarizeStream(
             anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
     when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -190,7 +192,7 @@ class AiReviewServiceTest {
         service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
 
     assertNotNull(response);
-    verify(prReviewer)
+    verify(prSummarizer)
         .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
     var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
     verify(broadcaster, atLeast(0)).broadcast(captor.capture());
@@ -851,7 +853,7 @@ class AiReviewServiceTest {
         .thenReturn(new HangingTokenStream());
     StreamingHandle handle = mock(StreamingHandle.class);
     var cancellableService =
-        new AiReviewService(prReviewer, parser, config, broadcaster) {
+        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -903,7 +905,7 @@ class AiReviewServiceTest {
     StreamingHandle handle = mock(StreamingHandle.class);
     doThrow(new IllegalStateException("already closed")).when(handle).cancel();
     var cancellableService =
-        new AiReviewService(prReviewer, parser, config, broadcaster) {
+        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;

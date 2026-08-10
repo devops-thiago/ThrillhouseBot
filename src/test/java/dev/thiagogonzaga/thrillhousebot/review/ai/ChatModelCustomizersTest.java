@@ -183,6 +183,66 @@ class ChatModelCustomizersTest {
   }
 
   @Test
+  void conciseChatModelGetsSharedTuningButNeverAResponseCap() {
+    // The concise model's cap comes from its named config block
+    // (quarkus.langchain4j.openai.concise.chat-model.max-tokens); customizers run after config
+    // properties, so a maxTokens call here would stomp the cap the named model exists to carry.
+    var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var config =
+        config(
+            true,
+            "Medium",
+            Map.of(MODEL, settings(Optional.of(0.2), Optional.of(0.95), Optional.of(384_000))));
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).reasoningEffort("medium");
+    verify(builder).temperature(0.2);
+    verify(builder).topP(0.95);
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void conciseStreamingModelGetsSharedTuningButNeverAResponseCap() {
+    var builder = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config =
+        config(
+            true,
+            "Medium",
+            Map.of(MODEL, settings(Optional.of(0.2), Optional.of(0.95), Optional.of(384_000))));
+
+    new ChatModelCustomizers.ConciseStreamingChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).reasoningEffort("medium");
+    verify(builder).temperature(0.2);
+    verify(builder).topP(0.95);
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void conciseCustomizersApplyPenaltiesAndSeed() {
+    var blocking = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var streaming = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config = config(false, "low", Map.of(MODEL, settingsWithPenaltiesAndSeed(0.5, -0.5, 42)));
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(blocking);
+    new ChatModelCustomizers.ConciseStreamingChatModelCustomizer(config, activeModel(config))
+        .customize(streaming);
+
+    verify(blocking).frequencyPenalty(0.5);
+    verify(blocking).presencePenalty(-0.5);
+    verify(blocking).seed(42);
+    verifyNoMoreInteractions(blocking);
+    verify(streaming).frequencyPenalty(0.5);
+    verify(streaming).presencePenalty(-0.5);
+    verify(streaming).seed(42);
+    verifyNoMoreInteractions(streaming);
+  }
+
+  @Test
   void anotherModelsEntryIsNotAppliedToTheActiveModel() {
     // A tuning entry keyed to a different model name must not leak into the active model's calls.
     var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);

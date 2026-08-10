@@ -24,10 +24,13 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 /**
  * Second-pass AI call that audits candidate findings; returns raw JSON parsed by the caller.
- * Application-scoped (no chat memory) so parallel map-reduce batch threads can invoke it.
+ * Application-scoped (no chat memory) so parallel map-reduce batch threads can invoke it. Bound to
+ * the {@code concise} named model: the response is one verdict per finding, so it carries the
+ * concise response cap ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}) instead of the batch review's
+ * allowance.
  */
 @ApplicationScoped
-@RegisterAiService
+@RegisterAiService(modelName = "concise")
 public interface FindingVerifier {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
