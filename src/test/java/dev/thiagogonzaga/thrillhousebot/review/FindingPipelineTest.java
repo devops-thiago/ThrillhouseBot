@@ -1016,12 +1016,12 @@ class FindingPipelineTest {
         .when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
     var thrown =
         assertThrows(
             TokenSpendCeilingExceededException.class,
-            () ->
-                pipeline.run(
-                    session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of())));
+            () -> pipeline.run(session, template, ctx, plan, resolver));
 
     assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
   }
@@ -1037,7 +1037,7 @@ class FindingPipelineTest {
     when(reviewConfig.maxTokensPerReview()).thenReturn(0L);
     var realLedger = new ReviewTokenLedger(thrillhouseConfig);
     realLedger.open(42L);
-    realLedger.record(42L, 900_000, 100_000);
+    realLedger.recordUsage(42L, 900_000, 100_000);
     var p =
         new FindingPipeline(
             aiReviewService,

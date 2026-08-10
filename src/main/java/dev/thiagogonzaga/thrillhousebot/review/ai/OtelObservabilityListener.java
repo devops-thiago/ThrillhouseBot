@@ -136,7 +136,7 @@ public class OtelObservabilityListener implements ChatModelListener {
     // concise named model included — so summary/retry calls are all metered.
     var ledgerSessionId = (Long) ctx.attributes().get(ATTR_SESSION_ID);
     if (ledgerSessionId != null) {
-      tokenLedger.record(ledgerSessionId, usage.inputTokenCount(), usage.outputTokenCount());
+      tokenLedger.recordUsage(ledgerSessionId, usage.inputTokenCount(), usage.outputTokenCount());
     }
 
     var cost = 0.0;

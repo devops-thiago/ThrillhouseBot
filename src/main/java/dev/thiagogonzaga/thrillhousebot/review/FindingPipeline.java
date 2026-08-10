@@ -216,44 +216,8 @@ public class FindingPipeline {
                                   i, batches, session, promptInputs, plan, previousFilesById),
                           executor))
               .toList();
-      var ceilingBlockedBatches = 0;
-      for (int i = 0; i < futures.size(); i++) {
-        try {
-          outcomesByIndex[i] = futures.get(i).join();
-        } catch (CompletionException e) {
-          if (isResponseTruncated(e)) {
-            // The batch's own retry below would re-send the identical prompt against the identical
-            // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
-            Log.warnf(
-                e,
-                "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
-                    + " files as not reviewed",
-                i + 1,
-                batches.size());
-            plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
-          } else if (isSpendCeilingBlocked(e)) {
-            // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
-            // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
-            // as the reason — instead of paying nothing and losing the batches that succeeded.
-            ceilingBlockedBatches++;
-            Log.warnf(
-                "Batch %d/%d skipped at the review's token spend ceiling (%d tokens spent, ceiling"
-                    + " %d — REVIEW_MAX_TOKENS_PER_REVIEW); disclosing its files as not reviewed",
-                i + 1,
-                batches.size(),
-                tokenLedger.tokensSpent(ledgerSessionId(session)),
-                tokenLedger.ceiling());
-            plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(i).files()));
-          } else {
-            failedIndices.add(i);
-            Log.warnf(
-                e,
-                "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
-                i + 1,
-                batches.size());
-          }
-        }
-      }
+      var ceilingBlockedBatches =
+          joinBatchOutcomes(futures, batches, plan, session, outcomesByIndex, failedIndices);
       if (ceilingBlockedBatches == batches.size()) {
         // Every batch was refused before its first attempt: this review made zero AI calls and has
         // no paid findings to keep, so a "partial review" disclosure would dress up an empty one.
@@ -349,7 +313,7 @@ public class FindingPipeline {
     ReviewResponse summaryResponse;
     try {
       summaryResponse = aiReviewService.summarize(session, summaryInputs);
-    } catch (TokenSpendCeilingExceededException e) {
+    } catch (TokenSpendCeilingExceededException _) {
       // The gate above passed but a late usage callback (e.g. a timed-out batch attempt's
       // response) crossed the ceiling first, or a summary retry was refused mid-loop.
       return countsOnlySummary(session, refined, "summary call refused");
@@ -391,6 +355,60 @@ public class FindingPipeline {
    */
   private static long ledgerSessionId(ReviewSession session) {
     return ReviewTokenLedger.keyFor(session);
+  }
+
+  /**
+   * Joins the parallel batch futures, classifying each failure: a truncation is disclosed at once
+   * (its retry would cut identically), a ceiling refusal is disclosed with the ceiling as the
+   * reason, and anything else queues for the sequential retry pass. Returns how many batches the
+   * ceiling refused before their first attempt, so the caller can detect the zero-call review.
+   */
+  private int joinBatchOutcomes(
+      List<CompletableFuture<BatchOutcome>> futures,
+      List<DiffBudgetPlanner.DiffBatch> batches,
+      DiffBudgetPlanner.BudgetPlan plan,
+      ReviewSession session,
+      BatchOutcome[] outcomesByIndex,
+      List<Integer> failedIndices) {
+    var ceilingBlockedBatches = 0;
+    for (int i = 0; i < futures.size(); i++) {
+      try {
+        outcomesByIndex[i] = futures.get(i).join();
+      } catch (CompletionException e) {
+        if (isResponseTruncated(e)) {
+          // The batch's own retry below would re-send the identical prompt against the identical
+          // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
+          Log.warnf(
+              e,
+              "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
+                  + " files as not reviewed",
+              i + 1,
+              batches.size());
+          plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
+        } else if (isSpendCeilingBlocked(e)) {
+          // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
+          // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
+          // as the reason — instead of paying nothing and losing the batches that succeeded.
+          ceilingBlockedBatches++;
+          Log.warnf(
+              "Batch %d/%d skipped at the review's token spend ceiling (%d tokens spent, ceiling"
+                  + " %d — REVIEW_MAX_TOKENS_PER_REVIEW); disclosing its files as not reviewed",
+              i + 1,
+              batches.size(),
+              tokenLedger.tokensSpent(ledgerSessionId(session)),
+              tokenLedger.ceiling());
+          plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(i).files()));
+        } else {
+          failedIndices.add(i);
+          Log.warnf(
+              e,
+              "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
+              i + 1,
+              batches.size());
+        }
+      }
+    }
+    return ceilingBlockedBatches;
   }
 
   private BatchOutcome processBatch(

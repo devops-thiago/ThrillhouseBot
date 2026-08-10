@@ -64,7 +64,7 @@ public class ReviewTokenLedger {
    * Adds one call's provider-reported usage to its review's total. Null counts (providers that omit
    * a side of the usage) count as zero; a session with no open entry is ignored (see class doc).
    */
-  public void record(long sessionId, Integer inputTokens, Integer outputTokens) {
+  public void recordUsage(long sessionId, Integer inputTokens, Integer outputTokens) {
     var spent = spentBySession.get(sessionId);
     if (spent == null) {
       return;

@@ -1001,7 +1001,7 @@ class AiReviewServiceTest {
     when(reviewConfig.maxTokensPerReview()).thenReturn(0L);
     var realLedger = new ReviewTokenLedger(config);
     realLedger.open(42L);
-    realLedger.record(42L, 900_000, 100_000);
+    realLedger.recordUsage(42L, 900_000, 100_000);
     var uncappedService =
         new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, realLedger);
     when(prReviewer.reviewStream(
@@ -1058,7 +1058,7 @@ class AiReviewServiceTest {
               // The listener's onResponse runs before this handler (pinned by
               // StreamingChatModelListenerOrderingTest), so the attempt's usage is on the ledger
               // by the time the retry loop decides whether to call again.
-              realLedger.record(42L, 50_000, 3_000);
+              realLedger.recordUsage(42L, 50_000, 3_000);
               throw new IllegalArgumentException("response does not match the review schema");
             });
 

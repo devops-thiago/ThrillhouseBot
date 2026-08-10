@@ -342,9 +342,8 @@ class DiffBudgetPlannerTest {
     assertEquals(List.of("a.java", "b.java"), plan.runtimeUncoveredFiles());
     assertEquals(List.of("a.java", "b.java"), plan.effectiveOmittedFiles());
     assertTrue(plan.truncated());
-    assertThrows(
-        UnsupportedOperationException.class,
-        () -> plan.spendCeilingSkippedFiles().add("escaped.java"));
+    var skipped = plan.spendCeilingSkippedFiles();
+    assertThrows(UnsupportedOperationException.class, () -> skipped.add("escaped.java"));
   }
 
   @Test
