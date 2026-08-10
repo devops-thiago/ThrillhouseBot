@@ -206,19 +206,54 @@ public class ReviewPublisher {
    * surfaced. Best-effort: a failure to post it is logged, not propagated.
    */
   void postFailureNotice(String auth, String owner, String repo, int prNumber) {
+    postFailureNoticeComment(
+        auth,
+        owner,
+        repo,
+        prNumber,
+        """
+            ⚠️ **ThrillhouseBot review could not be completed.**
+
+            The review service encountered an error. \
+            Please reply with `/review` or `@Thrillhousebot review` to retry.""");
+  }
+
+  /**
+   * The failure notice for a review that failed because the model's response was cut at its length
+   * cap (#500 scope B). A truncation is deterministic — the generic notice's bare {@code /review}
+   * advice is exactly the knowably-futile retry #495 exists to prevent — so this variant names the
+   * cap and the knob to raise instead: the active model's {@code max-output-tokens}, plus {@code
+   * REVIEW_CONCISE_MAX_OUTPUT_TOKENS} when the truncated call ran on the concise named model (its
+   * cap is configured separately).
+   */
+  void postTruncationFailureNotice(
+      String auth, String owner, String repo, int prNumber, boolean conciseModelImplicated) {
+    var conciseClause =
+        conciseModelImplicated
+            ? " The truncated call ran on the concise model, so raise"
+                + " `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` as well."
+            : "";
+    postFailureNoticeComment(
+        auth,
+        owner,
+        repo,
+        prNumber,
+        """
+            ⚠️ **ThrillhouseBot review could not be completed.**
+
+            The model's response was cut at its response-length cap (`finish_reason=length`), \
+            so the review output was incomplete. This failure is deterministic: retrying \
+            without changing configuration would be cut at the same point. Raise the active \
+            model's `max-output-tokens` (or leave it unset to use the provider default), then \
+            run `/review` again."""
+            + conciseClause);
+  }
+
+  private void postFailureNoticeComment(
+      String auth, String owner, String repo, int prNumber, String body) {
     try {
       commentClient.createComment(
-          auth,
-          ACCEPT,
-          owner,
-          repo,
-          prNumber,
-          new GitHubCommentClient.CreateCommentRequest(
-              """
-                  ⚠️ **ThrillhouseBot review could not be completed.**
-
-                  The review service encountered an error. \
-                  Please reply with `/review` or `@Thrillhousebot review` to retry."""));
+          auth, ACCEPT, owner, repo, prNumber, new GitHubCommentClient.CreateCommentRequest(body));
     } catch (RuntimeException commentError) {
       Log.warnf(
           commentError,

@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -36,6 +37,25 @@ public class ReviewOrchestrator {
   private static final String CHECK_STATUS_COMPLETED = "completed";
 
   private static final String CONCLUSION_FAILURE = "failure";
+
+  /** FAILED check-run title when the failure was the model's response-length cap (#500). */
+  static final String TRUNCATION_CHECK_TITLE = "Review failed: the AI response hit its length cap";
+
+  /**
+   * FAILED check-run summary for a truncation: names the cap and the knob(s) to raise, matching the
+   * PR notice, instead of the bare conclusion-only update a generic failure gets.
+   */
+  static String truncationCheckSummary(boolean conciseModelImplicated) {
+    return "The model's response was cut at its response-length cap (finish_reason=length), so the"
+        + " review output was incomplete. Retrying without changing configuration would be cut at"
+        + " the same point — raise the active model's max-output-tokens (or leave it unset to use"
+        + " the provider default)"
+        + (conciseModelImplicated
+            ? ", and REVIEW_CONCISE_MAX_OUTPUT_TOKENS (the truncated call ran on the concise"
+                + " model)"
+            : "")
+        + ", then run /review again.";
+  }
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -438,11 +458,16 @@ public class ReviewOrchestrator {
 
   /**
    * Handles a review failure: updates the check run, posts an error comment, and updates the
-   * session.
+   * session. A failure caused by the model's response-length cap (anywhere in the cause chain) gets
+   * truncation-specific copy on both surfaces (#500 scope B): the cap is named and the {@code
+   * max-output-tokens} knob pointed at, because the generic notice's bare {@code /review} retry
+   * advice is knowably futile for a deterministic truncation — and the FAILED check run carries the
+   * same explanation instead of a bare conclusion.
    */
   void handleReviewFailure(
       String auth, ReviewRequest req, ReviewSession session, long checkRunId, RuntimeException e) {
     Log.errorf(e, "Review failed for %s/%s #%d", req.owner(), req.repo(), req.prNumber());
+    var truncation = AiResponseTruncatedException.findIn(e);
 
     if (checkRunId > 0) {
       try {
@@ -454,15 +479,22 @@ public class ReviewOrchestrator {
                 checkRunId,
                 CHECK_STATUS_COMPLETED,
                 CONCLUSION_FAILURE,
-                null,
-                null,
+                truncation.isPresent() ? TRUNCATION_CHECK_TITLE : null,
+                truncation
+                    .map(t -> truncationCheckSummary(t.conciseModelImplicated()))
+                    .orElse(null),
                 sessionUrl(session)));
       } catch (RuntimeException checkRunError) {
         Log.warnf(checkRunError, "Failed to mark check run %d as failed", checkRunId);
       }
     }
 
-    reviewPublisher.postFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
+    if (truncation.isPresent()) {
+      reviewPublisher.postTruncationFailureNotice(
+          auth, req.owner(), req.repo(), req.prNumber(), truncation.get().conciseModelImplicated());
+    } else {
+      reviewPublisher.postFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
+    }
 
     String errorMessage =
         e.getMessage() != null

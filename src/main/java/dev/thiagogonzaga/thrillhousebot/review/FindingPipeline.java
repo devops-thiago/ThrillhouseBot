@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -77,6 +78,7 @@ public class FindingPipeline {
   private final DiffBudgetPlanner budgetPlanner;
   private final TokenCounter tokenCounter;
   private final ReviewTokenLedger tokenLedger;
+  private final TruncatedResponseSalvager salvager;
 
   @Inject
   public FindingPipeline(
@@ -90,7 +92,8 @@ public class FindingPipeline {
       BotIdentity botIdentity,
       DiffBudgetPlanner budgetPlanner,
       TokenCounter tokenCounter,
-      ReviewTokenLedger tokenLedger) {
+      ReviewTokenLedger tokenLedger,
+      TruncatedResponseSalvager salvager) {
     this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
     this.frameworkFilter = frameworkFilter;
@@ -102,6 +105,7 @@ public class FindingPipeline {
     this.budgetPlanner = budgetPlanner;
     this.tokenCounter = tokenCounter;
     this.tokenLedger = tokenLedger;
+    this.salvager = salvager;
   }
 
   /**
@@ -216,7 +220,15 @@ public class FindingPipeline {
                                   i, batches, session, promptInputs, plan, previousFilesById),
                           executor))
               .toList();
-      joinBatchOutcomes(futures, batches, plan, session, outcomesByIndex, failedIndices);
+      joinBatchOutcomes(
+          futures,
+          batches,
+          promptInputs,
+          plan,
+          session,
+          previousFilesById,
+          outcomesByIndex,
+          failedIndices);
     }
 
     for (int index : failedIndices) {
@@ -246,6 +258,15 @@ public class FindingPipeline {
             index + 1, batches.size(), e.getMessage());
         plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
       } catch (RuntimeException e) {
+        var truncation = AiResponseTruncatedException.findIn(e);
+        if (truncation.isPresent()) {
+          // The parallel attempt failed transiently and the retry hit the length cap: same
+          // salvage-or-disclose step as a parallel-pass truncation, and no further retry (#495).
+          outcomesByIndex[index] =
+              salvageTruncatedBatch(
+                  index, batches, promptInputs, plan, previousFilesById, truncation.get());
+          continue;
+        }
         // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
         // one batch that never succeeds must not discard the batches that did. Keep their
         // findings, record this batch's files as uncovered on the shared plan so the verdict holds
@@ -301,6 +322,12 @@ public class FindingPipeline {
       // The gate above passed but a late usage callback (e.g. a timed-out batch attempt's
       // response) crossed the ceiling first, or a summary retry was refused mid-loop.
       return countsOnlySummary(session, refined, "summary call refused");
+    } catch (AiResponseTruncatedException e) {
+      // #500 scope A: every batch call succeeded and was billed. Losing the whole review to a
+      // truncated summary would discard exactly the paid work #495 preserved on the batch lane —
+      // salvage the summary object if it closed before the cut, else degrade to the same
+      // counts-only shape as the ceiling-tripped path above. Never re-enters the retry lane.
+      return salvagedOrCountsOnlySummary(session, refined, e);
     }
 
     var merged =
@@ -327,7 +354,40 @@ public class FindingPipeline {
         tokenLedger.ceiling(),
         what,
         refined.findings().size());
-    var merged = new ReviewResponse(refined.findings(), refined.previousFindingsStatus(), null);
+    return persistWithSummary(session, refined, null);
+  }
+
+  /**
+   * The summary degradation for a summary response the model cut at its length cap (#500 scope A):
+   * if the summary object closed before the cut it is salvaged and used as-is; otherwise the review
+   * keeps its paid findings with the {@link #countsOnlySummary counts-only} shape. Either way the
+   * truncation is disclosed in the log with the caps that apply — the summary call runs on the
+   * concise model, so both knobs are named. Statuses are never taken from the salvage: the
+   * code-blind summary call must not decide what was resolved (same rule as the parsed path).
+   */
+  private ReviewResponse salvagedOrCountsOnlySummary(
+      ReviewSession session, ReviewResponse refined, AiResponseTruncatedException truncation) {
+    var salvagedSummary = salvager.salvage(truncation.partialBody()).summary();
+    if (salvagedSummary != null) {
+      Log.warnf(
+          "Summary response for session %d was cut at the model's response-length cap"
+              + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS); the summary object"
+              + " closed before the cut and was salvaged — keeping the %d paid findings",
+          ledgerSessionId(session), refined.findings().size());
+      return persistWithSummary(session, refined, salvagedSummary);
+    }
+    Log.warnf(
+        "Summary response for session %d was cut at the model's response-length cap"
+            + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) and no complete summary"
+            + " object could be salvaged; keeping the %d paid findings with a counts-only summary",
+        ledgerSessionId(session), refined.findings().size());
+    return persistWithSummary(session, refined, null);
+  }
+
+  /** Persists and returns the refined findings/statuses under the given (possibly null) summary. */
+  private ReviewResponse persistWithSummary(
+      ReviewSession session, ReviewResponse refined, ReviewResponse.Summary summary) {
+    var merged = new ReviewResponse(refined.findings(), refined.previousFindingsStatus(), summary);
     persistAiResponse(session, merged);
     return merged;
   }
@@ -352,24 +412,24 @@ public class FindingPipeline {
   private void joinBatchOutcomes(
       List<CompletableFuture<BatchOutcome>> futures,
       List<DiffBudgetPlanner.DiffBatch> batches,
+      AiReviewService.PromptInputs promptInputs,
       DiffBudgetPlanner.BudgetPlan plan,
       ReviewSession session,
+      Map<Integer, String> previousFilesById,
       BatchOutcome[] outcomesByIndex,
       List<Integer> failedIndices) {
     for (int i = 0; i < futures.size(); i++) {
       try {
         outcomesByIndex[i] = futures.get(i).join();
       } catch (CompletionException e) {
-        if (isResponseTruncated(e)) {
+        var truncation = AiResponseTruncatedException.findIn(e);
+        if (truncation.isPresent()) {
           // The batch's own retry below would re-send the identical prompt against the identical
-          // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
-          Log.warnf(
-              e,
-              "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
-                  + " files as not reviewed",
-              i + 1,
-              batches.size());
-          plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
+          // cap (#495), so the failure goes straight to the disclose step — which now salvages
+          // the complete leading findings out of the buffered partial body first (#500).
+          outcomesByIndex[i] =
+              salvageTruncatedBatch(
+                  i, batches, promptInputs, plan, previousFilesById, truncation.get());
         } else if (isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
@@ -405,14 +465,30 @@ public class FindingPipeline {
     var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
     var batchResponse =
         aiReviewService.reviewBatch(session, batchInputs, index + 1, batches.size());
+    return refineBatchOutcome(index, batch, batchInputs, batchResponse, plan, previousFilesById);
+  }
+
+  /**
+   * Runs one batch's raw response through the per-batch chain — quote validation and framework
+   * filtering against the batch's own in-budget text, verification, and status scoping. Shared by
+   * the parsed path and the salvage path, so salvaged findings face exactly the checks a normally
+   * parsed batch's findings do.
+   */
+  private BatchOutcome refineBatchOutcome(
+      int index,
+      DiffBudgetPlanner.DiffBatch batch,
+      AiReviewService.PromptInputs batchInputs,
+      ReviewResponse batchResponse,
+      DiffBudgetPlanner.BudgetPlan plan,
+      Map<Integer, String> previousFilesById) {
     var validated = quoteValidator.validate(batchResponse, batch.text());
     validated = frameworkFilter.filter(validated, batch.text());
     var verified =
         findingVerificationService.verify(
             validated,
             batchInputs.diff(),
-            promptInputs.projectStack(),
-            promptInputs.previousFindings());
+            batchInputs.projectStack(),
+            batchInputs.previousFindings());
     return new BatchOutcome(
         index,
         verified.findings(),
@@ -420,37 +496,58 @@ public class FindingPipeline {
             batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
   }
 
+  /**
+   * The disclose step for a batch whose response the model cut at its length cap (#500): salvages
+   * the complete leading findings/statuses out of the buffered partial body and, when anything came
+   * back, runs them through the normal per-batch chain and discloses the batch's files as
+   * <em>partially reviewed</em> — the response was cut and the findings up to the cut were kept.
+   * When nothing salvages (the cut landed before the first element closed, or the lane carried no
+   * body), it falls back to the pre-#500 behaviour: the files are disclosed as not reviewed.
+   * Replaces disclosure only — the truncation was already refused a retry (#495), and salvage makes
+   * no AI call of its own, so #509's ceiling accounting is untouched.
+   */
+  private BatchOutcome salvageTruncatedBatch(
+      int index,
+      List<DiffBudgetPlanner.DiffBatch> batches,
+      AiReviewService.PromptInputs promptInputs,
+      DiffBudgetPlanner.BudgetPlan plan,
+      Map<Integer, String> previousFilesById,
+      AiResponseTruncatedException truncation) {
+    var batch = batches.get(index);
+    var salvaged = salvager.salvage(truncation.partialBody());
+    if (!salvaged.hasFindingsOrStatuses()) {
+      Log.warnf(
+          "Batch %d/%d hit the model's response-length cap and nothing could be salvaged from the"
+              + " partial response; not retrying and disclosing its files as not reviewed",
+          index + 1, batches.size());
+      plan.recordUncoveredFiles(filenamesOf(batch.files()));
+      return null;
+    }
+    Log.warnf(
+        "Batch %d/%d hit the model's response-length cap; not retrying — salvaged %d complete"
+            + " finding(s) and %d status(es) from the partial response and disclosing its files as"
+            + " partially reviewed",
+        index + 1,
+        batches.size(),
+        salvaged.findings().size(),
+        salvaged.previousFindingsStatus().size());
+    plan.recordResponseCutFiles(filenamesOf(batch.files()));
+    var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
+    var partialResponse =
+        new ReviewResponse(salvaged.findings(), salvaged.previousFindingsStatus(), null);
+    return refineBatchOutcome(index, batch, batchInputs, partialResponse, plan, previousFilesById);
+  }
+
   private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
   }
 
   /**
-   * Whether a batch failure was the model hitting its response-length cap. Walks the cause chain
-   * because the failure arrives wrapped — {@link CompletionException} over the {@link
-   * dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException} the service threw, so depth 2 in
-   * practice.
-   *
-   * <p>Bounded rather than walked to {@code null}: a cause chain can cycle — a {@link Throwable}
-   * overriding {@code getCause()}, or plain {@code A caused-by B caused-by A} — and an unbounded
-   * walk would spin forever on the review thread. The bound is far above any real chain, so a
-   * truncation is never missed for depth.
-   */
-  private static boolean isResponseTruncated(Throwable failure) {
-    var cause = failure;
-    for (var depth = 0;
-        cause != null && depth < MAX_CAUSE_DEPTH;
-        depth++, cause = cause.getCause()) {
-      if (cause instanceof AiResponseTruncatedException) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Whether a batch failure was the spend ceiling refusing the call before it was made. Same
-   * bounded cause walk as {@link #isResponseTruncated} and for the same reason: the refusal arrives
-   * wrapped in the parallel pass's {@link CompletionException}.
+   * Whether a batch failure was the spend ceiling refusing the call before it was made. Bounded
+   * cause walk like {@link AiResponseTruncatedException#findIn} (where the truncation flavour of
+   * this check was hoisted, so the pipeline and the orchestrator share one walk) and for the same
+   * reason: the refusal arrives wrapped in the parallel pass's {@link CompletionException}, and an
+   * unbounded walk over a cyclic chain would spin forever on the review thread.
    */
   private static boolean isSpendCeilingBlocked(Throwable failure) {
     var cause = failure;
@@ -498,7 +595,16 @@ public class FindingPipeline {
                 clampOverview(changedFilesOverview(ctx, plan), promptInputs)),
             promptInputs.previousFindings(),
             promptInputs.repoInstructions());
-    var summaryResponse = aiReviewService.summarize(session, summaryInputs);
+    ReviewResponse summaryResponse;
+    try {
+      summaryResponse = aiReviewService.summarize(session, summaryInputs);
+    } catch (AiResponseTruncatedException e) {
+      // Same degradation as the multi-call summary seam (#500 scope A): this path has no findings
+      // by construction, but the review must still post with its omission disclosures rather than
+      // fail on a deterministic truncation.
+      return salvagedOrCountsOnlySummary(
+          session, new ReviewResponse(List.of(), List.of(), null), e);
+    }
     var merged = new ReviewResponse(List.of(), List.of(), summaryResponse.summary());
     persistAiResponse(session, merged);
     return merged;
@@ -750,6 +856,10 @@ public class FindingPipeline {
     // effectiveClippedFiles drops any clipped file a failed batch left wholly uncovered, so it is
     // disclosed once, as uncovered, not also marked "partially analyzed".
     var clipped = Set.copyOf(plan.effectiveClippedFiles());
+    // Files whose batch response was cut but salvaged (#500): kept in the walkthrough with an
+    // honest caveat — checked before the clipped marker so a file in both classes is disclosed
+    // once, under the stronger (output-side) statement.
+    var responseCut = Set.copyOf(plan.responseCutFiles());
     for (var file : ctx.reviewableFiles()) {
       if (ReviewDiffFormatter.namesContain(omitted, file.filename())
           || ReviewDiffFormatter.namesContain(uncovered, file.filename())) {
@@ -762,10 +872,7 @@ public class FindingPipeline {
           .append(file.additions())
           .append(" -")
           .append(file.deletions())
-          .append(
-              ReviewDiffFormatter.namesContain(clipped, file.filename())
-                  ? " — partially analyzed: clipped to fit the review call budget"
-                  : "")
+          .append(fileCoverageMarker(file.filename(), responseCut, clipped))
           .append(")\n");
     }
     for (var name : plan.omittedFiles()) {
@@ -777,6 +884,19 @@ public class FindingPipeline {
               " (not reviewed — the review call for it did not complete; treated as uncovered)\n");
     }
     return sb.toString();
+  }
+
+  /** The per-file coverage caveat for the summary overview, or empty for full coverage. */
+  private static String fileCoverageMarker(
+      String filename, Set<String> responseCut, Set<String> clipped) {
+    if (ReviewDiffFormatter.namesContain(responseCut, filename)) {
+      return " — partially reviewed: the model's response was cut at its length cap; findings up"
+          + " to the cut were kept";
+    }
+    if (ReviewDiffFormatter.namesContain(clipped, filename)) {
+      return " — partially analyzed: clipped to fit the review call budget";
+    }
+    return "";
   }
 
   /**

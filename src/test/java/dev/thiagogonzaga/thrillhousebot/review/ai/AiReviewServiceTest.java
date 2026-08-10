@@ -1133,6 +1133,56 @@ class AiReviewServiceTest {
                             event.type())));
   }
 
+  @Test
+  void aTruncationCarriesTheBufferedPartialBody() {
+    // #500: the streamed text received before the cut is the salvage input — well-formed JSON up
+    // to the cut point. It must travel on the typed exception; today it is buffered and then
+    // discarded, leaving the disclose step nothing to salvage from.
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    var partial = "{\"findings\":[{\"file\":\"A";
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(invocation -> new TruncatedTokenStream(partial, starts));
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertEquals(partial, thrown.partialBody());
+    assertFalse(thrown.conciseModelImplicated(), "the single-call review runs on the active model");
+  }
+
+  @Test
+  void aTruncatedSummaryImplicatesTheConciseModel() {
+    // #500 scope B: the summary call runs on the concise named model, whose cap is
+    // REVIEW_CONCISE_MAX_OUTPUT_TOKENS — downstream copy must be able to name that knob rather
+    // than only the active model's max-output-tokens.
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    var partial = "{\"summary\":{\"total_findings\":2,\"cri";
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(invocation -> new TruncatedTokenStream(partial, starts));
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                service.summarize(
+                    session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "")));
+
+    assertEquals(1, starts.get(), "no-retry must hold on the summary lane too");
+    assertTrue(thrown.conciseModelImplicated());
+    assertEquals(partial, thrown.partialBody(), "the marked copy must keep the salvage input");
+  }
+
   private static ReviewSession reviewSession() {
     var session = new ReviewSession();
     session.id = 42L;

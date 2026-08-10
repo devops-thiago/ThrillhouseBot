@@ -360,6 +360,35 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void responseCutFilesStayOutOfTheUncoveredSetButHoldTruncation() {
+    // #500: a salvaged batch's files are partially reviewed — they must trip the truncation gate
+    // (approval held, disclosure rendered) without joining the not-reviewed sets, keep dedupe/null
+    // hygiene like the other recorders, and stay behind a defensive copy.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+
+    plan.recordResponseCutFiles(Arrays.asList("a.java", null, "a.java", "b.java"));
+
+    assertEquals(List.of("a.java", "b.java"), plan.responseCutFiles());
+    assertTrue(plan.runtimeUncoveredFiles().isEmpty());
+    assertTrue(plan.effectiveOmittedFiles().isEmpty());
+    assertTrue(plan.truncated());
+    assertThrows(
+        UnsupportedOperationException.class, () -> plan.responseCutFiles().add("escaped.java"));
+  }
+
+  @Test
+  void aPlanBuiltWithANullResponseCutListStillAcceptsRecords() {
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null, null, null);
+
+    assertTrue(plan.responseCutFiles().isEmpty());
+
+    plan.recordResponseCutFiles(List.of("src/Cut.java"));
+
+    assertEquals(List.of("src/Cut.java"), plan.responseCutFiles());
+  }
+
+  @Test
   void clippedFilesAreReportedUnchangedWhenNoBatchFailed() {
     // No runtime gap: the clipped list passes through, so a partially analyzed file keeps its
     // "clipped" meaning rather than being reported as wholly uncovered.

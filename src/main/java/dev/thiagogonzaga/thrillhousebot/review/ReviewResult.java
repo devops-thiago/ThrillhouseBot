@@ -121,19 +121,22 @@ public record ReviewResult(
   /**
    * Which files the review left uncovered, by name and by reason: {@code omittedFileNames} were
    * never sent because the diff exceeded the token budget, {@code clippedFileNames} were
-   * hunk-clipped and only partially analyzed, and {@code spendCeilingSkippedFileNames} had their
-   * review call skipped because the review's token spend ceiling ({@code
-   * REVIEW_MAX_TOKENS_PER_REVIEW}) was reached — a different reason with a different fix, so the
-   * rendered copy names it separately. All empty on the legacy line-cap path, where only a count is
-   * known — the rendered copy then falls back to the numeric clause.
+   * hunk-clipped and only partially analyzed, {@code spendCeilingSkippedFileNames} had their review
+   * call skipped because the review's token spend ceiling ({@code REVIEW_MAX_TOKENS_PER_REVIEW})
+   * was reached — a different reason with a different fix, so the rendered copy names it separately
+   * — and {@code responseCutFileNames} were only partially reviewed because the model's response
+   * was cut at its length cap and the findings up to the cut were kept (#500). All empty on the
+   * legacy line-cap path, where only a count is known — the rendered copy then falls back to the
+   * numeric clause.
    */
   @RegisterForReflection
   public record TruncationDetail(
       List<String> omittedFileNames,
       List<String> clippedFileNames,
-      List<String> spendCeilingSkippedFileNames) {
+      List<String> spendCeilingSkippedFileNames,
+      List<String> responseCutFileNames) {
     public static final TruncationDetail EMPTY =
-        new TruncationDetail(List.of(), List.of(), List.of());
+        new TruncationDetail(List.of(), List.of(), List.of(), List.of());
 
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
@@ -142,17 +145,28 @@ public record ReviewResult(
           spendCeilingSkippedFileNames == null
               ? List.of()
               : List.copyOf(spendCeilingSkippedFileNames);
+      responseCutFileNames =
+          responseCutFileNames == null ? List.of() : List.copyOf(responseCutFileNames);
     }
 
     /** Convenience for the token-budget-only surfaces, which have no spend-ceiling skips. */
     public TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
-      this(omittedFileNames, clippedFileNames, List.of());
+      this(omittedFileNames, clippedFileNames, List.of(), List.of());
+    }
+
+    /** Back-compat convenience predating {@code responseCutFileNames}; starts it empty. */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> spendCeilingSkippedFileNames) {
+      this(omittedFileNames, clippedFileNames, spendCeilingSkippedFileNames, List.of());
     }
 
     public boolean isEmpty() {
       return omittedFileNames.isEmpty()
           && clippedFileNames.isEmpty()
-          && spendCeilingSkippedFileNames.isEmpty();
+          && spendCeilingSkippedFileNames.isEmpty()
+          && responseCutFileNames.isEmpty();
     }
   }
 
@@ -339,6 +353,16 @@ public record ReviewResult(
               detail.spendCeilingSkippedFileNames().size(),
               nameList(detail.spendCeilingSkippedFileNames())));
     }
+    // The response-cut class is partial in a third way: the files were sent and reviewed, but the
+    // model's answer was cut at its length cap — the findings produced before the cut were kept,
+    // so "not reviewed" would understate the coverage and silence the honest caveat.
+    if (!detail.responseCutFileNames().isEmpty()) {
+      clauses.add(
+          String.format(
+              "%d file(s) were only partially reviewed because the model's response was cut at"
+                  + " its length cap (max-output-tokens) — findings up to the cut were kept (%s)",
+              detail.responseCutFileNames().size(), nameList(detail.responseCutFileNames())));
+    }
     return String.join(", and ", clauses);
   }
 
@@ -369,6 +393,12 @@ public record ReviewResult(
           String.format(
               "%d file(s) skipped at the token spend ceiling",
               truncation.spendCeilingSkippedFileNames().size()));
+    }
+    if (!truncation.responseCutFileNames().isEmpty()) {
+      parts.add(
+          String.format(
+              "%d file(s) partially reviewed (response cut at the length cap)",
+              truncation.responseCutFileNames().size()));
     }
     return String.join(", ", parts);
   }
