@@ -166,7 +166,9 @@ class StreamingChatModelListenerOrderingTest {
         ChatRequest.builder().messages(UserMessage.from("hi")).build(),
         new StreamingChatResponseHandler() {
           @Override
-          public void onPartialResponse(String partialResponse) {}
+          public void onPartialResponse(String partialResponse) {
+            // Irrelevant to the ordering property under test.
+          }
 
           @Override
           public void onCompleteResponse(ChatResponse completeResponse) {
@@ -175,7 +177,9 @@ class StreamingChatModelListenerOrderingTest {
           }
 
           @Override
-          public void onError(Throwable error) {}
+          public void onError(Throwable error) {
+            // The fake model never errors; a call here would leave the assertions unset and fail.
+          }
         });
 
     assertEquals(
