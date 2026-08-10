@@ -180,11 +180,21 @@ public record ReviewResult(
     }
 
     public boolean isEmpty() {
-      return omittedFileNames.isEmpty()
-          && clippedFileNames.isEmpty()
-          && spendCeilingSkippedFileNames.isEmpty()
-          && responseCutFileNames.isEmpty()
-          && !summaryResponseCut;
+      return !hasFileGaps() && !summaryResponseCut;
+    }
+
+    /**
+     * Whether any per-file coverage gap exists — a name in any of the four file classes. False for
+     * a detail whose only content is a summary flag: the findings then cover the whole diff, so
+     * surfaces whose framing is per-file partial coverage (the on-demand disclosure, the delta
+     * comment) treat such a detail as empty (#516) while the summary-aware surfaces (banner,
+     * coverage clause, check-run brief) still disclose the flag.
+     */
+    public boolean hasFileGaps() {
+      return !omittedFileNames.isEmpty()
+          || !clippedFileNames.isEmpty()
+          || !spendCeilingSkippedFileNames.isEmpty()
+          || !responseCutFileNames.isEmpty();
     }
   }
 
@@ -481,9 +491,14 @@ public record ReviewResult(
    * #truncationNotice(int, TruncationDetail)} so an on-demand command that batches under the token
    * budget upholds the same "reported by name, never silently dropped" contract as the review
    * banner; falls back to the numeric clause when only a count is known.
+   *
+   * <p>A detail carrying only a summary flag (no file names) is treated as empty here: this
+   * disclosure's framing — "Large PR — partial coverage … covers only part of the diff" — is about
+   * per-file gaps, and with the findings complete it would be self-contradictory (#516). The
+   * summary-aware surfaces (review banner, check-run suffix) disclose the flag instead.
    */
   public static String truncationDisclosure(int omittedFiles, TruncationDetail detail) {
-    if (omittedFiles <= 0 && (detail == null || detail.isEmpty())) {
+    if (omittedFiles <= 0 && (detail == null || !detail.hasFileGaps())) {
       return "";
     }
     return "\n\n> ⚠️ **Large PR — partial coverage.** "
