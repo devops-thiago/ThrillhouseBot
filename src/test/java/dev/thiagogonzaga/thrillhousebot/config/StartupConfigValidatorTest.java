@@ -73,6 +73,7 @@ class StartupConfigValidatorTest {
     private int outputBufferTokens = 8192;
     private int maxAiCalls = 6;
     private double tokenSafetyMargin = 0.9;
+    private long maxTokensPerReview = 0;
     private String ciGating = "strict";
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
@@ -132,6 +133,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder maxTokensPerReview(long v) {
+      this.maxTokensPerReview = v;
+      return this;
+    }
+
     ConfigBuilder ciGating(String v) {
       this.ciGating = v;
       return this;
@@ -185,6 +191,7 @@ class StartupConfigValidatorTest {
       lenient().when(review.outputBufferTokens()).thenReturn(outputBufferTokens);
       lenient().when(review.maxAiCalls()).thenReturn(maxAiCalls);
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
+      lenient().when(review.maxTokensPerReview()).thenReturn(maxTokensPerReview);
       lenient().when(review.ciGating()).thenReturn(ciGating);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
@@ -289,6 +296,21 @@ class StartupConfigValidatorTest {
   void failsFastWhenMaxAiCallsBelowOne() {
     var ex = assertFailsValidation(new ConfigBuilder().maxAiCalls(0).build());
     assertTrue(ex.getMessage().contains("REVIEW_MAX_AI_CALLS"), ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenMaxTokensPerReviewNegative() {
+    // #499: same fail-fast contract as the other budget keys — a negative spend ceiling is a
+    // misconfiguration, rejected at boot naming the env var; 0 stays valid and means off.
+    var ex = assertFailsValidation(new ConfigBuilder().maxTokensPerReview(-1).build());
+    assertTrue(ex.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("thrillhousebot.review.max-tokens-per-review"), ex.getMessage());
+  }
+
+  @Test
+  void bootsWhenMaxTokensPerReviewIsPositive() {
+    new ConfigBuilder().maxTokensPerReview(250_000).build().validate();
   }
 
   @Test

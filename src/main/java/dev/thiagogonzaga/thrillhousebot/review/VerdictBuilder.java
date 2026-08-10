@@ -116,11 +116,17 @@ public class VerdictBuilder {
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       DiffBudgetPlanner.BudgetPlan plan) {
     // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
-    // into the omitted set (effective*); legacy: line-cap count — never sum both.
+    // into the omitted set (effective*); legacy: line-cap count — never sum both. Files skipped at
+    // the token spend ceiling gate approval through the same omitted set but are pulled out into
+    // their own class here, so the disclosure names the ceiling — a different cause with a
+    // different fix — instead of blaming the diff budget (and never lists a file twice).
+    var ceilingSkipped = plan.spendCeilingSkippedFiles();
     var truncation =
         plan.budgeted()
             ? new ReviewResult.TruncationDetail(
-                plan.effectiveOmittedFiles(), plan.effectiveClippedFiles())
+                withoutNames(plan.effectiveOmittedFiles(), ceilingSkipped),
+                plan.effectiveClippedFiles(),
+                ceilingSkipped)
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
         plan.budgeted()
@@ -366,6 +372,15 @@ public class VerdictBuilder {
       sb.append(batch.text()).append('\n');
     }
     return sb.toString();
+  }
+
+  /** {@code names} minus {@code excluded}, preserving order — empty exclusion returns as-is. */
+  private static List<String> withoutNames(List<String> names, List<String> excluded) {
+    if (excluded.isEmpty()) {
+      return names;
+    }
+    var excludedSet = Set.copyOf(excluded);
+    return names.stream().filter(n -> !excludedSet.contains(n)).toList();
   }
 
   /**

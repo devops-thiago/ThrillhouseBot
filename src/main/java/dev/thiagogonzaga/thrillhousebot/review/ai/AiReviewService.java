@@ -54,18 +54,22 @@ public class AiReviewService {
 
   private final SessionEventBroadcaster broadcaster;
 
+  private final ReviewTokenLedger tokenLedger;
+
   @Inject
   public AiReviewService(
       PrReviewer prReviewer,
       PrSummarizer prSummarizer,
       ReviewResponseParser parser,
       ThrillhouseConfig config,
-      SessionEventBroadcaster broadcaster) {
+      SessionEventBroadcaster broadcaster,
+      ReviewTokenLedger tokenLedger) {
     this.prReviewer = prReviewer;
     this.prSummarizer = prSummarizer;
     this.parser = parser;
     this.config = config;
     this.broadcaster = broadcaster;
+    this.tokenLedger = tokenLedger;
   }
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
@@ -124,6 +128,12 @@ public class AiReviewService {
     RuntimeException lastFailure = null;
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Spend-ceiling gate, before EVERY attempt: a retry is a fresh billed call, and the previous
+      // attempt's usage is already in the ledger by the time we get here (the observability
+      // listener's onResponse runs before the completion handler resolves the stream future — see
+      // StreamingChatModelListenerOrderingTest). Deliberately outside the try below, so the typed
+      // refusal propagates instead of being mistaken for one more transient failure to retry.
+      tokenLedger.ensureCallAllowed(session.id);
       if (attempt > 1) {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.retry(

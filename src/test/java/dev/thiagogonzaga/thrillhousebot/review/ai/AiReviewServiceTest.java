@@ -54,6 +54,8 @@ class AiReviewServiceTest {
 
   @Mock private SessionEventBroadcaster broadcaster;
 
+  @Mock private ReviewTokenLedger tokenLedger;
+
   private static final AiReviewService.PromptInputs PROMPT_INPUTS =
       new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "");
 
@@ -853,7 +855,7 @@ class AiReviewServiceTest {
         .thenReturn(new HangingTokenStream());
     StreamingHandle handle = mock(StreamingHandle.class);
     var cancellableService =
-        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster) {
+        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -905,7 +907,7 @@ class AiReviewServiceTest {
     StreamingHandle handle = mock(StreamingHandle.class);
     doThrow(new IllegalStateException("already closed")).when(handle).cancel();
     var cancellableService =
-        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster) {
+        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -929,6 +931,153 @@ class AiReviewServiceTest {
 
     assertSame(handle, service.streamingHandleOf(quarkusStream));
     assertNull(service.streamingHandleOf(new FakeTokenStream("{\"findings\":[]}")));
+  }
+
+  @Test
+  void shouldStopRetryingOnceTheSpendCeilingIsReached() {
+    // #499(b): a retry is a fresh billed call, so the ceiling is checked before EVERY attempt —
+    // a retry loop that would spend past it stops instead of re-calling.
+    ReviewSession session = reviewSession();
+    doNothing()
+        .doThrow(new TokenSpendCeilingExceededException(120_000, 100_000))
+        .when(tokenLedger)
+        .ensureCallAllowed(42L);
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new ErrorTokenStream(new RuntimeException("provider down")));
+
+    var thrown =
+        assertThrows(
+            TokenSpendCeilingExceededException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
+    verify(prReviewer, times(1))
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
+  }
+
+  @Test
+  void shouldMakeNoCallWhenTheSpendCeilingIsAlreadyExceeded() {
+    // #499: when the ceiling is already exceeded before the first attempt, no call is made and
+    // the typed error names the knob.
+    ReviewSession session = reviewSession();
+    doThrow(new TokenSpendCeilingExceededException(120_000, 100_000))
+        .when(tokenLedger)
+        .ensureCallAllowed(42L);
+
+    var thrown =
+        assertThrows(
+            TokenSpendCeilingExceededException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
+    verify(prReviewer, never())
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
+  }
+
+  @Test
+  void aDisabledCeilingNeverBlocksACallEvenWithHugeRecordedSpend() {
+    // #499(d) characterization: REVIEW_MAX_TOKENS_PER_REVIEW=0 (the default) leaves the call and
+    // retry behavior exactly as before the ceiling existed.
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxTokensPerReview()).thenReturn(0L);
+    var realLedger = new ReviewTokenLedger(config);
+    realLedger.open(42L);
+    realLedger.record(42L, 900_000, 100_000);
+    var uncappedService =
+        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, realLedger);
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new ErrorTokenStream(new RuntimeException("transient")))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var response = uncappedService.review(session, PROMPT_INPUTS);
+
+    assertNotNull(response);
+    verify(prReviewer, times(2))
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
+  }
+
+  @Test
+  void aRetryStormStopsWhenItsAccumulatedBilledUsageCrossesTheCeiling() {
+    // #508's shape end-to-end with a real ledger: a deterministic mapping failure is billed on
+    // every attempt (the provider answered — usage is recorded before the completion handler
+    // parses), and pre-#499 it burned max-ai-retries full-price calls producing nothing. With a
+    // 100K ceiling and ~53K billed per attempt, attempt 3 must be refused, not made.
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxTokensPerReview()).thenReturn(100_000L);
+    var realLedger = new ReviewTokenLedger(config);
+    realLedger.open(42L);
+    var cappedService =
+        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, realLedger);
+    when(reviewConfig.maxAiRetries()).thenReturn(5);
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(invocation -> new FakeTokenStream("{\"schema\":\"unexpected\"}"));
+    when(parser.parse(anyString()))
+        .thenAnswer(
+            invocation -> {
+              // The listener's onResponse runs before this handler (pinned by
+              // StreamingChatModelListenerOrderingTest), so the attempt's usage is on the ledger
+              // by the time the retry loop decides whether to call again.
+              realLedger.record(42L, 50_000, 3_000);
+              throw new IllegalArgumentException("response does not match the review schema");
+            });
+
+    var thrown =
+        assertThrows(
+            TokenSpendCeilingExceededException.class,
+            () -> cappedService.review(session, PROMPT_INPUTS));
+
+    assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
+    assertEquals(106_000L, realLedger.tokensSpent(42L), "two attempts billed, not five");
+    verify(prReviewer, times(2))
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
   }
 
   @Test

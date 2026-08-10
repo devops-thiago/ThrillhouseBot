@@ -30,6 +30,7 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
@@ -148,7 +149,8 @@ class ReviewOrchestratorTest {
             BOT_ID,
             new DiffBudgetPlanner(
                 diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
-            new TokenCounter());
+            new TokenCounter(),
+            mock(ReviewTokenLedger.class));
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -4204,7 +4206,8 @@ class ReviewOrchestratorTest {
               BOT_ID,
               new DiffBudgetPlanner(
                   diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
-              new TokenCounter());
+              new TokenCounter(),
+              mock(ReviewTokenLedger.class));
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

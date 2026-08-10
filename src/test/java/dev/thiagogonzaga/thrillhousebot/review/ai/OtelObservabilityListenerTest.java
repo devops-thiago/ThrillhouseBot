@@ -62,6 +62,7 @@ class OtelObservabilityListenerTest {
   private ThrillhouseConfig config;
   private AiPricingConfig aiConfig;
   private Vertx vertx;
+  private ReviewTokenLedger tokenLedger;
 
   @BeforeEach
   void setUp() {
@@ -98,6 +99,11 @@ class OtelObservabilityListenerTest {
     when(aiConfig.baseUrl()).thenReturn("https://api.deepseek.com/v1");
     when(aiConfig.providerName()).thenReturn(Optional.empty());
 
+    var reviewConfig = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(reviewConfig);
+    when(reviewConfig.maxTokensPerReview()).thenReturn(0L);
+    tokenLedger = new ReviewTokenLedger(config);
+
     sessionUpdater = mock(ReviewSessionUpdater.class);
     vertx = mock(Vertx.class);
     when(vertx.<Void>executeBlocking(any(Callable.class)))
@@ -110,7 +116,7 @@ class OtelObservabilityListenerTest {
               when(future.onFailure(any())).thenReturn(future);
               return future;
             });
-    listener = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
+    listener = new OtelObservabilityListener(otel, config, sessionUpdater, vertx, tokenLedger);
   }
 
   @AfterEach
@@ -204,7 +210,7 @@ class OtelObservabilityListenerTest {
             });
 
     var failingListener =
-        new OtelObservabilityListener(localOtel, config, failingUpdater, failingVertx);
+        new OtelObservabilityListener(localOtel, config, failingUpdater, failingVertx, tokenLedger);
     var attrs = requestAttributes(failingListener, 16L, 1);
 
     assertDoesNotThrow(() -> failingListener.onResponse(responseContext(attrs)));
@@ -237,7 +243,8 @@ class OtelObservabilityListenerTest {
   @Test
   void onResponseShouldPreferExplicitlyConfiguredProviderName() {
     when(aiConfig.providerName()).thenReturn(Optional.of("  my-gateway  "));
-    var overridden = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
+    var overridden =
+        new OtelObservabilityListener(otel, config, sessionUpdater, vertx, tokenLedger);
 
     overridden.onResponse(responseContext(requestAttributes(overridden, 1L, 1)));
 
@@ -247,7 +254,8 @@ class OtelObservabilityListenerTest {
   @Test
   void onResponseShouldDeriveProviderWhenConfiguredNameIsBlank() {
     when(aiConfig.providerName()).thenReturn(Optional.of("   "));
-    var blankOverride = new OtelObservabilityListener(otel, config, sessionUpdater, vertx);
+    var blankOverride =
+        new OtelObservabilityListener(otel, config, sessionUpdater, vertx, tokenLedger);
 
     blankOverride.onResponse(responseContext(requestAttributes(blankOverride, 1L, 1)));
 
@@ -424,6 +432,47 @@ class OtelObservabilityListenerTest {
             eq(20L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyBoolean(), anyLong());
     verify(sessionUpdater, never())
         .recordModelUsage(eq(99L), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
+  }
+
+  @Test
+  void onResponseShouldRecordUsageInTheTokenLedger() {
+    // #499: the ledger is fed here because this is the one place every review-path call's
+    // provider-reported usage arrives correlated to its session — retries and the concise-model
+    // summary call included.
+    tokenLedger.open(42L);
+    var attrs = requestAttributes(42L, 1);
+
+    listener.onResponse(responseContext(attrs));
+
+    assertEquals(150L, tokenLedger.tokensSpent(42L));
+  }
+
+  @Test
+  void onResponseShouldRecordUsageEvenForAStaleCall() {
+    // Distinct from the persist gating above: a timed-out attempt whose response still arrives was
+    // still billed by the provider, so the spend ceiling must count it even though the dashboard
+    // drops it as stale.
+    tokenLedger.open(42L);
+    var attrs = requestAttributes(42L, 1);
+    ReviewSessionContext.invalidate(42L);
+
+    listener.onResponse(responseContext(attrs));
+
+    assertEquals(150L, tokenLedger.tokensSpent(42L));
+    verify(sessionUpdater, never())
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
+  }
+
+  @Test
+  void onResponseShouldNotRecordUsageWithoutASessionInAttributes() {
+    tokenLedger.open(42L);
+    var attrs = new HashMap<>();
+    attrs.put(OtelObservabilityListener.ATTR_START_NANOS, System.nanoTime() - 1_000_000L);
+
+    listener.onResponse(responseContext(attrs));
+
+    assertEquals(0L, tokenLedger.tokensSpent(42L));
   }
 
   @Test
