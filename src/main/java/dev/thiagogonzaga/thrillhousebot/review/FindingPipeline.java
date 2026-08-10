@@ -293,7 +293,7 @@ public class FindingPipeline {
       // truncated summary would discard exactly the paid work #495 preserved on the batch lane —
       // salvage the summary object if it closed before the cut, else degrade to the same
       // counts-only shape as the ceiling-tripped path above. Never re-enters the retry lane.
-      return salvagedOrCountsOnlySummary(session, refined, e);
+      return salvagedOrCountsOnlySummary(session, refined, plan, e);
     }
 
     var merged =
@@ -328,11 +328,17 @@ public class FindingPipeline {
    * if the summary object closed before the cut it is salvaged and used as-is; otherwise the review
    * keeps its paid findings with the {@link #countsOnlySummary counts-only} shape. Either way the
    * truncation is disclosed in the log with the caps that apply — the summary call runs on the
-   * concise model, so both knobs are named. Statuses are never taken from the salvage: the
-   * code-blind summary call must not decide what was resolved (same rule as the parsed path).
+   * concise model, so both knobs are named — and recorded on the plan so the posted review carries
+   * the same disclosure instead of leaving it log-only (the sibling spend-ceiling degradation of
+   * this lane already discloses itself). Statuses are never taken from the salvage: the code-blind
+   * summary call must not decide what was resolved (same rule as the parsed path).
    */
   private ReviewResponse salvagedOrCountsOnlySummary(
-      ReviewSession session, ReviewResponse refined, AiResponseTruncatedException truncation) {
+      ReviewSession session,
+      ReviewResponse refined,
+      DiffBudgetPlanner.BudgetPlan plan,
+      AiResponseTruncatedException truncation) {
+    plan.recordSummaryResponseCut();
     var salvagedSummary = salvager.salvage(truncation.partialBody()).summary();
     if (salvagedSummary != null) {
       Log.warnf(
@@ -619,7 +625,7 @@ public class FindingPipeline {
       // by construction, but the review must still post with its omission disclosures rather than
       // fail on a deterministic truncation.
       return salvagedOrCountsOnlySummary(
-          session, new ReviewResponse(List.of(), List.of(), null), e);
+          session, new ReviewResponse(List.of(), List.of(), null), plan, e);
     }
     var merged = new ReviewResponse(List.of(), List.of(), summaryResponse.summary());
     persistAiResponse(session, merged);

@@ -327,6 +327,64 @@ class ReviewResultTest {
   }
 
   @Test
+  void coverageGapClauseNamesTheSummaryCutAlongsideFileGaps() {
+    // #500 scope A: when the summary call's response was cut too, the clause must say so in the
+    // posted review — naming both knobs (the summary runs on the concise model) and making clear
+    // the findings themselves are complete — instead of leaving the cut log-only while the
+    // sibling ceiling degradation of the same lane discloses itself.
+    var detail =
+        new ReviewResult.TruncationDetail(List.of("a.java"), List.of(), List.of(), List.of(), true);
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "the summary was shortened because the model's response was cut at its length cap"
+                + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) — the findings"
+                + " themselves are complete"),
+        clause);
+  }
+
+  @Test
+  void coverageGapBriefMarksTheSummaryCut() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of("a.java"), List.of(), List.of(), List.of(), true));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("1 file(s) omitted"), brief);
+    assertTrue(brief.contains("summary shortened (response cut at the length cap)"), brief);
+  }
+
+  @Test
+  void truncationDetailWithOnlyTheSummaryCutIsNotEmpty() {
+    var detail =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true);
+    assertFalse(detail.isEmpty());
+    // The four-list convenience constructor keeps the pre-summary-cut shape: flag unset.
+    assertFalse(
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of())
+            .summaryResponseCut());
+  }
+
+  @Test
   void truncationDetailWithOnlySpendCeilingSkipsIsNotEmpty() {
     var detail = new ReviewResult.TruncationDetail(List.of(), List.of(), List.of("c.java"));
     assertFalse(detail.isEmpty());

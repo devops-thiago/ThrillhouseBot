@@ -298,6 +298,8 @@ class FindingPipelineTest {
     assertEquals(List.of("a.java"), plan.responseCutFiles());
     assertTrue(plan.runtimeUncoveredFiles().isEmpty());
     assertTrue(plan.truncated());
+    assertFalse(
+        plan.summaryWasCut(), "a batch cut is not a summary cut — the classes are disjoint");
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("a.java (modified"), changedFiles);
     assertTrue(
@@ -377,13 +379,16 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), any()))
         .thenThrow(new AiResponseTruncatedException("finish_reason=length", "{\"summ", true));
 
-    var result =
-        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
     verify(aiReviewService, times(1)).summarize(eq(session), any());
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
+    assertTrue(
+        plan.summaryWasCut(),
+        "the summary cut must be recorded on the plan so the posted review discloses it");
   }
 
   @Test
@@ -402,13 +407,16 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), any()))
         .thenThrow(new AiResponseTruncatedException("finish_reason=length", partial, true));
 
-    var result =
-        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
     assertEquals(2, result.findings().size());
     assertNotNull(result.summary());
     assertEquals("solid", result.summary().overallAssessment());
     assertNotNull(session.getAiResponseJson());
+    assertTrue(
+        plan.summaryWasCut(),
+        "a salvaged summary is still a shortened one — the cut must be recorded for disclosure");
   }
 
   @Test
@@ -429,6 +437,7 @@ class FindingPipelineTest {
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson());
+    assertTrue(plan.summaryWasCut(), "the degenerate path records the summary cut on the plan too");
   }
 
   @Test

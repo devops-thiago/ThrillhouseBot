@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
@@ -386,6 +387,37 @@ class DiffBudgetPlannerTest {
     plan.recordResponseCutFiles(List.of("src/Cut.java"));
 
     assertEquals(List.of("src/Cut.java"), plan.responseCutFiles());
+  }
+
+  @Test
+  void summaryCutFlagIsRecordedLiveButItsAccessorReturnsASnapshot() {
+    // #500 scope A: the flag rides the shared plan like the runtime-gap lists — written after the
+    // plan is built, read by the verdict — and, like them, its record accessor must not leak the
+    // mutable backing.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    assertFalse(plan.summaryWasCut());
+
+    plan.recordSummaryResponseCut();
+
+    assertTrue(plan.summaryWasCut());
+    assertFalse(plan.truncated(), "a summary cut is not a coverage gap and must not hold approval");
+    var snapshot = plan.summaryResponseCut();
+    snapshot.set(false);
+    assertTrue(plan.summaryWasCut(), "mutating the snapshot must not touch the live flag");
+  }
+
+  @Test
+  void aPlanBuiltWithItsOwnSummaryCutFlagKeepsThatInstanceLive() {
+    var live = new java.util.concurrent.atomic.AtomicBoolean(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, live);
+
+    assertTrue(plan.summaryWasCut());
+    assertNotSame(live, plan.summaryResponseCut(), "the accessor returns a defensive snapshot");
+
+    live.set(false);
+    assertFalse(plan.summaryWasCut(), "the passed-in flag stays the live backing");
   }
 
   @Test
