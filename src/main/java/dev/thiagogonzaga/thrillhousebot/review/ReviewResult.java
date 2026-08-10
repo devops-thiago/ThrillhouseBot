@@ -119,22 +119,40 @@ public record ReviewResult(
   }
 
   /**
-   * Which files the token budget left uncovered, by name: {@code omittedFileNames} were never sent
-   * at all, {@code clippedFileNames} were hunk-clipped and only partially analyzed. Empty on the
-   * legacy line-cap path, where only a count is known — the rendered copy then falls back to the
-   * numeric clause.
+   * Which files the review left uncovered, by name and by reason: {@code omittedFileNames} were
+   * never sent because the diff exceeded the token budget, {@code clippedFileNames} were
+   * hunk-clipped and only partially analyzed, and {@code spendCeilingSkippedFileNames} had their
+   * review call skipped because the review's token spend ceiling ({@code
+   * REVIEW_MAX_TOKENS_PER_REVIEW}) was reached — a different reason with a different fix, so the
+   * rendered copy names it separately. All empty on the legacy line-cap path, where only a count is
+   * known — the rendered copy then falls back to the numeric clause.
    */
   @RegisterForReflection
-  public record TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
-    public static final TruncationDetail EMPTY = new TruncationDetail(List.of(), List.of());
+  public record TruncationDetail(
+      List<String> omittedFileNames,
+      List<String> clippedFileNames,
+      List<String> spendCeilingSkippedFileNames) {
+    public static final TruncationDetail EMPTY =
+        new TruncationDetail(List.of(), List.of(), List.of());
 
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
       clippedFileNames = clippedFileNames == null ? List.of() : List.copyOf(clippedFileNames);
+      spendCeilingSkippedFileNames =
+          spendCeilingSkippedFileNames == null
+              ? List.of()
+              : List.copyOf(spendCeilingSkippedFileNames);
+    }
+
+    /** Convenience for the token-budget-only surfaces, which have no spend-ceiling skips. */
+    public TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
+      this(omittedFileNames, clippedFileNames, List.of());
     }
 
     public boolean isEmpty() {
-      return omittedFileNames.isEmpty() && clippedFileNames.isEmpty();
+      return omittedFileNames.isEmpty()
+          && clippedFileNames.isEmpty()
+          && spendCeilingSkippedFileNames.isEmpty();
     }
   }
 
@@ -306,7 +324,22 @@ public record ReviewResult(
               "%d file(s) were only partially analyzed (%s)",
               detail.clippedFileNames().size(), nameList(detail.clippedFileNames())));
     }
-    return String.join(" and ", parts) + " because the diff exceeded the review budget";
+    // The spend-ceiling class carries its own reason: these files fit the diff budget fine — the
+    // review ran out of tokens to pay for their calls — so the budget wording would misdirect the
+    // operator, and the knob to raise is named instead (#499).
+    var clauses = new ArrayList<String>(2);
+    if (!parts.isEmpty()) {
+      clauses.add(String.join(" and ", parts) + " because the diff exceeded the review budget");
+    }
+    if (!detail.spendCeilingSkippedFileNames().isEmpty()) {
+      clauses.add(
+          String.format(
+              "%d file(s) were not reviewed because the review's token spend ceiling"
+                  + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (%s)",
+              detail.spendCeilingSkippedFileNames().size(),
+              nameList(detail.spendCeilingSkippedFileNames())));
+    }
+    return String.join(", and ", clauses);
   }
 
   /** This result's coverage-gap clause, for surfaces that already hold the record. */
@@ -323,13 +356,19 @@ public record ReviewResult(
     if (truncation.isEmpty()) {
       return String.format("%d file(s) omitted", omittedFiles);
     }
-    var parts = new ArrayList<String>(2);
+    var parts = new ArrayList<String>(3);
     if (!truncation.omittedFileNames().isEmpty()) {
       parts.add(String.format("%d file(s) omitted", truncation.omittedFileNames().size()));
     }
     if (!truncation.clippedFileNames().isEmpty()) {
       parts.add(
           String.format("%d file(s) partially analyzed", truncation.clippedFileNames().size()));
+    }
+    if (!truncation.spendCeilingSkippedFileNames().isEmpty()) {
+      parts.add(
+          String.format(
+              "%d file(s) skipped at the token spend ceiling",
+              truncation.spendCeilingSkippedFileNames().size()));
     }
     return String.join(", ", parts);
   }

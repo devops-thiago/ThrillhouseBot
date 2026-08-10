@@ -52,6 +52,7 @@ public class OtelObservabilityListener implements ChatModelListener {
   private final ThrillhouseConfig config;
   private final ReviewSessionUpdater sessionUpdater;
   private final Vertx vertx;
+  private final ReviewTokenLedger tokenLedger;
   private final String providerName;
   private final LongHistogram tokenHistogram;
   private final DoubleHistogram durationHistogram;
@@ -63,10 +64,12 @@ public class OtelObservabilityListener implements ChatModelListener {
       OpenTelemetry otel,
       ThrillhouseConfig config,
       ReviewSessionUpdater sessionUpdater,
-      Vertx vertx) {
+      Vertx vertx,
+      ReviewTokenLedger tokenLedger) {
     this.config = config;
     this.sessionUpdater = sessionUpdater;
     this.vertx = vertx;
+    this.tokenLedger = tokenLedger;
     this.providerName = resolveProviderName(config);
     var meter = otel.getMeter("thrillhousebot");
 
@@ -125,6 +128,16 @@ public class OtelObservabilityListener implements ChatModelListener {
     var model = response.modelName();
     var startNanos = (long) ctx.attributes().get(ATTR_START_NANOS);
     var durationSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
+
+    // Spend-ceiling accounting (#499). Deliberately NOT behind shouldPersistSessionUsage: a call
+    // whose future already timed out client-side was still billed by the provider, so the ceiling
+    // must count it even though the dashboard drops it as stale. Correlation rides the same
+    // ATTR_SESSION_ID stamped in onRequest, which covers every model the extension builds — the
+    // concise named model included — so summary/retry calls are all metered.
+    var ledgerSessionId = (Long) ctx.attributes().get(ATTR_SESSION_ID);
+    if (ledgerSessionId != null) {
+      tokenLedger.recordUsage(ledgerSessionId, usage.inputTokenCount(), usage.outputTokenCount());
+    }
 
     var cost = 0.0;
     var pricing = config.ai().pricing().get(model);

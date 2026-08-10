@@ -202,6 +202,19 @@ public interface ThrillhouseConfig {
     @WithName("token-safety-margin")
     double tokenSafetyMargin();
 
+    /**
+     * Ceiling on the tokens one review may consume across every AI call it makes — input plus
+     * output as the provider reports them, counting retries and the final summary call, not planned
+     * calls. Complements {@link #maxAiCalls()}, which bounds how many calls are planned but not
+     * what they cost: one call against a large-context model can span two orders of magnitude of
+     * spend. Once the ceiling is reached no further review call is made — remaining batches are
+     * disclosed as not reviewed and the summary degrades to counts-only — so the overrun is bounded
+     * by one in-flight call per parallel batch. 0 (the default) disables the ceiling entirely.
+     */
+    @WithDefault("0")
+    @WithName("max-tokens-per-review")
+    long maxTokensPerReview();
+
     @WithDefault(".github/thrillhousebot.md")
     @WithName("instructions-file")
     String instructionsFile();

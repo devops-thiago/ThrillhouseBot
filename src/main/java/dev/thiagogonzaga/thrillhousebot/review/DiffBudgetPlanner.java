@@ -91,7 +91,8 @@ public class DiffBudgetPlanner {
       List<String> omittedFiles,
       List<String> clippedFiles,
       boolean budgeted,
-      List<String> runtimeUncoveredFiles) {
+      List<String> runtimeUncoveredFiles,
+      List<String> spendCeilingSkippedFiles) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -100,6 +101,10 @@ public class DiffBudgetPlanner {
       // onto this shared instance after the plan is built.
       runtimeUncoveredFiles =
           runtimeUncoveredFiles == null ? new CopyOnWriteArrayList<>() : runtimeUncoveredFiles;
+      spendCeilingSkippedFiles =
+          spendCeilingSkippedFiles == null
+              ? new CopyOnWriteArrayList<>()
+              : spendCeilingSkippedFiles;
     }
 
     /**
@@ -113,10 +118,32 @@ public class DiffBudgetPlanner {
       this(batches, omittedFiles, clippedFiles, budgeted, new CopyOnWriteArrayList<>());
     }
 
+    /** Back-compat convenience predating {@code spendCeilingSkippedFiles}; starts it empty. */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          new CopyOnWriteArrayList<>());
+    }
+
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
     @Override
     public List<String> runtimeUncoveredFiles() {
       return List.copyOf(runtimeUncoveredFiles);
+    }
+
+    /** Defensive copy, like {@link #runtimeUncoveredFiles()}. */
+    @Override
+    public List<String> spendCeilingSkippedFiles() {
+      return List.copyOf(spendCeilingSkippedFiles);
     }
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
@@ -124,6 +151,22 @@ public class DiffBudgetPlanner {
       for (var name : filenames) {
         if (name != null && !runtimeUncoveredFiles.contains(name)) {
           runtimeUncoveredFiles.add(name);
+        }
+      }
+    }
+
+    /**
+     * Records files whose review call was skipped because the review's token spend ceiling was
+     * reached. They flow through {@link #recordUncoveredFiles} — so the verdict holds and the
+     * summary discloses them exactly like any other runtime coverage gap — and are additionally
+     * remembered here so the disclosure can name the spend ceiling as the reason, distinct from the
+     * token-budget omissions.
+     */
+    void recordSpendCeilingSkippedFiles(List<String> filenames) {
+      recordUncoveredFiles(filenames);
+      for (var name : filenames) {
+        if (name != null && !spendCeilingSkippedFiles.contains(name)) {
+          spendCeilingSkippedFiles.add(name);
         }
       }
     }

@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -325,6 +326,37 @@ class DiffBudgetPlannerTest {
     plan.recordUncoveredFiles(List.of("src/Failed.java"));
 
     assertEquals(List.of("src/Failed.java"), plan.runtimeUncoveredFiles());
+  }
+
+  @Test
+  void spendCeilingSkipsFoldIntoRuntimeGapsButKeepTheirOwnReason() {
+    // #499: a ceiling-skipped batch's files take the same coverage-gap route as any runtime gap
+    // (verdict holds, summary discloses) while staying separately attributable so the disclosure
+    // can name the spend ceiling rather than the diff budget. Nulls and duplicates are dropped
+    // like recordUncoveredFiles does, and the accessor is a defensive copy.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+
+    plan.recordSpendCeilingSkippedFiles(Arrays.asList("a.java", null, "a.java", "b.java"));
+
+    assertEquals(List.of("a.java", "b.java"), plan.spendCeilingSkippedFiles());
+    assertEquals(List.of("a.java", "b.java"), plan.runtimeUncoveredFiles());
+    assertEquals(List.of("a.java", "b.java"), plan.effectiveOmittedFiles());
+    assertTrue(plan.truncated());
+    var skipped = plan.spendCeilingSkippedFiles();
+    assertThrows(UnsupportedOperationException.class, () -> skipped.add("escaped.java"));
+  }
+
+  @Test
+  void aPlanBuiltWithANullSpendCeilingListStillAcceptsSkips() {
+    // Same normalization contract as the runtime-gap list: a null accumulator must not NPE the
+    // moment a ceiling-blocked batch records a skip on the review thread.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null, null);
+
+    assertTrue(plan.spendCeilingSkippedFiles().isEmpty());
+
+    plan.recordSpendCeilingSkippedFiles(List.of("src/Skipped.java"));
+
+    assertEquals(List.of("src/Skipped.java"), plan.spendCeilingSkippedFiles());
   }
 
   @Test

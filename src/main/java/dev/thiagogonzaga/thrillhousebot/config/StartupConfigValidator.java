@@ -166,6 +166,12 @@ public class StartupConfigValidator {
               + " (thrillhousebot.review.token-safety-margin): "
               + margin);
     }
+    if (review.maxTokensPerReview() < 0) {
+      problems.add(
+          "REVIEW_MAX_TOKENS_PER_REVIEW must be >= 0, where 0 disables the per-review token spend"
+              + " ceiling (thrillhousebot.review.max-tokens-per-review): "
+              + review.maxTokensPerReview());
+    }
   }
 
   /**

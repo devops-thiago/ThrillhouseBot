@@ -205,6 +205,79 @@ class ReviewResultTest {
         "a stored review body keeps its surrounding whitespace");
   }
 
+  @Test
+  void coverageGapClauseNamesTheSpendCeilingSeparatelyFromTheBudgetOmissions() {
+    // #499: files skipped because the review's token spend ceiling was reached have a different
+    // cause — and a different operator fix — than files the diff budget dropped, so the rendered
+    // disclosure must name the ceiling (and its knob) rather than folding them into the budget
+    // wording.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"), List.of("b.java"), List.of("c.java", "d.java"));
+
+    var clause = ReviewResult.coverageGapClause(4, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(clause.contains("1 file(s) were only partially analyzed (b.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "2 file(s) were not reviewed because the review's token spend ceiling"
+                + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (c.java, d.java)"),
+        clause);
+  }
+
+  @Test
+  void coverageGapClauseWithOnlySpendCeilingSkipsDropsTheBudgetWording() {
+    var detail = new ReviewResult.TruncationDetail(List.of(), List.of(), List.of("c.java"));
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertFalse(clause.contains("review budget"), clause);
+    assertTrue(clause.contains("token spend ceiling"), clause);
+    assertTrue(clause.contains("REVIEW_MAX_TOKENS_PER_REVIEW"), clause);
+  }
+
+  @Test
+  void coverageGapBriefCountsSpendCeilingSkipsAsTheirOwnClass() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            2,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(List.of("a.java"), List.of(), List.of("c.java")));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("1 file(s) omitted"), brief);
+    assertTrue(brief.contains("1 file(s) skipped at the token spend ceiling"), brief);
+  }
+
+  @Test
+  void truncationDetailNormalizesNullListsToEmpty() {
+    var detail = new ReviewResult.TruncationDetail(null, null, null);
+    assertTrue(detail.isEmpty());
+    assertEquals(List.of(), detail.spendCeilingSkippedFileNames());
+  }
+
+  @Test
+  void truncationDetailWithOnlySpendCeilingSkipsIsNotEmpty() {
+    var detail = new ReviewResult.TruncationDetail(List.of(), List.of(), List.of("c.java"));
+    assertFalse(detail.isEmpty());
+    // The two-list convenience constructor keeps the pre-#499 shape: no ceiling skips.
+    assertTrue(new ReviewResult.TruncationDetail(List.of(), List.of()).isEmpty());
+  }
+
   /**
    * #455 — everything the recognizer accepts is dropped from the previous-findings context, so a
    * near miss costs a maintainer their review body. A human sentence that merely opens with the

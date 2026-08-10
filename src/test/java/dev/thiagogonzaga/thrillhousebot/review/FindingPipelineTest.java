@@ -17,7 +17,10 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -42,7 +45,9 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +68,7 @@ class FindingPipelineTest {
   @Mock private FindingVerificationService findingVerificationService;
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private DiffBudgetPlanner budgetPlanner;
+  @Mock private ReviewTokenLedger tokenLedger;
 
   private FindingPipeline pipeline;
 
@@ -80,7 +86,8 @@ class FindingPipelineTest {
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             budgetPlanner,
-            new TokenCounter());
+            new TokenCounter(),
+            tokenLedger);
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -575,6 +582,31 @@ class FindingPipelineTest {
   }
 
   @Test
+  void singleCallCeilingRefusalPropagatesForTheOrchestratorToFailSoft() {
+    // Characterization of the single-call contract: a mid-retry ceiling refusal has no paid batch
+    // findings to keep, so the pipeline does not degrade. The typed exception escapes the pipeline
+    // and ReviewOrchestrator's RuntimeException handling fails the review soft — failure notice,
+    // FAILED check run, session error — with ReviewDispatcher as the backstop, so nothing reaches
+    // the webhook boundary. The multi-call path, which does hold paid findings, degrades instead.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), List.of(), false);
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+
+    var resolver = new DiffLineResolver(Map.of());
+    var thrown =
+        assertThrows(
+            TokenSpendCeilingExceededException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver));
+
+    assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
+    assertNull(session.getAiResponseJson(), "a refused single-call review persists nothing");
+  }
+
+  @Test
   void resolvedFromABatchThatNeverSawTheFileIsDemotedToUnresolved() {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
@@ -852,6 +884,217 @@ class FindingPipelineTest {
     assertTrue(serialized.contains("4 total, 1 critical, 1 high, 1 medium, 1 low"), serialized);
   }
 
+  /** A session persisted far enough to have an id, which the token ledger is keyed by. */
+  private static ReviewSession persistedSession() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    session.id = 42L;
+    return session;
+  }
+
+  @Test
+  void multiCallDoesNotRetryABatchBlockedByTheSpendCeilingAndDisclosesIt() {
+    // #499(a): once the review's token spend ceiling is reached, a blocked batch must not be
+    // retried (the ledger is monotonic — the retry would be refused identically), its files must
+    // be disclosed with the ceiling as the reason, and the batches already paid for keep their
+    // findings.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    // ceilingReached=true implies spent >= a positive ceiling — stub the state consistently.
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
+    lenient()
+        .when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1))
+        .reviewBatch(eq(session), any(), eq(2), anyInt()); // no second, knowably-refused call
+    verify(aiReviewService, never()).summarize(any(), any()); // the ceiling blocks the summary too
+    assertEquals(1, result.findings().size());
+    assertEquals("A", result.findings().get(0).title());
+    assertEquals(List.of("b.java"), plan.spendCeilingSkippedFiles());
+    assertEquals(List.of("b.java"), plan.runtimeUncoveredFiles());
+    assertTrue(plan.truncated());
+  }
+
+  @Test
+  void multiCallSkipsTheSequentialBatchRetryOnceTheSpendCeilingIsReached() {
+    // #499(b) at the pipeline layer: the sequential batch retry is a fresh billed call, so it is
+    // gated on the ledger before being made at all.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(new AiReviewException("transient", 1, null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    // ceilingReached=true implies spent >= a positive ceiling — stub the state consistently.
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
+    lenient()
+        .when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1))
+        .reviewBatch(eq(session), any(), eq(1), anyInt()); // parallel attempt only, no retry
+    verify(aiReviewService, never()).summarize(any(), any());
+    assertEquals(1, result.findings().size());
+    assertEquals("B", result.findings().get(0).title());
+    assertEquals(List.of("a.java"), plan.spendCeilingSkippedFiles());
+  }
+
+  @Test
+  void multiCallDisclosesABatchWhoseSequentialRetryIsRefusedMidLoop() {
+    // The sequential retry's pre-gate passed (a race with a late usage callback, or the ceiling
+    // trips on a retry attempt inside the call), so the refusal surfaces as the typed exception
+    // from the call itself — it must land in the ceiling disclosure, not the generic soft-fail.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(new AiReviewException("transient", 1, null))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(false).thenReturn(true);
+    lenient()
+        .when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    assertEquals(List.of("a.java"), plan.spendCeilingSkippedFiles());
+    assertEquals(1, result.findings().size());
+    assertEquals("B", result.findings().get(0).title());
+  }
+
+  @Test
+  void multiCallKeepsFindingsWhenTheSummaryCallItselfIsRefusedAtTheCeiling() {
+    // The pre-summary gate can pass and the summary call still be refused (a late usage callback
+    // crossed the ceiling in between, or a summary retry was refused). The paid findings must
+    // still come back with the counts-only summary, not be lost to the propagating refusal.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(false);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertEquals(2, result.findings().size());
+    assertNull(result.summary());
+    assertNotNull(session.getAiResponseJson());
+  }
+
+  @Test
+  void multiCallFallsBackToACountsOnlySummaryWhenTheCeilingTripsBeforeTheSummaryCall() {
+    // #499(c): the batch findings are already paid for. A ceiling reached before the summary call
+    // must degrade to the counts-only summary (null model summary — the same shape the renderer
+    // already handles), not lose the whole review.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    lenient()
+        .when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var result =
+        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, never()).summarize(any(), any());
+    assertEquals(2, result.findings().size());
+    assertNull(result.summary());
+    assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
+  }
+
+  @Test
+  void billedThenRefusedBatchesDiscloseInsteadOfClaimingNoCallsWereMade() {
+    // A batch can cross the ceiling AFTER its first billed attempt, with the retry gate then
+    // refusing typed. That shape must not hit the zero-call branch — its "Review made no AI
+    // calls" message would be contradicted by the very spend figure inside it. It falls through
+    // to disclosure + the counts-only summary, like every other ceiling refusal.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenThrow(new TokenSpendCeilingExceededException(106_000, 100_000));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertTrue(result.findings().isEmpty());
+    assertEquals(List.of("a.java", "b.java"), plan.spendCeilingSkippedFiles());
+    verify(aiReviewService, never()).summarize(eq(session), any());
+  }
+
+  @Test
+  void aDisabledCeilingLeavesTheMultiCallPathUntouched() {
+    // #499(d) characterization: with the default REVIEW_MAX_TOKENS_PER_REVIEW=0 a review behaves
+    // exactly as before this feature, even with an enormous recorded spend.
+    var thrillhouseConfig = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+    var reviewConfig =
+        mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+    when(thrillhouseConfig.review()).thenReturn(reviewConfig);
+    when(reviewConfig.maxTokensPerReview()).thenReturn(0L);
+    var realLedger = new ReviewTokenLedger(thrillhouseConfig);
+    realLedger.open(42L);
+    realLedger.recordUsage(42L, 900_000, 100_000);
+    var p =
+        new FindingPipeline(
+            aiReviewService,
+            quoteValidator,
+            frameworkFilter,
+            deduplicator,
+            findingVerificationService,
+            followUpAnalyzer,
+            new ObjectMapper(),
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            budgetPlanner,
+            new TokenCounter(),
+            realLedger);
+    var session = persistedSession();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var summary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = p.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), anyInt());
+    verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), anyInt());
+    verify(aiReviewService).summarize(eq(session), any());
+    assertSame(summary, result.summary());
+    assertTrue(plan.spendCeilingSkippedFiles().isEmpty());
+  }
+
   @Test
   void mergeBatchStatusesLetsTheEvidenceBackedClaimWin() {
     var unresolvedOne = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not here");
@@ -945,7 +1188,8 @@ class FindingPipelineTest {
             throwingMapper,
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             budgetPlanner,
-            new TokenCounter());
+            new TokenCounter(),
+            tokenLedger);
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))

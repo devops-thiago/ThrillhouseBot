@@ -190,6 +190,35 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void spendCeilingSkippedFilesAreDisclosedWithTheCeilingAsTheReason() {
+    // #499: a batch skipped at the token spend ceiling withholds coverage like any runtime gap —
+    // holds approval, counts as omitted — but the rendered disclosure must name the ceiling (a
+    // spend limit with its own knob), not the diff budget, as the reason.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("big.java"), List.of(), true);
+    plan.recordSpendCeilingSkippedFiles(List.of("skipped.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(2, result.omittedFiles());
+    assertTrue(result.truncated());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(List.of("big.java"), result.truncation().omittedFileNames());
+    assertEquals(List.of("skipped.java"), result.truncation().spendCeilingSkippedFileNames());
+    assertTrue(
+        result.summaryMarkdown().contains("omitted entirely (big.java)"), result.summaryMarkdown());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains(
+                "1 file(s) were not reviewed because the review's token spend ceiling"
+                    + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached (skipped.java)"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(checkSummary.contains("1 file(s) skipped at the token spend ceiling"), checkSummary);
+  }
+
+  @Test
   void clippedOnlyReviewIsDisclosedAsPartialAndHoldsApproval() {
     var ctx = contextWithLineCapOmissions(0);
     var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("huge.java"), true);

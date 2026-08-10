@@ -26,7 +26,9 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -74,6 +76,7 @@ public class FindingPipeline {
   private final BotIdentity botIdentity;
   private final DiffBudgetPlanner budgetPlanner;
   private final TokenCounter tokenCounter;
+  private final ReviewTokenLedger tokenLedger;
 
   @Inject
   public FindingPipeline(
@@ -86,7 +89,8 @@ public class FindingPipeline {
       ObjectMapper mapper,
       BotIdentity botIdentity,
       DiffBudgetPlanner budgetPlanner,
-      TokenCounter tokenCounter) {
+      TokenCounter tokenCounter,
+      ReviewTokenLedger tokenLedger) {
     this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
     this.frameworkFilter = frameworkFilter;
@@ -97,6 +101,7 @@ public class FindingPipeline {
     this.botIdentity = botIdentity;
     this.budgetPlanner = budgetPlanner;
     this.tokenCounter = tokenCounter;
+    this.tokenLedger = tokenLedger;
   }
 
   /**
@@ -109,6 +114,22 @@ public class FindingPipeline {
    * explicitly disabled.
    */
   ReviewResponse run(
+      ReviewSession session,
+      AiReviewService.PromptInputs promptInputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan,
+      DiffLineResolver lineResolver) {
+    // Open/clear the spend ledger around everything that can make an AI call, so a review's
+    // entry exists exactly while its provider callbacks may land and never outlives the review.
+    tokenLedger.open(ledgerSessionId(session));
+    try {
+      return runWithLedger(session, promptInputs, ctx, plan, lineResolver);
+    } finally {
+      tokenLedger.clear(ledgerSessionId(session));
+    }
+  }
+
+  private ReviewResponse runWithLedger(
       ReviewSession session,
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
@@ -195,37 +216,35 @@ public class FindingPipeline {
                                   i, batches, session, promptInputs, plan, previousFilesById),
                           executor))
               .toList();
-      for (int i = 0; i < futures.size(); i++) {
-        try {
-          outcomesByIndex[i] = futures.get(i).join();
-        } catch (CompletionException e) {
-          if (isResponseTruncated(e)) {
-            // The batch's own retry below would re-send the identical prompt against the identical
-            // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
-            Log.warnf(
-                e,
-                "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
-                    + " files as not reviewed",
-                i + 1,
-                batches.size());
-            plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
-          } else {
-            failedIndices.add(i);
-            Log.warnf(
-                e,
-                "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
-                i + 1,
-                batches.size());
-          }
-        }
-      }
+      joinBatchOutcomes(futures, batches, plan, session, outcomesByIndex, failedIndices);
     }
 
     for (int index : failedIndices) {
+      if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
+        // The sequential retry is a fresh billed call; once the ceiling is reached it is not made.
+        Log.warnf(
+            "Batch %d/%d retry skipped at the review's token spend ceiling (%d tokens spent,"
+                + " ceiling %d — REVIEW_MAX_TOKENS_PER_REVIEW); disclosing its files as not"
+                + " reviewed",
+            index + 1,
+            batches.size(),
+            tokenLedger.tokensSpent(ledgerSessionId(session)),
+            tokenLedger.ceiling());
+        plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
+        continue;
+      }
       try {
         outcomesByIndex[index] =
             processBatch(index, batches, session, promptInputs, plan, previousFilesById);
         Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
+      } catch (TokenSpendCeilingExceededException e) {
+        // The gate above passed but a concurrent late callback (e.g. a timed-out attempt's usage)
+        // pushed the ledger over before the attempt started, or a mid-retry attempt was refused.
+        Log.warnf(
+            "Batch %d/%d retry refused at the review's token spend ceiling; disclosing its files"
+                + " as not reviewed. %s",
+            index + 1, batches.size(), e.getMessage());
+        plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
       } catch (RuntimeException e) {
         // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
         // one batch that never succeeds must not discard the batches that did. Keep their
@@ -263,6 +282,9 @@ public class FindingPipeline {
             refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
 
+    if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
+      return countsOnlySummary(session, refined, "skipping the summary call");
+    }
     var overview = clampOverview(changedFilesOverview(ctx, plan), promptInputs);
     var summaryInputs =
         new AiReviewService.SummaryInputs(
@@ -272,13 +294,104 @@ public class FindingPipeline {
             PromptTemplateEscaper.escape(overview),
             promptInputs.previousFindings(),
             promptInputs.repoInstructions());
-    var summaryResponse = aiReviewService.summarize(session, summaryInputs);
+    ReviewResponse summaryResponse;
+    try {
+      summaryResponse = aiReviewService.summarize(session, summaryInputs);
+    } catch (TokenSpendCeilingExceededException _) {
+      // The gate above passed but a late usage callback (e.g. a timed-out batch attempt's
+      // response) crossed the ceiling first, or a summary retry was refused mid-loop.
+      return countsOnlySummary(session, refined, "summary call refused");
+    }
 
     var merged =
         new ReviewResponse(
             refined.findings(), refined.previousFindingsStatus(), summaryResponse.summary());
     persistAiResponse(session, merged);
     return merged;
+  }
+
+  /**
+   * The summary degradation for a review whose token spend ceiling tripped after the batch calls:
+   * the findings are already paid for, so they are kept and persisted with a {@code null} model
+   * summary — the renderer's counts-only shape, the same one a summary call that returns no summary
+   * object produces — rather than spending past the ceiling or discarding the review.
+   */
+  private ReviewResponse countsOnlySummary(
+      ReviewSession session, ReviewResponse refined, String what) {
+    Log.warnf(
+        "Review session %d reached its token spend ceiling before the summary call (%d tokens"
+            + " spent, ceiling %d — REVIEW_MAX_TOKENS_PER_REVIEW); %s and keeping the %d paid"
+            + " findings with a counts-only summary",
+        ledgerSessionId(session),
+        tokenLedger.tokensSpent(ledgerSessionId(session)),
+        tokenLedger.ceiling(),
+        what,
+        refined.findings().size());
+    var merged = new ReviewResponse(refined.findings(), refined.previousFindingsStatus(), null);
+    persistAiResponse(session, merged);
+    return merged;
+  }
+
+  /**
+   * The ledger key for a session. Production sessions are persisted (and so have an id) before the
+   * pipeline runs; the sentinel only exists so an unpersisted session (unit tests) does not NPE on
+   * unboxing.
+   */
+  private static long ledgerSessionId(ReviewSession session) {
+    return ReviewTokenLedger.keyFor(session);
+  }
+
+  /**
+   * Joins the parallel batch futures, classifying each failure: a truncation is disclosed at once
+   * (its retry would cut identically), a ceiling refusal is disclosed with the ceiling as the
+   * reason, and anything else queues for the sequential retry pass. A genuine ceiling refusal
+   * always follows billed spend — the ledger opens fresh per review and only refuses once spent
+   * reaches a positive ceiling — so an all-refused review still falls through to the disclosure and
+   * counts-only summary paths; there is no reachable zero-call state to special-case.
+   */
+  private void joinBatchOutcomes(
+      List<CompletableFuture<BatchOutcome>> futures,
+      List<DiffBudgetPlanner.DiffBatch> batches,
+      DiffBudgetPlanner.BudgetPlan plan,
+      ReviewSession session,
+      BatchOutcome[] outcomesByIndex,
+      List<Integer> failedIndices) {
+    for (int i = 0; i < futures.size(); i++) {
+      try {
+        outcomesByIndex[i] = futures.get(i).join();
+      } catch (CompletionException e) {
+        if (isResponseTruncated(e)) {
+          // The batch's own retry below would re-send the identical prompt against the identical
+          // cap. Disclose the gap now rather than paying for a second guaranteed truncation.
+          Log.warnf(
+              e,
+              "Batch %d/%d hit the model's response-length cap; not retrying and disclosing its"
+                  + " files as not reviewed",
+              i + 1,
+              batches.size());
+          plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
+        } else if (isSpendCeilingBlocked(e)) {
+          // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
+          // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
+          // as the reason — instead of paying nothing and losing the batches that succeeded.
+          Log.warnf(
+              "Batch %d/%d skipped at the review's token spend ceiling (%d tokens spent, ceiling"
+                  + " %d — REVIEW_MAX_TOKENS_PER_REVIEW); disclosing its files as not reviewed",
+              i + 1,
+              batches.size(),
+              tokenLedger.tokensSpent(ledgerSessionId(session)),
+              tokenLedger.ceiling());
+          plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(i).files()));
+        } else {
+          failedIndices.add(i);
+          Log.warnf(
+              e,
+              "Batch %d/%d failed in the parallel pass; will retry after the other batches finish",
+              i + 1,
+              batches.size());
+        }
+      }
+    }
   }
 
   private BatchOutcome processBatch(
@@ -328,6 +441,23 @@ public class FindingPipeline {
         cause != null && depth < MAX_CAUSE_DEPTH;
         depth++, cause = cause.getCause()) {
       if (cause instanceof AiResponseTruncatedException) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether a batch failure was the spend ceiling refusing the call before it was made. Same
+   * bounded cause walk as {@link #isResponseTruncated} and for the same reason: the refusal arrives
+   * wrapped in the parallel pass's {@link CompletionException}.
+   */
+  private static boolean isSpendCeilingBlocked(Throwable failure) {
+    var cause = failure;
+    for (var depth = 0;
+        cause != null && depth < MAX_CAUSE_DEPTH;
+        depth++, cause = cause.getCause()) {
+      if (cause instanceof TokenSpendCeilingExceededException) {
         return true;
       }
     }
