@@ -405,7 +405,7 @@ public class FindingPipeline {
         // salvage-or-disclose step as a parallel-pass truncation, and no further retry (#495).
         outcomesByIndex[index] =
             salvageTruncatedBatch(
-                index, batches, promptInputs, plan, previousFilesById, truncation.get());
+                session, index, batches, promptInputs, plan, previousFilesById, truncation.get());
         return;
       }
       // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
@@ -451,7 +451,7 @@ public class FindingPipeline {
           // the complete leading findings out of the buffered partial body first (#500).
           outcomesByIndex[i] =
               salvageTruncatedBatch(
-                  i, batches, promptInputs, plan, previousFilesById, truncation.get());
+                  session, i, batches, promptInputs, plan, previousFilesById, truncation.get());
         } else if (isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
@@ -487,16 +487,19 @@ public class FindingPipeline {
     var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
     var batchResponse =
         aiReviewService.reviewBatch(session, batchInputs, index + 1, batches.size());
-    return refineBatchOutcome(index, batch, batchInputs, batchResponse, plan, previousFilesById);
+    return refineBatchOutcome(
+        session, index, batch, batchInputs, batchResponse, plan, previousFilesById);
   }
 
   /**
    * Runs one batch's raw response through the per-batch chain — quote validation and framework
    * filtering against the batch's own in-budget text, verification, and status scoping. Shared by
    * the parsed path and the salvage path, so salvaged findings face exactly the checks a normally
-   * parsed batch's findings do.
+   * parsed batch's findings do. The session keys the spend ledger for the verification call, which
+   * is metered and ceiling-gated inside {@link FindingVerificationService}.
    */
   private BatchOutcome refineBatchOutcome(
+      ReviewSession session,
       int index,
       DiffBudgetPlanner.DiffBatch batch,
       AiReviewService.PromptInputs batchInputs,
@@ -507,6 +510,7 @@ public class FindingPipeline {
     validated = frameworkFilter.filter(validated, batch.text());
     var verified =
         findingVerificationService.verify(
+            ledgerSessionId(session),
             validated,
             batchInputs.diff(),
             batchInputs.projectStack(),
@@ -526,9 +530,11 @@ public class FindingPipeline {
    * When nothing salvages (the cut landed before the first element closed, or the lane carried no
    * body), it falls back to the pre-#500 behaviour: the files are disclosed as not reviewed.
    * Replaces disclosure only — the truncation was already refused a retry (#495), and salvage makes
-   * no AI call of its own, so #509's ceiling accounting is untouched.
+   * no AI call of its own; the verification call it funnels salvaged findings into is metered and
+   * ceiling-gated like any other, so #509's ceiling accounting is untouched.
    */
   private BatchOutcome salvageTruncatedBatch(
+      ReviewSession session,
       int index,
       List<DiffBudgetPlanner.DiffBatch> batches,
       AiReviewService.PromptInputs promptInputs,
@@ -557,7 +563,8 @@ public class FindingPipeline {
     var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
     var partialResponse =
         new ReviewResponse(salvaged.findings(), salvaged.previousFindingsStatus(), null);
-    return refineBatchOutcome(index, batch, batchInputs, partialResponse, plan, previousFilesById);
+    return refineBatchOutcome(
+        session, index, batch, batchInputs, partialResponse, plan, previousFilesById);
   }
 
   private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
@@ -1028,6 +1035,7 @@ public class FindingPipeline {
     aiResponse = deduplicator.dedupe(aiResponse);
     aiResponse =
         findingVerificationService.verify(
+            ledgerSessionId(session),
             aiResponse,
             promptInputs.diff(),
             promptInputs.projectStack(),

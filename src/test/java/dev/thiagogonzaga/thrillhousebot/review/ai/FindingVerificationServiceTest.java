@@ -22,6 +22,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,11 +35,16 @@ import org.mockito.MockitoAnnotations;
 
 class FindingVerificationServiceTest {
 
+  /** The review's ledger key, as {@link ReviewTokenLedger#keyFor} would produce it. */
+  private static final long SESSION = 42L;
+
   @Mock private FindingVerifier verifier;
 
   @Mock private ThrillhouseConfig config;
 
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
+
+  @Mock private ReviewTokenLedger tokenLedger;
 
   private FindingVerificationService service;
 
@@ -45,7 +53,33 @@ class FindingVerificationServiceTest {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.verifierEnabled()).thenReturn(true);
-    service = new FindingVerificationService(verifier, config, new ObjectMapper());
+    service = new FindingVerificationService(verifier, config, new ObjectMapper(), tokenLedger);
+  }
+
+  /** Swaps in a real, opened ledger so a test can observe the spend the service records. */
+  private ReviewTokenLedger realLedger(long ceiling) {
+    when(reviewConfig.maxTokensPerReview()).thenReturn(ceiling);
+    var ledger = new ReviewTokenLedger(config);
+    ledger.open(SESSION);
+    service = new FindingVerificationService(verifier, config, new ObjectMapper(), ledger);
+    return ledger;
+  }
+
+  private static Result<String> aiOkWithUsage(String text, int inputTokens, int outputTokens) {
+    return Result.<String>builder()
+        .content(text)
+        .finishReason(FinishReason.STOP)
+        .tokenUsage(new TokenUsage(inputTokens, outputTokens))
+        .build();
+  }
+
+  private static Result<String> aiTruncatedWithUsage(
+      String partialText, int inputTokens, int outputTokens) {
+    return Result.<String>builder()
+        .content(partialText)
+        .finishReason(FinishReason.LENGTH)
+        .tokenUsage(new TokenUsage(inputTokens, outputTokens))
+        .build();
   }
 
   private static ReviewResponse.Finding finding(String risk, String confidence, String title) {
@@ -76,7 +110,7 @@ class FindingVerificationServiceTest {
                 null,
                 null));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertEquals("medium", result.findings().get(0).confidence());
     assertEquals("high", result.findings().get(0).risk());
@@ -100,7 +134,7 @@ class FindingVerificationServiceTest {
             new ReviewResponse.Finding("high", "high", "h", 3, "May break", null, null, null),
             new ReviewResponse.Finding("high", "high", "i", 4, "Breaks startup", null, null, null));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertEquals("medium", result.findings().get(0).confidence());
     assertEquals("medium", result.findings().get(1).confidence());
@@ -128,7 +162,7 @@ class FindingVerificationServiceTest {
             new ReviewResponse.Finding(
                 "critical", "medium", "h", 3, "May break", "Possibly wrong.", null, null));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
   }
@@ -138,7 +172,7 @@ class FindingVerificationServiceTest {
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original = response(finding("critical", "high", "Bug"));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
     verifyNoInteractions(verifier);
@@ -148,10 +182,89 @@ class FindingVerificationServiceTest {
   void shouldSkipVerificationWhenNoFindings() {
     var original = new ReviewResponse(List.of(), List.of(), null);
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
     verifyNoInteractions(verifier);
+  }
+
+  @Test
+  void skipsTheVerifierAiCallOnceTheSpendCeilingIsReached() {
+    // #514: the verifier is a billed review-path call, so "once reached no further call is made"
+    // applies to it too. The skip fails open — the unverified findings are kept, never lost.
+    when(tokenLedger.ceilingReached(SESSION)).thenReturn(true);
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    verifyNoInteractions(verifier);
+  }
+
+  @Test
+  void hedgedDemotionStillRunsWhenTheCeilingSkipsTheVerifier() {
+    // The deterministic hedging guard costs no tokens, so the ceiling must not switch it off.
+    when(tokenLedger.ceilingReached(SESSION)).thenReturn(true);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "high", "high", "f", 1, "May break", "This could fail.", null, null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("medium", result.findings().get(0).confidence());
+    verifyNoInteractions(verifier);
+  }
+
+  @Test
+  void recordsTheVerifierCallsUsageInTheReviewsLedger() {
+    // #514: the verifier's spend is real billed usage; the ledger must increase by the
+    // provider-reported input+output of the call.
+    var ledger = realLedger(100_000L);
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOkWithUsage("{\"verdicts\": []}", 1200, 34));
+
+    service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(1234L, ledger.tokensSpent(SESSION));
+  }
+
+  @Test
+  void recordsUsageEvenWhenTheVerifierResponseIsCutShort() {
+    // A truncated verifier response was still billed: its usage lands in the ledger before the
+    // truncation is turned into the fail-open path.
+    var ledger = realLedger(100_000L);
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiTruncatedWithUsage("{\"verdicts\": [{\"id", 900, 100));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result); // fails open, findings kept
+    assertEquals(1000L, ledger.tokensSpent(SESSION));
+  }
+
+  @Test
+  void recordsNothingWhenTheProviderReportsNoUsage() {
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOk("{\"verdicts\": []}"));
+
+    service.verify(SESSION, original, "diff", "stack", "");
+
+    verify(tokenLedger, never()).recordUsage(anyLong(), any(), any());
+  }
+
+  @Test
+  void failsOpenAndRecordsNothingWhenTheVerifierReturnsNoResult() {
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    verify(tokenLedger, never()).recordUsage(anyLong(), any(), any());
   }
 
   @Test
@@ -165,7 +278,7 @@ class FindingVerificationServiceTest {
             "confidence": "high", "reason": "verified"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
   }
@@ -188,7 +301,7 @@ class FindingVerificationServiceTest {
             ]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertEquals(2, result.findings().size());
     assertEquals("Real nit", result.findings().get(0).title());
@@ -213,7 +326,7 @@ class FindingVerificationServiceTest {
             "confidence": "low", "reason": "not verifiable from the diff"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertEquals(1, result.findings().size());
     var downgraded = result.findings().get(0);
@@ -234,7 +347,7 @@ class FindingVerificationServiceTest {
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(aiTruncated("{\"verdicts\": [{\"id\": 1, \"verdict\": \"downgr"));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     // Fails open: the unverified finding survives at its original risk/confidence.
     assertEquals(1, result.findings().size());
@@ -253,7 +366,7 @@ class FindingVerificationServiceTest {
                 "{\"verdicts\": [{\"id\": 1, \"verdict\": \"downgraded\", \"risk\": \"medium\","
                     + " \"confidence\": \"low\", \"reason\": \"guard\tmissing\nhere\"}]}"));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertEquals("medium", result.findings().get(0).risk());
     assertEquals("low", result.findings().get(0).confidence());
@@ -270,7 +383,7 @@ class FindingVerificationServiceTest {
             "confidence": "high", "reason": "tries to escalate"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     var kept = result.findings().get(0);
     assertEquals("medium", kept.risk());
@@ -287,7 +400,7 @@ class FindingVerificationServiceTest {
             {"verdicts": [{"id": 1, "verdict": "downgraded", "reason": "no ratings given"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     var kept = result.findings().get(0);
     assertEquals("high", kept.risk());
@@ -312,7 +425,7 @@ class FindingVerificationServiceTest {
             ]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     // Garbled labels must not collapse the rating to the lenient-parse default
     var garbled = result.findings().get(0);
@@ -336,7 +449,7 @@ class FindingVerificationServiceTest {
             {"verdicts": [{"id": 1, "reason": "verdict field omitted"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
   }
@@ -355,7 +468,7 @@ class FindingVerificationServiceTest {
             ]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     var blankRisk = result.findings().get(0);
     assertEquals("critical", blankRisk.risk());
@@ -376,7 +489,7 @@ class FindingVerificationServiceTest {
             {"verdicts": [{"id": 2, "verdict": "shrug", "reason": "?"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
   }
@@ -394,7 +507,7 @@ class FindingVerificationServiceTest {
             ]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertTrue(result.findings().isEmpty());
   }
@@ -411,7 +524,7 @@ class FindingVerificationServiceTest {
             ```
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertTrue(result.findings().isEmpty());
   }
@@ -422,7 +535,7 @@ class FindingVerificationServiceTest {
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenThrow(new RuntimeException("model unavailable"));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
   }
@@ -433,7 +546,7 @@ class FindingVerificationServiceTest {
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(aiOk("not json at all"));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertSame(original, result);
   }
@@ -448,7 +561,7 @@ class FindingVerificationServiceTest {
             {"verdicts": [{"id": 1, "verdict": "rejected", "reason": "fp"}]}
             """));
 
-    var result = service.verify(original, "diff", "stack", "");
+    var result = service.verify(SESSION, original, "diff", "stack", "");
 
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary());
@@ -461,7 +574,7 @@ class FindingVerificationServiceTest {
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(aiOk("{\"verdicts\": []}"));
 
-    service.verify(original, "the-diff", "the-stack", "prior context");
+    service.verify(SESSION, original, "the-diff", "the-stack", "prior context");
 
     var candidates = ArgumentCaptor.forClass(String.class);
     verify(verifier)
@@ -482,7 +595,7 @@ class FindingVerificationServiceTest {
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
         .thenReturn(aiOk("{\"verdicts\": []}"));
 
-    service.verify(original, "the-diff", "the-stack", null);
+    service.verify(SESSION, original, "the-diff", "the-stack", null);
 
     verify(verifier).verify(anyString(), eq("the-diff"), eq("the-stack"), eq(""));
   }

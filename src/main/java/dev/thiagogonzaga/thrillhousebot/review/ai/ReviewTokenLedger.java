@@ -33,7 +33,9 @@ import java.util.concurrent.atomic.LongAdder;
  * pinned by {@code StreamingChatModelListenerOrderingTest} guarantees the listener's {@code
  * onResponse} runs before the call's own completion handler resolves — so by the time the review
  * path decides whether to make its <em>next</em> call, the previous call's spend is already in the
- * ledger.
+ * ledger. The one review-path call that never runs under that bind — the blocking finding-verifier
+ * call — records its {@code Result}-reported usage directly from {@link
+ * FindingVerificationService}, which also gates it on {@link #ceilingReached}.
  *
  * <p>Entries follow an open/record/clear lifecycle keyed by session id: {@link
  * dev.thiagogonzaga.thrillhousebot.review.FindingPipeline} opens the entry before its first call
