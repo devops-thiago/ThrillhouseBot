@@ -131,4 +131,30 @@ class ReviewTokenLedgerTest {
     assertDoesNotThrow(() -> ledger.ensureCallAllowed(1L));
     assertEquals(1000L, ledger.ceiling());
   }
+
+  @Test
+  void keyForMapsAnUnpersistedSessionToTheSentinelInsteadOfUnboxingNull() {
+    // ReviewSession.id is a nullable Long. Every ledger call site maps it through keyFor, so the
+    // nullable never reaches a primitive parameter — the gate in runWithRetries included, which
+    // previously unboxed session.id raw and would NPE on the first attempt even with the ceiling
+    // off, before the short-circuit was consulted.
+    var unpersisted = new dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession();
+    unpersisted.id = null;
+    var persisted = new dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession();
+    persisted.id = 42L;
+
+    assertEquals(Long.MIN_VALUE, ReviewTokenLedger.keyFor(unpersisted));
+    assertEquals(42L, ReviewTokenLedger.keyFor(persisted));
+  }
+
+  @Test
+  void gateToleratesAnUnpersistedSessionKey() {
+    // The sentinel key flows through the whole gate lifecycle without throwing while the ceiling
+    // is off — the exact call shape AiReviewService.runWithRetries now uses.
+    var unpersisted = new dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession();
+    unpersisted.id = null;
+    var ledger = ledger(0L);
+
+    ledger.ensureCallAllowed(ReviewTokenLedger.keyFor(unpersisted));
+  }
 }

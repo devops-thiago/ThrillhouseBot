@@ -94,6 +94,16 @@ public class ReviewTokenLedger {
   }
 
   /**
+   * The ledger key for a session: its persisted id, or a sentinel for a session that has none. In
+   * production the orchestrator persists the session before the pipeline runs, so the sentinel
+   * exists for unpersisted sessions (unit tests, defensive callers) — mapping them here, at the
+   * ledger boundary, means no call site ever unboxes the nullable {@code ReviewSession.id} itself.
+   */
+  public static long keyFor(dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession session) {
+    return session.id == null ? Long.MIN_VALUE : session.id;
+  }
+
+  /**
    * Refuses the next AI call once the ceiling is reached, logging spent-vs-ceiling and throwing the
    * typed error; a no-op while the ceiling is off or not yet reached.
    */

@@ -390,7 +390,7 @@ public class FindingPipeline {
    * unboxing.
    */
   private static long ledgerSessionId(ReviewSession session) {
-    return session.id == null ? Long.MIN_VALUE : session.id;
+    return ReviewTokenLedger.keyFor(session);
   }
 
   private BatchOutcome processBatch(

@@ -133,7 +133,7 @@ public class AiReviewService {
       // listener's onResponse runs before the completion handler resolves the stream future — see
       // StreamingChatModelListenerOrderingTest). Deliberately outside the try below, so the typed
       // refusal propagates instead of being mistaken for one more transient failure to retry.
-      tokenLedger.ensureCallAllowed(session.id);
+      tokenLedger.ensureCallAllowed(ReviewTokenLedger.keyFor(session));
       if (attempt > 1) {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.retry(
