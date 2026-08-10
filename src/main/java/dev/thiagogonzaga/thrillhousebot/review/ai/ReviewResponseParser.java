@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -78,7 +79,7 @@ public class ReviewResponseParser {
                 + " kept %d finding(s). Mapping error: %s",
             salvaged.findings().size(), cause.getMessage());
         return salvaged;
-      } catch (JsonProcessingException stillFailing) {
+      } catch (JsonProcessingException _) {
         // The failure was not confined to the summary — fall through to the original error.
       }
     }
@@ -167,16 +168,7 @@ public class ReviewResponseParser {
     }
     var normalized = mapper.createArrayNode();
     if (gaps.isArray()) {
-      var changed = false;
-      for (var gap : gaps) {
-        if (gap.isTextual() || gap.isNull()) {
-          normalized.add(gap);
-        } else {
-          normalized.add(flattenGap(gap));
-          changed = true;
-        }
-      }
-      if (!changed) {
+      if (!flattenInto(normalized, gaps)) {
         // Already-conforming arrays stay untouched
         return;
       }
@@ -186,6 +178,24 @@ public class ReviewResponseParser {
       normalized.add(flattenGap(gaps));
     }
     summary.set(DESCRIPTION_GAPS, normalized);
+  }
+
+  /**
+   * Copies {@code gaps} into {@code normalized}, flattening every non-string element. Returns
+   * whether anything needed flattening — {@code false} means the array already conformed and the
+   * caller should keep the original node untouched.
+   */
+  private static boolean flattenInto(ArrayNode normalized, JsonNode gaps) {
+    var changed = false;
+    for (var gap : gaps) {
+      if (gap.isTextual() || gap.isNull()) {
+        normalized.add(gap);
+      } else {
+        normalized.add(flattenGap(gap));
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   /**
