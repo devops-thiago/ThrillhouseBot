@@ -23,9 +23,11 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 
 /**
  * Conversational reply to a maintainer's question or pushback in a PR thread. Returns the reply as
- * plain Markdown — unlike the review call, there is no JSON schema to parse.
+ * plain Markdown — unlike the review call, there is no JSON schema to parse. Bound to the {@code
+ * concise} named model: a reply is short prose, so it carries the concise response cap ({@code
+ * REVIEW_CONCISE_MAX_OUTPUT_TOKENS}) instead of the batch review's allowance.
  */
-@RegisterAiService
+@RegisterAiService(modelName = "concise")
 public interface ReplyAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

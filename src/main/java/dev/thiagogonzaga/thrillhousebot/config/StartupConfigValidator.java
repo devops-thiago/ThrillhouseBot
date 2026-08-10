@@ -51,21 +51,28 @@ public class StartupConfigValidator {
   private final ThrillhouseConfig config;
   private final String aiApiKey;
   private final ActiveModelSettings activeModel;
+  private final Optional<Integer> conciseMaxOutputTokens;
 
   @Inject
   public StartupConfigValidator(
       ThrillhouseConfig config,
       @ConfigProperty(name = "quarkus.langchain4j.openai.api-key") Optional<String> aiApiKey,
-      ActiveModelSettings activeModel) {
-    this(config, aiApiKey.orElse(""), activeModel);
+      ActiveModelSettings activeModel,
+      @ConfigProperty(name = "quarkus.langchain4j.openai.concise.chat-model.max-tokens")
+          Optional<Integer> conciseMaxOutputTokens) {
+    this(config, aiApiKey.orElse(""), activeModel, conciseMaxOutputTokens);
   }
 
   /** Visible for tests: exercises validation outcomes without booting the CDI container. */
   StartupConfigValidator(
-      ThrillhouseConfig config, String aiApiKey, ActiveModelSettings activeModel) {
+      ThrillhouseConfig config,
+      String aiApiKey,
+      ActiveModelSettings activeModel,
+      Optional<Integer> conciseMaxOutputTokens) {
     this.config = config;
     this.aiApiKey = aiApiKey;
     this.activeModel = activeModel;
+    this.conciseMaxOutputTokens = conciseMaxOutputTokens;
   }
 
   void onStart(@Observes StartupEvent event) {
@@ -95,6 +102,7 @@ public class StartupConfigValidator {
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
     validateReasoningEffort(problems, config.ai().reasoning());
+    validateConciseResponseCap(problems);
 
     if (!problems.isEmpty()) {
       throw new ConfigValidationException(formatMessage(problems));
@@ -104,6 +112,7 @@ public class StartupConfigValidator {
     logReasoningStatus();
     logCiGatingStatus();
     logActiveModelStatus();
+    logConciseModelStatus();
     warnUnmappedModelEnvVars(System.getenv());
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
@@ -323,6 +332,23 @@ public class StartupConfigValidator {
   }
 
   /**
+   * Rejects a degenerate response cap for the {@code concise} named model (the summary, verifier,
+   * and reply calls — #498) at boot, the same fail-fast contract as the other budget keys. Empty is
+   * allowed: an operator who clears {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} drops the cap and the
+   * provider default applies.
+   */
+  private void validateConciseResponseCap(List<String> problems) {
+    conciseMaxOutputTokens
+        .filter(v -> v < 1)
+        .ifPresent(
+            v ->
+                problems.add(
+                    "REVIEW_CONCISE_MAX_OUTPUT_TOKENS must be >= 1"
+                        + " (quarkus.langchain4j.openai.concise.chat-model.max-tokens): "
+                        + v));
+  }
+
+  /**
    * Rejects an unrecognized {@code REVIEW_CI_GATING} value at boot so a typo never silently falls
    * through to the fail-closed default.
    */
@@ -395,6 +421,20 @@ public class StartupConfigValidator {
           presencePenalty,
           seed);
     }
+  }
+
+  /**
+   * Mirrors {@link #logActiveModelStatus}'s per-model line for the {@code concise} named model, so
+   * the boot log states which response cap the summary/verifier/reply calls run under — including
+   * the shipped 8192 default, which applies without any operator action.
+   */
+  private void logConciseModelStatus() {
+    log.info(
+        "Concise model active for summary/verifier/reply calls: max-output-tokens={}"
+            + " (REVIEW_CONCISE_MAX_OUTPUT_TOKENS); other generation parameters follow the active"
+            + " model '{}'.",
+        orProviderDefault(conciseMaxOutputTokens),
+        activeModel.modelName());
   }
 
   /** Env-var prefix every per-model setting shares. */
