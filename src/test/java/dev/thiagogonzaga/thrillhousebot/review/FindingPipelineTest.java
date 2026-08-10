@@ -1027,6 +1027,28 @@ class FindingPipelineTest {
   }
 
   @Test
+  void billedThenRefusedBatchesDiscloseInsteadOfClaimingNoCallsWereMade() {
+    // A batch can cross the ceiling AFTER its first billed attempt, with the retry gate then
+    // refusing typed. That shape must not hit the zero-call branch — its "Review made no AI
+    // calls" message would be contradicted by the very spend figure inside it. It falls through
+    // to disclosure + the counts-only summary, like every other ceiling refusal.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenThrow(new TokenSpendCeilingExceededException(106_000, 100_000));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertTrue(result.findings().isEmpty());
+    assertEquals(List.of("a.java", "b.java"), plan.spendCeilingSkippedFiles());
+    verify(aiReviewService, never()).summarize(eq(session), any());
+  }
+
+  @Test
   void aDisabledCeilingLeavesTheMultiCallPathUntouched() {
     // #499(d) characterization: with the default REVIEW_MAX_TOKENS_PER_REVIEW=0 a review behaves
     // exactly as before this feature, even with an enormous recorded spend.

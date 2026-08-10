@@ -218,10 +218,14 @@ public class FindingPipeline {
               .toList();
       var ceilingBlockedBatches =
           joinBatchOutcomes(futures, batches, plan, session, outcomesByIndex, failedIndices);
-      if (ceilingBlockedBatches == batches.size()) {
-        // Every batch was refused before its first attempt: this review made zero AI calls and has
-        // no paid findings to keep, so a "partial review" disclosure would dress up an empty one.
-        // Fail typed instead, naming the knob.
+      if (ceilingBlockedBatches == batches.size()
+          && tokenLedger.tokensSpent(ledgerSessionId(session)) == 0) {
+        // Every batch was refused before its first attempt AND nothing was billed: this review
+        // made zero AI calls and has no paid findings to keep, so a "partial review" disclosure
+        // would dress up an empty one. Fail typed instead, naming the knob. A billed-then-refused
+        // review (attempts crossed the ceiling, retries refused) deliberately falls through — its
+        // spend is real, the message would lie, and the disclosure/counts-only paths below say
+        // honestly what the ceiling skipped.
         throw new TokenSpendCeilingExceededException(
             "Review made no AI calls: its token spend ceiling was already reached before the first"
                 + " call ("
