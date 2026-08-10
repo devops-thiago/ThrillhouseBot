@@ -259,22 +259,32 @@ class FindingPipelineTest {
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
   }
 
-  /** A RuntimeException whose cause chain loops back on itself after one hop. */
+  /**
+   * A cause chain that genuinely loops: {@code a -> b -> a -> b -> ...}, never reaching {@code
+   * null}. Built through a holder because the two exceptions have to reference each other.
+   *
+   * <p>An earlier version of this helper ended in a plain exception, so the walk terminated on
+   * {@code cause != null} and the depth bound was never exercised — the test passed without testing
+   * anything. Coverage caught it.
+   */
   private static RuntimeException cyclicFailure() {
-    var head = new RuntimeException("head");
-    var tail =
-        new RuntimeException("tail") {
+    var forward = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+    var a =
+        new RuntimeException("a") {
           @Override
           public synchronized Throwable getCause() {
-            return head;
+            return forward.get();
           }
         };
-    return new RuntimeException("outer", tail) {
-      @Override
-      public synchronized Throwable getCause() {
-        return tail;
-      }
-    };
+    var b =
+        new RuntimeException("b") {
+          @Override
+          public synchronized Throwable getCause() {
+            return a;
+          }
+        };
+    forward.set(b);
+    return a;
   }
 
   @Test
