@@ -125,18 +125,21 @@ public record ReviewResult(
    * call skipped because the review's token spend ceiling ({@code REVIEW_MAX_TOKENS_PER_REVIEW})
    * was reached — a different reason with a different fix, so the rendered copy names it separately
    * — and {@code responseCutFileNames} were only partially reviewed because the model's response
-   * was cut at its length cap and the findings up to the cut were kept (#500). All empty on the
-   * legacy line-cap path, where only a count is known — the rendered copy then falls back to the
-   * numeric clause.
+   * was cut at its length cap and the findings up to the cut were kept (#500). {@code
+   * summaryResponseCut} marks the same length-cap cut on the summary call: the findings are
+   * complete, but the prose summary was salvaged from a cut response or replaced by the counts-only
+   * fallback. All empty on the legacy line-cap path, where only a count is known — the rendered
+   * copy then falls back to the numeric clause.
    */
   @RegisterForReflection
   public record TruncationDetail(
       List<String> omittedFileNames,
       List<String> clippedFileNames,
       List<String> spendCeilingSkippedFileNames,
-      List<String> responseCutFileNames) {
+      List<String> responseCutFileNames,
+      boolean summaryResponseCut) {
     public static final TruncationDetail EMPTY =
-        new TruncationDetail(List.of(), List.of(), List.of(), List.of());
+        new TruncationDetail(List.of(), List.of(), List.of(), List.of(), false);
 
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
@@ -151,7 +154,7 @@ public record ReviewResult(
 
     /** Convenience for the token-budget-only surfaces, which have no spend-ceiling skips. */
     public TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
-      this(omittedFileNames, clippedFileNames, List.of(), List.of());
+      this(omittedFileNames, clippedFileNames, List.of(), List.of(), false);
     }
 
     /** Back-compat convenience predating {@code responseCutFileNames}; starts it empty. */
@@ -159,14 +162,29 @@ public record ReviewResult(
         List<String> omittedFileNames,
         List<String> clippedFileNames,
         List<String> spendCeilingSkippedFileNames) {
-      this(omittedFileNames, clippedFileNames, spendCeilingSkippedFileNames, List.of());
+      this(omittedFileNames, clippedFileNames, spendCeilingSkippedFileNames, List.of(), false);
+    }
+
+    /** Back-compat convenience predating {@code summaryResponseCut}; starts it unset. */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> spendCeilingSkippedFileNames,
+        List<String> responseCutFileNames) {
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          spendCeilingSkippedFileNames,
+          responseCutFileNames,
+          false);
     }
 
     public boolean isEmpty() {
       return omittedFileNames.isEmpty()
           && clippedFileNames.isEmpty()
           && spendCeilingSkippedFileNames.isEmpty()
-          && responseCutFileNames.isEmpty();
+          && responseCutFileNames.isEmpty()
+          && !summaryResponseCut;
     }
   }
 
@@ -282,6 +300,22 @@ public record ReviewResult(
   static final String TRUNCATION_NOTICE_LEAD_IN = "> ⚠️ **Large PR — partial review.**";
 
   /**
+   * Banner prepended to the summary when only the summary response was cut at the model's length
+   * cap — no file-coverage gap exists, so the partial-review banner (whose framing says the
+   * findings cover only part of the diff) would overstate the damage: here the findings are
+   * complete and only the prose summary was salvaged or degraded. When a file-coverage gap exists
+   * too, {@link #coverageGapClause(int, TruncationDetail)} folds the summary cut in as one more
+   * clause instead and this banner is not used.
+   */
+  static final String SUMMARY_CUT_NOTICE =
+      """
+      > ⚠️ **Summary shortened.** The model's summary response was cut at its length cap\
+       (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) — the findings themselves are\
+       complete.
+
+      """;
+
+  /**
    * The shared "N file(s) were omitted …" clause, so the review banner and the on-demand-command
    * disclosure never drift on the omitted count and the reason — only the surrounding framing
    * differs between the two surfaces.
@@ -363,6 +397,16 @@ public record ReviewResult(
                   + " its length cap (max-output-tokens) — findings up to the cut were kept (%s)",
               detail.responseCutFileNames().size(), nameList(detail.responseCutFileNames())));
     }
+    // The summary-cut class affects prose, not findings: the findings are complete, but the
+    // summary call's response hit the same length cap and was salvaged (or replaced by the
+    // counts-only fallback) — the sibling spend-ceiling degradation of the same lane already
+    // discloses itself, so staying silent here would make the two lanes inconsistent.
+    if (detail.summaryResponseCut()) {
+      clauses.add(
+          "the summary was shortened because the model's response was cut at its length cap"
+              + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) — the findings themselves"
+              + " are complete");
+    }
     return String.join(", and ", clauses);
   }
 
@@ -399,6 +443,9 @@ public record ReviewResult(
           String.format(
               "%d file(s) partially reviewed (response cut at the length cap)",
               truncation.responseCutFileNames().size()));
+    }
+    if (truncation.summaryResponseCut()) {
+      parts.add("summary shortened (response cut at the length cap)");
     }
     return String.join(", ", parts);
   }

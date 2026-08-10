@@ -93,7 +93,8 @@ public class DiffBudgetPlanner {
       boolean budgeted,
       List<String> runtimeUncoveredFiles,
       List<String> spendCeilingSkippedFiles,
-      List<String> responseCutFiles) {
+      List<String> responseCutFiles,
+      java.util.concurrent.atomic.AtomicBoolean summaryResponseCut) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -107,6 +108,20 @@ public class DiffBudgetPlanner {
               ? new CopyOnWriteArrayList<>()
               : spendCeilingSkippedFiles;
       responseCutFiles = responseCutFiles == null ? new CopyOnWriteArrayList<>() : responseCutFiles;
+      summaryResponseCut =
+          summaryResponseCut == null
+              ? new java.util.concurrent.atomic.AtomicBoolean(false)
+              : summaryResponseCut;
+    }
+
+    /** Marks the review's summary response as cut at the model's length cap (#500 scope A). */
+    void recordSummaryResponseCut() {
+      summaryResponseCut.set(true);
+    }
+
+    /** Whether the summary response was cut — salvaged or degraded, the disclosure names it. */
+    public boolean summaryWasCut() {
+      return summaryResponseCut.get();
     }
 
     /**
@@ -151,7 +166,28 @@ public class DiffBudgetPlanner {
           budgeted,
           runtimeUncoveredFiles,
           spendCeilingSkippedFiles,
-          new CopyOnWriteArrayList<>());
+          new CopyOnWriteArrayList<>(),
+          null);
+    }
+
+    /** Back-compat convenience predating {@code summaryResponseCut}; starts it unset. */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles,
+        List<String> responseCutFiles) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          responseCutFiles,
+          null);
     }
 
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
@@ -170,6 +206,15 @@ public class DiffBudgetPlanner {
     @Override
     public List<String> responseCutFiles() {
       return List.copyOf(responseCutFiles);
+    }
+
+    /**
+     * Defensive snapshot, like {@link #runtimeUncoveredFiles()}: the live flag is only written
+     * through {@link #recordSummaryResponseCut()} and read through {@link #summaryWasCut()}.
+     */
+    @Override
+    public java.util.concurrent.atomic.AtomicBoolean summaryResponseCut() {
+      return new java.util.concurrent.atomic.AtomicBoolean(summaryResponseCut.get());
     }
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */

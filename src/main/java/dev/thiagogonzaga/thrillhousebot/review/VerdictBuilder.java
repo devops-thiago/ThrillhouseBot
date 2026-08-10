@@ -132,7 +132,8 @@ public class VerdictBuilder {
                 withoutNames(plan.effectiveOmittedFiles(), ceilingSkipped),
                 clipped,
                 ceilingSkipped,
-                responseCut)
+                responseCut,
+                plan.summaryWasCut())
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
         plan.budgeted()
@@ -227,12 +228,7 @@ public class VerdictBuilder {
   }
 
   static String checkSummaryForResult(ReviewResult result) {
-    var truncationSuffix =
-        result.truncated()
-            ? " The diff was also too large to review in full ("
-                + result.coverageGapBrief()
-                + ") — partial review."
-            : "";
+    var truncationSuffix = truncationSuffixFor(result);
     if (result.hasIssues()) {
       return String.format(
               "%d findings: %d critical, %d high, %d medium, %d low",
@@ -282,9 +278,26 @@ public class VerdictBuilder {
     }
     var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
-      return PrSummaryGenerator.ZERO_ISSUES_MESSAGE;
+      return PrSummaryGenerator.ZERO_ISSUES_MESSAGE + truncationSuffix;
     }
-    return ReviewResult.unresolvedPreviousMessage(unresolved);
+    return ReviewResult.unresolvedPreviousMessage(unresolved) + truncationSuffix;
+  }
+
+  /**
+   * The coverage suffix of the check-run summary: the partial-review brief when file coverage was
+   * truncated (that brief already folds a summary cut in as one of its counts), the summary-only
+   * marker when just the summary response was cut, empty otherwise.
+   */
+  private static String truncationSuffixFor(ReviewResult result) {
+    if (result.truncated()) {
+      return " The diff was also too large to review in full ("
+          + result.coverageGapBrief()
+          + ") — partial review.";
+    }
+    if (result.truncation().summaryResponseCut()) {
+      return " The summary was shortened (response cut at the length cap).";
+    }
+    return "";
   }
 
   record DiffStats(
@@ -512,6 +525,11 @@ public class VerdictBuilder {
       summaryMarkdown =
           ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
               + summaryMarkdown;
+    } else if (diffStats.truncation().summaryResponseCut()) {
+      // Summary-only cut: the findings are complete, so the partial-review banner (and the
+      // approval hold that goes with file gaps) would overstate it — a dedicated banner names
+      // the cut without holding the verdict.
+      summaryMarkdown = ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
     }
 
     return new ReviewResult(
