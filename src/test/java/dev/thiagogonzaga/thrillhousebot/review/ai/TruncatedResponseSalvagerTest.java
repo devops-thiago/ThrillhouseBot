@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -278,5 +279,22 @@ class TruncatedResponseSalvagerTest {
     assertEquals(1, salvaged.findings().size());
     assertEquals(1, salvaged.previousFindingsStatus().size());
     assertTrue(salvaged.hasFindingsOrStatuses());
+  }
+
+  @Test
+  void closeQuietlyToleratesANullParser() {
+    // Reached only if createParser itself threw; the guard is contract, tested directly.
+    assertDoesNotThrow(() -> TruncatedResponseSalvager.closeQuietly(null));
+  }
+
+  @Test
+  void closeQuietlySwallowsACloseFailure() throws Exception {
+    // A string-backed parser cannot fail to close; the swallow is contract, tested directly so
+    // the finally block can never mask a salvage result with a close-time surprise.
+    var parser = org.mockito.Mockito.mock(com.fasterxml.jackson.core.JsonParser.class);
+    org.mockito.Mockito.doThrow(new java.io.IOException("boom")).when(parser).close();
+
+    assertDoesNotThrow(() -> TruncatedResponseSalvager.closeQuietly(parser));
+    org.mockito.Mockito.verify(parser).close();
   }
 }

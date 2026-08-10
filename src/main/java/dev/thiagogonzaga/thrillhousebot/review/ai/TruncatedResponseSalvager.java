@@ -106,11 +106,9 @@ public class TruncatedResponseSalvager {
     var findings = new ArrayList<ReviewResponse.Finding>();
     var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
     ReviewResponse.Summary summary = null;
-    // Deliberately not try-with-resources: the parser reads a String, holds no OS resource, and
-    // the compiler's close-on-exception desugaring adds unreachable branches for a reader that
-    // cannot fail to close. The success path closes explicitly; the cut path abandons the parser.
+    JsonParser parser = null;
     try {
-      JsonParser parser = mapper.createParser(json);
+      parser = mapper.createParser(json);
       if (parser.nextToken() != JsonToken.START_OBJECT) {
         return Salvaged.NOTHING;
       }
@@ -129,12 +127,13 @@ public class TruncatedResponseSalvager {
           default -> parser.skipChildren();
         }
       }
-      parser.close();
     } catch (IOException e) {
       // The cut point (or trailing garbage): everything that closed before it is already
       // collected, and the partial trailing value was never added. This is the expected way for
       // a truncated body's pass to end.
       Log.debugf("Salvage pass ended at the cut: %s", e.getMessage());
+    } finally {
+      closeQuietly(parser);
     }
     return new Salvaged(findings, statuses, summary);
   }
@@ -173,6 +172,22 @@ public class TruncatedResponseSalvager {
    * parser stays element-aligned — and a value the cut split throws, ending the pass with the
    * partial value dropped.
    */
+  /**
+   * Closes the parser without letting a close-time failure mask the salvage result. A string-backed
+   * parser cannot fail to close in practice — the null guard and the swallow exist for the
+   * contract, and are exercised directly by tests because no production input reaches them.
+   */
+  static void closeQuietly(JsonParser parser) {
+    if (parser == null) {
+      return;
+    }
+    try {
+      parser.close();
+    } catch (IOException e) {
+      Log.debugf("Ignoring a close failure on a string-backed parser: %s", e.getMessage());
+    }
+  }
+
   private <T> T objectOrNull(JsonParser parser, JsonToken token, Class<T> type) throws IOException {
     JsonNode node = parser.readValueAsTree();
     if (token != JsonToken.START_OBJECT) {
