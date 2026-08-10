@@ -213,7 +213,7 @@ public class DiffBudgetPlanner {
       return Integer.MAX_VALUE;
     }
     return (int) (maxInputTokens * activeModel.tokenSafetyMargin())
-        - activeModel.outputBufferTokens();
+        - activeModel.reservedOutputTokens();
   }
 
   /**

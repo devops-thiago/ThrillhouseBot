@@ -199,6 +199,7 @@ class StartupConfigValidatorTest {
     lenient().when(settings.frequencyPenalty()).thenReturn(Optional.empty());
     lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
     lenient().when(settings.seed()).thenReturn(Optional.empty());
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -335,6 +336,46 @@ class StartupConfigValidatorTest {
         ex.getMessage()
             .contains("effective output buffer (8192) must be >= max-output-tokens (8193)"),
         ex.getMessage());
+  }
+
+  @Test
+  void pointsAtSeparateOutputBudgetWhenTheResponseCapExceedsTheBuffer() {
+    // The message has to name the way out, or an operator on a separate-budget model reads it as
+    // "raise the buffer" and pays 384000 tokens of diff budget to satisfy a rule that should not
+    // have applied to them.
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(8_193));
+
+    var ex = assertFailsValidation(new ConfigBuilder().model("deepseek-chat", settings).build());
+    assertTrue(
+        ex.getMessage().contains("separate-output-budget=true"),
+        "the failure must point at the escape hatch: " + ex.getMessage());
+  }
+
+  @Test
+  void allowsAResponseCapAboveTheBufferWhenTheOutputBudgetIsSeparate() {
+    // #494: on a model whose response allowance is independent of its input window, requiring the
+    // buffer to cover the cap makes the model's real output allowance unconfigurable. 384000 out
+    // against an 8192 buffer is exactly the deepseek-v4-flash shape, and it must boot.
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(1_000_000));
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(384_000));
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(true));
+
+    new ConfigBuilder().model("deepseek-chat", settings).build().validate();
+  }
+
+  @Test
+  void stillRejectsAResponseCapAboveTheBufferOnASharedWindow() {
+    // The narrowing must not become a deletion: without the flag the rule stands, because there
+    // the output really is spent out of the window the prompt was packed into.
+    var settings = emptyModelSettings();
+    lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(1_000_000));
+    lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(384_000));
+    lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(false));
+
+    var ex = assertFailsValidation(new ConfigBuilder().model("deepseek-chat", settings).build());
+    assertTrue(ex.getMessage().contains("must be >= max-output-tokens (384000)"), ex.getMessage());
   }
 
   @Test

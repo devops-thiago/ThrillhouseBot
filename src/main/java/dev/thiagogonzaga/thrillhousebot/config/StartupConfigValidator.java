@@ -222,7 +222,9 @@ public class StartupConfigValidator {
   private void validateEffectiveBudget(List<String> problems) {
     var maxInputTokens = activeModel.maxInputTokens();
     var margin = activeModel.tokenSafetyMargin();
-    var outputBuffer = activeModel.outputBufferTokens();
+    // What the budgeter will actually hold back — zero when the response has a budget of its own.
+    // Reading the same value the planner reads keeps the two from disagreeing about the arithmetic.
+    var outputBuffer = activeModel.reservedOutputTokens();
     if (maxInputTokens > 0
         && Double.isFinite(margin)
         && margin > 0
@@ -238,7 +240,11 @@ public class StartupConfigValidator {
               + "' so there is budget left for the diff (thrillhousebot.review.* with"
               + " thrillhousebot.ai.models overrides)");
     }
-    if (maxInputTokens > 0) {
+    // Only meaningful on a shared window, where output tokens are spent out of the same pool the
+    // budgeter packed the prompt into: licensing more output than was reserved overruns it. When
+    // the response has a budget of its own there is nothing to reserve, and enforcing the ceiling
+    // would make the model's real output allowance unconfigurable — so the rule does not apply.
+    if (maxInputTokens > 0 && !activeModel.separateOutputBudget()) {
       activeModel
           .maxOutputTokens()
           .filter(maxOutput -> maxOutput > outputBuffer)
@@ -251,7 +257,11 @@ public class StartupConfigValidator {
                           + maxOutput
                           + ") for model '"
                           + activeModel.modelName()
-                          + "' so the token budget reserves the configured response cap"));
+                          + "' so the token budget reserves the configured response cap. Set"
+                          + " thrillhousebot.ai.models.\""
+                          + activeModel.modelName()
+                          + "\".separate-output-budget=true if this model's response allowance is"
+                          + " independent of its input window."));
     }
   }
 
@@ -394,6 +404,7 @@ public class StartupConfigValidator {
           "OUTPUT_BUFFER_TOKENS",
           "TOKEN_SAFETY_MARGIN",
           "MAX_OUTPUT_TOKENS",
+          "SEPARATE_OUTPUT_BUDGET",
           "FREQUENCY_PENALTY",
           "PRESENCE_PENALTY",
           "TEMPERATURE",

@@ -17,9 +17,11 @@ package dev.thiagogonzaga.thrillhousebot.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -90,5 +92,44 @@ class AiPricingConfigTest {
     assertNotNull(settings, "deepseek-v4-flash model settings must resolve");
     assertEquals(1_000_000, settings.maxInputTokens().orElseThrow());
     assertEquals(384_000, settings.maxOutputTokens().orElseThrow());
+    assertEquals(
+        Optional.of(true),
+        settings.separateOutputBudget(),
+        "the 384000 output is on top of the 1M input, not carved out of it — without this flag the"
+            + " shipped pair cannot boot and would cost ~40% of the diff budget if it could");
+  }
+
+  @Test
+  void noShippedModelCapExceedsItsBufferOnASharedWindow() {
+    // A shipped max-output-tokens above the effective buffer refuses to boot every deployment
+    // naming that model. The validator rule only fires for the ACTIVE model — one of eighteen in
+    // the table — so no ordinary test sees it. Walk the table directly instead.
+    var reviewBuffer = config.review().outputBufferTokens();
+
+    config
+        .ai()
+        .models()
+        .forEach(
+            (model, settings) -> {
+              if (settings.separateOutputBudget().orElse(false)) {
+                return; // its response draws on a budget of its own; nothing to reserve
+              }
+              settings
+                  .maxOutputTokens()
+                  .ifPresent(
+                      cap -> {
+                        int buffer = settings.outputBufferTokens().orElse(reviewBuffer);
+                        assertTrue(
+                            cap <= buffer,
+                            "shipped max-output-tokens "
+                                + cap
+                                + " for '"
+                                + model
+                                + "' exceeds its effective output buffer "
+                                + buffer
+                                + " — every deployment naming this model would fail to start."
+                                + " Either lower the cap or mark it separate-output-budget");
+                      });
+            });
   }
 }

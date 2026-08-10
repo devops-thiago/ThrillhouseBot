@@ -172,7 +172,12 @@ public interface ThrillhouseConfig {
     @WithName("max-input-tokens")
     int maxInputTokens();
 
-    /** Tokens reserved out of the context window for the model's response (findings JSON). */
+    /**
+     * Tokens held back from the input budget for the model's response (findings JSON), because on a
+     * shared window the response is spent from the same pool the prompt was packed into. Ignored
+     * for a model marked {@link AiPricingConfig.ModelSettings#separateOutputBudget()}, whose
+     * response draws on an allowance of its own and so takes nothing from the diff.
+     */
     @WithDefault("8192")
     @WithName("output-buffer-tokens")
     int outputBufferTokens();
@@ -586,8 +591,9 @@ public interface ThrillhouseConfig {
       Optional<Integer> maxInputTokens();
 
       /**
-       * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens reserved
-       * out of the context window for the model's response.
+       * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens held back
+       * from the input budget for the model's response. Only meaningful on a shared window: with
+       * {@link #separateOutputBudget()} set, nothing is held back regardless of this value.
        */
       @WithName("output-buffer-tokens")
       Optional<Integer> outputBufferTokens();
@@ -616,11 +622,35 @@ public interface ThrillhouseConfig {
       /**
        * OpenAI-compatible {@code max_tokens} sent on every chat call, bounding the response length
        * (and spend). Absent leaves the provider default. Independent of {@link
-       * #outputBufferTokens()}, which only reserves input-budget headroom — set both when capping
-       * output.
+       * #outputBufferTokens()}, which only reserves input-budget headroom — on a shared-window
+       * model, set both when capping output.
        */
       @WithName("max-output-tokens")
       Optional<Integer> maxOutputTokens();
+
+      /**
+       * Whether this model's response allowance is a budget of its own rather than a slice of the
+       * window {@link #maxInputTokens()} describes.
+       *
+       * <p>The default ({@code false}) is the classic OpenAI-style contract: prompt and completion
+       * share one window, so tokens spent on the response are tokens unavailable to the diff. The
+       * budgeter reserves {@link #outputBufferTokens()} out of the input budget accordingly, and
+       * {@code max-output-tokens} may not exceed that reservation — licensing more output than was
+       * reserved is how a call overruns the window.
+       *
+       * <p>Set {@code true} for a model that publishes an input window and a response allowance
+       * that do not compete (e.g. 1M in with 384K out <em>on top</em>). Both of those rules are
+       * then wrong rather than merely conservative: the reservation would take budget from the diff
+       * to protect a pool the response never draws from, and the ceiling would make the model's
+       * real output allowance unconfigurable. So the budgeter stops subtracting and {@link
+       * StartupConfigValidator} stops requiring the buffer to cover the cap.
+       *
+       * <p>Deliberately explicit rather than inferred from a model declaring both caps: getting
+       * this wrong silently picks the wrong arithmetic, and an operator should be able to read
+       * which contract a model is on straight from its config.
+       */
+      @WithName("separate-output-budget")
+      Optional<Boolean> separateOutputBudget();
 
       /**
        * OpenAI-compatible {@code frequency_penalty} in {@code [-2, 2]} sent on every chat call —

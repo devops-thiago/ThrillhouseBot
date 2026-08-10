@@ -435,6 +435,9 @@ thrillhousebot.ai.models.deepseek-chat.max-output-tokens=8192
 thrillhousebot.ai.models.deepseek-chat.frequency-penalty=0.1
 thrillhousebot.ai.models.deepseek-chat.presence-penalty=0.1
 thrillhousebot.ai.models.deepseek-chat.seed=42
+# Set true only when the model's response allowance is separate from its input
+# window (1M in with 384K out on top, rather than 384K carved out of the 1M)
+thrillhousebot.ai.models.deepseek-v4-flash.separate-output-budget=true
 ```
 
 Notes:
@@ -456,9 +459,20 @@ Notes:
   relevant only with native provider integrations.
 - **`max-output-tokens` vs `output-buffer-tokens`**: `max-output-tokens` is the
   hard response-length cap sent to the provider; `output-buffer-tokens` only
-  reserves input-budget headroom for the map-reduce budgeter. Keep the buffer
-  at least as large as the output cap so a response the model is allowed to
-  produce always has reserved room — set both when capping output.
+  reserves input-budget headroom for the map-reduce budgeter. On a shared-window
+  model, keep the buffer at least as large as the output cap so a response the
+  model is allowed to produce always has reserved room — set both when capping
+  output. Boot fails if you don't.
+- **`separate-output-budget`** (default `false`) says which contract the model is
+  on. Left off, prompt and completion share one window: the budgeter reserves
+  `output-buffer-tokens` out of the input budget, and the buffer must cover
+  `max-output-tokens`. Set it `true` for a model that publishes a response
+  allowance *on top of* its input window rather than inside it — then the
+  budgeter stops reserving (the response never draws on the diff budget) and the
+  buffer no longer has to cover the cap. Getting it wrong is expensive in one
+  direction and unbootable in the other, so it is explicit rather than inferred:
+  a 384000-token cap on a 1M window silently costs ~40% of every call's diff
+  budget if the model is wrongly marked shared.
 - **`seed`** is a best-effort determinism hint (same seed + same parameters aims
   for the same sampling) on providers that support it; unsupported providers
   ignore it. For deterministic reviews, prefer a low `temperature` first.
