@@ -44,6 +44,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Inline code suggestions on review comments that you can apply with one click
 - Every finding is tagged `critical`, `high`, `medium`, or `low`
 - Follow-up reviews track whether earlier findings were addressed or justified
+- Every finding can be closed by a maintainer: reply on its review thread, or — for one raised below the inline-posting bar, which has no thread — comment `@thrillhousebot resolved <path>:<line> — <title>` on the PR
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
@@ -96,11 +97,20 @@ not a reaction.
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
+| `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval — see [Clearing a finding with no thread](#clearing-a-finding-with-no-thread) | write |
 
 **Access** — every command except `/help` requires the commenter to hold write access to
 the repository (or to be named in
 `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`), since reviews spend the operator's
 AI budget.
+
+**`@thrillhousebot resolved`** — a directive, not a slash command: it has no `/resolved`
+form, and it is read by the *next* review rather than acted on immediately (the bot replies
+with a short acknowledgement when it sees one). Do not confuse it with `/resolve`, which
+resolves GitHub review threads and does nothing to a finding that never opened one. Its
+access check is the commenter's GitHub `author_association` on that comment — `OWNER`,
+`MEMBER` or `COLLABORATOR` — and `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` does
+*not* extend it.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
 ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve` and
@@ -371,6 +381,50 @@ of being recorded justified. It is deliberately conservative:
   unresolved previous finding; it never invents a new blocking finding.
 
 Set it to `false` to make a maintainer's reply final, unconditionally.
+
+### Clearing a finding with no thread
+
+Replying on a finding's review thread is the usual way to close it — but a
+**LOW**-confidence finding at **MEDIUM** or **LOW** risk never opens one. It is
+listed under **Things to double-check** in the summary instead, so there is no
+thread to reply on, while follow-up reviews keep reporting it unresolved and
+holding approval (`APPROVE` → `COMMENT`). To close one, comment on the PR
+conversation:
+
+```
+@thrillhousebot resolved src/main/java/com/example/Widget.java:42 — Missing null check
+```
+
+Closing a finding wrongly is worse than leaving it open, so the match is strict
+and **when the naming is ambiguous the finding stays held**. All of the
+following must hold:
+
+- **The comment carries `@thrillhousebot resolved`.** `resolve` (the thread
+  command) is not it, and a mention alone is not it — an ordinary question about
+  a finding is engagement, not a decision.
+- **You name the finding by *both* its `path:line` locator and its own content**
+  — its title, or its description when it has no title. Each **Things to
+  double-check** row already prints both, the title first and then the locator in
+  backticks, so copying the row is the reliable way to get them right. Naming only
+  one of the two clears nothing. Locators match whole, so `Widget.java:42` never
+  closes a different finding at `Widget.java:4`.
+- **You hold write access.** The comment's GitHub `author_association` must be
+  `OWNER`, `MEMBER` or `COLLABORATOR`; a fork-PR author's or a drive-by
+  commenter's comment is ignored. The bot's own comments are ignored too — its
+  summary reproduces every finding verbatim.
+- **Quoted text does not count.** Blockquote lines and fenced code blocks are
+  stripped before matching, so GitHub's *Quote reply* on the summary — which
+  reproduces every double-check row — clears nothing, and neither does a quoted
+  directive. Write the directive and the finding you mean in your own prose.
+  Inline code is kept, so the backticked `` `path:line` `` from the summary row
+  still matches.
+
+One comment may name several findings; each is matched independently, and one it
+does not name stays open. A finding with neither a title nor a description can
+never be named this way, so it stays held — fix it, or reply on its thread if it
+has one. The clearing is applied by the next review, which records the finding
+**resolved**; the bot posts a short acknowledgement when it sees the directive so
+you know it was read.
 
 ### Blocking strictness
 
