@@ -411,6 +411,39 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void namesThePerModelBufferKnobWhenAnOverrideSourcesTheEffectiveBuffer() {
+    // #528: when a per-model output-buffer-tokens override is present, the global env var is never
+    // read (ActiveModelSettings resolves the override first), so advising "raise
+    // REVIEW_OUTPUT_BUFFER_TOKENS" sends the operator to a knob that changes nothing — following
+    // it re-boots into the identical refusal. The remedy must name the override property instead.
+    var settings = emptyModelSettings();
+    lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(4_096));
+
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder()
+                .model("deepseek-chat", settings)
+                .conciseMaxOutputTokens(Optional.of(8_192))
+                .build());
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "effective output buffer (4096) must be >= REVIEW_CONCISE_MAX_OUTPUT_TOKENS"
+                    + " (8192"),
+        ex.getMessage());
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "raise thrillhousebot.ai.models.\"deepseek-chat\".output-buffer-tokens to cover"
+                    + " it"),
+        "the remedy must name the override that sources the effective buffer: " + ex.getMessage());
+    assertFalse(
+        ex.getMessage().contains("REVIEW_OUTPUT_BUFFER_TOKENS"),
+        "the global env var is inert under the override and must not be advised: "
+            + ex.getMessage());
+  }
+
+  @Test
   void failsFastWhenSafetyMarginOutOfRange() {
     assertTrue(
         assertFailsValidation(new ConfigBuilder().tokenSafetyMargin(0).build())
