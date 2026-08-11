@@ -342,6 +342,14 @@ public class StartupConfigValidator {
    * and reply calls — #498) at boot, the same fail-fast contract as the other budget keys. Empty is
    * allowed: an operator who clears {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} drops the cap and the
    * provider default applies.
+   *
+   * <p>On a shared-window active model the concise cap is also held to the same reservation rule as
+   * the active model's own response cap ({@link #validateEffectiveBudget}): the concise calls spend
+   * their {@code max_tokens} out of the same window the budgeter packed the prompt into with only
+   * {@code reservedOutputTokens} held back, so licensing more output than was reserved overruns the
+   * window just as surely from this knob (#517). Not applied when token budgeting is off (no packed
+   * prompt to overrun) or when the active model declares {@code separate-output-budget} (nothing is
+   * reserved, and the response never draws on the window).
    */
   private void validateConciseResponseCap(List<String> problems) {
     conciseMaxOutputTokens
@@ -352,6 +360,29 @@ public class StartupConfigValidator {
                     "REVIEW_CONCISE_MAX_OUTPUT_TOKENS must be >= 1"
                         + " (quarkus.langchain4j.openai.concise.chat-model.max-tokens): "
                         + v));
+    if (activeModel.maxInputTokens() > 0 && !activeModel.separateOutputBudget()) {
+      var outputBuffer = activeModel.reservedOutputTokens();
+      conciseMaxOutputTokens
+          .filter(v -> v > outputBuffer)
+          .ifPresent(
+              v ->
+                  problems.add(
+                      "the effective output buffer ("
+                          + outputBuffer
+                          + ") must be >= REVIEW_CONCISE_MAX_OUTPUT_TOKENS ("
+                          + v
+                          + ", quarkus.langchain4j.openai.concise.chat-model.max-tokens) for model"
+                          + " '"
+                          + activeModel.modelName()
+                          + "' so the token budget reserves the response cap the"
+                          + " summary/verifier/reply calls send. Lower"
+                          + " REVIEW_CONCISE_MAX_OUTPUT_TOKENS, raise"
+                          + " REVIEW_OUTPUT_BUFFER_TOKENS to cover it, or set"
+                          + " thrillhousebot.ai.models.\""
+                          + activeModel.modelName()
+                          + "\".separate-output-budget=true if this model's response allowance is"
+                          + " independent of its input window."));
+    }
   }
 
   /**
