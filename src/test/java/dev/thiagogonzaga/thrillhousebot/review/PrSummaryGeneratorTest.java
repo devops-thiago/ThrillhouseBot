@@ -607,8 +607,13 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("| `src/B.java` | Added | New cache wrapper |"));
   }
 
+  /**
+   * #547 — a row the model returned no note for used to render a bare "-", which reads as a
+   * rendering bug rather than the honest "nothing came back for this file". It states the reason
+   * now, exactly as the pure-rename row does.
+   */
   @Test
-  void shouldRenderDashWhenFileHasNoMatchingSummary() {
+  void shouldExplainTheMissingSummaryWhenFileHasNoMatchingSummary() {
     var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/A.java", "modified"));
     var aiSummary = summaryWithFiles(new ReviewResponse.FileSummary("src/Other.java", "unrelated"));
     var result =
@@ -617,7 +622,38 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(1, 1, 0, changedFiles, aiSummary, result);
 
-    assertTrue(summary.contains("| `src/A.java` | Modified | - |"));
+    assertTrue(
+        summary.contains(
+            "| `src/A.java` | Modified | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |"),
+        summary);
+    assertFalse(summary.contains("| `src/A.java` | Modified | - |"), summary);
+  }
+
+  /**
+   * #547 — the walkthrough is rendered from the diff, not from the model's reply, so a summary call
+   * that returned no summary object at all still produces rows. Every one of them must say why it
+   * is empty rather than rendering a wall of dashes.
+   */
+  @Test
+  void shouldExplainEveryRowWhenNoSummaryObjectCameBackAtAll() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("src/A.java", "modified"),
+            new PrSummaryGenerator.ChangedFile("src/B.java", "added"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(2, 1, 0, changedFiles, null, result);
+
+    assertTrue(
+        summary.contains(
+            "| `src/A.java` | Modified | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |"),
+        summary);
+    assertTrue(
+        summary.contains("| `src/B.java` | Added | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |"),
+        summary);
+    assertFalse(summary.contains(" | - |"), summary);
   }
 
   @Test
@@ -638,8 +674,12 @@ class PrSummaryGeneratorTest {
         summary.contains(
             "| `src/Moved.java` | Renamed | " + PrSummaryGenerator.PURE_RENAME_SUMMARY + " |"),
         summary);
-    // A rename that also changed content WAS reviewed, so an absent summary stays a bare dash.
-    assertTrue(summary.contains("| `src/Edited.java` | Renamed | - |"), summary);
+    // A rename that also changed content WAS reviewed, so its absent summary carries the other
+    // reason — the model simply returned no note — not the pure-rename one (#547).
+    assertTrue(
+        summary.contains(
+            "| `src/Edited.java` | Renamed | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |"),
+        summary);
   }
 
   @Test

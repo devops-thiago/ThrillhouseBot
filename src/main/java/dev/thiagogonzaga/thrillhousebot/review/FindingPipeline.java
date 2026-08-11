@@ -686,6 +686,16 @@ public class FindingPipeline {
    * single finding is serialized. The overview gets at most half of what remains after the
    * templates and inherited sections (which fit every batch call by construction), leaving the
    * other half for the findings JSON; dropped rows are rolled up by count.
+   *
+   * <p>The clamp keeps a prefix, so what it drops is the tail — a row the walkthrough renders could
+   * in principle be one the summary prompt never saw, leaving it ungrounded (#547). Measured
+   * against the largest PR on record (devops-thiago/ThrillhouseBot#532, 170 changed files) at the
+   * shipped defaults, that gap does not open: the per-call budget is {@code 48000 * 0.9 - 8192 =
+   * 35008} tokens and the summary prompt's fixed sections cost ~1208, so the overview's half share
+   * is ~16900 — while all 170 rows cost 5188, under a third of it. Nothing is clamped, and the
+   * walkthrough renders at most {@link PrReviewPrompts#MAX_FILE_SUMMARIES} rows, so every rendered
+   * row is grounded with a wide margin. Pinned by {@code
+   * FindingPipelineTest#aPr532SizedOverviewKeepsFarMoreRowsThanTheWalkthroughRenders}.
    */
   private String clampOverview(String overview, AiReviewService.PromptInputs promptInputs) {
     var budget = budgetPlanner.perCallInputBudget();
