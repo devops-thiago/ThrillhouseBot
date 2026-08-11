@@ -387,17 +387,17 @@ public class DiffBudgetPlanner {
       // header with no ```diff``` body — there is nothing for the model to read — so packing it
       // would count the file as fully reviewed and let an unbacked "resolved" claim through.
       // Omit it by name like an unclippable file: never packed, holds APPROVE, disclosed.
-      rendered.unclippable().add(file.filename());
+      recordName(rendered.unclippable(), file.filename());
       return;
     }
     var tokens = tokenCounter.estimateTokens(section);
     if (tokens > diffBudgetTokens) {
       var clipped = clipToBudget(section, diffBudgetTokens);
       if (clipped == null) {
-        rendered.unclippable().add(file.filename());
+        recordName(rendered.unclippable(), file.filename());
         return;
       }
-      rendered.clipped().add(file.filename());
+      recordName(rendered.clipped(), file.filename());
       section = clipped;
       tokens = tokenCounter.estimateTokens(clipped);
     }
@@ -409,6 +409,18 @@ public class DiffBudgetPlanner {
    * text diff too large to display). It survives {@link ReviewDiffFormatter#isPureRename} (which
    * needs a zero change count) yet has no diff to review, so it must be omitted, not packed.
    */
+  /**
+   * Records a coverage-gap filename, skipping a null one. {@code FileDiff.filename()} is not
+   * validated at construction, and a null name reaching the plan's name lists makes the {@code
+   * List.copyOf} in the {@link BudgetPlan} constructor throw — failing the whole review at plan
+   * time for a file the disclosure could not have named anyway.
+   */
+  private static void recordName(List<String> names, String filename) {
+    if (filename != null) {
+      names.add(filename);
+    }
+  }
+
   private static boolean isPatchlessWithChanges(GitHubPullRequestClient.FileDiff file) {
     var patch = file.patch();
     return (patch == null || patch.isBlank()) && file.additions() + file.deletions() > 0;
