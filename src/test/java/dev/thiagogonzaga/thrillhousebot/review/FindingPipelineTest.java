@@ -983,6 +983,53 @@ class FindingPipelineTest {
         captor.getValue().changedFiles());
   }
 
+  /**
+   * #547 — the clamp keeps a prefix and drops the tail, so a walkthrough row could in principle be
+   * one the summary prompt never saw. Pins that it is not: at the shipped budget defaults, a PR the
+   * size of devops-thiago/ThrillhouseBot#532 (170 changed files) is not clamped at all, so every
+   * one of the {@link PrSummaryGenerator#MAX_FILE_ROWS} rows the walkthrough renders is grounded.
+   * The bound guarded here is the render bound, not the file count: shrinking the overview's share
+   * below it would reopen the ungrounded-row gap #536 set out to close.
+   */
+  @Test
+  void aPr532SizedOverviewKeepsFarMoreRowsThanTheWalkthroughRenders() {
+    var session = ReviewSession.create("owner/repo", 1, "Release/v0.6.0", "sha");
+    var files = new ArrayList<FileDiff>();
+    for (var i = 0; i < 170; i++) {
+      files.add(
+          new FileDiff(
+              String.format(
+                  "src/main/java/dev/thiagogonzaga/thrillhousebot/review/Component%03d.java", i),
+              "modified",
+              123,
+              45,
+              168,
+              ""));
+    }
+    var ctx = reviewContext(List.of(), files, null);
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    // The shipped defaults: max-input-tokens 48000 * token-safety-margin 0.9 - output buffer 8192.
+    when(budgetPlanner.perCallInputBudget()).thenReturn((int) (48_000 * 0.9) - 8_192);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    var overview = captor.getValue().changedFiles();
+    assertFalse(overview.contains("more changed files"), overview);
+    var rows = 0;
+    for (var line : overview.split("\n")) {
+      if (line.contains(" (modified, +123 -45)")) {
+        rows++;
+      }
+    }
+    assertEquals(files.size(), rows, overview);
+    assertTrue(rows >= PrSummaryGenerator.MAX_FILE_ROWS, "rendered rows must all be grounded");
+  }
+
   @Test
   void overviewIsWithheldWhenTheInheritedSectionsExhaustTheBudget() {
     var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");

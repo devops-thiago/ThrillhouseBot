@@ -81,6 +81,15 @@ public class PrSummaryGenerator {
   static final String PURE_RENAME_SUMMARY = "Pure rename — content unchanged";
 
   /**
+   * Summary cell for a reviewed row the model returned no per-file note for. The bare "-" it
+   * replaces was indistinguishable from a rendering bug: it stated nothing about why the cell was
+   * empty, on exactly the rows a large PR leaves unsummarized (#547). Says the reason instead, for
+   * the same reason {@link #PURE_RENAME_SUMMARY} does — the two cover the whole unsummarized set,
+   * one row per cause.
+   */
+  static final String NO_MODEL_SUMMARY = "Not summarized — no model summary for this file";
+
+  /**
    * One changed file in the walkthrough: its path, the diff's authoritative change type, and
    * whether it is a pure rename — renamed with no content change, hence never sent to the model and
    * never carrying a model summary.
@@ -435,14 +444,16 @@ public class PrSummaryGenerator {
   }
 
   /**
-   * The walkthrough's Summary cell. The model's note wins whenever it supplied one; otherwise a
-   * pure rename says why it has none, and every other unsummarized row keeps the bare dash.
+   * The walkthrough's Summary cell. The model's note wins whenever it supplied one; otherwise the
+   * row states why it has none — a pure rename was never sent to the model, and any other row
+   * simply got no note back. No cell is ever left as a bare dash, which said nothing about which of
+   * the two it was (#547).
    */
   private static String summaryCell(ChangedFile file, String summary) {
     if (!summary.isBlank()) {
       return MarkdownSafe.tableCell(summary.strip());
     }
-    return file.pureRename() ? PURE_RENAME_SUMMARY : "-";
+    return file.pureRename() ? PURE_RENAME_SUMMARY : NO_MODEL_SUMMARY;
   }
 
   /** Indexes the model's per-file notes by path; a duplicate path keeps the first note. */
