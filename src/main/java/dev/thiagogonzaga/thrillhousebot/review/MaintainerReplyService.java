@@ -229,7 +229,10 @@ public class MaintainerReplyService {
                   // codeContext is the diff/hunk under discussion: fence it byte-exact.
                   PromptTemplateEscaper.fence(codeContext),
                   PromptTemplateEscaper.escape(thread)),
-              "Maintainer reply");
+              "Maintainer reply",
+              // ReplyAssistant is bound to the concise named model, so the cap that can cut this
+              // call is REVIEW_CONCISE_MAX_OUTPUT_TOKENS, not the active model's.
+              AiResponses.ModelLane.CONCISE);
       if (reply == null || reply.isBlank()) {
         Log.debug("Reply assistant produced an empty reply — posting nothing");
         return null;

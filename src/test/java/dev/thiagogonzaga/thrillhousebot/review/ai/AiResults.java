@@ -39,4 +39,13 @@ public final class AiResults {
   public static Result<String> aiTruncated(String partialText) {
     return Result.<String>builder().content(partialText).finishReason(FinishReason.LENGTH).build();
   }
+
+  /**
+   * A completed response carrying no content body at all — the "no response" case a reasoning model
+   * produces when its whole output budget went to reasoning tokens, with no length stop to show for
+   * it (#534).
+   */
+  public static Result<String> aiNoContent() {
+    return Result.<String>builder().finishReason(FinishReason.STOP).build();
+  }
 }

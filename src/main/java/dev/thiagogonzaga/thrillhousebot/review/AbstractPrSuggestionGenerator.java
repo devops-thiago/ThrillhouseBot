@@ -296,11 +296,17 @@ public abstract class AbstractPrSuggestionGenerator {
    * RuntimeException}, degrades to {@code null} (post nothing); a usable reply is returned
    * stripped. {@code command} labels the operation in logs (e.g. {@code "/describe"}). Subclasses
    * supply the actual call (and apply any command-specific post-filtering to the result).
+   *
+   * <p>Every subclass's assistant is bound to the default model ({@code /describe}, {@code
+   * /improve}, {@code /changelog}, {@code /generate-tests}, {@code /add-docs}), so a truncation
+   * here is capped by the active model's {@code max-output-tokens} — the concise-bound calls
+   * (summary, verifier, replies) do not come through this path.
    */
   protected String callAssistant(String command, Supplier<Result<String>> assistantCall) {
     try {
       String suggestion =
-          AiResponses.textOrThrowOnTruncation(assistantCall.get(), command + " assistant");
+          AiResponses.textOrThrowOnTruncation(
+              assistantCall.get(), command + " assistant", AiResponses.ModelLane.ACTIVE);
       if (suggestion == null || suggestion.isBlank()) {
         Log.debugf("%s assistant produced an empty suggestion — posting nothing", command);
         return null;

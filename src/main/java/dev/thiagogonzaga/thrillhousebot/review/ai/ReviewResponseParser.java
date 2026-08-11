@@ -223,8 +223,16 @@ public class ReviewResponseParser {
     return parts.isEmpty() ? gap.toString() : String.join(": ", parts);
   }
 
-  /** Strips optional markdown fences and leading noise before the JSON object/array. */
+  /**
+   * Strips optional markdown fences and leading noise before the JSON object/array. An absent body
+   * extracts to {@code ""}: "no response" is a soft failure every caller decides for itself (each
+   * one guards the body before parsing), so this must not convert it into a {@code
+   * NullPointerException} raised from inside the extraction.
+   */
   static String extractJson(String raw) {
+    if (raw == null) {
+      return "";
+    }
     var trimmed = raw.strip();
 
     if (trimmed.startsWith("```")) {
