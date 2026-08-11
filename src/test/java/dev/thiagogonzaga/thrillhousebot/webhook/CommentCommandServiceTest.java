@@ -155,15 +155,19 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void summaryIsNoOpWhenSummaryCommentIsLiveOnPr() {
+  void summaryExplainsItselfWhenSummaryCommentIsLiveOnPr() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
     when(contextLoader.botSummaryCommentExists("token", "owner", "repo", 7)).thenReturn(true);
 
     service.handle(ctx(CommentCommand.SUMMARY));
 
+    // The command was acknowledged with 👀 before it got here, so declining in silence reads as a
+    // hang: the decline has to be stated, along with the way to get a fresh summary anyway.
     verify(reviewDispatcher, never()).dispatch(any());
-    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedBody().contains("summary is already on this PR"), postedBody());
+    assertTrue(postedBody().contains("Delete that summary comment"), postedBody());
+    assertTrue(postedBody().contains("`/summary` again"), postedBody());
   }
 
   @Test
@@ -202,7 +206,7 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void describePostsNothingWhenGeneratorReturnsNull() {
+  void describeSaysSoWhenGeneratorReturnsNothing() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
     when(descriptionGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
@@ -210,7 +214,8 @@ class CommentCommandServiceTest {
 
     service.handle(ctx(CommentCommand.DESCRIBE));
 
-    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedBody().contains("`/describe`"), postedBody());
+    assertTrue(postedBody().contains("no `/describe` output to post"), postedBody());
   }
 
   @Test
@@ -248,14 +253,14 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void changelogPostsNothingWhenGeneratorReturnsNull() {
+  void changelogSaysSoWhenGeneratorReturnsNothing() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
     when(changelogGenerator.generate("owner", "repo", 7, "main", 12345L, "token")).thenReturn(null);
 
     service.handle(ctx(CommentCommand.CHANGELOG));
 
-    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedBody().contains("no `/changelog` output to post"), postedBody());
   }
 
   @Test
@@ -315,13 +320,27 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void addDocsIgnoredWhenDisabled() {
+  void addDocsSaysSoWhenDisabled() {
+    authorize(true);
     when(reviewConfig.addDocsEnabled()).thenReturn(false);
 
     service.handle(ctx(CommentCommand.ADD_DOCS));
 
     verifyNoInteractions(docGenerationService);
-    verifyNoInteractions(authorizer);
+    assertTrue(postedBody().contains("`/add-docs` is disabled"), postedBody());
+    assertTrue(postedBody().contains("thrillhousebot.review.add-docs-enabled=true"), postedBody());
+  }
+
+  @Test
+  void addDocsStaysSilentWhenDisabledAndUnauthorized() {
+    // The kill-switch notice is gated behind write access: otherwise any commenter could make the
+    // bot post on a repository whose maintainers switched the command off.
+    authorize(false);
+    when(reviewConfig.addDocsEnabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.ADD_DOCS));
+
+    verifyNoInteractions(docGenerationService);
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 
@@ -360,14 +379,15 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void improveIgnoredWhenDisabled() {
+  void improveSaysSoWhenDisabled() {
+    authorize(true);
     when(reviewConfig.improveEnabled()).thenReturn(false);
 
     service.handle(ctx(CommentCommand.IMPROVE));
 
     verifyNoInteractions(improvementService);
-    verifyNoInteractions(authorizer);
-    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedBody().contains("`/improve` is disabled"), postedBody());
+    assertTrue(postedBody().contains("thrillhousebot.review.improve-enabled=true"), postedBody());
   }
 
   @Test
@@ -390,14 +410,14 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void generateTestsPostsNothingWhenGeneratorReturnsNull() {
+  void generateTestsSaysSoWhenGeneratorReturnsNothing() {
     authorize(true);
     when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
     when(testGenerator.generate("owner", "repo", 7, "main", 12345L, "token")).thenReturn(null);
 
     service.handle(ctx(CommentCommand.GENERATE_TESTS));
 
-    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedBody().contains("no `/generate-tests` output to post"), postedBody());
   }
 
   @Test
@@ -423,14 +443,16 @@ class CommentCommandServiceTest {
   }
 
   @Test
-  void generateTestsIgnoredWhenDisabled() {
+  void generateTestsSaysSoWhenDisabled() {
+    authorize(true);
     when(reviewConfig.generateTestsEnabled()).thenReturn(false);
 
     service.handle(ctx(CommentCommand.GENERATE_TESTS));
 
     verifyNoInteractions(testGenerator);
-    verifyNoInteractions(authorizer);
-    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(postedBody().contains("`/generate-tests` is disabled"), postedBody());
+    assertTrue(
+        postedBody().contains("thrillhousebot.review.generate-tests-enabled=true"), postedBody());
   }
 
   @Test

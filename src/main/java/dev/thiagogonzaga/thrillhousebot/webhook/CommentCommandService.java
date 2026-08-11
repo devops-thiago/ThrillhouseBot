@@ -43,6 +43,13 @@ import org.slf4j.LoggerFactory;
  * /describe}, {@code /changelog}, {@code /add-docs}, {@code /improve}, {@code /generate-tests},
  * {@code /resolve}, {@code /pause}, {@code /resume}. Work runs on the shared review executor so the
  * webhook 200-ack thread is never blocked by GitHub API calls.
+ *
+ * <p>Every recognized command is acknowledged with a 👀 reaction before it reaches here, so a path
+ * that ends without posting reads on the PR as a hang. The rule these handlers follow is therefore:
+ * an acknowledged command produces exactly one visible reply — the requested output, or a one-line
+ * notice saying why there is none (paused, switched off, already satisfied, nothing to say). The
+ * single deliberate exception is a command from someone without write access: replying there would
+ * let any commenter make the bot post, so those stay silent and are only logged.
  */
 @ApplicationScoped
 public class CommentCommandService {
@@ -54,6 +61,15 @@ public class CommentCommandService {
   /** Posted when a review-generating command lands on a paused PR. */
   static final String PAUSED_NOTICE =
       "⏸️ ThrillhouseBot is paused on this PR. Comment `/resume` to re-enable reviews.";
+
+  /**
+   * Posted when {@code /summary} declines because the PR already carries a bot summary. The command
+   * only regenerates a summary that is missing, so the way to get a fresh one is to delete the
+   * existing comment first.
+   */
+  static final String SUMMARY_ALREADY_PRESENT =
+      "📋 A ThrillhouseBot summary is already on this PR, so `/summary` did nothing. "
+          + "Delete that summary comment and comment `/summary` again to regenerate it.";
 
   static final String HELP_TEXT =
       """
@@ -197,10 +213,11 @@ public class CommentCommandService {
     }
     if (contextLoader.botSummaryCommentExists(auth, ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
-          "Ignoring /summary — a summary comment is already present on {}/{} #{}",
+          "Declining /summary — a summary comment is already present on {}/{} #{}",
           ctx.owner(),
           ctx.repo(),
           num(ctx));
+      postComment(auth, ctx, SUMMARY_ALREADY_PRESENT);
       return;
     }
     log.info(
@@ -248,10 +265,7 @@ public class CommentCommandService {
             ctx.defaultBranch(),
             ctx.installationId(),
             auth);
-    if (suggestion == null) {
-      return;
-    }
-    postComment(auth, ctx, suggestion);
+    postComment(auth, ctx, suggestion != null ? suggestion : noOutputNotice("/describe"));
   }
 
   private void handleChangelog(CommandContext ctx, String auth) {
@@ -277,19 +291,16 @@ public class CommentCommandService {
             ctx.defaultBranch(),
             ctx.installationId(),
             auth);
-    if (entry == null) {
-      return;
-    }
-    postComment(auth, ctx, entry);
+    postComment(auth, ctx, entry != null ? entry : noOutputNotice("/changelog"));
   }
 
   private void handleAddDocs(CommandContext ctx, String auth) {
-    if (!config.review().addDocsEnabled()) {
-      log.info("Ignoring /add-docs on PR #{} — the command is disabled", num(ctx));
-      return;
-    }
     if (!authorized(ctx)) {
       log.info("Ignoring unauthorized /add-docs from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (!config.review().addDocsEnabled()) {
+      declineAsDisabled(ctx, auth, "/add-docs", "add-docs-enabled");
       return;
     }
     if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
@@ -308,12 +319,12 @@ public class CommentCommandService {
   }
 
   private void handleImprove(CommandContext ctx, String auth) {
-    if (!config.review().improveEnabled()) {
-      log.info("Ignoring /improve on PR #{} — the command is disabled", num(ctx));
-      return;
-    }
     if (!authorized(ctx)) {
       log.info("Ignoring unauthorized /improve from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (!config.review().improveEnabled()) {
+      declineAsDisabled(ctx, auth, "/improve", "improve-enabled");
       return;
     }
     if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
@@ -333,12 +344,12 @@ public class CommentCommandService {
   }
 
   private void handleGenerateTests(CommandContext ctx, String auth) {
-    if (!config.review().generateTestsEnabled()) {
-      log.info("Ignoring /generate-tests on PR #{} — the command is disabled", num(ctx));
-      return;
-    }
     if (!authorized(ctx)) {
       log.info("Ignoring unauthorized /generate-tests from @{} on PR #{}", ctx.login(), num(ctx));
+      return;
+    }
+    if (!config.review().generateTestsEnabled()) {
+      declineAsDisabled(ctx, auth, "/generate-tests", "generate-tests-enabled");
       return;
     }
     if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
@@ -359,10 +370,7 @@ public class CommentCommandService {
             ctx.defaultBranch(),
             ctx.installationId(),
             auth);
-    if (suggestion == null) {
-      return;
-    }
-    postComment(auth, ctx, suggestion);
+    postComment(auth, ctx, suggestion != null ? suggestion : noOutputNotice("/generate-tests"));
   }
 
   private void handleResolve(CommandContext ctx, String auth) {
@@ -471,6 +479,41 @@ public class CommentCommandService {
       }
     }
     return ids;
+  }
+
+  /**
+   * Logs and answers a command that is switched off for this deployment, naming the config key an
+   * administrator would flip. The kill-switch check sits after the authorization check in every
+   * handler precisely so this reply exists: a notice posted before authorization would let any
+   * commenter make the bot speak on a repository whose maintainers turned the command off.
+   */
+  private void declineAsDisabled(
+      CommandContext ctx, String auth, String command, String configKey) {
+    log.info("Declining {} on PR #{} — the command is disabled", command, num(ctx));
+    postComment(
+        auth,
+        ctx,
+        "🚫 `"
+            + command
+            + "` is disabled on this ThrillhouseBot deployment. An administrator can turn it back"
+            + " on with `thrillhousebot.review."
+            + configKey
+            + "=true`.");
+  }
+
+  /**
+   * The reply for a generator that produced nothing to post. The two causes are indistinguishable
+   * from here — the generators return {@code null} both when the PR gave them nothing worth saying
+   * and when every batch call failed — so the notice names both rather than assert a verdict the
+   * caller cannot support.
+   */
+  private static String noOutputNotice(String command) {
+    return "🤖 ThrillhouseBot has no `"
+        + command
+        + "` output to post for this PR — it found nothing to suggest, or the generation did not"
+        + " complete. Re-run `"
+        + command
+        + "` to try again.";
   }
 
   private boolean authorized(CommandContext ctx) {
