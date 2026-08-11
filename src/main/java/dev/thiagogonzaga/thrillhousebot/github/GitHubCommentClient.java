@@ -111,11 +111,31 @@ public interface GitHubCommentClient {
   /**
    * A PR conversation comment: the id (to edit the bot's own summary in place), plus the body and
    * author needed to spot it.
+   *
+   * <p>{@code authorAssociation} is GitHub's per-comment statement of the author's relationship to
+   * the repository ({@code OWNER}/{@code MEMBER}/{@code COLLABORATOR}/{@code CONTRIBUTOR}/{@code
+   * NONE}/…), carried for the same reason {@link GitHubReviewClient.PullRequestComment} carries it:
+   * the follow-up analyzer only lets a write-capable maintainer's conversation comment clear an
+   * approve hold, never a drive-by commenter's.
    */
-  record IssueComment(long id, String body, GitHubReviewClient.ReviewResponse.User user) {
+  record IssueComment(
+      long id,
+      String body,
+      GitHubReviewClient.ReviewResponse.User user,
+      @JsonProperty("author_association") String authorAssociation) {
+
+    /**
+     * Back-compat convenience for callers/tests that carry no author association. Defaults it to
+     * {@code null}, which the analyzer treats as not write-capable — the safe direction, since a
+     * comment with an unknown association must not clear a hold.
+     */
+    public IssueComment(long id, String body, GitHubReviewClient.ReviewResponse.User user) {
+      this(id, body, user, null);
+    }
+
     /** Convenience constructor for callers that never edit the comment. */
     public IssueComment(String body, GitHubReviewClient.ReviewResponse.User user) {
-      this(0, body, user);
+      this(0, body, user, null);
     }
   }
 }

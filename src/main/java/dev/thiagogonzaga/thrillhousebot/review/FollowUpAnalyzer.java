@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -35,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /** Analyzes follow-up reviews by comparing new findings against prior reviews. */
@@ -728,6 +730,189 @@ public class FollowUpAnalyzer {
         && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
 
+  /**
+   * The directive a maintainer writes in a PR conversation comment to clear findings the review
+   * threads cannot reach. Mirrors the {@code @thrillhousebot <word>} mention form every other
+   * command uses, but deliberately spells the word {@code resolved} rather than {@code resolve}, so
+   * it is not the existing {@code /resolve} command (which resolves GitHub review threads) under a
+   * second name — {@code TriggerDetector}'s {@code resolve} pattern ends in a word boundary and
+   * therefore does not fire on {@code resolved}.
+   */
+  private static final Pattern CLEAR_DIRECTIVE =
+      Pattern.compile("@thrillhousebot\\s+resolved\\b", Pattern.CASE_INSENSITIVE);
+
+  /** Fenced code blocks, dropped before a conversation comment is read as a directive. */
+  private static final Pattern FENCED_CODE = Pattern.compile("(?s)```.*?```|~~~.*?~~~");
+
+  /** Markdown blockquote lines — what GitHub's "Quote reply" produces. */
+  private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]*>.*$");
+
+  /** Note recorded on a finding a maintainer cleared from the PR conversation. */
+  static final String CONVERSATION_CLEARED_NOTE =
+      "Cleared by a maintainer's @thrillhousebot resolved comment on the PR conversation.";
+
+  /**
+   * Whether {@code body} is a maintainer's clearing directive — an {@code @thrillhousebot resolved}
+   * instruction written outside quoted context. Shared with {@link MaintainerReplyService} so the
+   * conversational-reply path recognizes exactly the text this analyzer acts on.
+   */
+  static boolean isClearDirective(String body) {
+    return body != null && CLEAR_DIRECTIVE.matcher(unquoted(body)).find();
+  }
+
+  /**
+   * The comment body with quoted context removed: fenced code blocks and blockquote lines. Dropping
+   * blockquotes is what keeps GitHub's "Quote reply" from clearing findings — quoting the summary's
+   * "Things to double-check" list reproduces every row verbatim, and matching inside it would clear
+   * findings the maintainer never named. Inline code is deliberately <em>kept</em>: the summary
+   * prints each finding's locator as {@code `path:line`}, so a pasted row must stay matchable.
+   */
+  private static String unquoted(String body) {
+    return BLOCKQUOTE_LINE.matcher(FENCED_CODE.matcher(body).replaceAll(" ")).replaceAll(" ");
+  }
+
+  /**
+   * Whether a maintainer cleared this finding from the PR conversation — the escape hatch for a
+   * finding that has no review thread to reply on, because {@link Finding#postsInline} routed it to
+   * the summary's "Things to double-check" instead of the diff (#548). Without it a low-confidence
+   * finding held by the backstop could never be closed by any maintainer action: the reply hatch
+   * (#133/#142) needs a thread, and there is none.
+   *
+   * <p>Over-clearing is the dangerous direction, so every leg below must hold and any one missing
+   * leaves the finding held:
+   *
+   * <ul>
+   *   <li>the comment is a human's, not the bot's — the bot's own summary lists every finding
+   *       verbatim, so reading it back would clear the whole round;
+   *   <li>its author may hold write access ({@link #mayHoldWriteAccess}) — the same association
+   *       prefilter the review-thread hatch applies, so a drive-by commenter on a public repo
+   *       cannot clear a hold;
+   *   <li>it carries the {@link #CLEAR_DIRECTIVE} outside quoted context — an ordinary comment that
+   *       merely discusses a finding is engagement, not a decision, and the whole PR conversation
+   *       is one space rather than the finding's own thread;
+   *   <li>it names <em>this</em> finding by BOTH its printed locator ({@code path:line}) and its
+   *       own content (its title, or its description when it has no title) — the same
+   *       content-anchoring the marked-thread hatch uses. A finding with neither title nor
+   *       description matches nothing and stays held.
+   * </ul>
+   *
+   * <p>Marker reuse cannot leak a clear across rounds: no {@code thrillhousebot:finding=N} marker
+   * is read here at all, so a pasted marker names nothing. The locator is the finding's own
+   * persisted {@code file}:{@code line} — the pair the summary printed for that round — so a
+   * same-titled finding at another location is not named by it either.
+   */
+  private static boolean clearedInConversation(
+      ReviewResponse.Finding finding,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity) {
+    if (conversationComments == null || conversationComments.isEmpty() || finding.file() == null) {
+      return false;
+    }
+    String anchor = ownContentAnchor(finding);
+    if (anchor == null) {
+      return false;
+    }
+    String locator = finding.file() + ":" + finding.line();
+    for (var comment : conversationComments) {
+      if (!isMaintainerConversationComment(comment, botIdentity)) {
+        continue;
+      }
+      String body = unquoted(comment.body());
+      if (CLEAR_DIRECTIVE.matcher(body).find()
+          && namesLocator(body, locator)
+          && body.contains(anchor)) {
+        Log.infof(
+            "Clearing previous finding '%s' (%s) — a maintainer named it in an"
+                + " @thrillhousebot resolved comment on the PR conversation",
+            finding.title(), locator);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether {@code body} names {@code path:line} as a whole locator. A bare {@code contains} would
+   * let a comment about {@code src/A.java:10} clear the distinct finding at {@code src/A.java:1},
+   * whose locator is a prefix of it — an over-clear, and the direction that must never happen — so
+   * a match followed by another digit is skipped and the scan continues.
+   */
+  private static boolean namesLocator(String body, String locator) {
+    for (var at = body.indexOf(locator); at >= 0; at = body.indexOf(locator, at + 1)) {
+      var after = at + locator.length();
+      if (after >= body.length() || !Character.isDigit(body.charAt(after))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A non-bot conversation comment with a body and a write-capable author association. */
+  private static boolean isMaintainerConversationComment(
+      GitHubCommentClient.IssueComment comment, BotIdentity botIdentity) {
+    return comment != null
+        && comment.body() != null
+        && comment.user() != null
+        && !botIdentity.matches(comment.user().login())
+        && mayHoldWriteAccess(comment.authorAssociation());
+  }
+
+  /**
+   * The text that identifies a finding in prose: its title, or its description when it has no
+   * usable title (the same fallback {@link #bodyCarriesOwnContent} uses, for the same reason — the
+   * bot renders a null title as the literal {@code "null"}, which names nothing). {@code null} when
+   * the finding carries neither, so it can never be cleared by content it does not have.
+   */
+  private static String ownContentAnchor(ReviewResponse.Finding finding) {
+    String title = finding.title();
+    if (title != null && !title.isBlank()) {
+      return title;
+    }
+    String description = finding.description();
+    return description == null || description.isBlank() ? null : description;
+  }
+
+  /**
+   * Rewrites a model-reported {@code unresolved} to {@code resolved} when a maintainer cleared that
+   * finding from the PR conversation ({@link #clearedInConversation}). The model never sees the
+   * conversation, so without this pass a finding the maintainer explicitly closed keeps being
+   * reported unresolved and keeps holding APPROVE — the same dead end the backstop had (#548).
+   *
+   * <p>Only {@code unresolved} entries are touched: a {@code justified}/{@code resolved}/{@code
+   * superseded} verdict is already an accounting, and an id outside the prior round names no
+   * finding to check.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> clearNamedInConversation(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity) {
+    if (statuses == null || statuses.isEmpty()) {
+      return statuses == null ? List.of() : statuses;
+    }
+    if (previous == null
+        || previous.isEmpty()
+        || conversationComments == null
+        || conversationComments.isEmpty()) {
+      return statuses;
+    }
+    var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var id = status.id();
+      if (STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
+          && id >= 1
+          && id <= previous.size()
+          && clearedInConversation(previous.get(id - 1), conversationComments, botIdentity)) {
+        rewritten.add(
+            new ReviewResponse.PreviousFindingStatus(
+                id, STATUS_RESOLVED, CONVERSATION_CLEARED_NOTE));
+      } else {
+        rewritten.add(status);
+      }
+    }
+    return rewritten;
+  }
+
   /** Maps each previous finding's prompt id to its bot root comment, for thread resolution. */
   public Map<Integer, Long> matchFindingThreads(
       String previousAiResponseJson,
@@ -1096,7 +1281,9 @@ public class FollowUpAnalyzer {
    * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
    * so they can turn APPROVE into COMMENT, never into REQUEST_CHANGES. A maintainer reply on the
    * thread clears the hold (the human is engaged; defer to them, matching {@link
-   * #dropRepliedDuplicates}), as does the model marking the finding resolved/justified.
+   * #dropRepliedDuplicates}), as does the model marking the finding resolved/justified, as does an
+   * {@code @thrillhousebot resolved} comment naming the finding on the PR conversation — the hatch
+   * for a finding that has no thread to reply on ({@link #clearedInConversation}).
    *
    * @param priorAiResponseJsons every completed prior round's persisted AI response, newest first
    *     (as {@link
@@ -1149,13 +1336,39 @@ public class FollowUpAnalyzer {
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
+    return unreportedUnresolvedStatusesFromParsed(
+        priorAiResponses,
+        currentStatuses,
+        inlineComments,
+        List.of(),
+        lineResolver,
+        botIdentity,
+        renameTargets);
+  }
+
+  /**
+   * Conversation-aware variant used by the review verdict path. A finding that never posted inline
+   * ({@link Finding#postsInline}) has no thread for the reply hatch to reach, so its only
+   * maintainer-driven escape is an {@code @thrillhousebot resolved} comment on the PR conversation
+   * ({@link #clearedInConversation}); without it the backstop holds such a finding every round with
+   * no action able to clear it (#548).
+   */
+  public List<ReviewResult.PreviousFindingStatus> unreportedUnresolvedStatusesFromParsed(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
     var chrono = toChronological(priorAiResponses);
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
-    return heldFromClusters(clusters, inlineComments, lineResolver, botIdentity, renameTargets);
+    return heldFromClusters(
+        clusters, inlineComments, conversationComments, lineResolver, botIdentity, renameTargets);
   }
 
   /**
@@ -1223,13 +1436,20 @@ public class FollowUpAnalyzer {
   private List<ReviewResult.PreviousFindingStatus> heldFromClusters(
       List<List<OpenFinding>> clusters,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
     for (var cluster : clusters) {
       OpenFinding target =
-          holdableTarget(cluster, inlineComments, lineResolver, botIdentity, renameTargets);
+          holdableTarget(
+              cluster,
+              inlineComments,
+              conversationComments,
+              lineResolver,
+              botIdentity,
+              renameTargets);
       if (target != null) {
         held.add(
             new ReviewResult.PreviousFindingStatus(
@@ -1242,11 +1462,12 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The first still-present member of the cluster to hold, or {@code null} when its code is gone or
-   * a maintainer has replied on it. The reply is located by the round-relative marker ({@link
-   * OpenFinding#id()}) plus the finding's own content rather than by title, so a null-title
-   * finding's thread is still seen and a thread-less finding cannot bind to a different finding
-   * that reused the same marker index in another round.
+   * The first still-present member of the cluster to hold, or {@code null} when its code is gone, a
+   * maintainer has replied on its thread, or a maintainer cleared it from the PR conversation
+   * ({@link #clearedInConversation} — the only hatch a finding with no thread has, #548). The reply
+   * is located by the round-relative marker ({@link OpenFinding#id()}) plus the finding's own
+   * content rather than by title, so a null-title finding's thread is still seen and a thread-less
+   * finding cannot bind to a different finding that reused the same marker index in another round.
    *
    * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
    * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
@@ -1255,21 +1476,23 @@ public class FollowUpAnalyzer {
   private OpenFinding holdableTarget(
       List<OpenFinding> cluster,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
     OpenFinding target = null;
-    boolean anyReplied = false;
+    boolean answered = false;
     for (var member : cluster) {
       var finding = member.finding();
       if (target == null && isStillPresent(finding, lineResolver, renameTargets)) {
         target = member;
       }
-      if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null) {
-        anyReplied = true;
+      if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null
+          || clearedInConversation(finding, conversationComments, botIdentity)) {
+        answered = true;
       }
     }
-    return anyReplied ? null : target;
+    return answered ? null : target;
   }
 
   /**

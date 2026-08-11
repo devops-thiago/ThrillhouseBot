@@ -190,7 +190,31 @@ public class MaintainerReplyService {
         task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
   }
 
+  /**
+   * Acknowledgement posted for an {@code @thrillhousebot resolved} comment. Deliberately
+   * deterministic prose rather than an assistant answer: the directive is an instruction the review
+   * path acts on, not a question, and a generated reply could contradict or overstate what it does.
+   * The wording is conditional because the clearing decision is made by the next review, which
+   * matches each named finding against its own {@code path:line} and title (#548).
+   */
+  static final String CLEAR_DIRECTIVE_ACK =
+      "Noted. Every previous finding your comment names by its `path:line` and title is treated as"
+          + " cleared from the next review onward; any it does not name stays open.";
+
   private void handleMention(String auth, ReplyTask task) {
+    if (FollowUpAnalyzer.isClearDirective(task.question())) {
+      commentClient.createComment(
+          auth,
+          ACCEPT,
+          task.owner(),
+          task.repo(),
+          task.prNumber(),
+          new GitHubCommentClient.CreateCommentRequest(CLEAR_DIRECTIVE_ACK));
+      Log.infof(
+          "Acknowledged a maintainer clear directive on %s/%s #%d",
+          task.owner(), task.repo(), task.prNumber());
+      return;
+    }
     var diff = fetchDiff(auth, task);
     String reply =
         generateReply(

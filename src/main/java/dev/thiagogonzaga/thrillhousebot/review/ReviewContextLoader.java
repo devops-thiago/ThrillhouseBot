@@ -133,7 +133,8 @@ public class ReviewContextLoader {
       String patchCoverage,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
-      PrTotals prTotals) {
+      PrTotals prTotals,
+      List<GitHubCommentClient.IssueComment> conversationComments) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -142,6 +143,62 @@ public class ReviewContextLoader {
       inlineComments = List.copyOf(inlineComments);
       repoLabels = List.copyOf(repoLabels);
       reviewableFiles = List.copyOf(reviewableFiles);
+      conversationComments = List.copyOf(conversationComments);
+    }
+
+    /**
+     * Back-compat constructor for callers that carry no PR conversation comments. Defaults them to
+     * empty, which reads as "no maintainer cleared anything from the conversation" — the safe
+     * direction, since a missing list must never clear a hold.
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          List.of());
     }
 
     /**
@@ -243,6 +300,11 @@ public class ReviewContextLoader {
         hasContext
             ? fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber())
             : List.of();
+    // The PR conversation carries the only escape hatch a thread-less finding has: an
+    // "@thrillhousebot resolved" comment naming it (#548). Fetched on the same gate as the inline
+    // comments — a first review has no prior finding to clear, so it never pays for the call.
+    List<GitHubCommentClient.IssueComment> conversationComments =
+        hasContext ? fetchIssueComments(auth, req.owner(), req.repo(), req.prNumber()) : List.of();
     List<ReviewResponse.Finding> previousFindingsSource =
         FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
     // The review-body fallback is for sessions carrying no readable AI response at all. Once any
@@ -301,7 +363,8 @@ public class ReviewContextLoader {
         patchCoverage,
         reviewableFiles,
         lineResolverSupplier,
-        prTotals);
+        prTotals,
+        conversationComments);
   }
 
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */

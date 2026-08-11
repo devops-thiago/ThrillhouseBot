@@ -620,4 +620,53 @@ class MaintainerReplyServiceTest {
         body.getValue().body().contains("partial coverage"),
         "a truncated diff must disclose the omission in the posted reply");
   }
+
+  private MaintainerReplyService.ReplyTask mentionTask(String question) {
+    return new MaintainerReplyService.ReplyTask(
+        "owner",
+        "repo",
+        42,
+        12345L,
+        "octocat",
+        "OWNER",
+        question,
+        "PR Title",
+        "PR body",
+        false,
+        null,
+        2000L,
+        true,
+        null);
+  }
+
+  @Test
+  void clearDirectiveIsAcknowledgedDeterministicallyWithoutTheAssistant() {
+    authorize();
+
+    service.handle(
+        mentionTask("@thrillhousebot resolved `src/A.java:10` — SQL injection, fixed in abc123"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_ACK, body.getValue().body());
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void anOrdinaryMentionStillGetsAnAssistantAnswer() {
+    authorize();
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(fileDiff("src/A.java", "@@ -1 +1 @@\n-a\n+aa", 1)));
+    when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
+        .thenReturn(RepoSettings.EMPTY);
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
+
+    service.handle(mentionTask("@thrillhousebot did you resolve this already?"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals("Answer.", body.getValue().body());
+  }
 }

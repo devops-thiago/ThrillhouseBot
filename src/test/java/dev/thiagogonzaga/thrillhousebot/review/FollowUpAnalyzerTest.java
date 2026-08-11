@@ -23,6 +23,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
@@ -2662,5 +2663,351 @@ class FollowUpAnalyzerTest {
             .get(0)
             .status(),
         "the injected constructor must honour thrillhousebot.review.decline-recheck-enabled");
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // #548 — a finding that never posted inline has no review thread, so the reply hatch (#133/#142)
+  // cannot reach it. The PR conversation is its only escape. Over-clearing is the dangerous
+  // direction, so each case below pins one leg of the recognition.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Names the first PREVIOUS_JSON finding exactly as the summary prints it. */
+  private static final String CLEARS_FINDING_ONE =
+      "@thrillhousebot resolved `src/A.java:10` — SQL injection (fixed in abc123)";
+
+  private static GitHubCommentClient.IssueComment conversationComment(
+      String body, String author, String association) {
+    return new GitHubCommentClient.IssueComment(
+        900L, body, new GitHubReviewClient.ReviewResponse.User(author), association);
+  }
+
+  /** A write-capable maintainer's PR conversation comment. */
+  private static GitHubCommentClient.IssueComment maintainerSays(String body) {
+    return conversationComment(body, "maintainer", "MEMBER");
+  }
+
+  /** The backstop over PREVIOUS_JSON with both findings still present in the diff. */
+  private List<ReviewResult.PreviousFindingStatus> backstopWith(
+      List<GitHubCommentClient.IssueComment> conversation) {
+    return backstopWith(PREVIOUS_JSON, conversation);
+  }
+
+  private List<ReviewResult.PreviousFindingStatus> backstopWith(
+      String roundJson, List<GitHubCommentClient.IssueComment> conversation) {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    return analyzer.unreportedUnresolvedStatusesFromParsed(
+        analyzer.parsePreviousResponses(List.of(roundJson)),
+        List.of(),
+        List.of(),
+        conversation,
+        resolver,
+        BOT_ID,
+        Map.of());
+  }
+
+  @Test
+  void backstopShouldClearOnlyTheThreadlessFindingTheConversationNames() {
+    var held = backstopWith(List.of(maintainerSays(CLEARS_FINDING_ONE)));
+
+    assertEquals(
+        List.of(2),
+        heldIds(held),
+        "the named finding must be cleared and the one it does not name must stay held");
+  }
+
+  @Test
+  void backstopShouldScopeAConversationClearToTheNamedLocator() {
+    // Two findings sharing a title in different files: the locator, not the title, decides which
+    // one the maintainer named — the same discipline that keeps a recurring marker index from
+    // binding a clear to another round's finding.
+    var sameTitleTwice =
+        """
+        {"findings": [
+          {"risk": "low", "file": "src/A.java", "line": 10, "title": "Missing null check",
+           "description": "may NPE"},
+          {"risk": "low", "file": "src/B.java", "line": 5, "title": "Missing null check",
+           "description": "may NPE"}
+        ]}
+        """;
+
+    var held =
+        backstopWith(
+            sameTitleTwice,
+            List.of(maintainerSays("@thrillhousebot resolved `src/A.java:10` Missing null check")));
+
+    assertEquals(List.of(2), heldIds(held));
+  }
+
+  static Stream<Arguments> conversationCommentsThatClearNothing() {
+    return Stream.of(
+        arguments("directive naming no finding", "@thrillhousebot resolved — thanks, all good now"),
+        arguments(
+            "a pasted marker names nothing across rounds",
+            "@thrillhousebot resolved <!-- thrillhousebot:finding=1 -->"),
+        arguments(
+            "another round's locator for the same title",
+            "@thrillhousebot resolved `src/A.java:99` — SQL injection"),
+        arguments(
+            "one finding's locator with another finding's title",
+            "@thrillhousebot resolved `src/A.java:10` — Missing null check"),
+        arguments(
+            "GitHub quote-reply reproducing every summary row",
+            """
+            > ### Things to double-check
+            > - **CRITICAL:** SQL injection (`src/A.java:10`)
+            > - **MEDIUM:** Missing null check (`src/B.java:5`)
+
+            @thrillhousebot resolved
+            """),
+        arguments(
+            "the directive quoted while the findings are named",
+            """
+            Someone told me to write:
+            > @thrillhousebot resolved
+
+            about `src/A.java:10` — SQL injection and `src/B.java:5` — Missing null check.
+            """),
+        arguments(
+            "the directive fenced while the findings are named",
+            """
+            ```
+            @thrillhousebot resolved
+            ```
+            `src/A.java:10` — SQL injection, `src/B.java:5` — Missing null check
+            """),
+        arguments(
+            "findings named with no directive at all",
+            "Fixed `src/A.java:10` — SQL injection and `src/B.java:5` — Missing null check."),
+        arguments(
+            "the thread-resolving command is not a clear directive",
+            "@thrillhousebot resolve `src/A.java:10` — SQL injection"));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("conversationCommentsThatClearNothing")
+  void backstopShouldClearNothingWhenTheConversationDoesNotNameTheFinding(
+      String name, String body) {
+    assertEquals(
+        List.of(1, 2),
+        heldIds(backstopWith(List.of(maintainerSays(body)))),
+        name + " must clear nothing");
+  }
+
+  static Stream<Arguments> conversationCommentsThatCannotDecide() {
+    return Stream.of(
+        arguments("fork-PR author", conversationComment(CLEARS_FINDING_ONE, "outsider", "NONE")),
+        arguments(
+            "contributor without write access",
+            conversationComment(CLEARS_FINDING_ONE, "outsider", "CONTRIBUTOR")),
+        arguments(
+            "absent author association", conversationComment(CLEARS_FINDING_ONE, "someone", null)),
+        arguments(
+            "the bot quoting its own summary",
+            conversationComment(CLEARS_FINDING_ONE, BOT, "OWNER")),
+        arguments(
+            "comment with no author object",
+            new GitHubCommentClient.IssueComment(900L, CLEARS_FINDING_ONE, null, "OWNER")),
+        arguments("comment with no body", conversationComment(null, "maintainer", "OWNER")));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("conversationCommentsThatCannotDecide")
+  void backstopShouldIgnoreAClearDirectiveFromAnIneligibleComment(
+      String name, GitHubCommentClient.IssueComment comment) {
+    assertEquals(
+        List.of(1, 2), heldIds(backstopWith(List.of(comment))), name + " must not clear a hold");
+  }
+
+  @Test
+  void backstopShouldIgnoreAnAbsentConversationEntry() {
+    // Defensive: a null element cannot survive the ReviewContext copy, but the analyzer is called
+    // directly by other paths and must never dereference one.
+    var conversation = new ArrayList<GitHubCommentClient.IssueComment>();
+    conversation.add(null);
+    conversation.add(maintainerSays(CLEARS_FINDING_ONE));
+
+    assertEquals(List.of(2), heldIds(backstopWith(conversation)));
+  }
+
+  @Test
+  void backstopShouldTreatAnAbsentConversationAsNoClear() {
+    assertEquals(List.of(1, 2), heldIds(backstopWith(null)));
+  }
+
+  static Stream<Arguments> contentAnchorCases() {
+    return Stream.of(
+        arguments(
+            "title", "\"Missing bound check\"", "\"guards nothing\"", "Missing bound check", true),
+        arguments(
+            "description when the title is null",
+            "null",
+            "\"guards nothing\"",
+            "guards nothing",
+            true),
+        arguments(
+            "description when the title is blank",
+            "\"  \"",
+            "\"guards nothing\"",
+            "guards nothing",
+            true),
+        arguments("neither title nor description", "null", "null", "src/A.java", false),
+        arguments("blank title and blank description", "\"  \"", "\"  \"", "src/A.java", false));
+  }
+
+  @ParameterizedTest(name = "cleared by {0}: {4}")
+  @MethodSource("contentAnchorCases")
+  void backstopShouldClearOnlyOnTheFindingsOwnContent(
+      String name, String titleJson, String descriptionJson, String quoted, boolean cleared) {
+    var json =
+        "{\"findings\": [{\"risk\": \"low\", \"file\": \"src/A.java\", \"line\": 10, \"title\": "
+            + titleJson
+            + ", \"description\": "
+            + descriptionJson
+            + "}]}";
+
+    var held =
+        backstopWith(
+            json, List.of(maintainerSays("@thrillhousebot resolved `src/A.java:10` — " + quoted)));
+
+    assertEquals(
+        cleared ? List.of() : List.of(1),
+        heldIds(held),
+        name + " — a finding with no content of its own must stay held");
+  }
+
+  /** One low finding at src/A.java:1, whose locator is a prefix of src/A.java:10's. */
+  private static final String FINDING_AT_LINE_ONE =
+      """
+      {"findings": [
+        {"risk": "low", "file": "src/A.java", "line": 1, "title": "SQL injection",
+         "description": "raw query"}
+      ]}
+      """;
+
+  static Stream<Arguments> prefixLocatorCases() {
+    return Stream.of(
+        arguments(
+            "a longer line number must not clear the shorter one",
+            "@thrillhousebot resolved `src/A.java:10` — SQL injection",
+            false),
+        arguments(
+            "a later whole match still counts",
+            "@thrillhousebot resolved src/A.java:10 and src/A.java:1 — SQL injection",
+            true),
+        arguments(
+            "a match ending the comment counts",
+            "@thrillhousebot resolved SQL injection at src/A.java:1",
+            true));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("prefixLocatorCases")
+  void backstopShouldMatchWholeLocatorsOnly(String name, String body, boolean cleared) {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(1)));
+    var held =
+        analyzer.unreportedUnresolvedStatusesFromParsed(
+            analyzer.parsePreviousResponses(List.of(FINDING_AT_LINE_ONE)),
+            List.of(),
+            List.of(),
+            List.of(maintainerSays(body)),
+            resolver,
+            BOT_ID,
+            Map.of());
+
+    assertEquals(cleared ? List.of() : List.of(1), heldIds(held), name);
+  }
+
+  private List<ReviewResponse.Finding> previousFindings() {
+    return analyzer.parseResponse(PREVIOUS_JSON).findings();
+  }
+
+  private static List<ReviewResponse.PreviousFindingStatus> bothUnresolved() {
+    return List.of(
+        new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still present"),
+        new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still present"));
+  }
+
+  @Test
+  void clearNamedInConversationShouldCloseOnlyTheModelReportedFindingThatWasNamed() {
+    var rewritten =
+        analyzer.clearNamedInConversation(
+            previousFindings(),
+            bothUnresolved(),
+            List.of(maintainerSays(CLEARS_FINDING_ONE)),
+            BOT_ID);
+
+    assertEquals(
+        List.of("resolved", "unresolved"),
+        rewritten.stream().map(ReviewResponse.PreviousFindingStatus::status).toList());
+    assertEquals(FollowUpAnalyzer.CONVERSATION_CLEARED_NOTE, rewritten.get(0).note());
+    assertEquals("still present", rewritten.get(1).note(), "an unnamed finding keeps its note");
+  }
+
+  @Test
+  void clearNamedInConversationShouldLeaveNonUnresolvedAndUnplaceableStatusesAlone() {
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "justified", "intentional"),
+            new ReviewResponse.PreviousFindingStatus(9, "unresolved", "out of range"),
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", "out of range"));
+
+    assertEquals(
+        statuses,
+        analyzer.clearNamedInConversation(
+            previousFindings(), statuses, List.of(maintainerSays(CLEARS_FINDING_ONE)), BOT_ID),
+        "only an in-range unresolved status may be rewritten by a conversation clear");
+  }
+
+  @Test
+  void clearNamedInConversationShouldPassStatusesThroughWithNothingToMatchAgainst() {
+    var statuses = bothUnresolved();
+    var conversation = List.of(maintainerSays(CLEARS_FINDING_ONE));
+
+    assertEquals(List.of(), analyzer.clearNamedInConversation(null, null, conversation, BOT_ID));
+    assertEquals(
+        List.of(),
+        analyzer.clearNamedInConversation(previousFindings(), List.of(), conversation, BOT_ID));
+    assertSame(
+        statuses,
+        analyzer.clearNamedInConversation(null, statuses, conversation, BOT_ID),
+        "no prior round means no finding to name");
+    assertSame(
+        statuses, analyzer.clearNamedInConversation(List.of(), statuses, conversation, BOT_ID));
+    assertSame(
+        statuses, analyzer.clearNamedInConversation(previousFindings(), statuses, null, BOT_ID));
+    assertSame(
+        statuses,
+        analyzer.clearNamedInConversation(previousFindings(), statuses, List.of(), BOT_ID));
+  }
+
+  @Test
+  void clearNamedInConversationShouldHoldAFindingWithNoFile() {
+    var json =
+        "{\"findings\": [{\"risk\": \"low\", \"file\": null, \"line\": 10,"
+            + " \"title\": \"SQL injection\", \"description\": \"raw query\"}]}";
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
+
+    assertEquals(
+        statuses,
+        analyzer.clearNamedInConversation(
+            analyzer.parseResponse(json).findings(),
+            statuses,
+            List.of(maintainerSays("@thrillhousebot resolved null:10 — SQL injection")),
+            BOT_ID),
+        "a finding that cannot be placed in a file cannot be named by a locator");
+  }
+
+  @Test
+  void isClearDirectiveShouldRecognizeOnlyAnUnquotedResolvedInstruction() {
+    assertTrue(FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved src/A.java:10 — title"));
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective("thanks!\n\n@ThrillhouseBot   RESOLVED all of it"));
+    assertFalse(FollowUpAnalyzer.isClearDirective(null));
+    assertFalse(FollowUpAnalyzer.isClearDirective("@thrillhousebot why is this flagged?"));
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolve"),
+        "the thread-resolving command must not be read as a finding clear");
+    assertFalse(FollowUpAnalyzer.isClearDirective("> @thrillhousebot resolved"));
+    assertFalse(FollowUpAnalyzer.isClearDirective("```\n@thrillhousebot resolved\n```"));
   }
 }

@@ -191,6 +191,12 @@ public class VerdictBuilder {
             ctx.inlineComments(),
             botIdentity,
             () -> reviewedCode(ctx, plan));
+    // A finding that never posted inline has no thread to reply on, so the only maintainer action
+    // that can close it is an "@thrillhousebot resolved" comment naming it on the PR conversation
+    // (#548). The model never sees that conversation, so its "unresolved" is rewritten here.
+    effectiveStatuses =
+        followUpAnalyzer.clearNamedInConversation(
+            ctx.previousFindingsList(), effectiveStatuses, ctx.conversationComments(), botIdentity);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
@@ -204,6 +210,7 @@ public class VerdictBuilder {
                 ctx.priorAiResponses(),
                 effectiveStatuses,
                 ctx.inlineComments(),
+                ctx.conversationComments(),
                 ctx.lineResolver(),
                 botIdentity,
                 currentRenameTargets)
