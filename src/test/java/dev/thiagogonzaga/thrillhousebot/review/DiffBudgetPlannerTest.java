@@ -614,4 +614,18 @@ class DiffBudgetPlannerTest {
     assertEquals(List.of("src/App.java"), coveredFilenames(plan));
     assertTrue(plan.omittedFiles().isEmpty(), "pure rename must not appear as budget omission");
   }
+
+  @Test
+  void aPatchlessFileWithNoNameIsSkippedInsteadOfFailingThePlan() {
+    // GitHub returns a null/blank patch for binaries and oversized text diffs, and FileDiff does
+    // not validate its filename. A null name reaching the plan's omitted list makes List.copyOf in
+    // the BudgetPlan constructor throw, failing the whole review at plan time — for a file the
+    // disclosure could not have named anyway.
+    var files = Arrays.asList(new FileDiff(null, "modified", 7, 0, 7, ""));
+
+    var plan = planner.plan(files, 10000, 3);
+
+    assertTrue(plan.omittedFiles().isEmpty(), plan.omittedFiles().toString());
+    assertTrue(plan.clippedFiles().isEmpty(), plan.clippedFiles().toString());
+  }
 }
