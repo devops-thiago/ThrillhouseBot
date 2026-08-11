@@ -191,28 +191,46 @@ public class MaintainerReplyService {
   }
 
   /**
-   * Acknowledgement posted for an {@code @thrillhousebot resolved} comment. Deliberately
-   * deterministic prose rather than an assistant answer: the directive is an instruction the review
-   * path acts on, not a question, and a generated reply could contradict or overstate what it does.
-   * The wording is conditional because the clearing decision is made by the next review, which
-   * matches each named finding against its own {@code path:line} and title (#548).
+   * Acknowledgement posted for an {@code @thrillhousebot resolved} comment that names at least one
+   * locator. Deliberately deterministic prose rather than an assistant answer: the directive is an
+   * instruction the review path acts on, not a question, and a generated reply could contradict or
+   * overstate what it does.
+   *
+   * <p>It states what will be <em>evaluated</em>, never that a clear happened. This reply is
+   * written before any review has run — no prior round is loaded here and no findings exist to
+   * match against — so whether a given locator names a real finding is not knowable at this point
+   * and is left to the review that decides it (#548). Hence no "done", and no count.
    */
   static final String CLEAR_DIRECTIVE_ACK =
-      "Noted. Every previous finding your comment names by its `path:line` and title is treated as"
-          + " cleared from the next review onward; any it does not name stays open.";
+      "The next review will close every previous finding this comment names by its `path:line` and"
+          + " title; anything it does not name stays open.";
+
+  /**
+   * Acknowledgement for a directive that names no {@code path:line} at all. Unlike the general
+   * case, this outcome <em>is</em> knowable from the comment alone — naming a finding requires its
+   * locator ({@link FollowUpAnalyzer#namesALocator}) — so the reply says plainly that nothing will
+   * be cleared rather than leaving a maintainer who mistyped or omitted the locator to discover it
+   * from a review that changes nothing.
+   */
+  static final String CLEAR_DIRECTIVE_NO_LOCATOR_ACK =
+      "That comment names no finding, so nothing will be cleared. Name each one by its `path:line`"
+          + " and title exactly as the summary prints it — for example `@thrillhousebot resolved"
+          + " src/main/java/com/example/Widget.java:42 — Missing null check`.";
 
   private void handleMention(String auth, ReplyTask task) {
     if (FollowUpAnalyzer.isClearDirective(task.question())) {
+      boolean named = FollowUpAnalyzer.namesALocator(task.question());
       commentClient.createComment(
           auth,
           ACCEPT,
           task.owner(),
           task.repo(),
           task.prNumber(),
-          new GitHubCommentClient.CreateCommentRequest(CLEAR_DIRECTIVE_ACK));
+          new GitHubCommentClient.CreateCommentRequest(
+              named ? CLEAR_DIRECTIVE_ACK : CLEAR_DIRECTIVE_NO_LOCATOR_ACK));
       Log.infof(
-          "Acknowledged a maintainer clear directive on %s/%s #%d",
-          task.owner(), task.repo(), task.prNumber());
+          "Acknowledged a maintainer clear directive on %s/%s #%d (names a locator: %b)",
+          task.owner(), task.repo(), task.prNumber(), named);
       return;
     }
     var diff = fetchDiff(auth, task);

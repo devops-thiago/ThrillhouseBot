@@ -105,12 +105,15 @@ the repository (or to be named in
 AI budget.
 
 **`@thrillhousebot resolved`** — a directive, not a slash command: it has no `/resolved`
-form, and it is read by the *next* review rather than acted on immediately (the bot replies
-with a short acknowledgement when it sees one). Do not confuse it with `/resolve`, which
-resolves GitHub review threads and does nothing to a finding that never opened one. Its
-access check is the commenter's GitHub `author_association` on that comment — `OWNER`,
-`MEMBER` or `COLLABORATOR` — and `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` does
-*not* extend it.
+form, and it is read by the *next* review rather than acted on immediately. The bot replies
+straight away to say what that review will evaluate — and, when the comment names no
+`path:line` at all, to say plainly that nothing will be cleared, so a mistyped locator shows
+up immediately instead of as a review that changes nothing. It is a statement, never a
+question: `@thrillhousebot resolved?` is asking, not deciding, and clears nothing. Do not
+confuse it with `/resolve`, which resolves GitHub review threads and does nothing to a
+finding that never opened one. Its access check is the commenter's GitHub
+`author_association` on that comment — `OWNER`, `MEMBER` or `COLLABORATOR` — and
+`THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` does *not* extend it.
 
 **Pause** — while a PR is paused, ThrillhouseBot skips automatic reviews on new commits,
 ignores `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve` and
@@ -403,9 +406,12 @@ Closing a finding wrongly is worse than leaving it open, so the match is strict
 and **when the naming is ambiguous the finding stays held**. All of the
 following must hold:
 
-- **The comment carries `@thrillhousebot resolved`.** `resolve` (the thread
+- **The comment states `@thrillhousebot resolved`.** `resolve` (the thread
   command) is not it, and a mention alone is not it — an ordinary question about
-  a finding is engagement, not a decision.
+  a finding is engagement, not a decision. Nor is the interrogative:
+  `@thrillhousebot resolved?` *asks* whether a finding was fixed, so it clears
+  nothing even when the rest of the comment names one. A question mark anywhere
+  later is fine — only one straight after the directive words makes it a question.
 - **You name the finding by *both* its `path:line` locator and its own content**
   — its title, or its description when it has no title. Each **Things to
   double-check** row already prints both, the title first and then the locator in
@@ -431,8 +437,15 @@ One comment may name several findings; each is matched independently, and one it
 does not name stays open. A finding with neither a title nor a description can
 never be named this way, so it stays held — fix it, or reply on its thread if it
 has one. The clearing is applied by the next review, which records the finding
-**resolved**; the bot posts a short acknowledgement when it sees the directive so
-you know it was read.
+**resolved**.
+
+The bot answers the directive as soon as it sees it, but only with what is
+knowable that early: it has no review loaded and no findings to match against, so
+it says what the next review will evaluate rather than reporting an outcome. The
+one exception is a directive naming no `path:line` at all — that provably clears
+nothing, so the reply says so outright and shows the shape to use. A locator that
+is present but wrong still gets the general reply, and the review is what reports
+the finding still unresolved.
 
 **Conversation read ceiling.** A review reads the PR conversation in pages of
 100, up to 10 pages — 1000 comments — so one review can never turn a runaway
