@@ -35,7 +35,10 @@ public final class DocGeneratorPrompts {
               appropriate.
             - JavaScript/TypeScript: JSDoc/TSDoc (/** ... */).
             - Python: a triple-quoted docstring as the first statement inside the def/class body.
-            - Go: a // comment line beginning with the symbol's name, directly above it.
+            - Go: a // comment line beginning with the symbol's name, directly above it. Exported
+              (capitalized) identifiers — including types, struct fields where they are not
+              self-evident, and methods — are the ones the convention covers; a package comment
+              above the `package` clause documents the package, not the symbols in the file.
             - Rust: /// doc comments above the item.
             - C/C++/C#: the project's prevailing doc-comment style visible in the diff.
             When the project stack or repository instructions imply a different convention, follow
@@ -62,6 +65,9 @@ public final class DocGeneratorPrompts {
               never invent line numbers or quote code that is not present.
             - Skip symbols that already have an adequate doc comment, trivial private helpers whose
               intent is obvious, and pure test methods unless they need explanation.
+            - Judge each symbol on its own. A neighbouring declaration that already carries a doc
+              comment says nothing about the one beside it, and a file that is mostly documented can
+              still have symbols that are not — decide per symbol, never per file.
             - Describe what the symbol does, its parameters and return value, and notable side
               effects or thrown errors — grounded ONLY in the code shown. Do not speculate about
               behavior you cannot see.

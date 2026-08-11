@@ -423,8 +423,9 @@ class DocGenerationServiceTest {
   static Stream<Arguments> unpostableSuggestions() {
     // A postable doc the anchor resolver cannot place yields COULD_NOT_PLACE — real documentation
     // was generated but did not map onto the diff. A non-postable (malformed) entry never reaches
-    // the merged list at all, so the run is empty of usable docs and reports NOTHING_TO_DOCUMENT
-    // rather than the force-push wording, which would misdescribe a simply malformed reply.
+    // the merged list at all, so the run has no usable docs and reports UNUSABLE_SUGGESTIONS: the
+    // force-push wording would misdescribe a reply that carried no anchor, and NOTHING_TO_DOCUMENT
+    // would turn a broken reply into a verdict that the code needs no documentation.
     return Stream.of(
         arguments(
             "declaration line is not in the diff",
@@ -447,14 +448,14 @@ class DocGenerationServiceTest {
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"public int bar(int x) {","suggestion_new":""}]}
             """,
-            DocGenerationService.NOTHING_TO_DOCUMENT),
+            DocGenerationService.UNUSABLE_SUGGESTIONS),
         arguments(
             "suggestion_old is omitted (no anchor to verify against)",
             """
             {"docs":[{"file":"src/Foo.java","line":1,"symbol":"bar",
             "suggestion_old":"","suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
             """,
-            DocGenerationService.NOTHING_TO_DOCUMENT),
+            DocGenerationService.UNUSABLE_SUGGESTIONS),
         arguments(
             "file is not part of the diff",
             """
@@ -463,6 +464,33 @@ class DocGenerationServiceTest {
             "suggestion_new":"/** d */\\npublic int bar(int x) {"}]}
             """,
             DocGenerationService.COULD_NOT_PLACE));
+  }
+
+  @Test
+  void separatesAnUnusableReplyFromAVerdictThatNothingNeedsDocumentation() {
+    // The model named two symbols and returned neither a declaration line nor a replacement for
+    // them. Reporting NOTHING_TO_DOCUMENT here asserts something about the code — that no changed
+    // symbol needs a doc comment — which this run has no basis for: the model found symbols, the
+    // reply was just unusable. That conflation is what makes an empty /add-docs run impossible to
+    // tell apart from a working one that genuinely had nothing to say.
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            aiOk(
+                """
+                {"docs":[
+                  {"file":"src/Foo.java","line":1,"symbol":"bar","suggestion_old":"",
+                   "suggestion_new":""},
+                  {"file":"src/Foo.java","line":2,"symbol":"baz","suggestion_old":"",
+                   "suggestion_new":""}]}
+                """));
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertNotEquals(DocGenerationService.NOTHING_TO_DOCUMENT, postedSummary());
+    assertTrue(postedSummary().contains("came back incomplete"), postedSummary());
   }
 
   @Test
