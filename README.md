@@ -97,7 +97,7 @@ not a reaction.
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
-| `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval — see [Clearing a finding with no thread](#clearing-a-finding-with-no-thread) | write |
+| `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval (see **Clearing a finding with no thread** under Configuration) | write |
 
 **Access** — every command except `/help` requires the commenter to hold write access to
 the repository (or to be named in
