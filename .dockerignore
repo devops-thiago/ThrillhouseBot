@@ -19,8 +19,11 @@ frontend/out
 frontend/coverage
 frontend/.turbo
 
-# Docs (not copied into any image)
+# Docs (not copied into any image). `website` is the Astro docs site — its sources,
+# generated output (dist/, .astro/) and local dependencies are built and published by the
+# Docs workflow, never by an image build.
 docs
+website
 
 # Secrets and local env — never ship these in a build context
 .env
