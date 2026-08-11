@@ -427,12 +427,17 @@ public class VerdictBuilder {
   }
 
   /**
-   * Projects the reviewed diff onto the (path, change type) rows the summary walkthrough renders.
+   * Projects the reviewed diff onto the (path, change type, pure-rename) rows the summary
+   * walkthrough renders. The pure-rename flag travels with the row so the walkthrough can say why
+   * such a file carries no model summary instead of rendering a bare dash (#536).
    */
   static List<PrSummaryGenerator.ChangedFile> toChangedFiles(
       List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream()
-        .map(f -> new PrSummaryGenerator.ChangedFile(f.filename(), f.status()))
+        .map(
+            f ->
+                new PrSummaryGenerator.ChangedFile(
+                    f.filename(), f.status(), ReviewDiffFormatter.isPureRename(f)))
         .toList();
   }
 

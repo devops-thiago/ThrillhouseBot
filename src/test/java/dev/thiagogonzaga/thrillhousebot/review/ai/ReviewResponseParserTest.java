@@ -460,6 +460,165 @@ class ReviewResponseParserTest {
     assertFalse(ex.getMessage().contains("did not match the review schema"));
   }
 
+  /**
+   * The injected production mapper is Quarkus's, which ignores unknown properties. That is what
+   * makes a mis-keyed file_summaries entry silent: it maps to a FileSummary with a null path, which
+   * the walkthrough renderer then skips without a word (#536).
+   */
+  private static ReviewResponseParser lenientParser() {
+    var mapper = new ObjectMapper();
+    mapper.configure(
+        com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    return new ReviewResponseParser(mapper);
+  }
+
+  @Test
+  void shouldRecoverFileSummariesKeyedFileAndDescription() {
+    var response =
+        lenientParser()
+            .parse(
+                """
+                {"findings": [],
+                 "summary": {"total_findings": 0, "pr_purpose": "p",
+                   "file_summaries": [{"file": "src/A.java", "description": "adds a guard"},
+                                      {"filename": "src/B.java", "note": "new cache"}]}}
+                """);
+
+    var summaries = response.summary().fileSummaries();
+    assertEquals(2, summaries.size(), summaries.toString());
+    assertEquals("src/A.java", summaries.get(0).path());
+    assertEquals("adds a guard", summaries.get(0).summary());
+    assertEquals("src/B.java", summaries.get(1).path());
+    assertEquals("new cache", summaries.get(1).summary());
+  }
+
+  @Test
+  void shouldRecoverFileSummariesEmittedAsAMapKeyedByPath() {
+    var response =
+        parser.parse(
+            """
+            {"findings": [],
+             "summary": {"total_findings": 0, "pr_purpose": "p",
+               "file_summaries": {"src/A.java": "adds a guard",
+                                  "src/B.java": {"summary": "new cache"}}}}
+            """);
+
+    var summaries = response.summary().fileSummaries();
+    assertEquals(2, summaries.size(), summaries.toString());
+    assertEquals("src/A.java", summaries.get(0).path());
+    assertEquals("adds a guard", summaries.get(0).summary());
+    assertEquals("src/B.java", summaries.get(1).path());
+    assertEquals("new cache", summaries.get(1).summary());
+    // The rest of the summary survives the rewrite
+    assertEquals("p", response.summary().prPurpose());
+  }
+
+  @Test
+  void shouldRecoverFileSummariesEmittedAsPathColonSummaryStrings() {
+    var response =
+        parser.parse(
+            """
+            {"findings": [],
+             "summary": {"total_findings": 0,
+               "file_summaries": ["src/A.java: adds a guard", "no separator here"]}}
+            """);
+
+    var summaries = response.summary().fileSummaries();
+    assertEquals(1, summaries.size(), summaries.toString());
+    assertEquals("src/A.java", summaries.get(0).path());
+    assertEquals("adds a guard", summaries.get(0).summary());
+  }
+
+  @Test
+  void shouldWrapASingleFileSummaryObjectEmittedWhereTheArrayBelongs() {
+    var response =
+        parser.parse(
+            """
+            {"findings": [],
+             "summary": {"total_findings": 0,
+               "file_summaries": {"path": "src/A.java", "summary": "adds a guard"}}}
+            """);
+
+    var summaries = response.summary().fileSummaries();
+    assertEquals(1, summaries.size(), summaries.toString());
+    assertEquals("src/A.java", summaries.get(0).path());
+    assertEquals("adds a guard", summaries.get(0).summary());
+  }
+
+  @Test
+  void shouldDropHalfEntriesButKeepTheUsableOnesAndTheSummary() {
+    // Every way half an entry can arrive: no path, no summary, not an object at all, a blank path,
+    // a non-textual path key ahead of a usable one, and a blank summary.
+    var response =
+        lenientParser()
+            .parse(
+                """
+                {"findings": [],
+                 "summary": {"total_findings": 0, "pr_purpose": "p",
+                   "file_summaries": [{"summary": "no path"}, {"path": "src/A.java"}, 7,
+                                      {"file": "   ", "description": "blank path"},
+                                      {"file": 12, "filename": "src/B.java", "note": "kept"},
+                                      {"path": "src/C.java", "summary": "  "}]}}
+                """);
+
+    var summaries = response.summary().fileSummaries();
+    assertEquals(1, summaries.size(), summaries.toString());
+    assertEquals("src/B.java", summaries.get(0).path());
+    assertEquals("kept", summaries.get(0).summary());
+    assertEquals("p", response.summary().prPurpose());
+  }
+
+  @Test
+  void shouldRewriteAnArrayWhoseFirstEntryBreaksTheSchemaInAnyWay() {
+    // The conformance check short-circuits on the first offender, so each way an entry can fail it
+    // has to lead its own payload.
+    for (String entries :
+        new String[] {"7", "{\"summary\": \"x\"}", "{\"path\": \"src/A.java\", \"summary\": 7}"}) {
+      var response =
+          lenientParser()
+              .parse(
+                  "{\"findings\":[],\"summary\":{\"total_findings\":0,\"pr_purpose\":\"p\","
+                      + "\"file_summaries\":["
+                      + entries
+                      + "]}}");
+
+      assertNotNull(response.summary(), entries);
+      assertTrue(response.summary().fileSummaries().isEmpty(), entries);
+    }
+  }
+
+  @Test
+  void shouldKeepTheSummaryWhenFileSummariesIsAScalar() {
+    // Without normalization this fails schema mapping, and the salvage drops the WHOLE summary.
+    var response =
+        parser.parse(
+            """
+            {"findings": [],
+             "summary": {"total_findings": 0, "pr_purpose": "p", "overall_assessment": "ok",
+               "file_summaries": "nothing worth calling out"}}
+            """);
+
+    assertNotNull(response.summary(), "the summary object must survive a mis-shaped field");
+    assertEquals("p", response.summary().prPurpose());
+    assertTrue(response.summary().fileSummaries().isEmpty());
+  }
+
+  @Test
+  void shouldLeaveNullAndConformingFileSummariesUntouched() {
+    var withNull =
+        parser.parse(
+            "{\"findings\":[],\"summary\":{\"total_findings\":0,\"file_summaries\":null}}");
+    assertTrue(withNull.summary().fileSummaries().isEmpty());
+
+    var conforming =
+        parser.parse(
+            "{\"findings\":[],\"summary\":{\"total_findings\":0,\"file_summaries\":"
+                + "[{\"path\":\"src/A.java\",\"summary\":\"\"}]}}");
+    assertEquals(1, conforming.summary().fileSummaries().size());
+    // A conforming-but-blank summary is not rewritten away; the renderer decides how to show it.
+    assertEquals("", conforming.summary().fileSummaries().get(0).summary());
+  }
+
   @Test
   void shouldLeaveFullyValidResponseUnchanged() throws Exception {
     var raw =

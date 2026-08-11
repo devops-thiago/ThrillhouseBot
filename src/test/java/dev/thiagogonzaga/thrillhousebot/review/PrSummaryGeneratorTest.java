@@ -621,6 +621,44 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldExplainPureRenameRowInsteadOfRenderingBareDash() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("src/Moved.java", "renamed", true),
+            new PrSummaryGenerator.ChangedFile("src/Edited.java", "renamed", false));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(2, 0, 0, changedFiles, summaryWithFiles(), result);
+
+    // A pure rename is excluded from AI review by design, so it never carries a model summary:
+    // say so rather than rendering the "-" that reads as a missing summary (#536).
+    assertTrue(
+        summary.contains(
+            "| `src/Moved.java` | Renamed | " + PrSummaryGenerator.PURE_RENAME_SUMMARY + " |"),
+        summary);
+    // A rename that also changed content WAS reviewed, so an absent summary stays a bare dash.
+    assertTrue(summary.contains("| `src/Edited.java` | Renamed | - |"), summary);
+  }
+
+  @Test
+  void shouldPreferModelSummaryOverThePureRenameExplanation() {
+    var changedFiles =
+        List.of(new PrSummaryGenerator.ChangedFile("src/Moved.java", "renamed", true));
+    var aiSummary =
+        summaryWithFiles(new ReviewResponse.FileSummary("src/Moved.java", "Moved to the new pkg"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 0, 0, changedFiles, aiSummary, result);
+
+    assertTrue(summary.contains("| `src/Moved.java` | Renamed | Moved to the new pkg |"), summary);
+    assertFalse(summary.contains(PrSummaryGenerator.PURE_RENAME_SUMMARY), summary);
+  }
+
+  @Test
   void shouldOmitChangedFilesSectionWhenNoFiles() {
     var result =
         new ReviewResult(
