@@ -54,7 +54,7 @@ class FindingVerificationServiceTest {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.verifierEnabled()).thenReturn(true);
-    service = new FindingVerificationService(verifier, config, new ObjectMapper(), tokenLedger);
+    service = serviceWith(tokenLedger);
   }
 
   /** Swaps in a real, opened ledger so a test can observe the spend the service records. */
@@ -62,8 +62,14 @@ class FindingVerificationServiceTest {
     when(reviewConfig.maxTokensPerReview()).thenReturn(ceiling);
     var ledger = new ReviewTokenLedger(config);
     ledger.open(SESSION);
-    service = new FindingVerificationService(verifier, config, new ObjectMapper(), ledger);
+    service = serviceWith(ledger);
     return ledger;
+  }
+
+  private FindingVerificationService serviceWith(ReviewTokenLedger ledger) {
+    var mapper = new ObjectMapper();
+    return new FindingVerificationService(
+        verifier, config, mapper, ledger, new TruncatedResponseSalvager(mapper));
   }
 
   private static Result<String> aiOkWithUsage(String text, int inputTokens, int outputTokens) {
@@ -393,6 +399,80 @@ class FindingVerificationServiceTest {
       assertEquals("high", result.findings().get(0).risk());
       parser.verify(() -> ReviewResponseParser.extractJson(any()), never());
     }
+  }
+
+  @Test
+  void appliesTheVerdictsThatCompletedWhenTheBodyIsCutMidJson() {
+    // #546: production has seen the verifier body arrive cut mid-JSON with no finish_reason=length
+    // (STOP, as built here), so it never reaches the truncation lane — before the salvage, the
+    // whole pass was discarded and every complete verdict thrown away. The three verdicts that
+    // closed must be applied; the candidate whose verdict was on the far side of the cut stays
+    // unverified, never rejected.
+    ReviewResponse original =
+        response(
+            finding("critical", "high", "Hallucinated API claim"),
+            finding("high", "high", "Speculative"),
+            finding("critical", "high", "Real injection"),
+            finding("high", "high", "Verdict cut off"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "downgraded", "risk": "low", "confidence": "low", "reason": "r"},
+              {"id": 3, "verdict": "confirmed", "risk": "critical", "confidence": "high", "reason": "ok"},
+              {"id": 4, "verdict": "reje"""));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(3, result.findings().size());
+    assertEquals("Speculative", result.findings().get(0).title());
+    assertEquals("low", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+    assertEquals("Real injection", result.findings().get(1).title());
+    // The unverified candidate survives untouched — a missing verdict never rejects or downgrades.
+    var unverified = result.findings().get(2);
+    assertEquals("Verdict cut off", unverified.title());
+    assertEquals("high", unverified.risk());
+    assertEquals("high", unverified.confidence());
+    assertEquals(3, result.summary().totalFindings());
+  }
+
+  @Test
+  void keepsEveryFindingWhenTheCutLeavesNoCompleteVerdict() {
+    // Nothing recoverable: the salvage adds nothing, and the service fails open exactly as it did
+    // before — the parse failure is rethrown into the fail-open catch.
+    ReviewResponse original =
+        response(finding("critical", "high", "Bug"), finding("low", "high", "Nit"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOk("{\"verdicts\": [{\"id\": 1, \"verdict\": \"reje"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+  }
+
+  @Test
+  void ignoresSalvagedVerdictsWhoseIdMatchesNoCandidate() {
+    // Salvage is best-effort over model output, so a verdict can carry an id outside the candidate
+    // range. It must not reject anything, while the in-range verdict beside it still applies.
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 0, "verdict": "rejected", "reason": "no such candidate"},
+              {"id": 9, "verdict": "rejected", "reason": "no such candidate either"},
+              {"id": 1, "verdict": "downgraded", "risk": "low", "confidence": "low", "reason": "r"},
+              {"id": 2, "verdict": "conf"""));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(1, result.findings().size());
+    assertEquals("low", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
   }
 
   @Test

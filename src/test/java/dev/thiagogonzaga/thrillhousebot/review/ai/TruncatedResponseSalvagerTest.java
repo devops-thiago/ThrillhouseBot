@@ -282,6 +282,38 @@ class TruncatedResponseSalvagerTest {
   }
 
   @Test
+  void salvagesTheCompleteElementsOfANamedArray() {
+    // #546: the verifier's response is one named array, and its body arrives cut mid-JSON too. The
+    // same pass serves it — the verdicts that closed come back, the cut one is dropped, and the
+    // fields around it are skipped whole.
+    var body =
+        """
+        {"note":"thinking out loud",
+         "verdicts":[{"id":1,"verdict":"rejected","risk":null,"confidence":null,"reason":"fp"},
+                     {"id":2,"verdict":"confirmed","risk":"high","confidence":"high","reason":"ok"},
+                     {"id":3,"verdict":"downgr""";
+
+    var verdicts = salvager.salvageArray(body, "verdicts", VerificationResponse.Verdict.class);
+
+    assertEquals(2, verdicts.size());
+    assertEquals(1, verdicts.get(0).id());
+    assertEquals("rejected", verdicts.get(0).verdict());
+    assertEquals("confirmed", verdicts.get(1).verdict());
+  }
+
+  @Test
+  void namedArraySalvageComesBackEmptyWhenThereIsNothingToRecover() {
+    var type = VerificationResponse.Verdict.class;
+    // No body at all, and a body whose cut precedes the first complete element.
+    assertTrue(salvager.salvageArray(null, "verdicts", type).isEmpty());
+    assertTrue(
+        salvager.salvageArray("{\"verdicts\":[{\"id\":1,\"verd", "verdicts", type).isEmpty());
+    // A complete body that simply has no such field, and one where the field is not an array.
+    assertTrue(salvager.salvageArray("{\"other\":[{\"id\":1}]}", "verdicts", type).isEmpty());
+    assertTrue(salvager.salvageArray("{\"verdicts\":{\"id\":1}}", "verdicts", type).isEmpty());
+  }
+
+  @Test
   void closeQuietlyToleratesANullParser() {
     // Reached only if createParser itself threw; the guard is contract, tested directly.
     assertDoesNotThrow(() -> TruncatedResponseSalvager.closeQuietly(null));
