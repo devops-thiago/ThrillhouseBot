@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -963,6 +964,61 @@ class ReviewContextLoaderTest {
 
       assertFalse(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
       assertTrue(loader.fetchIssueComments("auth", "owner", "repo", 1).isEmpty());
+    }
+  }
+
+  /**
+   * #548 — the conversation is where a thread-less finding is cleared, and the walk that reads it
+   * is bounded. GitHub serves issue comments oldest first with no reverse order on this endpoint,
+   * so a walk that stops at the ceiling keeps the oldest window and drops the newest — where a
+   * freshly written directive lives. The ceiling has to be recognized, not assumed away.
+   */
+  @Nested
+  class ConversationReadCeiling {
+
+    private List<GitHubCommentClient.IssueComment> comments(int count) {
+      var all = new ArrayList<GitHubCommentClient.IssueComment>(count);
+      for (var i = 0; i < count; i++) {
+        all.add(
+            new GitHubCommentClient.IssueComment(
+                "comment " + i, new GitHubReviewClient.ReviewResponse.User("maintainer")));
+      }
+      return all;
+    }
+
+    @Test
+    void shouldNameTheCeilingAsTheFullPagedWalk() {
+      assertEquals(
+          GitHubCommentClient.COMMENTS_PER_PAGE * GitHubCommentClient.MAX_COMMENT_PAGES,
+          ReviewContextLoader.MAX_CONVERSATION_COMMENTS,
+          "the documented ceiling must be the walk the client actually performs");
+    }
+
+    @Test
+    void shouldRecognizeAWalkThatStoppedAtTheCeiling() {
+      assertTrue(
+          ReviewContextLoader.conversationWalkCapped(
+              comments(ReviewContextLoader.MAX_CONVERSATION_COMMENTS)),
+          "a full window means the walk stopped at the bound, not at the end of the thread");
+    }
+
+    @Test
+    void shouldNotFlagAConversationThatFitUnderTheCeiling() {
+      assertFalse(
+          ReviewContextLoader.conversationWalkCapped(
+              comments(ReviewContextLoader.MAX_CONVERSATION_COMMENTS - 1)));
+      assertFalse(ReviewContextLoader.conversationWalkCapped(List.of()));
+    }
+
+    @Test
+    void shouldReturnEveryCommentTheWalkRead() {
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(comments(ReviewContextLoader.MAX_CONVERSATION_COMMENTS));
+
+      assertEquals(
+          ReviewContextLoader.MAX_CONVERSATION_COMMENTS,
+          loader.fetchConversationComments("auth", "owner", "repo", 1).size(),
+          "disclosing the ceiling must not drop what was read");
     }
   }
 

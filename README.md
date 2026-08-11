@@ -395,6 +395,10 @@ conversation:
 @thrillhousebot resolved src/main/java/com/example/Widget.java:42 — Missing null check
 ```
 
+Write it as plain text in the comment — pasted back inside a code fence or
+backticks it reads as documentation and does nothing (see the quoting rule
+below).
+
 Closing a finding wrongly is worse than leaving it open, so the match is strict
 and **when the naming is ambiguous the finding stays held**. All of the
 following must hold:
@@ -412,12 +416,16 @@ following must hold:
   `OWNER`, `MEMBER` or `COLLABORATOR`; a fork-PR author's or a drive-by
   commenter's comment is ignored. The bot's own comments are ignored too — its
   summary reproduces every finding verbatim.
-- **Quoted text does not count.** Blockquote lines and fenced code blocks are
-  stripped before matching, so GitHub's *Quote reply* on the summary — which
-  reproduces every double-check row — clears nothing, and neither does a quoted
-  directive. Write the directive and the finding you mean in your own prose.
-  Inline code is kept, so the backticked `` `path:line` `` from the summary row
-  still matches.
+- **You *use* the directive rather than quote it.** `@thrillhousebot resolved`
+  counts as an instruction only when those words are plain text. Marking them up
+  — as `` `@thrillhousebot resolved` ``, inside a fenced block, or on a `>`
+  quoted line — reads as documentation, so a comment that *explains* the feature
+  (the fenced example above, or a colleague pasting one) clears nothing. The
+  **locator and title may still be in backticks**, which is how the summary
+  prints them; only the directive words themselves may not be.
+- **Quoted blocks do not count at all.** Blockquote lines and fenced code are
+  dropped before anything is matched, so GitHub's *Quote reply* on the summary —
+  which reproduces every double-check row — names no finding either.
 
 One comment may name several findings; each is matched independently, and one it
 does not name stays open. A finding with neither a title nor a description can
@@ -425,6 +433,16 @@ never be named this way, so it stays held — fix it, or reply on its thread if 
 has one. The clearing is applied by the next review, which records the finding
 **resolved**; the bot posts a short acknowledgement when it sees the directive so
 you know it was read.
+
+**Conversation read ceiling.** A review reads the PR conversation in pages of
+100, up to 10 pages — 1000 comments — so one review can never turn a runaway
+thread into hundreds of API calls. GitHub serves these comments oldest first and
+offers no reverse order on that endpoint, so on a PR past the ceiling the
+**newest** comments are the ones left unread, and a directive among them will not
+clear anything that round. The bot logs a warning naming the ceiling whenever it
+is reached, so this shows up as a log line rather than as the feature quietly
+doing nothing; push a commit to re-review, or reply on the finding's thread if it
+has one.
 
 ### Blocking strictness
 

@@ -747,28 +747,54 @@ public class FollowUpAnalyzer {
   /** Markdown blockquote lines — what GitHub's "Quote reply" produces. */
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]*>.*$");
 
+  /**
+   * Inline code spans, dropped only when looking for the directive token itself. The delimiter is
+   * {@code `+} rather than a single backtick so the double-backtick form documentation uses to show
+   * a span that itself contains a backtick is recognized too.
+   */
+  private static final Pattern INLINE_CODE = Pattern.compile("`+[^`\\n]*`+");
+
   /** Note recorded on a finding a maintainer cleared from the PR conversation. */
   static final String CONVERSATION_CLEARED_NOTE =
       "Cleared by a maintainer's @thrillhousebot resolved comment on the PR conversation.";
 
   /**
-   * Whether {@code body} is a maintainer's clearing directive — an {@code @thrillhousebot resolved}
-   * instruction written outside quoted context. Shared with {@link MaintainerReplyService} so the
-   * conversational-reply path recognizes exactly the text this analyzer acts on.
+   * Whether {@code body} <em>uses</em> the clearing directive, as opposed to quoting it. Shared
+   * with {@link MaintainerReplyService} so the conversational-reply path recognizes exactly the
+   * text this analyzer acts on.
+   *
+   * <p>The token is looked for in {@link #directiveText}: outside blockquotes, code fences <em>and
+   * inline code</em>. Explaining the feature to a colleague — "comment {@code `@thrillhousebot
+   * resolved src/A.java:10 — the title`}" — is documentation, not a decision, and a rule that fired
+   * on it would let the project's own docs close findings. Marking up the directive is the
+   * universal way to show rather than issue a command, so it is the line drawn here.
    */
   static boolean isClearDirective(String body) {
-    return body != null && CLEAR_DIRECTIVE.matcher(unquoted(body)).find();
+    return body != null && CLEAR_DIRECTIVE.matcher(directiveText(body)).find();
   }
 
   /**
-   * The comment body with quoted context removed: fenced code blocks and blockquote lines. Dropping
-   * blockquotes is what keeps GitHub's "Quote reply" from clearing findings — quoting the summary's
-   * "Things to double-check" list reproduces every row verbatim, and matching inside it would clear
-   * findings the maintainer never named. Inline code is deliberately <em>kept</em>: the summary
-   * prints each finding's locator as {@code `path:line`}, so a pasted row must stay matchable.
+   * The comment body with quoted <em>blocks</em> removed: fenced code and blockquote lines.
+   * Dropping blockquotes is what keeps GitHub's "Quote reply" from clearing findings — quoting the
+   * summary's "Things to double-check" list reproduces every row verbatim, and matching inside it
+   * would clear findings the maintainer never named.
+   *
+   * <p>Inline code is deliberately <em>kept</em> here: the summary prints each finding's locator as
+   * {@code `path:line`}, so a maintainer who copies the row must still be naming the finding. This
+   * is the text the locator and content are matched against, never the directive token.
    */
-  private static String unquoted(String body) {
+  private static String namingText(String body) {
     return BLOCKQUOTE_LINE.matcher(FENCED_CODE.matcher(body).replaceAll(" ")).replaceAll(" ");
+  }
+
+  /**
+   * The text the directive token must appear in: {@link #namingText} with inline code spans dropped
+   * too. Using the directive and quoting it are different acts, and only the first may clear a
+   * finding; keeping the two texts separate is what lets a comment carry a backticked locator (how
+   * the summary prints it) while a backticked <em>token</em> reads as documentation.
+   */
+  private static String directiveText(String body) {
+    return INLINE_CODE.matcher(namingText(body)).replaceAll(" ");
   }
 
   /**
@@ -787,9 +813,10 @@ public class FollowUpAnalyzer {
    *   <li>its author may hold write access ({@link #mayHoldWriteAccess}) — the same association
    *       prefilter the review-thread hatch applies, so a drive-by commenter on a public repo
    *       cannot clear a hold;
-   *   <li>it carries the {@link #CLEAR_DIRECTIVE} outside quoted context — an ordinary comment that
-   *       merely discusses a finding is engagement, not a decision, and the whole PR conversation
-   *       is one space rather than the finding's own thread;
+   *   <li>it <em>uses</em> the {@link #CLEAR_DIRECTIVE} rather than quoting it ({@link
+   *       #isClearDirective}: outside blockquotes, fences and inline code) — an ordinary comment
+   *       that merely discusses a finding is engagement, not a decision, and a comment that shows
+   *       the directive marked up is documentation, not an instruction;
    *   <li>it names <em>this</em> finding by BOTH its printed locator ({@code path:line}) and its
    *       own content (its title, or its description when it has no title) — the same
    *       content-anchoring the marked-thread hatch uses. A finding with neither title nor
@@ -817,10 +844,13 @@ public class FollowUpAnalyzer {
       if (!isMaintainerConversationComment(comment, botIdentity)) {
         continue;
       }
-      String body = unquoted(comment.body());
-      if (CLEAR_DIRECTIVE.matcher(body).find()
-          && namesLocator(body, locator)
-          && body.contains(anchor)) {
+      if (!isClearDirective(comment.body())) {
+        continue;
+      }
+      // The naming may sit in backticks (the shape the summary prints); only the directive token
+      // may not — see isClearDirective.
+      String body = namingText(comment.body());
+      if (namesLocator(body, locator) && body.contains(anchor)) {
         Log.infof(
             "Clearing previous finding '%s' (%s) — a maintainer named it in an"
                 + " @thrillhousebot resolved comment on the PR conversation",

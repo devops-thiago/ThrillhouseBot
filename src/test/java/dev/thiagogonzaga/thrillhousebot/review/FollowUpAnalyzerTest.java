@@ -3009,5 +3009,61 @@ class FollowUpAnalyzerTest {
         "the thread-resolving command must not be read as a finding clear");
     assertFalse(FollowUpAnalyzer.isClearDirective("> @thrillhousebot resolved"));
     assertFalse(FollowUpAnalyzer.isClearDirective("```\n@thrillhousebot resolved\n```"));
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("write `@thrillhousebot resolved src/A.java:10 — title`"),
+        "a marked-up directive is documentation, not an instruction");
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved `src/A.java:10` — title"),
+        "a backticked locator is how the summary prints it and must still be a directive");
+  }
+
+  /**
+   * The README, the PR description and any comment explaining the feature all show the directive
+   * marked up. A rule that fired on those would let the project's own documentation close findings
+   * — the over-clear direction — so quoting the directive must clear nothing, while the locator
+   * stays matchable in backticks because that is the shape the summary prints.
+   */
+  static Stream<Arguments> documentedDirectiveCases() {
+    return Stream.of(
+        arguments(
+            "inline-code directive with the naming inside it",
+            "To close it, comment `@thrillhousebot resolved src/A.java:10 — SQL injection`.",
+            false),
+        arguments(
+            "inline-code directive with the naming outside it",
+            "Write `@thrillhousebot resolved` and then src/A.java:10 — SQL injection.",
+            false),
+        arguments(
+            "double-backtick directive, as docs showing a span",
+            "Use ``@thrillhousebot resolved`` for src/A.java:10 — SQL injection.",
+            false),
+        arguments(
+            "fenced example",
+            """
+            Like this:
+
+            ```
+            @thrillhousebot resolved src/A.java:10 — SQL injection
+            ```
+            """,
+            false),
+        arguments(
+            "a real directive naming a backticked locator",
+            "@thrillhousebot resolved `src/A.java:10` — SQL injection",
+            true),
+        arguments(
+            "a real directive naming a plain locator",
+            "@thrillhousebot resolved src/A.java:10 — SQL injection",
+            true));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("documentedDirectiveCases")
+  void backstopShouldSeparateUsingTheDirectiveFromQuotingIt(
+      String name, String body, boolean clears) {
+    assertEquals(
+        clears ? List.of(2) : List.of(1, 2),
+        heldIds(backstopWith(List.of(maintainerSays(body)))),
+        name);
   }
 }
