@@ -653,6 +653,42 @@ class MaintainerReplyServiceTest {
     verifyNoInteractions(replyAssistant, prClient);
   }
 
+  /**
+   * The reply runs before any review, with no prior round loaded, so it cannot know whether a
+   * locator matches a real finding — but a directive carrying no locator at all provably clears
+   * nothing, and saying so beats leaving a maintainer who mistyped it to infer the failure from a
+   * review that changes nothing.
+   */
+  @Test
+  void clearDirectiveNamingNoLocatorSaysNothingWillBeCleared() {
+    authorize();
+
+    service.handle(mentionTask("@thrillhousebot resolved the null check thing, it's fine now"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK, body.getValue().body());
+    assertTrue(
+        body.getValue().body().contains("nothing will be cleared"),
+        "the maintainer must not read this as a confirmation");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void clearDirectiveAckNeverClaimsAClearingAlreadyHappened() {
+    // The ack states what the next review will evaluate; it must not report an outcome it cannot
+    // know, and must not open with a bare confirmation.
+    for (var ack :
+        List.of(
+            MaintainerReplyService.CLEAR_DIRECTIVE_ACK,
+            MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK)) {
+      assertFalse(ack.startsWith("Noted"), ack);
+      assertFalse(ack.contains("has been cleared"), ack);
+      assertFalse(ack.contains("is cleared"), ack);
+    }
+  }
+
   @Test
   void anOrdinaryMentionStillGetsAnAssistantAnswer() {
     authorize();

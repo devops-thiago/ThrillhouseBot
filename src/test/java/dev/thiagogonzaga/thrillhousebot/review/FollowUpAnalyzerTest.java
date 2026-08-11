@@ -3066,4 +3066,53 @@ class FollowUpAnalyzerTest {
         heldIds(backstopWith(List.of(maintainerSays(body)))),
         name);
   }
+
+  /**
+   * Asking whether a finding was fixed is not deciding that it was. A word boundary holds before
+   * {@code ?}, so the interrogative form quotes the finding well enough to name it and would
+   * otherwise close the very finding the question is about — the over-clear direction.
+   */
+  static Stream<Arguments> interrogativeDirectiveCases() {
+    return Stream.of(
+        arguments(
+            "question mark straight after the token",
+            "@thrillhousebot resolved? `src/A.java:10` — SQL injection",
+            false),
+        arguments(
+            "spaced question mark",
+            "@thrillhousebot resolved ? `src/A.java:10` — SQL injection",
+            false),
+        arguments(
+            "plain statement still clears",
+            "@thrillhousebot resolved `src/A.java:10` — SQL injection",
+            true),
+        arguments(
+            "a directive whose sentence ends in a question still clears",
+            "@thrillhousebot resolved `src/A.java:10` — SQL injection, fixed in abc123, ok?",
+            true));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("interrogativeDirectiveCases")
+  void backstopShouldNotReadAQuestionAsADirective(String name, String body, boolean clears) {
+    assertEquals(
+        clears ? List.of(2) : List.of(1, 2),
+        heldIds(backstopWith(List.of(maintainerSays(body)))),
+        name);
+  }
+
+  @Test
+  void namesALocatorShouldProveOnlyThatNothingWasNamed() {
+    assertTrue(FollowUpAnalyzer.namesALocator("@thrillhousebot resolved src/A.java:10 — title"));
+    assertTrue(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:10` — title"),
+        "the summary prints the locator in backticks, which is what maintainers copy");
+    assertFalse(FollowUpAnalyzer.namesALocator(null));
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved the null check thing"),
+        "no path:line means no finding can be named, whatever the round holds");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("> @thrillhousebot resolved src/A.java:10 — title"),
+        "a quoted locator names nothing, matching where the clear actually looks");
+  }
 }
