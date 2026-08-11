@@ -242,8 +242,12 @@ public record ReviewResult(
     return previousStatuses.stream().filter(s -> "resolved".equalsIgnoreCase(s.status())).count();
   }
 
-  // A backstop-held finding may have no inline thread (its line was outside the diff when raised),
-  // hence the "where one exists" qualifier.
+  /**
+   * The "previous findings are still open" status line, which must state every way a maintainer can
+   * close one. A finding raised below the inline-posting bar has no review thread at all, so
+   * pointing only at threads left it uncloseable by any action (#548); the message now names the PR
+   * conversation directive that reaches it, instead of admitting the gap with a parenthetical.
+   */
   public static String unresolvedPreviousMessage(long unresolved) {
     return UNRESOLVED_PREVIOUS_PREFIX + unresolved + UNRESOLVED_PREVIOUS_SUFFIX;
   }
@@ -251,8 +255,10 @@ public record ReviewResult(
   private static final String UNRESOLVED_PREVIOUS_PREFIX = "No new issues in this revision, but ";
 
   private static final String UNRESOLVED_PREVIOUS_SUFFIX =
-      " previous finding(s) remain unresolved — fix them, or reply on their review thread (where"
-          + " one exists) with why they are deferred.";
+      " previous finding(s) remain unresolved — fix them, or reply on their review thread with why"
+          + " they are deferred. A finding listed only under \"Things to double-check\" has no"
+          + " thread: clear it by commenting `@thrillhousebot resolved path/to/File.java:42 —"
+          + " <the finding's title>` on this PR.";
 
   /**
    * Whether {@code text} is {@link #unresolvedPreviousMessage(long)} for some count — the bot's own

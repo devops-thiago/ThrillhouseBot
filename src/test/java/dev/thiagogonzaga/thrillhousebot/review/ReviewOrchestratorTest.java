@@ -205,8 +205,11 @@ class ReviewOrchestratorTest {
     lenient()
         .when(
             followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-                any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(List.of());
+    lenient()
+        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(1));
     lenient()
         .when(
             followUpAnalyzer.unresolvedFindings(
@@ -4979,7 +4982,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldQualifyReplyGuidanceSinceABackstopFindingMayHaveNoThread() {
+    void shouldGiveAClearingPathForABackstopFindingWithNoThread() {
       delegateStatusGate();
       var result =
           buildWithBackstop(
@@ -4991,10 +4994,11 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.contains("where one exists"), "the reply guidance must be qualified");
+      assertTrue(
+          body.contains("@thrillhousebot resolved"),
+          "a finding with no thread needs a path that does not depend on one (#548)");
       assertFalse(
-          body.contains("reply on their threads"),
-          "must not unconditionally promise a thread that may not exist");
+          body.contains("where one exists"), "must not merely admit that a thread may not exist");
     }
 
     @Test
@@ -5023,7 +5027,7 @@ class ReviewOrchestratorTest {
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-                any(), any(), any(), any(), eq(BOT_ID), any()))
+                any(), any(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn(
                 List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
 
@@ -5215,7 +5219,7 @@ class ReviewOrchestratorTest {
       when(followUpAnalyzer.parsePreviousResponses(any()))
           .thenAnswer(invocation -> realAnalyzer.parsePreviousResponses(invocation.getArgument(0)));
       when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-              any(), any(), any(), any(), eq(BOT_ID), any()))
+              any(), any(), any(), any(), any(), eq(BOT_ID), any()))
           .thenAnswer(
               invocation ->
                   realAnalyzer.unreportedUnresolvedStatusesFromParsed(
@@ -5224,7 +5228,8 @@ class ReviewOrchestratorTest {
                       invocation.getArgument(2),
                       invocation.getArgument(3),
                       invocation.getArgument(4),
-                      invocation.getArgument(5)));
+                      invocation.getArgument(5),
+                      invocation.getArgument(6)));
     }
 
     private static final String PRIOR_FINDING_JSON =

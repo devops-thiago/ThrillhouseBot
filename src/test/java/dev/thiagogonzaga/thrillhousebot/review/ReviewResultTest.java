@@ -562,8 +562,26 @@ class ReviewResultTest {
         "a human review opening with the same words carries a real finding and must be kept");
     assertFalse(
         ReviewResult.isUnresolvedPreviousMessage(
-            "Please fix them, or reply on their review thread (where one exists) with why they are"
-                + " deferred."),
+            "Please clear it by commenting `@thrillhousebot resolved path/to/File.java:42 —"
+                + " <the finding's title>` on this PR."),
         "the generated ending without the generated opening is not the sentence");
+  }
+
+  /**
+   * #548 — a finding raised below the inline-posting bar has no review thread, so guidance that
+   * points only at threads leaves it uncloseable by any maintainer action. The status line must
+   * spell out the conversation directive that reaches it.
+   */
+  @Test
+  void unresolvedPreviousMessageShouldStateHowToClearAThreadlessFinding() {
+    var message = ReviewResult.unresolvedPreviousMessage(2);
+
+    assertTrue(message.contains("2 previous finding(s) remain unresolved"), message);
+    assertTrue(message.contains("reply on their review thread"), message);
+    assertTrue(message.contains("Things to double-check"), message);
+    assertTrue(message.contains("@thrillhousebot resolved"), message);
+    assertFalse(
+        message.contains("where one exists"),
+        "the gap must be closed with a path, not admitted in a parenthetical");
   }
 }

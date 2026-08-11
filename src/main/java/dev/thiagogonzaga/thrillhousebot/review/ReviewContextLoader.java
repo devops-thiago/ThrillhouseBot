@@ -133,7 +133,8 @@ public class ReviewContextLoader {
       String patchCoverage,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
-      PrTotals prTotals) {
+      PrTotals prTotals,
+      List<GitHubCommentClient.IssueComment> conversationComments) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -142,6 +143,62 @@ public class ReviewContextLoader {
       inlineComments = List.copyOf(inlineComments);
       repoLabels = List.copyOf(repoLabels);
       reviewableFiles = List.copyOf(reviewableFiles);
+      conversationComments = List.copyOf(conversationComments);
+    }
+
+    /**
+     * Back-compat constructor for callers that carry no PR conversation comments. Defaults them to
+     * empty, which reads as "no maintainer cleared anything from the conversation" — the safe
+     * direction, since a missing list must never clear a hold.
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          List.of());
     }
 
     /**
@@ -243,6 +300,14 @@ public class ReviewContextLoader {
         hasContext
             ? fetchPullRequestComments(auth, req.owner(), req.repo(), req.prNumber())
             : List.of();
+    // The PR conversation carries the only escape hatch a thread-less finding has: an
+    // "@thrillhousebot resolved" comment naming it (#548). Fetched on the same gate as the inline
+    // comments — a first review has no prior finding to clear, so it never pays for the call — and
+    // paginated, with the read ceiling disclosed rather than silently truncating the conversation.
+    List<GitHubCommentClient.IssueComment> conversationComments =
+        hasContext
+            ? fetchConversationComments(auth, req.owner(), req.repo(), req.prNumber())
+            : List.of();
     List<ReviewResponse.Finding> previousFindingsSource =
         FollowUpAnalyzer.effectivePreviousFindings(priorAiResponses);
     // The review-body fallback is for sessions carrying no readable AI response at all. Once any
@@ -301,7 +366,8 @@ public class ReviewContextLoader {
         patchCoverage,
         reviewableFiles,
         lineResolverSupplier,
-        prTotals);
+        prTotals,
+        conversationComments);
   }
 
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */
@@ -547,6 +613,54 @@ public class ReviewContextLoader {
       Log.debug("Could not fetch PR issue comments (continuing as if none exist)", e);
       return List.of();
     }
+  }
+
+  /**
+   * Hard ceiling on how much of a PR conversation one review reads: {@link
+   * GitHubCommentClient#MAX_COMMENT_PAGES} pages of {@link GitHubCommentClient#COMMENTS_PER_PAGE}.
+   * The walk is deliberately bounded rather than unbounded — a runaway thread must not turn one
+   * review into hundreds of API calls — so the bound is named here, disclosed in the log, and
+   * documented in the README next to the directive it limits.
+   */
+  static final int MAX_CONVERSATION_COMMENTS =
+      GitHubCommentClient.COMMENTS_PER_PAGE * GitHubCommentClient.MAX_COMMENT_PAGES;
+
+  /**
+   * Whether a conversation walk stopped at {@link #MAX_CONVERSATION_COMMENTS} rather than at the
+   * end of the thread. GitHub serves issue comments oldest first and offers no reverse order on
+   * this endpoint, so a capped walk keeps the <em>oldest</em> window and drops the newest — exactly
+   * where a freshly written clear directive lives. Reaching the ceiling therefore has to be said
+   * out loud instead of silently reading a partial conversation.
+   */
+  static boolean conversationWalkCapped(List<GitHubCommentClient.IssueComment> comments) {
+    return comments.size() >= MAX_CONVERSATION_COMMENTS;
+  }
+
+  /**
+   * The PR conversation the clear-directive scan reads (#548), oldest first. Same paginated fetch
+   * as everywhere else, plus the ceiling disclosure: past it the newest comments are unread, so a
+   * directive among them cannot clear a finding and the operator is told why rather than watching
+   * the feature quietly do nothing.
+   *
+   * <p>{@link #botSummaryCommentExists} deliberately keeps the plain fetch: the summary is posted
+   * on the first round, so it lives in the oldest window a capped walk retains.
+   */
+  List<GitHubCommentClient.IssueComment> fetchConversationComments(
+      String auth, String owner, String repo, int prNumber) {
+    var comments = fetchIssueComments(auth, owner, repo, prNumber);
+    if (conversationWalkCapped(comments)) {
+      Log.warnf(
+          "PR conversation on %s/%s #%d hit the %d-comment read ceiling (%d pages of %d): comments"
+              + " newer than that were not read, so an \"@thrillhousebot resolved\" directive among"
+              + " them cannot clear a finding this round",
+          owner,
+          repo,
+          prNumber,
+          MAX_CONVERSATION_COMMENTS,
+          GitHubCommentClient.MAX_COMMENT_PAGES,
+          GitHubCommentClient.COMMENTS_PER_PAGE);
+    }
+    return comments;
   }
 
   List<GitHubReviewClient.PullRequestComment> fetchPullRequestComments(
