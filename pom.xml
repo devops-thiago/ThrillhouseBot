@@ -157,14 +157,21 @@
             <artifactId>quarkus-websockets</artifactId>
         </dependency>
 
-        <!-- Database: H2 (dev) + Panache -->
+        <!-- Database: PostgreSQL (prod) / H2 (dev + test) + Panache -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-hibernate-orm-panache</artifactId>
         </dependency>
+        <!-- H2 backs `quarkus:dev` and the test suite only; %prod is PostgreSQL, so the driver
+             (and its transitive org.locationtech.jts geospatial jar) has no business in the
+             runtime image. `provided` keeps it on the dev-mode and test classpaths while
+             quarkus:build leaves it out of quarkus-app/lib/main. `test` scope would drop it from
+             dev mode too, and dev mode then fails to boot: "Unable to find a JDBC driver
+             corresponding to the database kind 'h2'". -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jdbc-h2</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
