@@ -669,6 +669,55 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void bothPromptsAskForAsManyFileSummariesAsTheWalkthroughRenders() {
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "cap the array at " + PrReviewPrompts.MAX_FILE_SUMMARIES + " entries",
+        "the review prompt's file_summaries cap must be the walkthrough row bound (#536)");
+    assertContains(
+        PrReviewPrompts.SUMMARY_SYSTEM,
+        "capped at " + PrReviewPrompts.MAX_FILE_SUMMARIES + " entries",
+        "the summary prompt's file_summaries cap must be the walkthrough row bound (#536)");
+  }
+
+  @Test
+  void summaryPromptGroundsFileSummariesInTheMaterialThatCallActuallyHas() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    // The collapse to "-" on large PRs is this call omitting the field: it is told it never sees
+    // the diff and must not invent, while the field is described as "what changed in that file".
+    assertContains(
+        sys,
+        "file_summaries: REQUIRED",
+        "the summary call must be told file_summaries is not optional (#536)");
+    assertContains(
+        sys,
+        "leaves every row of that table blank",
+        "the summary call must be told what omitting file_summaries costs (#536)");
+    assertContains(
+        sys,
+        "is what is wanted and is NOT invention",
+        "a file-list-grounded one-liner must be licensed against the do-not-invent rule (#536)");
+    assertContains(
+        sys,
+        "prefer a rougher true line over",
+        "the summary call must be told to say less rather than nothing (#536)");
+  }
+
+  @Test
+  void bothPromptsPinTheFileSummaryShapeThatSurvivesParsing() {
+    for (String prompt : new String[] {PrReviewPrompts.SYSTEM, PrReviewPrompts.SUMMARY_SYSTEM}) {
+      assertContains(
+          prompt,
+          "spelled exactly \"path\"",
+          "a mis-keyed entry is silently dropped, so the keys must be pinned (#536)");
+      assertContains(
+          prompt,
+          "must be an ARRAY, never an object keyed by",
+          "the map form fails schema mapping and costs the whole summary (#536)");
+    }
+  }
+
+  @Test
   void inDiffTestSelfCheckDoesNotSuppressAClaimAboutAnUncoveredLine() {
     String sys = PrReviewPrompts.SYSTEM;
     assertContains(
