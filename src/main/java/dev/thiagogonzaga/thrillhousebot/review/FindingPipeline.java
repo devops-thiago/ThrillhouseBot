@@ -623,6 +623,13 @@ public class FindingPipeline {
     ReviewResponse summaryResponse;
     try {
       summaryResponse = aiReviewService.summarize(session, summaryInputs);
+    } catch (TokenSpendCeilingExceededException _) {
+      // Same degradation as the multi-call summarize seam: a summary retry refused mid-loop at
+      // the spend ceiling must not fail the review — this lane's only AI call is the summary, so
+      // the review must still post with its omission disclosures, and the skip is recorded on the
+      // plan so the posted review names the ceiling.
+      return countsOnlySummary(
+          session, new ReviewResponse(List.of(), List.of(), null), plan, "summary call refused");
     } catch (AiResponseTruncatedException e) {
       // Same degradation as the multi-call summary seam (#500 scope A): this path has no findings
       // by construction, but the review must still post with its omission disclosures rather than
