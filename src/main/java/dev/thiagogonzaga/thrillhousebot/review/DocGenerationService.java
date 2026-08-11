@@ -83,6 +83,19 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
           + "Please try `/add-docs` again.";
   static final String NOTHING_TO_DOCUMENT =
       "📝 ThrillhouseBot found no changed symbols that need documentation in this PR.";
+
+  /**
+   * Posted when the model named symbols but every entry it returned was missing a field a
+   * suggestion needs — no file, no positive line, no declaration line to anchor against, or no
+   * replacement. Neither neighbour fits: {@link #NOTHING_TO_DOCUMENT} would assert a verdict on the
+   * code ("no changed symbol needs a doc comment") that a run which never got a usable suggestion
+   * cannot support, and {@link #COULD_NOT_PLACE} would blame the diff for a reply that carried no
+   * anchor to place in the first place.
+   */
+  static final String UNUSABLE_SUGGESTIONS =
+      "📝 ThrillhouseBot drafted documentation for this PR, but every suggestion came back"
+          + " incomplete, so none could be posted. Please try `/add-docs` again.";
+
   static final String COULD_NOT_PLACE =
       "📝 ThrillhouseBot generated documentation but could not anchor it to the current diff. "
           + "This usually happens after a force-push — try `/add-docs` again.";
@@ -200,14 +213,21 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
       }
       var outcome = postSuggestions(auth, task, pr.head().sha(), reviewable, generated.docs());
       postComment(auth, task, summaryMessage(generated, outcome, planned.plan()));
+      // The doc counts ride along with the posted counts on purpose: a run that posts nothing is
+      // otherwise indistinguishable in the log from one where the model returned nothing, from one
+      // whose entries were all incomplete, and from one whose docs would not anchor — which is
+      // exactly the question asked of every "/add-docs found nothing" report.
       Log.infof(
-          "/add-docs posted %d suggestion(s) and %d note(s) from %d batch(es) on %s/%s #%d",
+          "/add-docs posted %d suggestion(s) and %d note(s) from %d batch(es) on %s/%s #%d"
+              + " (model returned %d usable doc(s) and %d incomplete entry/entries)",
           outcome.suggestions(),
           outcome.notes(),
           planned.plan().batches().size(),
           task.owner(),
           task.repo(),
-          task.prNumber());
+          task.prNumber(),
+          generated.docs().size(),
+          generated.unusable());
     } catch (RuntimeException e) {
       Log.warnf(
           e, "Failed to handle /add-docs on %s/%s #%d", task.owner(), task.repo(), task.prNumber());
@@ -267,8 +287,14 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
     }
   }
 
-  /** The docs merged across every batch, plus how many batch calls failed outright. */
-  private record Generated(List<DocGenerationResponse.DocSuggestion> docs, int failedBatches) {}
+  /**
+   * The docs merged across every batch, how many batch calls failed outright, and how many entries
+   * the model returned that carried too little to post. The last count is what lets an empty run
+   * distinguish "nothing needed documenting" from "the reply was unusable" — both reach the summary
+   * with an empty {@code docs} list, and only one of them is a statement about the code.
+   */
+  private record Generated(
+      List<DocGenerationResponse.DocSuggestion> docs, int failedBatches, int unusable) {}
 
   /**
    * The map step plus the local union reduce: one call per batch, docs merged in batch order. A
@@ -280,6 +306,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
     var merged = new ArrayList<DocGenerationResponse.DocSuggestion>();
     var seen = new HashSet<String>();
     int failed = 0;
+    int unusable = 0;
     for (var batch : planned.plan().batches()) {
       var response = generateOne(planned, batch);
       if (response == null) {
@@ -293,7 +320,11 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
         // first would throw on a malformed entry (losing every valid entry in the same reply), and
         // a non-postable entry consuming file:line would both block a later batch's valid
         // suggestion for that declaration and leave a malformed reply reported as COULD_NOT_PLACE.
-        if (doc.isPostable() && seen.add(doc.file().strip() + ":" + doc.line())) {
+        if (!doc.isPostable()) {
+          unusable++;
+          continue;
+        }
+        if (seen.add(doc.file().strip() + ":" + doc.line())) {
           merged.add(doc);
         }
       }
@@ -302,7 +333,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
       Log.debugf("Every /add-docs batch failed — reporting the failure");
       return null;
     }
-    return new Generated(List.copyOf(merged), failed);
+    return new Generated(List.copyOf(merged), failed, unusable);
   }
 
   /** One batch's assistant call and parse, or {@code null} when either step fails. */
@@ -488,14 +519,14 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
    */
   private String summaryMessage(
       Generated generated, DocPostOutcome outcome, DiffBudgetPlanner.BudgetPlan plan) {
-    return baseSummaryMessage(generated.docs(), outcome)
+    return baseSummaryMessage(generated, outcome)
         + batchFailureNote(
             generated.failedBatches(), COMMAND, "the symbols in them are not documented here.")
         + disclosure(plan);
   }
 
-  private String baseSummaryMessage(
-      List<DocGenerationResponse.DocSuggestion> docs, DocPostOutcome outcome) {
+  private String baseSummaryMessage(Generated generated, DocPostOutcome outcome) {
+    var docs = generated.docs();
     int suggestions = outcome.suggestions();
     int notes = outcome.notes();
     String capSuffix =
@@ -534,7 +565,12 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
           + outcome.skippedByCap()
           + "** changed symbol(s) were not documented. Raise the comment cap or re-run `/add-docs`.";
     }
-    return docs.isEmpty() ? NOTHING_TO_DOCUMENT : COULD_NOT_PLACE;
+    if (!docs.isEmpty()) {
+      return COULD_NOT_PLACE;
+    }
+    // Nothing usable came back. Only a run where the model returned no entries at all can claim
+    // there was nothing to document; one whose entries were all incomplete says so instead.
+    return generated.unusable() > 0 ? UNUSABLE_SUGGESTIONS : NOTHING_TO_DOCUMENT;
   }
 
   // Command-specific guidance for the repository-instructions section.
