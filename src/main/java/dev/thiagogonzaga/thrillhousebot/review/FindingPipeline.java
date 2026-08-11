@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
@@ -58,9 +59,6 @@ public class FindingPipeline {
 
   /** Directory rows listed in the scope header before the remainder is rolled up by count. */
   private static final int MAX_SCOPE_DIRECTORIES = 10;
-
-  /** Cause-chain links inspected before giving up, so a cyclic chain cannot spin. */
-  private static final int MAX_CAUSE_DEPTH = 16;
 
   private record BatchOutcome(
       int index,
@@ -580,22 +578,12 @@ public class FindingPipeline {
   }
 
   /**
-   * Whether a batch failure was the spend ceiling refusing the call before it was made. Bounded
-   * cause walk like {@link AiResponseTruncatedException#findIn} (where the truncation flavour of
-   * this check was hoisted, so the pipeline and the orchestrator share one walk) and for the same
-   * reason: the refusal arrives wrapped in the parallel pass's {@link CompletionException}, and an
-   * unbounded walk over a cyclic chain would spin forever on the review thread.
+   * Whether a batch failure was the spend ceiling refusing the call before it was made. The refusal
+   * arrives wrapped in the parallel pass's {@link CompletionException}, so this shares the bounded
+   * cause walk in {@link Throwables#findCause} with {@link AiResponseTruncatedException#findIn}.
    */
   private static boolean isSpendCeilingBlocked(Throwable failure) {
-    var cause = failure;
-    for (var depth = 0;
-        cause != null && depth < MAX_CAUSE_DEPTH;
-        depth++, cause = cause.getCause()) {
-      if (cause instanceof TokenSpendCeilingExceededException) {
-        return true;
-      }
-    }
-    return false;
+    return Throwables.findCause(failure, TokenSpendCeilingExceededException.class).isPresent();
   }
 
   /**

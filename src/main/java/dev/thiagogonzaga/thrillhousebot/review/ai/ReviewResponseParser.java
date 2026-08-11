@@ -203,7 +203,8 @@ public class ReviewResponseParser {
    * ": "}-separated in a stable order — {@code "claim"} first when present (the field the
    * production shape led with), then the rest in emission order; non-string scalars flatten via
    * {@code asText()}; arrays, and objects without any string-valued field, degrade to their JSON
-   * text so no content is silently lost.
+   * text. Non-string members of an object that does have string-valued fields (e.g. {@code line:
+   * 42}) are dropped by design — the gap list renders prose, and the string fields carry it.
    */
   private static String flattenGap(JsonNode gap) {
     if (!gap.isObject()) {

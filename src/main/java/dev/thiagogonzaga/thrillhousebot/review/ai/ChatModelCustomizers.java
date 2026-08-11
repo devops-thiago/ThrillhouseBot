@@ -23,6 +23,7 @@ import io.quarkiverse.langchain4j.ModelBuilderCustomizer;
 import io.quarkiverse.langchain4j.ModelName;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 
 /**
  * Applies the operator's model tuning to the OpenAI-compatible chat models: the reasoning-effort
@@ -65,6 +66,61 @@ public final class ChatModelCustomizers {
         : Optional.empty();
   }
 
+  /**
+   * The shared customizer body, applied through one builder flavour's setter references — the
+   * blocking and streaming builders share no supertype, so the four customizers adapt via {@link
+   * #BLOCKING_TUNING}/{@link #STREAMING_TUNING} instead of each repeating the knob list. {@code
+   * applyResponseCap} is false for the concise pair, which must never see the active model's {@code
+   * max-output-tokens} (it would stomp the named config block's cap).
+   */
+  private record SharedTuning<B>(
+      BiConsumer<B, String> reasoningEffort,
+      BiConsumer<B, Double> temperature,
+      BiConsumer<B, Double> topP,
+      BiConsumer<B, Integer> maxTokens,
+      BiConsumer<B, Double> frequencyPenalty,
+      BiConsumer<B, Double> presencePenalty,
+      BiConsumer<B, Integer> seed) {
+
+    void apply(
+        ThrillhouseConfig config,
+        ActiveModelSettings activeModel,
+        B builder,
+        boolean applyResponseCap) {
+      ChatModelCustomizers.reasoningEffort(config)
+          .ifPresent(v -> reasoningEffort.accept(builder, v));
+      activeModel.temperature().ifPresent(v -> temperature.accept(builder, v));
+      activeModel.topP().ifPresent(v -> topP.accept(builder, v));
+      if (applyResponseCap) {
+        activeModel.maxOutputTokens().ifPresent(v -> maxTokens.accept(builder, v));
+      }
+      activeModel.frequencyPenalty().ifPresent(v -> frequencyPenalty.accept(builder, v));
+      activeModel.presencePenalty().ifPresent(v -> presencePenalty.accept(builder, v));
+      activeModel.seed().ifPresent(v -> seed.accept(builder, v));
+    }
+  }
+
+  private static final SharedTuning<OpenAiChatModel.OpenAiChatModelBuilder> BLOCKING_TUNING =
+      new SharedTuning<>(
+          OpenAiChatModel.OpenAiChatModelBuilder::reasoningEffort,
+          OpenAiChatModel.OpenAiChatModelBuilder::temperature,
+          OpenAiChatModel.OpenAiChatModelBuilder::topP,
+          OpenAiChatModel.OpenAiChatModelBuilder::maxTokens,
+          OpenAiChatModel.OpenAiChatModelBuilder::frequencyPenalty,
+          OpenAiChatModel.OpenAiChatModelBuilder::presencePenalty,
+          OpenAiChatModel.OpenAiChatModelBuilder::seed);
+
+  private static final SharedTuning<OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder>
+      STREAMING_TUNING =
+          new SharedTuning<>(
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::reasoningEffort,
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::temperature,
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::topP,
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::maxTokens,
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::frequencyPenalty,
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::presencePenalty,
+              OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder::seed);
+
   /** Tuning for the blocking model (verifier, describe, changelog, docs, replies). */
   @ApplicationScoped
   static class ChatModelCustomizer
@@ -80,13 +136,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiChatModel.OpenAiChatModelBuilder builder) {
-      reasoningEffort(config).ifPresent(builder::reasoningEffort);
-      activeModel.temperature().ifPresent(builder::temperature);
-      activeModel.topP().ifPresent(builder::topP);
-      activeModel.maxOutputTokens().ifPresent(builder::maxTokens);
-      activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
-      activeModel.presencePenalty().ifPresent(builder::presencePenalty);
-      activeModel.seed().ifPresent(builder::seed);
+      BLOCKING_TUNING.apply(config, activeModel, builder, true);
     }
   }
 
@@ -105,13 +155,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
-      reasoningEffort(config).ifPresent(builder::reasoningEffort);
-      activeModel.temperature().ifPresent(builder::temperature);
-      activeModel.topP().ifPresent(builder::topP);
-      activeModel.maxOutputTokens().ifPresent(builder::maxTokens);
-      activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
-      activeModel.presencePenalty().ifPresent(builder::presencePenalty);
-      activeModel.seed().ifPresent(builder::seed);
+      STREAMING_TUNING.apply(config, activeModel, builder, true);
     }
   }
 
@@ -137,12 +181,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiChatModel.OpenAiChatModelBuilder builder) {
-      reasoningEffort(config).ifPresent(builder::reasoningEffort);
-      activeModel.temperature().ifPresent(builder::temperature);
-      activeModel.topP().ifPresent(builder::topP);
-      activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
-      activeModel.presencePenalty().ifPresent(builder::presencePenalty);
-      activeModel.seed().ifPresent(builder::seed);
+      BLOCKING_TUNING.apply(config, activeModel, builder, false);
     }
   }
 
@@ -165,12 +204,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
-      reasoningEffort(config).ifPresent(builder::reasoningEffort);
-      activeModel.temperature().ifPresent(builder::temperature);
-      activeModel.topP().ifPresent(builder::topP);
-      activeModel.frequencyPenalty().ifPresent(builder::frequencyPenalty);
-      activeModel.presencePenalty().ifPresent(builder::presencePenalty);
-      activeModel.seed().ifPresent(builder::seed);
+      STREAMING_TUNING.apply(config, activeModel, builder, false);
     }
   }
 }

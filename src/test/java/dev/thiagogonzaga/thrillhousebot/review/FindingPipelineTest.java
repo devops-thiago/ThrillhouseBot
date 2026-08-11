@@ -168,7 +168,15 @@ class FindingPipelineTest {
 
   private static DiffBudgetPlanner.BudgetPlan multiBatchPlan(List<String> omittedByName) {
     return new DiffBudgetPlanner.BudgetPlan(
-        List.of(batch("a.java"), batch("b.java")), omittedByName, List.of(), true);
+        List.of(batch("a.java"), batch("b.java")),
+        omittedByName,
+        List.of(),
+        true,
+        null,
+        null,
+        null,
+        null,
+        null);
   }
 
   @Test
@@ -432,7 +440,8 @@ class FindingPipelineTest {
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
-        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java", "b.java"), List.of(), true);
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null, null);
     when(aiReviewService.summarize(eq(session), any()))
         .thenThrow(new AiResponseTruncatedException("finish_reason=length", null, true));
 
@@ -758,7 +767,15 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("clipped.java")), List.of(), List.of(), true);
+            List.of(batch("clipped.java")),
+            List.of(),
+            List.of(),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -777,7 +794,8 @@ class FindingPipelineTest {
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
-        new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), List.of(), false);
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null, null);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -799,7 +817,8 @@ class FindingPipelineTest {
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
     var plan =
-        new DiffBudgetPlanner.BudgetPlan(List.of(batch("a.java")), List.of(), List.of(), false);
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null, null);
     when(aiReviewService.review(eq(session), any()))
         .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
 
@@ -866,7 +885,9 @@ class FindingPipelineTest {
             new FileDiff("a.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n"),
             new FileDiff("b.java", "modified", 2, 0, 2, "@@ -1 +1 @@\n+y\n"));
     var batch = new DiffBudgetPlanner.DiffBatch("### a.java\n### b.java\n", batchFiles, 10);
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(batch), List.of(), List.of("a.java"), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch), List.of(), List.of("a.java"), true, null, null, null, null, null);
     when(aiReviewService.review(eq(session), any()))
         .thenReturn(
             new ReviewResponse(
@@ -894,7 +915,15 @@ class FindingPipelineTest {
         .thenReturn(Map.of(1, "a.java"));
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
+            List.of(batch("a.java"), batch("b.java")),
+            List.of(),
+            List.of("a.java"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
     when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
             new ReviewResponse(
@@ -980,7 +1009,15 @@ class FindingPipelineTest {
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("a.java"), batch("b.java")), List.of(), List.of("a.java"), true);
+            List.of(batch("a.java"), batch("b.java")),
+            List.of(),
+            List.of("a.java"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
     when(budgetPlanner.perCallInputBudget()).thenReturn(1_000_000);
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -1014,7 +1051,15 @@ class FindingPipelineTest {
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("a.java"), batch("b.java")), List.of("z.java"), List.of("a.java"), true);
+            List.of(batch("a.java"), batch("b.java")),
+            List.of("z.java"),
+            List.of("a.java"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
     when(budgetPlanner.perCallInputBudget()).thenReturn(1_000_000);
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -1459,7 +1504,8 @@ class FindingPipelineTest {
     var template =
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
-        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("a.java", "b.java"), List.of(), true);
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null, null);
     var summary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "too large", "unknown", List.of());
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))
@@ -1481,7 +1527,9 @@ class FindingPipelineTest {
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template =
         new AiReviewService.PromptInputs("(no changes detected)", "ctx", "base", "s", "t", "", "");
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
