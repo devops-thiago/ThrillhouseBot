@@ -366,7 +366,7 @@ class ReviewResultTest {
         new ReviewResult.TruncationDetail(
             List.of(), List.of(), List.of(), List.of("cut.java"), false, false);
     assertFalse(detail.isEmpty());
-    // The three-list convenience constructor keeps the pre-#500 shape: no response-cut files.
+    // The canonical constructor with an empty response-cut list keeps the pre-#500 shape.
     assertTrue(
         new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false)
             .isEmpty());
@@ -425,7 +425,7 @@ class ReviewResultTest {
     var detail =
         new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false);
     assertFalse(detail.isEmpty());
-    // The four-list convenience constructor keeps the pre-summary-cut shape: flag unset.
+    // The canonical constructor with the cut flag unset keeps the pre-summary-cut shape.
     assertFalse(
         new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false)
             .summaryResponseCut());
@@ -440,7 +440,7 @@ class ReviewResultTest {
     assertFalse(detail.isEmpty());
     // ...while the per-file surfaces treat it as gap-free, exactly like the cut flag (#516).
     assertFalse(detail.hasFileGaps());
-    // The five-arg convenience constructor keeps the pre-#518 shape: flag unset.
+    // The canonical constructor with the ceiling flag unset keeps the pre-#518 shape.
     assertFalse(
         new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false)
             .summarySkippedAtCeiling());
@@ -509,7 +509,7 @@ class ReviewResultTest {
         new ReviewResult.TruncationDetail(
             List.of(), List.of(), List.of("c.java"), List.of(), false, false);
     assertFalse(detail.isEmpty());
-    // The two-list convenience constructor keeps the pre-#499 shape: no ceiling skips.
+    // The canonical constructor with an empty ceiling-skip list keeps the pre-#499 shape.
     assertTrue(
         new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false)
             .isEmpty());
