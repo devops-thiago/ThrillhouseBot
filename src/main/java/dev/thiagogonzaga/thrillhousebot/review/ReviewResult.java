@@ -126,13 +126,13 @@ public record ReviewResult(
    * was reached — a different reason with a different fix, so the rendered copy names it separately
    * — and {@code responseCutFileNames} were only partially reviewed because the model's response
    * was cut at its length cap and the findings up to the cut were kept (#500). {@code
-   * summaryResponseCut} marks the same length-cap cut on the summary call: the findings are
-   * complete, but the prose summary was salvaged from a cut response or replaced by the counts-only
-   * fallback. {@code summarySkippedAtCeiling} marks the ceiling flavor of that same degradation:
-   * the summary call was skipped (or refused mid-call) because the review's token spend ceiling
-   * ({@code REVIEW_MAX_TOKENS_PER_REVIEW}) was reached — here too the findings are complete (#518).
-   * All empty on the legacy line-cap path, where only a count is known — the rendered copy then
-   * falls back to the numeric clause.
+   * summaryDegradation} marks the same degradations on the summary call: the findings are complete,
+   * but the prose summary either was salvaged from a length-cap-cut response or replaced by the
+   * counts-only fallback ({@link SummaryDegradation#RESPONSE_CUT}), or the call was skipped (or
+   * refused mid-call) because the review's token spend ceiling ({@code
+   * REVIEW_MAX_TOKENS_PER_REVIEW}) was reached ({@link SummaryDegradation#SKIPPED_AT_CEILING},
+   * #518). All empty on the legacy line-cap path, where only a count is known — the rendered copy
+   * then falls back to the numeric clause.
    */
   @RegisterForReflection
   public record TruncationDetail(
@@ -140,10 +140,9 @@ public record ReviewResult(
       List<String> clippedFileNames,
       List<String> spendCeilingSkippedFileNames,
       List<String> responseCutFileNames,
-      boolean summaryResponseCut,
-      boolean summarySkippedAtCeiling) {
+      SummaryDegradation summaryDegradation) {
     public static final TruncationDetail EMPTY =
-        new TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false);
+        new TruncationDetail(List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE);
 
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
@@ -154,18 +153,20 @@ public record ReviewResult(
               : List.copyOf(spendCeilingSkippedFileNames);
       responseCutFileNames =
           responseCutFileNames == null ? List.of() : List.copyOf(responseCutFileNames);
+      summaryDegradation =
+          summaryDegradation == null ? SummaryDegradation.NONE : summaryDegradation;
     }
 
     public boolean isEmpty() {
-      return !hasFileGaps() && !summaryResponseCut && !summarySkippedAtCeiling;
+      return !hasFileGaps() && summaryDegradation == SummaryDegradation.NONE;
     }
 
     /**
      * Whether any per-file coverage gap exists — a name in any of the four file classes. False for
-     * a detail whose only content is a summary flag: the findings then cover the whole diff, so
-     * surfaces whose framing is per-file partial coverage (the on-demand disclosure, the delta
+     * a detail whose only content is a summary degradation: the findings then cover the whole diff,
+     * so surfaces whose framing is per-file partial coverage (the on-demand disclosure, the delta
      * comment) treat such a detail as empty (#516) while the summary-aware surfaces (banner,
-     * coverage clause, check-run brief) still disclose the flag.
+     * coverage clause, check-run brief) still disclose the degradation.
      */
     public boolean hasFileGaps() {
       return !omittedFileNames.isEmpty()
@@ -399,22 +400,25 @@ public record ReviewResult(
                   + " its length cap (max-output-tokens) — findings up to the cut were kept (%s)",
               detail.responseCutFileNames().size(), nameList(detail.responseCutFileNames())));
     }
-    // The summary flags affect prose, not findings: the findings are complete, but the summary
-    // call either had its response cut at the length cap and was salvaged (or replaced by the
-    // counts-only fallback), or was skipped outright at the token spend ceiling (#518) — the two
-    // flavors of the same degradation, disclosed with the same shape so neither lane stays
+    // A summary degradation affects prose, not findings: the findings are complete, but the
+    // summary call either had its response cut at the length cap and was salvaged (or replaced by
+    // the counts-only fallback), or was skipped outright at the token spend ceiling (#518) — the
+    // two flavors of the same degradation, disclosed with the same shape so neither lane stays
     // log-only.
-    if (detail.summaryResponseCut()) {
-      clauses.add(
-          "the summary was shortened because the model's response was cut at its length cap"
-              + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) — the findings themselves"
-              + " are complete");
-    }
-    if (detail.summarySkippedAtCeiling()) {
-      clauses.add(
-          "the summary was skipped because the review's token spend ceiling"
-              + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
-              + " complete");
+    switch (detail.summaryDegradation()) {
+      case RESPONSE_CUT ->
+          clauses.add(
+              "the summary was shortened because the model's response was cut at its length cap"
+                  + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) — the findings"
+                  + " themselves are complete");
+      case SKIPPED_AT_CEILING ->
+          clauses.add(
+              "the summary was skipped because the review's token spend ceiling"
+                  + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
+                  + " complete");
+      case NONE -> {
+        // Nothing to disclose.
+      }
     }
     return String.join(", and ", clauses);
   }
@@ -453,11 +457,12 @@ public record ReviewResult(
               "%d file(s) partially reviewed (response cut at the length cap)",
               truncation.responseCutFileNames().size()));
     }
-    if (truncation.summaryResponseCut()) {
-      parts.add("summary shortened (response cut at the length cap)");
-    }
-    if (truncation.summarySkippedAtCeiling()) {
-      parts.add("summary skipped (token spend ceiling reached)");
+    switch (truncation.summaryDegradation()) {
+      case RESPONSE_CUT -> parts.add("summary shortened (response cut at the length cap)");
+      case SKIPPED_AT_CEILING -> parts.add("summary skipped (token spend ceiling reached)");
+      case NONE -> {
+        // Nothing to disclose.
+      }
     }
     return String.join(", ", parts);
   }
@@ -494,7 +499,7 @@ public record ReviewResult(
    * budget upholds the same "reported by name, never silently dropped" contract as the review
    * banner; falls back to the numeric clause when only a count is known.
    *
-   * <p>A detail carrying only a summary flag (no file names) is treated as empty here: this
+   * <p>A detail carrying only a summary degradation (no file names) is treated as empty here: this
    * disclosure's framing — "Large PR — partial coverage … covers only part of the diff" — is about
    * per-file gaps, and with the findings complete it would be self-contradictory (#516). The
    * summary-aware surfaces (review banner, check-run suffix) disclose the flag instead.

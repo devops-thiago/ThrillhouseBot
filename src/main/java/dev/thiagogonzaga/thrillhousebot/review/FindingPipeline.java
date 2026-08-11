@@ -315,7 +315,7 @@ public class FindingPipeline {
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
       String what) {
-    plan.recordSummarySkippedAtCeiling();
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
     Log.warnf(
         "Review session %d reached its token spend ceiling before the summary call (%d tokens"
             + " spent, ceiling %d — REVIEW_MAX_TOKENS_PER_REVIEW); %s and keeping the %d paid"
@@ -335,16 +335,16 @@ public class FindingPipeline {
    * truncation is disclosed in the log with the caps that apply — the summary call runs on the
    * concise model, so both knobs are named — and recorded on the plan so the posted review carries
    * the same disclosure instead of leaving it log-only, exactly like the sibling spend-ceiling
-   * degradation of this lane records {@code summarySkippedAtCeiling} in {@link #countsOnlySummary}
-   * (#518). Statuses are never taken from the salvage: the code-blind summary call must not decide
-   * what was resolved (same rule as the parsed path).
+   * degradation of this lane records its own flavor in {@link #countsOnlySummary} (#518). Statuses
+   * are never taken from the salvage: the code-blind summary call must not decide what was resolved
+   * (same rule as the parsed path).
    */
   private ReviewResponse salvagedOrCountsOnlySummary(
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
       AiResponseTruncatedException truncation) {
-    plan.recordSummaryResponseCut();
+    plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
     var salvagedSummary = salvager.salvage(truncation.partialBody()).summary();
     if (salvagedSummary != null) {
       Log.warnf(

@@ -94,8 +94,7 @@ public class DiffBudgetPlanner {
       List<String> runtimeUncoveredFiles,
       List<String> spendCeilingSkippedFiles,
       List<String> responseCutFiles,
-      java.util.concurrent.atomic.AtomicBoolean summaryResponseCut,
-      java.util.concurrent.atomic.AtomicBoolean summarySkippedAtCeiling) {
+      java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -109,39 +108,26 @@ public class DiffBudgetPlanner {
               ? new CopyOnWriteArrayList<>()
               : spendCeilingSkippedFiles;
       responseCutFiles = responseCutFiles == null ? new CopyOnWriteArrayList<>() : responseCutFiles;
-      summaryResponseCut =
-          summaryResponseCut == null
-              ? new java.util.concurrent.atomic.AtomicBoolean(false)
-              : summaryResponseCut;
-      summarySkippedAtCeiling =
-          summarySkippedAtCeiling == null
-              ? new java.util.concurrent.atomic.AtomicBoolean(false)
-              : summarySkippedAtCeiling;
-    }
-
-    /** Marks the review's summary response as cut at the model's length cap (#500 scope A). */
-    void recordSummaryResponseCut() {
-      summaryResponseCut.set(true);
-    }
-
-    /** Whether the summary response was cut — salvaged or degraded, the disclosure names it. */
-    public boolean summaryWasCut() {
-      return summaryResponseCut.get();
+      summaryDegradationRef =
+          summaryDegradationRef == null
+              ? new java.util.concurrent.atomic.AtomicReference<>(SummaryDegradation.NONE)
+              : summaryDegradationRef;
     }
 
     /**
-     * Marks the review's summary call as skipped (or refused mid-call) because the review's token
-     * spend ceiling ({@code REVIEW_MAX_TOKENS_PER_REVIEW}) was reached (#518) — the ceiling sibling
-     * of {@link #recordSummaryResponseCut()}, so the counts-only degradation is disclosed in the
-     * posted review instead of only in the log.
+     * Records how the review's summary prose degraded — response cut at the model's length cap
+     * (#500 scope A) or call skipped (or refused mid-call) at the token spend ceiling (#518) — so
+     * the posted review discloses the degradation instead of leaving it log-only. The two flavors
+     * arise on disjoint control paths, so a single slot suffices and the meaningless both-at-once
+     * state stays unrepresentable.
      */
-    void recordSummarySkippedAtCeiling() {
-      summarySkippedAtCeiling.set(true);
+    void recordSummaryDegradation(SummaryDegradation degradation) {
+      summaryDegradationRef.set(degradation);
     }
 
-    /** Whether the summary call was skipped at the spend ceiling — the disclosure names it. */
-    public boolean summaryWasSkippedAtCeiling() {
-      return summarySkippedAtCeiling.get();
+    /** How the summary prose degraded, if at all — the disclosure names the flavor. */
+    public SummaryDegradation summaryDegradation() {
+      return summaryDegradationRef.get();
     }
 
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
@@ -163,22 +149,12 @@ public class DiffBudgetPlanner {
     }
 
     /**
-     * Defensive snapshot, like {@link #runtimeUncoveredFiles()}: the live flag is only written
-     * through {@link #recordSummaryResponseCut()} and read through {@link #summaryWasCut()}.
+     * Defensive snapshot, like {@link #runtimeUncoveredFiles()}: the live slot is only written
+     * through {@link #recordSummaryDegradation} and read through {@link #summaryDegradation()}.
      */
     @Override
-    public java.util.concurrent.atomic.AtomicBoolean summaryResponseCut() {
-      return new java.util.concurrent.atomic.AtomicBoolean(summaryResponseCut.get());
-    }
-
-    /**
-     * Defensive snapshot, like {@link #summaryResponseCut()}: the live flag is only written through
-     * {@link #recordSummarySkippedAtCeiling()} and read through {@link
-     * #summaryWasSkippedAtCeiling()}.
-     */
-    @Override
-    public java.util.concurrent.atomic.AtomicBoolean summarySkippedAtCeiling() {
-      return new java.util.concurrent.atomic.AtomicBoolean(summarySkippedAtCeiling.get());
+    public java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef() {
+      return new java.util.concurrent.atomic.AtomicReference<>(summaryDegradationRef.get());
     }
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
@@ -350,23 +326,14 @@ public class DiffBudgetPlanner {
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
     var budgeted = diffBudgetTokens > 0;
     if (reviewable.isEmpty()) {
-      return new BudgetPlan(
-          List.of(), List.of(), List.of(), budgeted, null, null, null, null, null);
+      return new BudgetPlan(List.of(), List.of(), List.of(), budgeted, null, null, null, null);
     }
 
     var rendered = renderAndSize(reviewable, diffBudgetTokens);
 
     if (!budgeted) {
       return new BudgetPlan(
-          List.of(toBatch(rendered.sized())),
-          List.of(),
-          List.of(),
-          false,
-          null,
-          null,
-          null,
-          null,
-          null);
+          List.of(toBatch(rendered.sized())), List.of(), List.of(), false, null, null, null, null);
     }
     return pack(rendered, diffBudgetTokens, Math.max(1, maxBatches));
   }
@@ -487,7 +454,7 @@ public class DiffBudgetPlanner {
     // exactly one class or the disclosure would list it twice and the verdict double-count it.
     var omittedSet = new HashSet<>(omitted);
     var clipped = rendered.clipped().stream().filter(n -> !omittedSet.contains(n)).toList();
-    return new BudgetPlan(batches, omitted, clipped, true, null, null, null, null, null);
+    return new BudgetPlan(batches, omitted, clipped, true, null, null, null, null);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */

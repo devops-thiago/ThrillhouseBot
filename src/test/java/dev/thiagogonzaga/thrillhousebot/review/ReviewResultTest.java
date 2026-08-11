@@ -192,7 +192,8 @@ class ReviewResultTest {
     // diff") is about per-file gaps. A detail whose only content is a summary flag means the
     // findings cover the whole diff, so this surface must render nothing.
     var detail =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false);
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
 
     assertEquals("", ReviewResult.truncationDisclosure(0, detail));
     // The guard's null arm behaves like an empty detail, and a detail with file gaps still
@@ -200,7 +201,7 @@ class ReviewResultTest {
     assertEquals("", ReviewResult.truncationDisclosure(0, null));
     var clippedOnly =
         new ReviewResult.TruncationDetail(
-            List.of(), List.of("clipped.java"), List.of(), List.of(), false, false);
+            List.of(), List.of("clipped.java"), List.of(), List.of(), SummaryDegradation.NONE);
     assertTrue(
         ReviewResult.truncationDisclosure(0, clippedOnly).contains("partially analyzed"),
         ReviewResult.truncationDisclosure(0, clippedOnly));
@@ -212,7 +213,11 @@ class ReviewResultTest {
     // as one more clause — the flag-only guard must not suppress this shape.
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of("omitted.java"), List.of(), List.of(), List.of(), true, false);
+            List.of("omitted.java"),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.RESPONSE_CUT);
 
     var disclosure = ReviewResult.truncationDisclosure(1, detail);
 
@@ -252,8 +257,7 @@ class ReviewResultTest {
             List.of("b.java"),
             List.of("c.java", "d.java"),
             List.of(),
-            false,
-            false);
+            SummaryDegradation.NONE);
 
     var clause = ReviewResult.coverageGapClause(4, detail);
 
@@ -270,7 +274,7 @@ class ReviewResultTest {
   void coverageGapClauseWithOnlySpendCeilingSkipsDropsTheBudgetWording() {
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of(), List.of(), List.of("c.java"), List.of(), false, false);
+            List.of(), List.of(), List.of("c.java"), List.of(), SummaryDegradation.NONE);
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
@@ -298,7 +302,11 @@ class ReviewResultTest {
             false,
             true,
             new ReviewResult.TruncationDetail(
-                List.of("a.java"), List.of(), List.of("c.java"), List.of(), false, false));
+                List.of("a.java"),
+                List.of(),
+                List.of("c.java"),
+                List.of(),
+                SummaryDegradation.NONE));
 
     var brief = result.coverageGapBrief();
 
@@ -308,10 +316,14 @@ class ReviewResultTest {
 
   @Test
   void truncationDetailNormalizesNullListsToEmpty() {
-    var detail = new ReviewResult.TruncationDetail(null, null, null, null, false, false);
+    var detail = new ReviewResult.TruncationDetail(null, null, null, null, null);
     assertTrue(detail.isEmpty());
     assertEquals(List.of(), detail.spendCeilingSkippedFileNames());
     assertEquals(List.of(), detail.responseCutFileNames());
+    assertEquals(
+        SummaryDegradation.NONE,
+        detail.summaryDegradation(),
+        "a null degradation normalizes to NONE");
   }
 
   @Test
@@ -321,7 +333,7 @@ class ReviewResultTest {
     // them into the budget or ceiling wording.
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of("a.java"), List.of(), List.of(), List.of("cut.java"), false, false);
+            List.of("a.java"), List.of(), List.of(), List.of("cut.java"), SummaryDegradation.NONE);
 
     var clause = ReviewResult.coverageGapClause(2, detail);
 
@@ -352,7 +364,7 @@ class ReviewResultTest {
             false,
             true,
             new ReviewResult.TruncationDetail(
-                List.of(), List.of(), List.of(), List.of("cut.java"), false, false));
+                List.of(), List.of(), List.of(), List.of("cut.java"), SummaryDegradation.NONE));
 
     var brief = result.coverageGapBrief();
 
@@ -364,11 +376,12 @@ class ReviewResultTest {
   void truncationDetailWithOnlyResponseCutFilesIsNotEmpty() {
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of(), List.of(), List.of(), List.of("cut.java"), false, false);
+            List.of(), List.of(), List.of(), List.of("cut.java"), SummaryDegradation.NONE);
     assertFalse(detail.isEmpty());
     // The canonical constructor with an empty response-cut list keeps the pre-#500 shape.
     assertTrue(
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false)
+        new ReviewResult.TruncationDetail(
+                List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE)
             .isEmpty());
   }
 
@@ -380,7 +393,7 @@ class ReviewResultTest {
     // sibling ceiling degradation of the same lane discloses itself.
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of("a.java"), List.of(), List.of(), List.of(), true, false);
+            List.of("a.java"), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
@@ -412,7 +425,11 @@ class ReviewResultTest {
             false,
             true,
             new ReviewResult.TruncationDetail(
-                List.of("a.java"), List.of(), List.of(), List.of(), true, false));
+                List.of("a.java"),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.RESPONSE_CUT));
 
     var brief = result.coverageGapBrief();
 
@@ -423,12 +440,15 @@ class ReviewResultTest {
   @Test
   void truncationDetailWithOnlyTheSummaryCutIsNotEmpty() {
     var detail =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false);
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
     assertFalse(detail.isEmpty());
-    // The canonical constructor with the cut flag unset keeps the pre-summary-cut shape.
-    assertFalse(
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false)
-            .summaryResponseCut());
+    // The canonical constructor with no degradation keeps the pre-summary-cut shape.
+    assertEquals(
+        SummaryDegradation.NONE,
+        new ReviewResult.TruncationDetail(
+                List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE)
+            .summaryDegradation());
   }
 
   @Test
@@ -436,14 +456,17 @@ class ReviewResultTest {
     // #518: like the summary cut, the ceiling-skipped summary must defeat the EMPTY guards so
     // the summary-aware surfaces render it...
     var detail =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, true);
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.SKIPPED_AT_CEILING);
     assertFalse(detail.isEmpty());
-    // ...while the per-file surfaces treat it as gap-free, exactly like the cut flag (#516).
+    // ...while the per-file surfaces treat it as gap-free, exactly like the cut flavor (#516).
     assertFalse(detail.hasFileGaps());
-    // The canonical constructor with the ceiling flag unset keeps the pre-#518 shape.
-    assertFalse(
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false)
-            .summarySkippedAtCeiling());
+    // The single slot keeps the two flavors mutually exclusive by construction.
+    assertEquals(
+        SummaryDegradation.RESPONSE_CUT,
+        new ReviewResult.TruncationDetail(
+                List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT)
+            .summaryDegradation());
   }
 
   @Test
@@ -453,7 +476,11 @@ class ReviewResultTest {
     // complete — instead of leaving the degradation log-only.
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of("a.java"), List.of(), List.of(), List.of(), false, true);
+            List.of("a.java"),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.SKIPPED_AT_CEILING);
 
     var clause = ReviewResult.coverageGapClause(1, detail);
 
@@ -485,7 +512,11 @@ class ReviewResultTest {
             false,
             true,
             new ReviewResult.TruncationDetail(
-                List.of("a.java"), List.of(), List.of(), List.of(), false, true));
+                List.of("a.java"),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.SKIPPED_AT_CEILING));
 
     var brief = result.coverageGapBrief();
 
@@ -498,7 +529,8 @@ class ReviewResultTest {
     // #516's guard must hold for the ceiling flavor too: no file gap means no partial-coverage
     // framing, whichever summary flag is set.
     var detail =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, true);
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.SKIPPED_AT_CEILING);
 
     assertEquals("", ReviewResult.truncationDisclosure(0, detail));
   }
@@ -507,11 +539,12 @@ class ReviewResultTest {
   void truncationDetailWithOnlySpendCeilingSkipsIsNotEmpty() {
     var detail =
         new ReviewResult.TruncationDetail(
-            List.of(), List.of(), List.of("c.java"), List.of(), false, false);
+            List.of(), List.of(), List.of("c.java"), List.of(), SummaryDegradation.NONE);
     assertFalse(detail.isEmpty());
     // The canonical constructor with an empty ceiling-skip list keeps the pre-#499 shape.
     assertTrue(
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false)
+        new ReviewResult.TruncationDetail(
+                List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE)
             .isEmpty());
   }
 

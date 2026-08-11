@@ -134,8 +134,7 @@ public class VerdictBuilder {
                 clipped,
                 ceilingSkipped,
                 responseCut,
-                plan.summaryWasCut(),
-                plan.summaryWasSkippedAtCeiling())
+                plan.summaryDegradation())
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
         plan.budgeted()
@@ -301,13 +300,11 @@ public class VerdictBuilder {
           + result.coverageGapBrief()
           + ") — partial review.";
     }
-    if (result.truncation().summaryResponseCut()) {
-      return " The summary was shortened (response cut at the length cap).";
-    }
-    if (result.truncation().summarySkippedAtCeiling()) {
-      return " The summary was skipped (token spend ceiling reached).";
-    }
-    return "";
+    return switch (result.truncation().summaryDegradation()) {
+      case RESPONSE_CUT -> " The summary was shortened (response cut at the length cap).";
+      case SKIPPED_AT_CEILING -> " The summary was skipped (token spend ceiling reached).";
+      case NONE -> "";
+    };
   }
 
   record DiffStats(
@@ -535,16 +532,16 @@ public class VerdictBuilder {
       summaryMarkdown =
           ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
               + summaryMarkdown;
-    } else if (diffStats.truncation().summaryResponseCut()) {
-      // Summary-only cut: the findings are complete, so the partial-review banner (and the
-      // approval hold that goes with file gaps) would overstate it — a dedicated banner names
-      // the cut without holding the verdict.
-      summaryMarkdown = ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
-    } else if (diffStats.truncation().summarySkippedAtCeiling()) {
-      // Summary skipped at the token spend ceiling with no file gap (#518): same rationale as the
-      // summary-only cut — the findings are complete, so a dedicated banner names the ceiling
-      // without holding the verdict.
-      summaryMarkdown = ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
+    } else {
+      // Summary-only degradation (no file gap): the findings are complete, so the partial-review
+      // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
+      // banner names the cut, or the token spend ceiling (#518), without holding the verdict.
+      summaryMarkdown =
+          switch (diffStats.truncation().summaryDegradation()) {
+            case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
+            case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
+            case NONE -> summaryMarkdown;
+          };
     }
 
     return new ReviewResult(
