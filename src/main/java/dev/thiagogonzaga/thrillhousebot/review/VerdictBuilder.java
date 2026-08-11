@@ -134,7 +134,8 @@ public class VerdictBuilder {
                 clipped,
                 ceilingSkipped,
                 responseCut,
-                plan.summaryWasCut())
+                plan.summaryWasCut(),
+                plan.summaryWasSkippedAtCeiling())
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
         plan.budgeted()
@@ -290,8 +291,9 @@ public class VerdictBuilder {
 
   /**
    * The coverage suffix of the check-run summary: the partial-review brief when file coverage was
-   * truncated (that brief already folds a summary cut in as one of its counts), the summary-only
-   * marker when just the summary response was cut, empty otherwise.
+   * truncated (that brief already folds a summary cut or skip in as one of its counts), the
+   * summary-only marker when just the summary response was cut — or skipped at the token spend
+   * ceiling (#518) — and empty otherwise.
    */
   private static String truncationSuffixFor(ReviewResult result) {
     if (result.truncated()) {
@@ -301,6 +303,9 @@ public class VerdictBuilder {
     }
     if (result.truncation().summaryResponseCut()) {
       return " The summary was shortened (response cut at the length cap).";
+    }
+    if (result.truncation().summarySkippedAtCeiling()) {
+      return " The summary was skipped (token spend ceiling reached).";
     }
     return "";
   }
@@ -535,6 +540,11 @@ public class VerdictBuilder {
       // approval hold that goes with file gaps) would overstate it — a dedicated banner names
       // the cut without holding the verdict.
       summaryMarkdown = ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
+    } else if (diffStats.truncation().summarySkippedAtCeiling()) {
+      // Summary skipped at the token spend ceiling with no file gap (#518): same rationale as the
+      // summary-only cut — the findings are complete, so a dedicated banner names the ceiling
+      // without holding the verdict.
+      summaryMarkdown = ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
     }
 
     return new ReviewResult(

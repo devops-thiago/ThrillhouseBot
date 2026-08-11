@@ -421,6 +421,40 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void summarySkippedAtCeilingFlagIsRecordedLiveButItsAccessorReturnsASnapshot() {
+    // #518: the ceiling sibling of the summary-cut flag rides the shared plan the same way —
+    // written after the plan is built, read by the verdict — and, like it, its record accessor
+    // must not leak the mutable backing.
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    assertFalse(plan.summaryWasSkippedAtCeiling());
+
+    plan.recordSummarySkippedAtCeiling();
+
+    assertTrue(plan.summaryWasSkippedAtCeiling());
+    assertFalse(
+        plan.truncated(), "a skipped summary is not a coverage gap and must not hold approval");
+    assertFalse(plan.summaryWasCut(), "the ceiling skip is not a response cut — disjoint classes");
+    var snapshot = plan.summarySkippedAtCeiling();
+    snapshot.set(false);
+    assertTrue(plan.summaryWasSkippedAtCeiling(), "mutating the snapshot must not touch the flag");
+  }
+
+  @Test
+  void aPlanBuiltWithItsOwnSummarySkipFlagKeepsThatInstanceLive() {
+    var live = new java.util.concurrent.atomic.AtomicBoolean(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, live);
+
+    assertTrue(plan.summaryWasSkippedAtCeiling());
+    assertNotSame(
+        live, plan.summarySkippedAtCeiling(), "the accessor returns a defensive snapshot");
+
+    live.set(false);
+    assertFalse(plan.summaryWasSkippedAtCeiling(), "the passed-in flag stays the live backing");
+  }
+
+  @Test
   void clippedFilesAreReportedUnchangedWhenNoBatchFailed() {
     // No runtime gap: the clipped list passes through, so a partially analyzed file keeps its
     // "clipped" meaning rather than being reported as wholly uncovered.

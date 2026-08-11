@@ -128,8 +128,11 @@ public record ReviewResult(
    * was cut at its length cap and the findings up to the cut were kept (#500). {@code
    * summaryResponseCut} marks the same length-cap cut on the summary call: the findings are
    * complete, but the prose summary was salvaged from a cut response or replaced by the counts-only
-   * fallback. All empty on the legacy line-cap path, where only a count is known — the rendered
-   * copy then falls back to the numeric clause.
+   * fallback. {@code summarySkippedAtCeiling} marks the ceiling flavor of that same degradation:
+   * the summary call was skipped (or refused mid-call) because the review's token spend ceiling
+   * ({@code REVIEW_MAX_TOKENS_PER_REVIEW}) was reached — here too the findings are complete (#518).
+   * All empty on the legacy line-cap path, where only a count is known — the rendered copy then
+   * falls back to the numeric clause.
    */
   @RegisterForReflection
   public record TruncationDetail(
@@ -137,9 +140,10 @@ public record ReviewResult(
       List<String> clippedFileNames,
       List<String> spendCeilingSkippedFileNames,
       List<String> responseCutFileNames,
-      boolean summaryResponseCut) {
+      boolean summaryResponseCut,
+      boolean summarySkippedAtCeiling) {
     public static final TruncationDetail EMPTY =
-        new TruncationDetail(List.of(), List.of(), List.of(), List.of(), false);
+        new TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, false);
 
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
@@ -154,7 +158,7 @@ public record ReviewResult(
 
     /** Convenience for the token-budget-only surfaces, which have no spend-ceiling skips. */
     public TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
-      this(omittedFileNames, clippedFileNames, List.of(), List.of(), false);
+      this(omittedFileNames, clippedFileNames, List.of(), List.of(), false, false);
     }
 
     /** Back-compat convenience predating {@code responseCutFileNames}; starts it empty. */
@@ -162,7 +166,13 @@ public record ReviewResult(
         List<String> omittedFileNames,
         List<String> clippedFileNames,
         List<String> spendCeilingSkippedFileNames) {
-      this(omittedFileNames, clippedFileNames, spendCeilingSkippedFileNames, List.of(), false);
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          spendCeilingSkippedFileNames,
+          List.of(),
+          false,
+          false);
     }
 
     /** Back-compat convenience predating {@code summaryResponseCut}; starts it unset. */
@@ -176,11 +186,28 @@ public record ReviewResult(
           clippedFileNames,
           spendCeilingSkippedFileNames,
           responseCutFileNames,
+          false,
+          false);
+    }
+
+    /** Back-compat convenience predating {@code summarySkippedAtCeiling}; starts it unset. */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> spendCeilingSkippedFileNames,
+        List<String> responseCutFileNames,
+        boolean summaryResponseCut) {
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          spendCeilingSkippedFileNames,
+          responseCutFileNames,
+          summaryResponseCut,
           false);
     }
 
     public boolean isEmpty() {
-      return !hasFileGaps() && !summaryResponseCut;
+      return !hasFileGaps() && !summaryResponseCut && !summarySkippedAtCeiling;
     }
 
     /**
@@ -326,6 +353,21 @@ public record ReviewResult(
       """;
 
   /**
+   * The ceiling sibling of {@link #SUMMARY_CUT_NOTICE} (#518): the summary call was skipped because
+   * the review's token spend ceiling was reached, with every batch already reviewed — the findings
+   * are complete, so the partial-review banner would overstate the damage here too, and the knob to
+   * raise is named instead. When a file-coverage gap exists as well, {@link #coverageGapClause(int,
+   * TruncationDetail)} folds the skip in as one more clause and this banner is not used.
+   */
+  static final String SUMMARY_SKIPPED_NOTICE =
+      """
+      > ⚠️ **Summary skipped.** The review's token spend ceiling\
+       (REVIEW_MAX_TOKENS_PER_REVIEW) was reached before the summary could be generated — the\
+       findings themselves are complete.
+
+      """;
+
+  /**
    * The shared "N file(s) were omitted …" clause, so the review banner and the on-demand-command
    * disclosure never drift on the omitted count and the reason — only the surrounding framing
    * differs between the two surfaces.
@@ -407,15 +449,22 @@ public record ReviewResult(
                   + " its length cap (max-output-tokens) — findings up to the cut were kept (%s)",
               detail.responseCutFileNames().size(), nameList(detail.responseCutFileNames())));
     }
-    // The summary-cut class affects prose, not findings: the findings are complete, but the
-    // summary call's response hit the same length cap and was salvaged (or replaced by the
-    // counts-only fallback) — the sibling spend-ceiling degradation of the same lane already
-    // discloses itself, so staying silent here would make the two lanes inconsistent.
+    // The summary flags affect prose, not findings: the findings are complete, but the summary
+    // call either had its response cut at the length cap and was salvaged (or replaced by the
+    // counts-only fallback), or was skipped outright at the token spend ceiling (#518) — the two
+    // flavors of the same degradation, disclosed with the same shape so neither lane stays
+    // log-only.
     if (detail.summaryResponseCut()) {
       clauses.add(
           "the summary was shortened because the model's response was cut at its length cap"
               + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) — the findings themselves"
               + " are complete");
+    }
+    if (detail.summarySkippedAtCeiling()) {
+      clauses.add(
+          "the summary was skipped because the review's token spend ceiling"
+              + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
+              + " complete");
     }
     return String.join(", and ", clauses);
   }
@@ -456,6 +505,9 @@ public record ReviewResult(
     }
     if (truncation.summaryResponseCut()) {
       parts.add("summary shortened (response cut at the length cap)");
+    }
+    if (truncation.summarySkippedAtCeiling()) {
+      parts.add("summary skipped (token spend ceiling reached)");
     }
     return String.join(", ", parts);
   }

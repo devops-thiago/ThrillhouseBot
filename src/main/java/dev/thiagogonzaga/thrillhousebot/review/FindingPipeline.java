@@ -270,7 +270,7 @@ public class FindingPipeline {
     refined = populateMissingAnchors(refined, lineResolver);
 
     if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
-      return countsOnlySummary(session, refined, "skipping the summary call");
+      return countsOnlySummary(session, refined, plan, "skipping the summary call");
     }
     var overview = clampOverview(changedFilesOverview(ctx, plan), promptInputs);
     var summaryInputs =
@@ -287,7 +287,7 @@ public class FindingPipeline {
     } catch (TokenSpendCeilingExceededException _) {
       // The gate above passed but a late usage callback (e.g. a timed-out batch attempt's
       // response) crossed the ceiling first, or a summary retry was refused mid-loop.
-      return countsOnlySummary(session, refined, "summary call refused");
+      return countsOnlySummary(session, refined, plan, "summary call refused");
     } catch (AiResponseTruncatedException e) {
       // #500 scope A: every batch call succeeded and was billed. Losing the whole review to a
       // truncated summary would discard exactly the paid work #495 preserved on the batch lane —
@@ -307,10 +307,17 @@ public class FindingPipeline {
    * The summary degradation for a review whose token spend ceiling tripped after the batch calls:
    * the findings are already paid for, so they are kept and persisted with a {@code null} model
    * summary — the renderer's counts-only shape, the same one a summary call that returns no summary
-   * object produces — rather than spending past the ceiling or discarding the review.
+   * object produces — rather than spending past the ceiling or discarding the review. Recorded on
+   * the plan so the posted review names the ceiling (#518), like the truncation flavor of the same
+   * lane ({@link #salvagedOrCountsOnlySummary}) — a log-only warning would let a bare counts-only
+   * review post with no stated reason when no batch was also skipped.
    */
   private ReviewResponse countsOnlySummary(
-      ReviewSession session, ReviewResponse refined, String what) {
+      ReviewSession session,
+      ReviewResponse refined,
+      DiffBudgetPlanner.BudgetPlan plan,
+      String what) {
+    plan.recordSummarySkippedAtCeiling();
     Log.warnf(
         "Review session %d reached its token spend ceiling before the summary call (%d tokens"
             + " spent, ceiling %d — REVIEW_MAX_TOKENS_PER_REVIEW); %s and keeping the %d paid"
@@ -329,9 +336,10 @@ public class FindingPipeline {
    * keeps its paid findings with the {@link #countsOnlySummary counts-only} shape. Either way the
    * truncation is disclosed in the log with the caps that apply — the summary call runs on the
    * concise model, so both knobs are named — and recorded on the plan so the posted review carries
-   * the same disclosure instead of leaving it log-only (the sibling spend-ceiling degradation of
-   * this lane already discloses itself). Statuses are never taken from the salvage: the code-blind
-   * summary call must not decide what was resolved (same rule as the parsed path).
+   * the same disclosure instead of leaving it log-only, exactly like the sibling spend-ceiling
+   * degradation of this lane records {@code summarySkippedAtCeiling} in {@link #countsOnlySummary}
+   * (#518). Statuses are never taken from the salvage: the code-blind summary call must not decide
+   * what was resolved (same rule as the parsed path).
    */
   private ReviewResponse salvagedOrCountsOnlySummary(
       ReviewSession session,
