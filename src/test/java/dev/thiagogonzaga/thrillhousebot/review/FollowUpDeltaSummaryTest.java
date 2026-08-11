@@ -147,6 +147,38 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
+  void summaryOnlyCutMustNotClaimPartialDiffCoverageInTheDeltaComment() {
+    // #516 — only the summary response was cut: the findings (and this comment's counts) cover
+    // the whole diff. The partial-coverage framing is about per-file gaps; wrapping the
+    // summary-cut clause in it renders the self-contradictory "the findings themselves are
+    // complete, so this covers only part of the diff".
+    var truncation =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true);
+    var result =
+        new ReviewResult(
+            List.of(finding("a.java")),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            truncation);
+
+    var body = FollowUpDeltaSummary.render(result).orElseThrow();
+
+    assertFalse(body.contains("Large PR — partial coverage"), body);
+    assertFalse(body.contains("covers only part of the diff"), body);
+  }
+
+  @Test
   void untruncatedReviewCarriesNoDisclosure() {
     var body = FollowUpDeltaSummary.render(followUp(List.of(finding("a.java")), List.of(), 0));
 

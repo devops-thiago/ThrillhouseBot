@@ -186,6 +186,39 @@ class ReviewResultTest {
     assertFalse(disclosure.contains("partial review"), disclosure);
   }
 
+  @Test
+  void truncationDisclosureTreatsASummaryFlagOnlyDetailAsEmpty() {
+    // #516 — the disclosure's framing ("Large PR — partial coverage … covers only part of the
+    // diff") is about per-file gaps. A detail whose only content is a summary flag means the
+    // findings cover the whole diff, so this surface must render nothing.
+    var detail =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true);
+
+    assertEquals("", ReviewResult.truncationDisclosure(0, detail));
+    // The guard's null arm behaves like an empty detail, and a detail with file gaps still
+    // discloses even when the caller's count is zero — the names are the coverage truth.
+    assertEquals("", ReviewResult.truncationDisclosure(0, null));
+    var clippedOnly = new ReviewResult.TruncationDetail(List.of(), List.of("clipped.java"));
+    assertTrue(
+        ReviewResult.truncationDisclosure(0, clippedOnly).contains("partially analyzed"),
+        ReviewResult.truncationDisclosure(0, clippedOnly));
+  }
+
+  @Test
+  void truncationDisclosureStillRendersWhenFileGapsAccompanyTheSummaryCut() {
+    // With a real file gap the partial-coverage framing is correct, and the summary cut folds in
+    // as one more clause — the flag-only guard must not suppress this shape.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("omitted.java"), List.of(), List.of(), List.of(), true);
+
+    var disclosure = ReviewResult.truncationDisclosure(1, detail);
+
+    assertTrue(disclosure.contains("partial coverage"), disclosure);
+    assertTrue(disclosure.contains("omitted.java"), disclosure);
+    assertTrue(disclosure.contains("the summary was shortened"), disclosure);
+  }
+
   /**
    * #455 — the recognizer decides whether a prior review body is the bot's own verdict prose (and
    * so must never be fed back to the model as a "previous finding") or someone else's text, which
