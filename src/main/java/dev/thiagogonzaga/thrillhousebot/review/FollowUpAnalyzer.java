@@ -737,9 +737,17 @@ public class FollowUpAnalyzer {
    * it is not the existing {@code /resolve} command (which resolves GitHub review threads) under a
    * second name — {@code TriggerDetector}'s {@code resolve} pattern ends in a word boundary and
    * therefore does not fire on {@code resolved}.
+   *
+   * <p>The trailing lookahead rejects the interrogative: a word boundary holds before {@code ?}, so
+   * "@thrillhousebot resolved? `src/A.java:10` — SQL injection" — a maintainer <em>asking</em>
+   * whether a finding was fixed, while quoting it well enough to name it — otherwise parses as an
+   * instruction and closes the very finding the question is about. Asking is not deciding, and this
+   * is the over-clear direction, so a token immediately followed by a question mark (whitespace
+   * aside) is not a directive. The lookahead cannot skip past the naming, so a genuine directive
+   * that happens to end in a question ("…— fixed in abc123, ok?") still counts.
    */
   private static final Pattern CLEAR_DIRECTIVE =
-      Pattern.compile("@thrillhousebot\\s+resolved\\b", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("@thrillhousebot\\s+resolved\\b(?!\\s*\\?)", Pattern.CASE_INSENSITIVE);
 
   /** Fenced code blocks, dropped before a conversation comment is read as a directive. */
   private static final Pattern FENCED_CODE = Pattern.compile("(?s)```.*?```|~~~.*?~~~");
@@ -771,6 +779,30 @@ public class FollowUpAnalyzer {
    */
   static boolean isClearDirective(String body) {
     return body != null && CLEAR_DIRECTIVE.matcher(directiveText(body)).find();
+  }
+
+  /**
+   * The shape every locator has — a path, a colon, a line number. Only ever used to prove a
+   * <em>negative</em>; see {@link #namesALocator}.
+   */
+  private static final Pattern LOCATOR_SHAPE = Pattern.compile("\\S+:\\d+");
+
+  /**
+   * Whether {@code body} names anything locator-shaped at all. This is a <em>necessary</em>
+   * condition of {@link #clearedInConversation}, never a sufficient one: clearing a finding
+   * requires its exact {@code path:line}, so a comment carrying no {@code path:line} token
+   * whatsoever provably clears nothing, while one that carries such a token may still match no
+   * finding.
+   *
+   * <p>That asymmetry is the whole point. {@link MaintainerReplyService} answers a directive before
+   * any review has run, with no prior round loaded and no findings to match against — it cannot
+   * decide whether a clear will happen, and guessing would be worse than silence. It can, however,
+   * state the one thing derivable from the comment alone: that a directive naming no locator will
+   * clear nothing, so a maintainer who wrote the directive but forgot (or mistyped away) the
+   * locator is told immediately rather than after the next review quietly changes nothing.
+   */
+  static boolean namesALocator(String body) {
+    return body != null && LOCATOR_SHAPE.matcher(namingText(body)).find();
   }
 
   /**
