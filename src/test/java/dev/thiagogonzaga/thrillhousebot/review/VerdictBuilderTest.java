@@ -293,6 +293,59 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void aCeilingSkippedSummaryIsDisclosedWithoutHoldingApproval() {
+    // #518: the ceiling flavor of the summary degradation — every batch succeeded, the summary
+    // call was skipped at the token spend ceiling. Like the summary-only cut, the findings are
+    // complete: approval must not be held, but the posted review must name the ceiling instead of
+    // leaving the degradation log-only.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    plan.recordSummarySkippedAtCeiling();
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(0, result.omittedFiles());
+    assertFalse(result.truncated());
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertTrue(result.truncation().summarySkippedAtCeiling());
+    assertTrue(result.summaryMarkdown().contains("**Summary skipped.**"), result.summaryMarkdown());
+    assertTrue(
+        result.summaryMarkdown().contains("REVIEW_MAX_TOKENS_PER_REVIEW"),
+        result.summaryMarkdown());
+    // The partial-review banner's framing (findings cover only part of the diff) would overstate
+    // a summary-only degradation.
+    assertFalse(result.summaryMarkdown().contains("partial review"), result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("The summary was skipped (token spend ceiling reached)."),
+        checkSummary);
+  }
+
+  @Test
+  void aCeilingSkippedSummaryAlongsideFileGapsFoldsIntoTheCoverageClause() {
+    // With a real file gap the partial-review banner renders anyway, so the ceiling skip becomes
+    // one more clause there — the dedicated summary-only banner must not stack on top.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of("big.java"), List.of(), true);
+    plan.recordSummarySkippedAtCeiling();
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(result.truncated());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains("the summary was skipped because the review's token spend ceiling"),
+        result.summaryMarkdown());
+    assertFalse(
+        result.summaryMarkdown().contains("**Summary skipped.**"), result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("summary skipped (token spend ceiling reached)"), checkSummary);
+  }
+
+  @Test
   void aSummaryCutAlongsideFileGapsFoldsIntoTheCoverageClause() {
     // With a real file gap present the partial-review banner renders anyway, so the summary cut
     // becomes one more clause there — the dedicated summary-only banner must not stack on top.

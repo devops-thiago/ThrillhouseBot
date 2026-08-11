@@ -179,6 +179,37 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
+  void ceilingSkippedSummaryOnlyMustNotClaimPartialDiffCoverageInTheDeltaComment() {
+    // #518's flag gets the same treatment as the summary cut (#516): a summary skipped at the
+    // token spend ceiling leaves the findings — and this comment's counts — covering the whole
+    // diff, so the per-file partial-coverage framing must not render.
+    var truncation =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, true);
+    var result =
+        new ReviewResult(
+            List.of(finding("a.java")),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            truncation);
+
+    var body = FollowUpDeltaSummary.render(result).orElseThrow();
+
+    assertFalse(body.contains("Large PR — partial coverage"), body);
+    assertFalse(body.contains("covers only part of the diff"), body);
+  }
+
+  @Test
   void untruncatedReviewCarriesNoDisclosure() {
     var body = FollowUpDeltaSummary.render(followUp(List.of(finding("a.java")), List.of(), 0));
 

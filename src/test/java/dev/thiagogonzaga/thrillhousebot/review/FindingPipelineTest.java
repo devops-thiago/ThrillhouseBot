@@ -391,6 +391,9 @@ class FindingPipelineTest {
     assertTrue(
         plan.summaryWasCut(),
         "the summary cut must be recorded on the plan so the posted review discloses it");
+    assertFalse(
+        plan.summaryWasSkippedAtCeiling(),
+        "a response cut is not a ceiling skip — disjoint classes");
   }
 
   @Test
@@ -1200,12 +1203,16 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), any()))
         .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
 
-    var result =
-        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson());
+    assertTrue(
+        plan.summaryWasSkippedAtCeiling(),
+        "the refused summary must be recorded on the plan so the posted review discloses it");
+    assertFalse(plan.summaryWasCut(), "a ceiling refusal is not a response cut — disjoint classes");
   }
 
   @Test
@@ -1225,13 +1232,87 @@ class FindingPipelineTest {
         .when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    var result =
-        pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
     verify(aiReviewService, never()).summarize(any(), any());
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
+    assertTrue(
+        plan.summaryWasSkippedAtCeiling(),
+        "the skipped summary must be recorded on the plan so the posted review discloses it");
+  }
+
+  @Test
+  void aCeilingSkippedSummaryIsDisclosedInThePostedReviewNotJustTheLog() {
+    // #518 — the ceiling flavor of the summary degradation must reach the posted review through
+    // the plan, exactly like #513's summary-response-cut: with zero skipped batches a log-only
+    // warning lets a bare counts-only review post with no stated reason.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertNull(result.summary());
+    var verdict = verdictSeam().build(ctx, result, CI_CLEAR, plan);
+    assertTrue(
+        verdict.summaryMarkdown().contains("REVIEW_MAX_TOKENS_PER_REVIEW"),
+        "the posted review must name the ceiling that degraded the summary, got: "
+            + verdict.summaryMarkdown());
+    assertFalse(verdict.truncated(), "a skipped summary is not a file-coverage gap");
+  }
+
+  @Test
+  void aSummaryCallRefusedAtTheCeilingIsDisclosedInThePostedReviewNotJustTheLog() {
+    // #518, second degradation site: the pre-summary gate passed but the summary call itself was
+    // refused at the ceiling — the same counts-only shape must carry the same disclosure.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(false);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertNull(result.summary());
+    var verdict = verdictSeam().build(ctx, result, CI_CLEAR, plan);
+    assertTrue(
+        verdict.summaryMarkdown().contains("REVIEW_MAX_TOKENS_PER_REVIEW"),
+        "the posted review must name the ceiling that refused the summary call, got: "
+            + verdict.summaryMarkdown());
+    assertFalse(verdict.truncated(), "a skipped summary is not a file-coverage gap");
+  }
+
+  private static final CiStatusEvaluator.CiEvaluation CI_CLEAR =
+      new CiStatusEvaluator.CiEvaluation(List.of(), false);
+
+  /**
+   * The verdict seam the orchestrator hands the pipeline's plan to — the disclosure contract under
+   * test is that a summary degradation recorded on the plan reaches the rendered review.
+   */
+  private VerdictBuilder verdictSeam() {
+    var summaryGenerator = mock(PrSummaryGenerator.class);
+    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        .thenReturn("");
+    return new VerdictBuilder(
+        summaryGenerator,
+        followUpAnalyzer,
+        BotIdentity.from(List.of("thrillhousebot[bot]")),
+        BlockingStrictness.BALANCED);
   }
 
   @Test

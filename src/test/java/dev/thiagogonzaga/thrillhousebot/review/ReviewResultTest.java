@@ -418,6 +418,78 @@ class ReviewResultTest {
   }
 
   @Test
+  void truncationDetailWithOnlyTheCeilingSkippedSummaryIsNotEmpty() {
+    // #518: like the summary cut, the ceiling-skipped summary must defeat the EMPTY guards so
+    // the summary-aware surfaces render it...
+    var detail =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, true);
+    assertFalse(detail.isEmpty());
+    // ...while the per-file surfaces treat it as gap-free, exactly like the cut flag (#516).
+    assertFalse(detail.hasFileGaps());
+    // The five-arg convenience constructor keeps the pre-#518 shape: flag unset.
+    assertFalse(
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true)
+            .summarySkippedAtCeiling());
+  }
+
+  @Test
+  void coverageGapClauseNamesTheCeilingSkippedSummaryAlongsideFileGaps() {
+    // #518: when the summary call was skipped at the token spend ceiling, the clause must say so
+    // in the posted review — naming the ceiling knob and making clear the findings themselves are
+    // complete — instead of leaving the degradation log-only.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"), List.of(), List.of(), List.of(), false, true);
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "the summary was skipped because the review's token spend ceiling"
+                + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
+                + " complete"),
+        clause);
+  }
+
+  @Test
+  void coverageGapBriefMarksTheCeilingSkippedSummary() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of("a.java"), List.of(), List.of(), List.of(), false, true));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("1 file(s) omitted"), brief);
+    assertTrue(brief.contains("summary skipped (token spend ceiling reached)"), brief);
+  }
+
+  @Test
+  void truncationDisclosureTreatsACeilingSkipFlagOnlyDetailAsEmpty() {
+    // #516's guard must hold for the ceiling flavor too: no file gap means no partial-coverage
+    // framing, whichever summary flag is set.
+    var detail =
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, true);
+
+    assertEquals("", ReviewResult.truncationDisclosure(0, detail));
+  }
+
+  @Test
   void truncationDetailWithOnlySpendCeilingSkipsIsNotEmpty() {
     var detail = new ReviewResult.TruncationDetail(List.of(), List.of(), List.of("c.java"));
     assertFalse(detail.isEmpty());

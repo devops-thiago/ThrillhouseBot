@@ -94,7 +94,8 @@ public class DiffBudgetPlanner {
       List<String> runtimeUncoveredFiles,
       List<String> spendCeilingSkippedFiles,
       List<String> responseCutFiles,
-      java.util.concurrent.atomic.AtomicBoolean summaryResponseCut) {
+      java.util.concurrent.atomic.AtomicBoolean summaryResponseCut,
+      java.util.concurrent.atomic.AtomicBoolean summarySkippedAtCeiling) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -112,6 +113,10 @@ public class DiffBudgetPlanner {
           summaryResponseCut == null
               ? new java.util.concurrent.atomic.AtomicBoolean(false)
               : summaryResponseCut;
+      summarySkippedAtCeiling =
+          summarySkippedAtCeiling == null
+              ? new java.util.concurrent.atomic.AtomicBoolean(false)
+              : summarySkippedAtCeiling;
     }
 
     /** Marks the review's summary response as cut at the model's length cap (#500 scope A). */
@@ -122,6 +127,21 @@ public class DiffBudgetPlanner {
     /** Whether the summary response was cut — salvaged or degraded, the disclosure names it. */
     public boolean summaryWasCut() {
       return summaryResponseCut.get();
+    }
+
+    /**
+     * Marks the review's summary call as skipped (or refused mid-call) because the review's token
+     * spend ceiling ({@code REVIEW_MAX_TOKENS_PER_REVIEW}) was reached (#518) — the ceiling sibling
+     * of {@link #recordSummaryResponseCut()}, so the counts-only degradation is disclosed in the
+     * posted review instead of only in the log.
+     */
+    void recordSummarySkippedAtCeiling() {
+      summarySkippedAtCeiling.set(true);
+    }
+
+    /** Whether the summary call was skipped at the spend ceiling — the disclosure names it. */
+    public boolean summaryWasSkippedAtCeiling() {
+      return summarySkippedAtCeiling.get();
     }
 
     /**
@@ -190,6 +210,28 @@ public class DiffBudgetPlanner {
           null);
     }
 
+    /** Back-compat convenience predating {@code summarySkippedAtCeiling}; starts it unset. */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles,
+        List<String> responseCutFiles,
+        java.util.concurrent.atomic.AtomicBoolean summaryResponseCut) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          responseCutFiles,
+          summaryResponseCut,
+          null);
+    }
+
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
     @Override
     public List<String> runtimeUncoveredFiles() {
@@ -215,6 +257,16 @@ public class DiffBudgetPlanner {
     @Override
     public java.util.concurrent.atomic.AtomicBoolean summaryResponseCut() {
       return new java.util.concurrent.atomic.AtomicBoolean(summaryResponseCut.get());
+    }
+
+    /**
+     * Defensive snapshot, like {@link #summaryResponseCut()}: the live flag is only written through
+     * {@link #recordSummarySkippedAtCeiling()} and read through {@link
+     * #summaryWasSkippedAtCeiling()}.
+     */
+    @Override
+    public java.util.concurrent.atomic.AtomicBoolean summarySkippedAtCeiling() {
+      return new java.util.concurrent.atomic.AtomicBoolean(summarySkippedAtCeiling.get());
     }
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
