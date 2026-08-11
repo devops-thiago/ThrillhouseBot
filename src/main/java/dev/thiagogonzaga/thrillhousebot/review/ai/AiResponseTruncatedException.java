@@ -42,9 +42,6 @@ import java.util.Optional;
  */
 public class AiResponseTruncatedException extends AiReviewException {
 
-  /** Cause-chain links inspected before giving up, so a cyclic chain cannot spin. */
-  private static final int MAX_CAUSE_DEPTH = 16;
-
   private final String partialBody;
   private final boolean conciseModelImplicated;
 
@@ -90,22 +87,10 @@ public class AiResponseTruncatedException extends AiReviewException {
   /**
    * The truncation inside a failure's cause chain, if any. Hoisted from {@code FindingPipeline} so
    * every layer that reacts to a truncation — the pipeline's disclose step, the orchestrator's
-   * failure notice — shares one walk instead of each growing its own.
-   *
-   * <p>Bounded rather than walked to {@code null}: a cause chain can cycle — a {@link Throwable}
-   * overriding {@code getCause()}, or plain {@code A caused-by B caused-by A} — and an unbounded
-   * walk would spin forever on the review thread. The bound is far above any real chain (the
-   * failure arrives wrapped at depth 2 in practice), so a truncation is never missed for depth.
+   * failure notice — shares one walk instead of each growing its own; the walk itself is the
+   * generic bounded one in {@link Throwables#findCause}.
    */
   public static Optional<AiResponseTruncatedException> findIn(Throwable failure) {
-    var cause = failure;
-    for (var depth = 0;
-        cause != null && depth < MAX_CAUSE_DEPTH;
-        depth++, cause = cause.getCause()) {
-      if (cause instanceof AiResponseTruncatedException truncation) {
-        return Optional.of(truncation);
-      }
-    }
-    return Optional.empty();
+    return Throwables.findCause(failure, AiResponseTruncatedException.class);
   }
 }

@@ -266,7 +266,8 @@ public abstract class AbstractPrSuggestionGenerator {
     }
     return ReviewResult.truncationDisclosure(
         plan.omittedFiles().size() + plan.clippedFiles().size(),
-        new ReviewResult.TruncationDetail(plan.omittedFiles(), plan.clippedFiles()));
+        new ReviewResult.TruncationDetail(
+            plan.omittedFiles(), plan.clippedFiles(), List.of(), List.of(), false, false));
   }
 
   /**

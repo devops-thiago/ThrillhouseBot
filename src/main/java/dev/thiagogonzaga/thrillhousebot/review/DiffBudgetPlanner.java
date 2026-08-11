@@ -144,94 +144,6 @@ public class DiffBudgetPlanner {
       return summarySkippedAtCeiling.get();
     }
 
-    /**
-     * A fresh plan with no runtime coverage gaps yet; failures are recorded on it as they occur.
-     */
-    public BudgetPlan(
-        List<DiffBatch> batches,
-        List<String> omittedFiles,
-        List<String> clippedFiles,
-        boolean budgeted) {
-      this(batches, omittedFiles, clippedFiles, budgeted, new CopyOnWriteArrayList<>());
-    }
-
-    /** Back-compat convenience predating {@code spendCeilingSkippedFiles}; starts it empty. */
-    public BudgetPlan(
-        List<DiffBatch> batches,
-        List<String> omittedFiles,
-        List<String> clippedFiles,
-        boolean budgeted,
-        List<String> runtimeUncoveredFiles) {
-      this(
-          batches,
-          omittedFiles,
-          clippedFiles,
-          budgeted,
-          runtimeUncoveredFiles,
-          new CopyOnWriteArrayList<>());
-    }
-
-    /** Back-compat convenience predating {@code responseCutFiles}; starts it empty. */
-    public BudgetPlan(
-        List<DiffBatch> batches,
-        List<String> omittedFiles,
-        List<String> clippedFiles,
-        boolean budgeted,
-        List<String> runtimeUncoveredFiles,
-        List<String> spendCeilingSkippedFiles) {
-      this(
-          batches,
-          omittedFiles,
-          clippedFiles,
-          budgeted,
-          runtimeUncoveredFiles,
-          spendCeilingSkippedFiles,
-          new CopyOnWriteArrayList<>(),
-          null);
-    }
-
-    /** Back-compat convenience predating {@code summaryResponseCut}; starts it unset. */
-    public BudgetPlan(
-        List<DiffBatch> batches,
-        List<String> omittedFiles,
-        List<String> clippedFiles,
-        boolean budgeted,
-        List<String> runtimeUncoveredFiles,
-        List<String> spendCeilingSkippedFiles,
-        List<String> responseCutFiles) {
-      this(
-          batches,
-          omittedFiles,
-          clippedFiles,
-          budgeted,
-          runtimeUncoveredFiles,
-          spendCeilingSkippedFiles,
-          responseCutFiles,
-          null);
-    }
-
-    /** Back-compat convenience predating {@code summarySkippedAtCeiling}; starts it unset. */
-    public BudgetPlan(
-        List<DiffBatch> batches,
-        List<String> omittedFiles,
-        List<String> clippedFiles,
-        boolean budgeted,
-        List<String> runtimeUncoveredFiles,
-        List<String> spendCeilingSkippedFiles,
-        List<String> responseCutFiles,
-        java.util.concurrent.atomic.AtomicBoolean summaryResponseCut) {
-      this(
-          batches,
-          omittedFiles,
-          clippedFiles,
-          budgeted,
-          runtimeUncoveredFiles,
-          spendCeilingSkippedFiles,
-          responseCutFiles,
-          summaryResponseCut,
-          null);
-    }
-
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
     @Override
     public List<String> runtimeUncoveredFiles() {
@@ -438,13 +350,23 @@ public class DiffBudgetPlanner {
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
     var budgeted = diffBudgetTokens > 0;
     if (reviewable.isEmpty()) {
-      return new BudgetPlan(List.of(), List.of(), List.of(), budgeted);
+      return new BudgetPlan(
+          List.of(), List.of(), List.of(), budgeted, null, null, null, null, null);
     }
 
     var rendered = renderAndSize(reviewable, diffBudgetTokens);
 
     if (!budgeted) {
-      return new BudgetPlan(List.of(toBatch(rendered.sized())), List.of(), List.of(), false);
+      return new BudgetPlan(
+          List.of(toBatch(rendered.sized())),
+          List.of(),
+          List.of(),
+          false,
+          null,
+          null,
+          null,
+          null,
+          null);
     }
     return pack(rendered, diffBudgetTokens, Math.max(1, maxBatches));
   }
@@ -565,7 +487,7 @@ public class DiffBudgetPlanner {
     // exactly one class or the disclosure would list it twice and the verdict double-count it.
     var omittedSet = new HashSet<>(omitted);
     var clipped = rendered.clipped().stream().filter(n -> !omittedSet.contains(n)).toList();
-    return new BudgetPlan(batches, omitted, clipped, true);
+    return new BudgetPlan(batches, omitted, clipped, true, null, null, null, null, null);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */

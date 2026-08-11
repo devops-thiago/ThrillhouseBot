@@ -320,7 +320,9 @@ class DiffBudgetPlannerTest {
     // The canonical constructor normalizes a null accumulator rather than storing it: a null here
     // would NPE the moment a failed batch recorded a gap, on the async review thread, taking the
     // whole review down with it.
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
 
     assertTrue(plan.runtimeUncoveredFiles().isEmpty(), "a null accumulator normalizes to empty");
 
@@ -335,7 +337,9 @@ class DiffBudgetPlannerTest {
     // (verdict holds, summary discloses) while staying separately attributable so the disclosure
     // can name the spend ceiling rather than the diff budget. Nulls and duplicates are dropped
     // like recordUncoveredFiles does, and the accessor is a defensive copy.
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
 
     plan.recordSpendCeilingSkippedFiles(Arrays.asList("a.java", null, "a.java", "b.java"));
 
@@ -351,7 +355,9 @@ class DiffBudgetPlannerTest {
   void aPlanBuiltWithANullSpendCeilingListStillAcceptsSkips() {
     // Same normalization contract as the runtime-gap list: a null accumulator must not NPE the
     // moment a ceiling-blocked batch records a skip on the review thread.
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null, null);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
 
     assertTrue(plan.spendCeilingSkippedFiles().isEmpty());
 
@@ -365,7 +371,9 @@ class DiffBudgetPlannerTest {
     // #500: a salvaged batch's files are partially reviewed — they must trip the truncation gate
     // (approval held, disclosure rendered) without joining the not-reviewed sets, keep dedupe/null
     // hygiene like the other recorders, and stay behind a defensive copy.
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
 
     plan.recordResponseCutFiles(Arrays.asList("a.java", null, "a.java", "b.java"));
 
@@ -380,7 +388,8 @@ class DiffBudgetPlannerTest {
   @Test
   void aPlanBuiltWithANullResponseCutListStillAcceptsRecords() {
     var plan =
-        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true, null, null, null);
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
 
     assertTrue(plan.responseCutFiles().isEmpty());
 
@@ -394,7 +403,9 @@ class DiffBudgetPlannerTest {
     // #500 scope A: the flag rides the shared plan like the runtime-gap lists — written after the
     // plan is built, read by the verdict — and, like them, its record accessor must not leak the
     // mutable backing.
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
     assertFalse(plan.summaryWasCut());
 
     plan.recordSummaryResponseCut();
@@ -411,7 +422,7 @@ class DiffBudgetPlannerTest {
     var live = new java.util.concurrent.atomic.AtomicBoolean(true);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, live);
+            List.of(), List.of(), List.of(), true, null, null, null, live, null);
 
     assertTrue(plan.summaryWasCut());
     assertNotSame(live, plan.summaryResponseCut(), "the accessor returns a defensive snapshot");
@@ -425,7 +436,9 @@ class DiffBudgetPlannerTest {
     // #518: the ceiling sibling of the summary-cut flag rides the shared plan the same way —
     // written after the plan is built, read by the verdict — and, like it, its record accessor
     // must not leak the mutable backing.
-    var plan = new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of(), true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null, null);
     assertFalse(plan.summaryWasSkippedAtCeiling());
 
     plan.recordSummarySkippedAtCeiling();
@@ -459,7 +472,8 @@ class DiffBudgetPlannerTest {
     // No runtime gap: the clipped list passes through, so a partially analyzed file keeps its
     // "clipped" meaning rather than being reported as wholly uncovered.
     var plan =
-        new DiffBudgetPlanner.BudgetPlan(List.of(), List.of(), List.of("src/Clipped.java"), true);
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of("src/Clipped.java"), true, null, null, null, null, null);
 
     assertEquals(List.of("src/Clipped.java"), plan.effectiveClippedFiles());
   }
@@ -470,7 +484,15 @@ class DiffBudgetPlannerTest {
     // out of the clipped list and is reported as omitted, so coverage is never overstated.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of("src/Clipped.java", "src/Other.java"), true);
+            List.of(),
+            List.of(),
+            List.of("src/Clipped.java", "src/Other.java"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
 
     plan.recordUncoveredFiles(List.of("src/Clipped.java"));
 

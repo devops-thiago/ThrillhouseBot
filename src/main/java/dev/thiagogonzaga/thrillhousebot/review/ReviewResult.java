@@ -156,56 +156,6 @@ public record ReviewResult(
           responseCutFileNames == null ? List.of() : List.copyOf(responseCutFileNames);
     }
 
-    /** Convenience for the token-budget-only surfaces, which have no spend-ceiling skips. */
-    public TruncationDetail(List<String> omittedFileNames, List<String> clippedFileNames) {
-      this(omittedFileNames, clippedFileNames, List.of(), List.of(), false, false);
-    }
-
-    /** Back-compat convenience predating {@code responseCutFileNames}; starts it empty. */
-    public TruncationDetail(
-        List<String> omittedFileNames,
-        List<String> clippedFileNames,
-        List<String> spendCeilingSkippedFileNames) {
-      this(
-          omittedFileNames,
-          clippedFileNames,
-          spendCeilingSkippedFileNames,
-          List.of(),
-          false,
-          false);
-    }
-
-    /** Back-compat convenience predating {@code summaryResponseCut}; starts it unset. */
-    public TruncationDetail(
-        List<String> omittedFileNames,
-        List<String> clippedFileNames,
-        List<String> spendCeilingSkippedFileNames,
-        List<String> responseCutFileNames) {
-      this(
-          omittedFileNames,
-          clippedFileNames,
-          spendCeilingSkippedFileNames,
-          responseCutFileNames,
-          false,
-          false);
-    }
-
-    /** Back-compat convenience predating {@code summarySkippedAtCeiling}; starts it unset. */
-    public TruncationDetail(
-        List<String> omittedFileNames,
-        List<String> clippedFileNames,
-        List<String> spendCeilingSkippedFileNames,
-        List<String> responseCutFileNames,
-        boolean summaryResponseCut) {
-      this(
-          omittedFileNames,
-          clippedFileNames,
-          spendCeilingSkippedFileNames,
-          responseCutFileNames,
-          summaryResponseCut,
-          false);
-    }
-
     public boolean isEmpty() {
       return !hasFileGaps() && !summaryResponseCut && !summarySkippedAtCeiling;
     }

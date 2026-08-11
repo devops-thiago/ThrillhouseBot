@@ -121,7 +121,8 @@ class FollowUpDeltaSummaryTest {
     // describe a clipped (partially analyzed) file as omitted; the detail must distinguish them
     // (F8).
     var truncation =
-        new ReviewResult.TruncationDetail(List.of("omitted.java"), List.of("clipped.java"));
+        new ReviewResult.TruncationDetail(
+            List.of("omitted.java"), List.of("clipped.java"), List.of(), List.of(), false, false);
     var result =
         new ReviewResult(
             List.of(finding("a.java")),
@@ -153,7 +154,7 @@ class FollowUpDeltaSummaryTest {
     // summary-cut clause in it renders the self-contradictory "the findings themselves are
     // complete, so this covers only part of the diff".
     var truncation =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true);
+        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false);
     var result =
         new ReviewResult(
             List.of(finding("a.java")),
