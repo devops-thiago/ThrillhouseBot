@@ -25,6 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -93,8 +95,8 @@ class FindingPipelineTest {
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
-    when(findingVerificationService.verify(any(), any(), any(), any()))
-        .thenAnswer(inv -> inv.getArgument(0));
+    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any()))
+        .thenAnswer(inv -> inv.getArgument(1));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
     lenient()
@@ -200,7 +202,7 @@ class FindingPipelineTest {
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), eq(2));
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), eq(2));
     verify(aiReviewService).summarize(eq(session), any());
-    verify(findingVerificationService, times(2)).verify(any(), any(), any(), any());
+    verify(findingVerificationService, times(2)).verify(anyLong(), any(), any(), any(), any());
 
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
@@ -283,7 +285,7 @@ class FindingPipelineTest {
     // #495's no-retry stands: salvage replaces the disclose step, never re-enters the retry lane.
     verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
     // The salvaged findings run the same validate/verify chain as any batch's.
-    verify(findingVerificationService, times(2)).verify(any(), any(), any(), any());
+    verify(findingVerificationService, times(2)).verify(anyLong(), any(), any(), any(), any());
 
     assertEquals(4, result.findings().size());
     assertEquals("S1", result.findings().get(0).title());
@@ -1252,6 +1254,58 @@ class FindingPipelineTest {
     assertTrue(result.findings().isEmpty());
     assertEquals(List.of("a.java", "b.java"), plan.spendCeilingSkippedFiles());
     verify(aiReviewService, never()).summarize(eq(session), any());
+  }
+
+  @Test
+  void verifierAiCallsAreSkippedOnceTheSpendCeilingIsReached() {
+    // #514: the finding verifier is a billed AI call the review makes once per batch, so the
+    // ceiling's "once reached no further call is made" contract covers it too. Wires a real
+    // FindingVerificationService over a mock FindingVerifier so the assertion sits on the actual
+    // AI seam: past the ceiling the verifier must never fire, while the skip fails open — each
+    // batch keeps its unverified findings and the review completes with the counts-only summary.
+    var thrillhouseConfig = mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.class);
+    var reviewConfig =
+        mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
+    when(thrillhouseConfig.review()).thenReturn(reviewConfig);
+    when(reviewConfig.verifierEnabled()).thenReturn(true);
+    var findingVerifier = mock(dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier.class);
+    var realVerificationService =
+        new FindingVerificationService(
+            findingVerifier, thrillhouseConfig, new ObjectMapper(), tokenLedger);
+    var p =
+        new FindingPipeline(
+            aiReviewService,
+            quoteValidator,
+            frameworkFilter,
+            deduplicator,
+            realVerificationService,
+            followUpAnalyzer,
+            new ObjectMapper(),
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            budgetPlanner,
+            new TokenCounter(),
+            tokenLedger,
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+                new ObjectMapper()));
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(tokenLedger.ceilingReached(42L)).thenReturn(true);
+    // ceilingReached=true implies spent >= a positive ceiling — stub the state consistently.
+    when(tokenLedger.tokensSpent(42L)).thenReturn(106_000L);
+    when(tokenLedger.ceiling()).thenReturn(100_000L);
+
+    var result = p.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    // No billed verifier call is made past the ceiling (the summary call stays refused too)...
+    verify(findingVerifier, never()).verify(anyString(), anyString(), anyString(), anyString());
+    verify(aiReviewService, never()).summarize(any(), any());
+    // ...and the skip fails open: both batches' unverified findings survive.
+    assertEquals(2, result.findings().size());
   }
 
   @Test

@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
@@ -38,6 +39,14 @@ import java.util.regex.Pattern;
  *
  * <p>Fails open by design — any verifier error keeps the original findings, so a broken or slow
  * verification call can degrade quality but never lose a review.
+ *
+ * <p>The verifier is a billed review-path call, so it participates in the {@code
+ * REVIEW_MAX_TOKENS_PER_REVIEW} spend ceiling like every other call the review makes: its {@link
+ * Result#tokenUsage() provider-reported usage} is recorded straight into the {@link
+ * ReviewTokenLedger} (the blocking call never passes through the streaming path's {@link
+ * ReviewSessionContext} bind, so the observability listener cannot correlate it), and once the
+ * ceiling is reached the call is skipped fail-open — the unverified findings are kept, which is
+ * exactly this service's error contract.
  */
 @ApplicationScoped
 public class FindingVerificationService {
@@ -45,13 +54,18 @@ public class FindingVerificationService {
   private final FindingVerifier verifier;
   private final ThrillhouseConfig config;
   private final ObjectMapper mapper;
+  private final ReviewTokenLedger tokenLedger;
 
   @Inject
   public FindingVerificationService(
-      FindingVerifier verifier, ThrillhouseConfig config, ObjectMapper mapper) {
+      FindingVerifier verifier,
+      ThrillhouseConfig config,
+      ObjectMapper mapper,
+      ReviewTokenLedger tokenLedger) {
     this.verifier = verifier;
     this.config = config;
     this.mapper = mapper;
+    this.tokenLedger = tokenLedger;
   }
 
   private static final Pattern HEDGING =
@@ -62,23 +76,44 @@ public class FindingVerificationService {
   /**
    * Audits the response's findings; {@code diff}, {@code projectStack} and {@code previousFindings}
    * must already be escaped for prompt templating, the same values handed to the review call.
-   * Previous findings let the verifier reject re-raises of answered findings.
+   * Previous findings let the verifier reject re-raises of answered findings. {@code
+   * ledgerSessionId} is the review's {@link ReviewTokenLedger} key ({@link
+   * ReviewTokenLedger#keyFor}): the call's usage is recorded against it, and once the review's
+   * spend ceiling is reached the call is skipped fail-open, keeping the unverified findings.
    */
   public ReviewResponse verify(
-      ReviewResponse response, String diff, String projectStack, String previousFindings) {
+      long ledgerSessionId,
+      ReviewResponse response,
+      String diff,
+      String projectStack,
+      String previousFindings) {
     ReviewResponse screened = demoteHedgedBlockingFindings(response);
     if (!config.review().verifierEnabled() || screened.findings().isEmpty()) {
       return screened;
     }
+    if (tokenLedger.ceilingReached(ledgerSessionId)) {
+      // The verifier is a fresh billed call; once the ceiling is reached it is not made. Skipping
+      // fail-open keeps the unverified findings — degraded quality, never a lost review.
+      Log.warnf(
+          "Finding verification for review session %d skipped at the review's token spend ceiling"
+              + " (%d tokens spent, ceiling %d — REVIEW_MAX_TOKENS_PER_REVIEW); keeping the %d"
+              + " unverified finding(s)",
+          ledgerSessionId,
+          tokenLedger.tokensSpent(ledgerSessionId),
+          tokenLedger.ceiling(),
+          screened.findings().size());
+      return screened;
+    }
     try {
-      var raw =
-          AiResponses.textOrThrowOnTruncation(
-              verifier.verify(
-                  PromptTemplateEscaper.escape(renderCandidates(screened.findings())),
-                  diff,
-                  projectStack,
-                  previousFindings == null ? "" : previousFindings),
-              "Finding verification");
+      var result =
+          verifier.verify(
+              PromptTemplateEscaper.escape(renderCandidates(screened.findings())),
+              diff,
+              projectStack,
+              previousFindings == null ? "" : previousFindings);
+      // Meter before unwrapping: a truncated response was still billed, so its spend counts.
+      recordVerifierUsage(ledgerSessionId, result);
+      var raw = AiResponses.textOrThrowOnTruncation(result, "Finding verification");
       var verdicts =
           mapper.readValue(ReviewResponseParser.extractJson(raw), VerificationResponse.class);
       return apply(screened, verdicts);
@@ -90,6 +125,21 @@ public class FindingVerificationService {
       Log.warn("Finding verification failed — keeping unverified findings", e);
       return screened;
     }
+  }
+
+  /**
+   * Records the verifier call's provider-reported usage in the review's ledger. The blocking AI
+   * service returns usage on its {@link Result}, so it is recorded here directly — the
+   * observability listener only correlates calls made under the streaming path's session bind,
+   * which this call never is. A missing result or usage (a provider that omits it) records nothing;
+   * the ledger itself tolerates a null side of the count.
+   */
+  private void recordVerifierUsage(long ledgerSessionId, Result<String> result) {
+    var usage = result == null ? null : result.tokenUsage();
+    if (usage == null) {
+      return;
+    }
+    tokenLedger.recordUsage(ledgerSessionId, usage.inputTokenCount(), usage.outputTokenCount());
   }
 
   /**

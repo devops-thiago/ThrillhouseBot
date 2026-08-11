@@ -145,9 +145,11 @@ class PromptEvalTest {
             f.suggestionOld(),
             f.suggestionNew());
     var response = new ReviewResponse(List.of(candidate), List.of(), null);
+    // No review session exists here; the unopened sentinel key means no ceiling ever gates the
+    // call and its usage is dropped by the ledger's no-open-entry guard.
     var verified =
         findingVerificationService.verify(
-            response, PromptTemplateEscaper.fence(evalCase.diff()), "", "");
+            Long.MIN_VALUE, response, PromptTemplateEscaper.fence(evalCase.diff()), "", "");
     if (verified.findings().isEmpty()) {
       return "rejected";
     }
