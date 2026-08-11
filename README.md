@@ -328,7 +328,7 @@ will change per provider:
 | `REVIEW_LABELS_MAX` | Maximum labels applied or suggested per PR | `3` |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth credentials for dashboard login | _(required for dashboard)_ |
 | `DASHBOARD_URL` | Public dashboard URL (OAuth callback base) | `http://localhost:8080` |
-| `DATASOURCE_DB_KIND` | `h2` or `postgresql` | `h2` (dev), `postgresql` (`%prod`) |
+| `DATASOURCE_DB_KIND` | `h2` or `postgresql`. Quarkus fixes the datasource kind at build time, so this picks the driver when the app is built, not when a prebuilt image starts — released images are built for PostgreSQL and ignore an `h2` value | `h2` (dev), `postgresql` (`%prod`) |
 | `HTTP_CONNECT_TIMEOUT` | Outbound HTTP connect timeout (GitHub API, OAuth) | `10s` |
 | `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
 | `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive interval in ms; `0` or negative disables it (and stale replay-buffer eviction) | `25000` |
@@ -822,7 +822,8 @@ This is still an early-stage project; the current constraints are:
   If the app owner cannot be resolved from GitHub, the dashboard fails closed (denies all access) until
   `thrillhousebot.dashboard.github.account-owner` is set.
 - **Production database** — container and native production builds use PostgreSQL
-  (`%prod`). H2 is for local `quarkus:dev` only.
+  (`%prod`). H2 is for local `quarkus:dev` and the test suite only; its driver is a
+  `provided` dependency and is not packaged into the runtime image.
 - **OpenAI-compatible APIs only** — endpoints must implement the chat-completions
   API shape LangChain4j expects.
 - **Cost tracking** — needs a `thrillhousebot.ai.pricing.<model>.*` entry per model.
