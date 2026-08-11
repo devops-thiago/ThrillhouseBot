@@ -350,6 +350,12 @@ public class StartupConfigValidator {
    * window just as surely from this knob (#517). Not applied when token budgeting is off (no packed
    * prompt to overrun) or when the active model declares {@code separate-output-budget} (nothing is
    * reserved, and the response never draws on the window).
+   *
+   * <p>The buffer remedy names the knob that actually sources the effective buffer: when the active
+   * model carries an {@code output-buffer-tokens} override, {@link
+   * ActiveModelSettings#outputBufferTokens} never reads the global value, so advising {@code
+   * REVIEW_OUTPUT_BUFFER_TOKENS} there would send the operator to an inert knob and re-boot into
+   * the identical refusal (#528).
    */
   private void validateConciseResponseCap(List<String> problems) {
     conciseMaxOutputTokens
@@ -362,6 +368,14 @@ public class StartupConfigValidator {
                         + v));
     if (activeModel.maxInputTokens() > 0 && !activeModel.separateOutputBudget()) {
       var outputBuffer = activeModel.reservedOutputTokens();
+      // A per-model output-buffer-tokens override shadows the global env var entirely, so the
+      // remedy must name whichever knob the effective buffer actually came from (#528).
+      var bufferKnob =
+          Optional.ofNullable(config.ai().models().get(activeModel.modelName()))
+                  .flatMap(ThrillhouseConfig.AiPricingConfig.ModelSettings::outputBufferTokens)
+                  .isPresent()
+              ? "thrillhousebot.ai.models.\"" + activeModel.modelName() + "\".output-buffer-tokens"
+              : "REVIEW_OUTPUT_BUFFER_TOKENS";
       conciseMaxOutputTokens
           .filter(v -> v > outputBuffer)
           .ifPresent(
@@ -376,8 +390,9 @@ public class StartupConfigValidator {
                           + activeModel.modelName()
                           + "' so the token budget reserves the response cap the"
                           + " summary/verifier/reply calls send. Lower"
-                          + " REVIEW_CONCISE_MAX_OUTPUT_TOKENS, raise"
-                          + " REVIEW_OUTPUT_BUFFER_TOKENS to cover it, or set"
+                          + " REVIEW_CONCISE_MAX_OUTPUT_TOKENS, raise "
+                          + bufferKnob
+                          + " to cover it, or set"
                           + " thrillhousebot.ai.models.\""
                           + activeModel.modelName()
                           + "\".separate-output-budget=true if this model's response allowance is"
