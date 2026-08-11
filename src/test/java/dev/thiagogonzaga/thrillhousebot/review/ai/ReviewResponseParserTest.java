@@ -217,6 +217,14 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void shouldYieldEmptyExtractionForAnAbsentBody() {
+    // #534: a model can return no content at all (a reasoning model that spent its whole output
+    // budget on reasoning tokens). Every caller treats "no response" as its own soft failure, so
+    // the extraction must not turn it into a NullPointerException inside the strip.
+    assertEquals("", ReviewResponseParser.extractJson(null));
+  }
+
+  @Test
   void shouldStripLeadingNoiseBeforeJsonObject() {
     String json = ReviewResponseParser.extractJson("Here is the payload: {\"findings\":[]}");
     assertEquals("{\"findings\":[]}", json);

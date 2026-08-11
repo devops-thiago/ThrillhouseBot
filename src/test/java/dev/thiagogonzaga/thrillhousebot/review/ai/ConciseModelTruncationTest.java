@@ -90,9 +90,17 @@ class ConciseModelTruncationTest {
 
     var result = findingVerifier.verify("[]", "diff", "", "");
 
-    assertThrows(
-        AiResponseTruncatedException.class,
-        () -> AiResponses.textOrThrowOnTruncation(result, "Finding verification"));
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    result, "Finding verification", AiResponses.ModelLane.CONCISE));
+
+    assertTrue(
+        thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+        "the verifier runs on the concise model, so its cap is the one to name: "
+            + thrown.getMessage());
   }
 
   @Test
@@ -102,9 +110,17 @@ class ConciseModelTruncationTest {
 
     var result = replyAssistant.reply("question", "", "", "", "");
 
-    assertThrows(
-        AiResponseTruncatedException.class,
-        () -> AiResponses.textOrThrowOnTruncation(result, "Maintainer reply"));
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    result, "Maintainer reply", AiResponses.ModelLane.CONCISE));
+
+    assertTrue(
+        thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+        "the reply lane runs on the concise model, so its cap is the one to name: "
+            + thrown.getMessage());
   }
 
   private static ChatResponse lengthStoppedResponse(String partialText) {

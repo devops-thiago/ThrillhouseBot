@@ -113,7 +113,20 @@ public class FindingVerificationService {
               previousFindings == null ? "" : previousFindings);
       // Meter before unwrapping: a truncated response was still billed, so its spend counts.
       recordVerifierUsage(ledgerSessionId, result);
-      var raw = AiResponses.textOrThrowOnTruncation(result, "Finding verification");
+      var raw =
+          AiResponses.textOrThrowOnTruncation(
+              result, "Finding verification", AiResponses.ModelLane.CONCISE);
+      if (raw == null || raw.isBlank()) {
+        // The unwrap helper's documented "no response" soft failure, which this caller has to
+        // honour like every other one: a reasoning model can spend the whole output budget on
+        // reasoning tokens and return an empty body with no length stop. Keeping the unverified
+        // findings is this service's error contract; handing the absent body to the JSON
+        // extraction instead reported an expected outcome as a verification fault.
+        Log.warnf(
+            "Finding verification returned no response body — keeping the %d unverified finding(s)",
+            screened.findings().size());
+        return screened;
+      }
       var verdicts =
           mapper.readValue(ReviewResponseParser.extractJson(raw), VerificationResponse.class);
       return apply(screened, verdicts);

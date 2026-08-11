@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiNoContent;
 import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
 import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.*;
@@ -353,6 +354,45 @@ class FindingVerificationServiceTest {
     assertEquals(1, result.findings().size());
     assertEquals("critical", result.findings().get(0).risk());
     assertEquals("high", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void keepsUnverifiedFindingsWithoutParsingWhenTheModelReturnsNoBody() {
+    // #534: with the whole output budget spent on reasoning tokens the provider returns a completed
+    // response with no content body. That is the unwrap helper's documented "no response" soft
+    // failure, but the body went straight into the JSON extraction, which raised "Cannot invoke
+    // String.strip() because raw is null". The findings survive either way — the fail-open catch
+    // caught the NPE — so what this pins is that an absent body never reaches the extraction.
+    ReviewResponse original = response(finding("critical", "high", "Unverified"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiNoContent());
+
+    try (var parser = mockStatic(ReviewResponseParser.class)) {
+      var result = service.verify(SESSION, original, "diff", "stack", "");
+
+      assertEquals(1, result.findings().size());
+      assertEquals("critical", result.findings().get(0).risk());
+      assertEquals("high", result.findings().get(0).confidence());
+      parser.verify(() -> ReviewResponseParser.extractJson(any()), never());
+    }
+  }
+
+  @Test
+  void keepsUnverifiedFindingsWithoutParsingWhenTheModelReturnsABlankBody() {
+    // Same soft failure as an absent body, and it must not be reported as a parse fault either:
+    // whitespace is what the provider returns when the content field came back empty rather than
+    // missing.
+    ReviewResponse original = response(finding("high", "high", "Unverified"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOk("   "));
+
+    try (var parser = mockStatic(ReviewResponseParser.class)) {
+      var result = service.verify(SESSION, original, "diff", "stack", "");
+
+      assertEquals(1, result.findings().size());
+      assertEquals("high", result.findings().get(0).risk());
+      parser.verify(() -> ReviewResponseParser.extractJson(any()), never());
+    }
   }
 
   @Test
