@@ -912,4 +912,22 @@ class PrImprovementServiceTest {
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
   }
+
+  @Test
+  void namesTheBudgetWhenItCouldNotCoverASingleFile() {
+    // An empty plan with a non-empty omitted list is not "nothing to improve": there were
+    // changes, the budget could not read them. Saying NO_CHANGES here reports a misconfigured
+    // budget as a clean verdict, and contradicts the partial-coverage disclosure posted with it.
+    // The sibling generators all name the budget for this shape; /improve was the odd one out.
+    when(activeModel.maxInputTokens()).thenReturn(10);
+    prWithFiles(foo(), otherFile());
+
+    service.handle(task(), AUTH);
+
+    var body = postedSummary();
+    assertTrue(body.startsWith(PrImprovementService.NOT_COVERED), body);
+    assertTrue(body.contains("src/Foo.java"), body);
+    assertTrue(body.contains("partial coverage"), body);
+    verifyNoInteractions(improveAssistant);
+  }
 }
