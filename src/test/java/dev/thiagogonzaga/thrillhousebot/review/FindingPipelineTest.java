@@ -455,6 +455,32 @@ class FindingPipelineTest {
   }
 
   @Test
+  void summarizeWithoutReviewDegradesToCountsOnlyWhenTheCeilingRefusesTheSummary() {
+    // The degenerate all-omitted plan makes exactly one AI call — the summary. A mid-retry spend
+    // ceiling refusal there must not fail the review either: same counts-only degradation as the
+    // multi-call lane's summarize seam, with the skip recorded on the plan for disclosure.
+    var session = persistedSession();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null, null);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
+
+    var result =
+        pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    assertTrue(result.findings().isEmpty());
+    assertNull(result.summary(), "counts-only shape: no model summary");
+    assertNotNull(session.getAiResponseJson(), "the degraded review is still persisted and posts");
+    assertTrue(
+        plan.summaryWasSkippedAtCeiling(),
+        "the ceiling skip must be recorded on the plan so the posted review disclosures name it");
+    assertFalse(plan.summaryWasCut(), "a ceiling skip is not a response cut — disjoint classes");
+  }
+
+  @Test
   void multiCallSurvivesACyclicCauseChainOnAFailedBatch() {
     // The truncation check walks the cause chain, and a cycle (here A caused-by B caused-by A)
     // would spin forever on the review thread if the walk were unbounded. The batch must instead
