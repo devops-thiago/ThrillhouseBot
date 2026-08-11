@@ -1463,7 +1463,12 @@ class FindingPipelineTest {
     var findingVerifier = mock(dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier.class);
     var realVerificationService =
         new FindingVerificationService(
-            findingVerifier, thrillhouseConfig, new ObjectMapper(), tokenLedger);
+            findingVerifier,
+            thrillhouseConfig,
+            new ObjectMapper(),
+            tokenLedger,
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+                new ObjectMapper()));
     var p =
         new FindingPipeline(
             aiReviewService,

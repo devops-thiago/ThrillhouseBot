@@ -28,11 +28,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Salvages the complete leading JSON elements out of a response the model cut at its length cap
- * ({@link AiResponseTruncatedException#partialBody()}). The body is well-formed up to the cut, so
- * every {@code findings} / {@code previous_findings_status} array element that closed before it —
- * and a {@code summary} object that did — is recoverable as-is; the trailing cut-off value is
- * dropped by construction.
+ * Salvages the complete leading JSON elements out of a response the model cut mid-JSON — at its
+ * length cap ({@link AiResponseTruncatedException#partialBody()}), or with no {@code
+ * finish_reason=length} reported at all (#546). The body is well-formed up to the cut, so every
+ * {@code findings} / {@code previous_findings_status} array element that closed before it — and a
+ * {@code summary} object that did — is recoverable as-is; the trailing cut-off value is dropped by
+ * construction. {@link #salvageArray} exposes the same pass for the other review-path responses
+ * whose payload is a single named array, such as the finding verifier's {@code verdicts}.
  *
  * <p>Deliberately a separate class from {@link ReviewResponseParser}: the parser's contract is
  * all-or-nothing on a complete body, while salvage is best-effort on a known-cut one, and the two
@@ -83,8 +85,6 @@ public class TruncatedResponseSalvager {
       previousFindingsStatus = List.copyOf(previousFindingsStatus);
     }
 
-    static final Salvaged NOTHING = new Salvaged(List.of(), List.of(), null);
-
     /** Whether anything a batch disclosure could honestly call "partially reviewed" came back. */
     public boolean hasFindingsOrStatuses() {
       return !findings.isEmpty() || !previousFindingsStatus.isEmpty();
@@ -92,40 +92,85 @@ public class TruncatedResponseSalvager {
   }
 
   /**
-   * Salvages the complete elements of {@code partialBody}. Returns {@link Salvaged#NOTHING} when
-   * there is nothing to work with — no body (the blocking lanes do not buffer one), a body that
-   * does not open a JSON object, or a cut that landed before the first element closed.
+   * Salvages the complete elements of {@code partialBody}. Everything comes back empty when there
+   * is nothing to work with — no body (the blocking lanes do not buffer one), a body that does not
+   * open a JSON object, or a cut that landed before the first element closed.
    */
   public Salvaged salvage(String partialBody) {
+    var findings = new ArrayList<ReviewResponse.Finding>();
+    var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
+    // One-element holder: the summary is the pass's only scalar result, and the field handler
+    // below is a lambda, which cannot assign a local.
+    var summary = new ReviewResponse.Summary[1];
+    scan(
+        partialBody,
+        (parser, field, value) -> {
+          switch (field) {
+            case "findings" ->
+                salvageArrayElements(parser, value, ReviewResponse.Finding.class, findings);
+            case "previous_findings_status" ->
+                salvageArrayElements(
+                    parser, value, ReviewResponse.PreviousFindingStatus.class, statuses);
+            case "summary" ->
+                summary[0] = objectOrNull(parser, value, ReviewResponse.Summary.class);
+            default -> parser.skipChildren();
+          }
+        });
+    return new Salvaged(findings, statuses, summary[0]);
+  }
+
+  /**
+   * Salvages the complete leading elements of a single named top-level array — the shape of a
+   * response whose whole payload is one array of records, such as the finding verifier's {@code
+   * {"verdicts": [...]}} (#546). Same bounded, never-throwing pass as {@link #salvage}: the
+   * elements that closed before the cut come back mapped onto {@code type}, the cut-off trailing
+   * element is dropped, and an empty list means there was nothing recoverable — no body, no such
+   * field, a non-array value, or a cut before the first element closed.
+   */
+  public <T> List<T> salvageArray(String partialBody, String field, Class<T> type) {
+    var elements = new ArrayList<T>();
+    scan(
+        partialBody,
+        (parser, name, value) -> {
+          if (field.equals(name)) {
+            salvageArrayElements(parser, value, type, elements);
+          } else {
+            parser.skipChildren();
+          }
+        });
+    return List.copyOf(elements);
+  }
+
+  /** How a scan pass consumes one top-level field, positioned on its value token. */
+  @FunctionalInterface
+  private interface FieldHandler {
+    void handle(JsonParser parser, String field, JsonToken value) throws IOException;
+  }
+
+  /**
+   * The single bounded forward pass every salvage shares: hand each top-level field of the cut body
+   * to {@code handler}, and end quietly at the cut. Does nothing when there is nothing to work with
+   * — no body, an oversized one, or one that does not open a JSON object.
+   */
+  private void scan(String partialBody, FieldHandler handler) {
     if (partialBody == null
         || partialBody.isBlank()
         || partialBody.length() > MAX_SALVAGED_BODY_CHARS) {
-      return Salvaged.NOTHING;
+      return;
     }
     var json = ReviewResponseParser.extractJson(partialBody);
-    var findings = new ArrayList<ReviewResponse.Finding>();
-    var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
-    ReviewResponse.Summary summary = null;
     JsonParser parser = null;
     try {
       parser = mapper.createParser(json);
       if (parser.nextToken() != JsonToken.START_OBJECT) {
-        return Salvaged.NOTHING;
+        return;
       }
       while (parser.nextToken() == JsonToken.FIELD_NAME) {
         var field = parser.currentName();
         // Never null: inside the root object, Jackson raises JsonEOFException at the cut instead
         // of returning null, and the catch below ends the pass.
         var value = parser.nextToken();
-        switch (field) {
-          case "findings" ->
-              salvageArrayElements(parser, value, ReviewResponse.Finding.class, findings);
-          case "previous_findings_status" ->
-              salvageArrayElements(
-                  parser, value, ReviewResponse.PreviousFindingStatus.class, statuses);
-          case "summary" -> summary = objectOrNull(parser, value, ReviewResponse.Summary.class);
-          default -> parser.skipChildren();
-        }
+        handler.handle(parser, field, value);
       }
     } catch (IOException e) {
       // The cut point (or trailing garbage): everything that closed before it is already
@@ -135,7 +180,6 @@ public class TruncatedResponseSalvager {
     } finally {
       closeQuietly(parser);
     }
-    return new Salvaged(findings, statuses, summary);
   }
 
   /**

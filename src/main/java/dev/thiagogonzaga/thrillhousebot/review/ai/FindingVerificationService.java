@@ -55,23 +55,29 @@ public class FindingVerificationService {
   private final ThrillhouseConfig config;
   private final ObjectMapper mapper;
   private final ReviewTokenLedger tokenLedger;
+  private final TruncatedResponseSalvager salvager;
 
   @Inject
   public FindingVerificationService(
       FindingVerifier verifier,
       ThrillhouseConfig config,
       ObjectMapper mapper,
-      ReviewTokenLedger tokenLedger) {
+      ReviewTokenLedger tokenLedger,
+      TruncatedResponseSalvager salvager) {
     this.verifier = verifier;
     this.config = config;
     this.mapper = mapper;
     this.tokenLedger = tokenLedger;
+    this.salvager = salvager;
   }
 
   private static final Pattern HEDGING =
       Pattern.compile("\\b(may|might|could|potentially|possibly)\\b", Pattern.CASE_INSENSITIVE);
 
   private static final String MEDIUM_LABEL = "medium";
+
+  /** The verifier response's only field, and the array salvage keys on when the body is cut. */
+  private static final String VERDICTS = "verdicts";
 
   /**
    * Audits the response's findings; {@code diff}, {@code projectStack} and {@code previousFindings}
@@ -127,16 +133,53 @@ public class FindingVerificationService {
             screened.findings().size());
         return screened;
       }
-      var verdicts =
-          mapper.readValue(ReviewResponseParser.extractJson(raw), VerificationResponse.class);
-      return apply(screened, verdicts);
+      return apply(screened, parseOrSalvage(raw, screened.findings().size()));
     } catch (AiResponseTruncatedException e) {
       // The verifier fails open by design; say why so a cap is not mistaken for a provider fault.
       Log.warnf("Finding verification — keeping unverified findings. %s", e.getMessage());
       return screened;
     } catch (IOException | RuntimeException e) {
-      Log.warn("Finding verification failed — keeping unverified findings", e);
+      Log.warnf(
+          e,
+          "Finding verification failed — keeping the %d unverified finding(s)",
+          screened.findings().size());
       return screened;
+    }
+  }
+
+  /**
+   * Parses the verifier body, salvaging the verdicts that completed when it arrives cut mid-JSON
+   * (#546). Production has seen the body cut with no {@code finish_reason=length} reported, so it
+   * never reaches the truncation lane above: it landed in the generic catch and every verdict was
+   * thrown away, leaving a response that carried nine complete verdicts and a tenth cut off
+   * contributing nothing. The cut body is well-formed up to the cut, so {@link
+   * TruncatedResponseSalvager} recovers the verdicts that closed — the same machinery the review
+   * lane already uses, not a second parser.
+   *
+   * <p>Salvage is strictly additive to the fail-open contract: a candidate whose verdict fell on
+   * the far side of the cut simply has no verdict, and {@link #apply} keeps such a finding exactly
+   * as it stands — a missing verdict never rejects or downgrades anything. When nothing at all is
+   * recoverable the parse failure is rethrown, so the caller logs and fails open as before.
+   */
+  private VerificationResponse parseOrSalvage(String raw, int candidates) throws IOException {
+    try {
+      return mapper.readValue(ReviewResponseParser.extractJson(raw), VerificationResponse.class);
+    } catch (IOException | RuntimeException e) {
+      var salvaged = salvager.salvageArray(raw, VERDICTS, VerificationResponse.Verdict.class);
+      if (salvaged.isEmpty()) {
+        throw e;
+      }
+      var verified =
+          salvaged.stream()
+              .mapToInt(VerificationResponse.Verdict::id)
+              .filter(id -> id >= 1 && id <= candidates)
+              .distinct()
+              .count();
+      Log.warnf(
+          "Finding verification response was cut mid-JSON (%s); salvaged %d verdict(s) covering %d"
+              + " of %d candidate finding(s) — the remaining %d stay unverified",
+          e.getMessage(), salvaged.size(), verified, candidates, candidates - verified);
+      return new VerificationResponse(salvaged);
     }
   }
 
