@@ -6,9 +6,12 @@ FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:7d40f354792f52079213107a50b
 
 ARG TARGETARCH
 WORKDIR /work/
-COPY target/${TARGETARCH}/*-runner /work/application
-
-RUN chmod 555 /work/application && chown 1001:root /work /work/application
+# Set mode and ownership on the COPY itself, as Dockerfile.runtime-distroless does.
+# A follow-up RUN chmod/chown rewrites the file, so the whole native binary would be
+# stored a second time in the RUN layer, roughly doubling the image.
+# /work itself is left root-owned (0755): nothing is written to the working directory at
+# runtime, and a non-writable /work keeps uid 1001 from replacing its own executable.
+COPY --chown=1001:root --chmod=0555 target/${TARGETARCH}/*-runner /work/application
 
 EXPOSE 8080
 USER 1001
