@@ -429,8 +429,8 @@ public final class PrReviewPrompts {
               intent — dimension 9). Empty array when there is no description or no mismatch.
             - file_summaries: an array of { path, summary } objects, one per changed file, that gives
               reviewers a file-by-file walkthrough. The object keys must be spelled exactly "path"
-              and "summary" — "file", "filename" and "description" are silently discarded — and the
-              field itself must be an ARRAY, never an object keyed by path. "path" must match the
+              and "summary" — not "file", "filename" or "description" — and the field itself
+              must be an ARRAY, never an object keyed by path. "path" must match the
               file path exactly as it appears in the diff; "summary" is a single line (max ~100
               chars) describing what changed in that file and why, derived from the diff — not the
               file name. Cover the most significant files first and cap the array at 20 entries;
@@ -573,8 +573,8 @@ public final class PrReviewPrompts {
               granularity the file list and findings justify, and prefer a rougher true line over
               no line at all. "path" must match a path from the changed-file list below EXACTLY,
               character for character (no a/ or b/ prefix, no truncation). The object keys must be
-              spelled exactly "path" and "summary" — "file", "filename" and "description" are
-              silently discarded — and the field itself must be an ARRAY, never an object keyed by
+              spelled exactly "path" and "summary" — not "file", "filename" or "description" —
+              and the field itself must be an ARRAY, never an object keyed by
               path. "summary" is a single line, max ~100 chars. One entry per listed file, most
               impactful first, capped at 20 entries; when the list is longer than that, cover the
               20 most impactful and skip purely mechanical ones (generated code, lockfiles, bulk

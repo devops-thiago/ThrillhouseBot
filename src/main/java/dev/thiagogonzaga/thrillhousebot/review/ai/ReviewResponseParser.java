@@ -356,6 +356,7 @@ public class ReviewResponseParser {
     return fallback;
   }
 
+  /**
    * Strips optional markdown fences and leading noise before the JSON object/array. An absent body
    * extracts to {@code ""}: "no response" is a soft failure every caller decides for itself (each
    * one guards the body before parsing), so this must not convert it into a {@code
