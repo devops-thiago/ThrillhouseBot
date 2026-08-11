@@ -63,6 +63,16 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       "✨ ThrillhouseBot found no reviewable changes to improve in this PR.";
   static final String GENERATION_FAILED =
       "✨ ThrillhouseBot could not generate improvements for this PR. Please try `/improve` again.";
+
+  /**
+   * Posted when the token budget could fit no part of the diff: the plan is empty but the omitted
+   * list is not, so "no reviewable changes" would be false — there were changes, they could not be
+   * read. Mirrors the sibling generators, which all name the budget as the cause.
+   */
+  static final String NOT_COVERED =
+      "✨ ThrillhouseBot could not fit any part of this PR into the per-call input-token budget,"
+          + " so it has nothing to improve. Raise the input-token budget and re-run `/improve`.";
+
   static final String NOTHING_TO_IMPROVE =
       "✨ ThrillhouseBot has no improvements to suggest for the changes in this PR.";
 
@@ -153,7 +163,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
               PrSuggestionPrompts.userPrompt(),
               0);
       if (plan.batches().isEmpty()) {
-        postComment(auth, task, NO_CHANGES + disclosure(plan));
+        postComment(auth, task, plan.truncated() ? NOT_COVERED + disclosure(plan) : NO_CHANGES);
         return;
       }
       var generated = generate(inputs, plan);
