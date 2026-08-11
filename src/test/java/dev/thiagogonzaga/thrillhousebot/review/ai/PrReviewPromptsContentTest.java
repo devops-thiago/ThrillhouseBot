@@ -26,8 +26,10 @@ import org.junit.jupiter.api.Test;
  * must demonstrably hit the claimed path before it can invalidate a finding — #116), the symmetric
  * exact-arithmetic / "test fails" cap (#97), the heuristic failure-mode characterization pass with
  * its verifier exemption (#123), the producer→consumer data-flow contract dimension (#117), the
- * config-key documentation-completeness claim class and its narrowing guards (#109), and the
- * summary call's whole-change-set grounding (#335). These assertions are intentionally coarse —
+ * config-key documentation-completeness claim class and its narrowing guards (#109), the summary
+ * call's whole-change-set grounding (#335), and the rebalancing of the three dimensions a
+ * controlled four-language corpus measured as under-reported — comment-contradicts-code, added
+ * algorithmic complexity, and mock fidelity (#537). These assertions are intentionally coarse —
  * they check intent survives, not exact wording; an intentional rewording should update the
  * matching anchor.
  *
@@ -666,6 +668,174 @@ class PrReviewPromptsContentTest {
         req,
         "not evidence in the other direction",
         "absence from the list must never be read as proof a line is covered");
+  }
+
+  @Test
+  void commentContradictionIsAClaimClassRatherThanAStyleNote() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "4. COMMENT CONTRADICTS CODE",
+        "dimension 4 must lead with the contradiction claim class, not the comment-style list");
+    assertContains(
+        sys,
+        "is a defect, not a style note",
+        "a comment contradicting the code must not read as a style observation (#537)");
+    assertContains(
+        sys,
+        "the false statement IS the defect",
+        "a stale comment beside correct code must still be reportable (#537)");
+    assertContains(
+        sys,
+        "are style observations — raise them only when",
+        "missing/obvious comments and TODOs must stay the weak half of dimension 4 (#537)");
+    // The nitpick exclusion must not swallow the claim class it sits next to.
+    assertContains(
+        sys,
+        "that is a false statement, not a wording preference",
+        "the phrasing-nitpick exclusion must carve out dimension 4 (#537)");
+  }
+
+  @Test
+  void addedQuadraticComplexityIsReportableFromTheShapeAlone() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "ALGORITHMIC COMPLEXITY",
+        "dimension 5 must name algorithmic complexity as its own claim class (#537)");
+    assertContains(
+        sys,
+        "ITSELF, visible in the diff, is the evidence; you do NOT also have to demonstrate",
+        "the nested shape itself must count as the evidence of scale (#537)");
+    assertContains(
+        sys,
+        "you do NOT also have to demonstrate",
+        "a complexity finding must not wait to be shown the collection is large (#537)");
+    assertContains(
+        sys,
+        "duplicates is the canonical case: it is O(n^2), and a set or map makes it O(n)",
+        "the O(n^2) dedupe the corpus planted must be named outright (#537)");
+    // The severity rule is the other half of the brake and has to agree.
+    assertContains(
+        sys,
+        "quadratic shape over a collection the diff does not bound IS that evidence",
+        "the medium-severity rule must stop demanding separate evidence of scale (#537)");
+    assertContains(
+        sys,
+        "NOT a finding when the diff itself shows the bound is",
+        "a fixed small bound must still exclude the finding — precision is unchanged (#537)");
+  }
+
+  @Test
+  void mockFidelityIsReportableFromTheSignatureAndLandsAtMedium() {
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "The SIGNATURE alone is enough when the",
+        "a stub contradicting the declared signature must be reportable (#537)");
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "contradiction at risk \"medium\" — the suite is green",
+        "a demonstrated mock contradiction must land at medium, not low (#537)");
+    assertContains(
+        PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+        "the confidence governs the wording, not whether to",
+        "the injected mock-fidelity block must agree with dimension 8 (#537)");
+    assertContains(
+        PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+        "declared SIGNATURE counts as shown material",
+        "the injected block must accept the signature as evidence (#537)");
+  }
+
+  @Test
+  void confidenceCapsGovernWordingRatherThanWhetherToReport() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "Severity is not confidence, and neither one is a reason to stay silent",
+        "the omission guidance must stop absorbing demonstrable low-confidence findings (#537)");
+    assertContains(
+        sys,
+        "\"Omit rather than guess\" applies when you are unsure the issue is REAL",
+        "the omit rule must be scoped to doubt about the defect, not about its impact (#537)");
+    assertContains(
+        sys,
+        "When you have those two lines, report it",
+        "the three under-reported classes must be named with their evidence bar (#537)");
+  }
+
+  @Test
+  void rebalancedDimensionsKeepTheirOwnEvidenceRequirements() {
+    String sys = PrReviewPrompts.SYSTEM;
+    // Precision came in at zero false positives; each widened class carries its own self-check.
+    assertContains(
+        sys,
+        "A comment-contradiction claim (dimension 4) must quote the comment and the code line",
+        "a comment-contradiction claim must quote both halves (#537)");
+    assertContains(
+        sys,
+        "or about a neighbouring concern is not a contradiction",
+        "a terse or unshown comment must not become a contradiction claim (#537)");
+    assertContains(
+        sys,
+        "An algorithmic-complexity claim (dimension 5) must quote both levels from the diff",
+        "a complexity claim must quote the outer loop and the inner scan (#537)");
+    assertContains(
+        sys,
+        "name the ONE input whose size drives both",
+        "a complexity claim must trace one n through both levels (#537)");
+    assertContains(
+        sys,
+        "the finding is invalid. A single pass, or a lookup that is already",
+        "a bounded level, or an already-hashed lookup, must invalidate the claim (#537)");
+  }
+
+  @Test
+  void bothPromptsAskForAsManyFileSummariesAsTheWalkthroughRenders() {
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "cap the array at " + PrReviewPrompts.MAX_FILE_SUMMARIES + " entries",
+        "the review prompt's file_summaries cap must be the walkthrough row bound (#536)");
+    assertContains(
+        PrReviewPrompts.SUMMARY_SYSTEM,
+        "capped at " + PrReviewPrompts.MAX_FILE_SUMMARIES + " entries",
+        "the summary prompt's file_summaries cap must be the walkthrough row bound (#536)");
+  }
+
+  @Test
+  void summaryPromptGroundsFileSummariesInTheMaterialThatCallActuallyHas() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    // The collapse to "-" on large PRs is this call omitting the field: it is told it never sees
+    // the diff and must not invent, while the field is described as "what changed in that file".
+    assertContains(
+        sys,
+        "file_summaries: REQUIRED",
+        "the summary call must be told file_summaries is not optional (#536)");
+    assertContains(
+        sys,
+        "leaves every row of that table blank",
+        "the summary call must be told what omitting file_summaries costs (#536)");
+    assertContains(
+        sys,
+        "is what is wanted and is NOT invention",
+        "a file-list-grounded one-liner must be licensed against the do-not-invent rule (#536)");
+    assertContains(
+        sys,
+        "prefer a rougher true line over",
+        "the summary call must be told to say less rather than nothing (#536)");
+  }
+
+  @Test
+  void bothPromptsPinTheFileSummaryShapeThatSurvivesParsing() {
+    for (String prompt : new String[] {PrReviewPrompts.SYSTEM, PrReviewPrompts.SUMMARY_SYSTEM}) {
+      assertContains(
+          prompt,
+          "spelled exactly \"path\"",
+          "a mis-keyed entry is silently dropped, so the keys must be pinned (#536)");
+      assertContains(
+          prompt,
+          "must be an ARRAY, never an object keyed by",
+          "the map form fails schema mapping and costs the whole summary (#536)");
+    }
   }
 
   @Test

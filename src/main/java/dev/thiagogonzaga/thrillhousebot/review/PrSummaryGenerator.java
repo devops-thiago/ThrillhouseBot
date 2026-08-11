@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -64,11 +65,33 @@ public class PrSummaryGenerator {
   /**
    * Upper bound on rows in the changed-files walkthrough. Keeps the comment within GitHub's size
    * budget on large PRs; any files beyond this are rolled up into a trailing "… and N more" note.
+   *
+   * <p>Read from {@link PrReviewPrompts#MAX_FILE_SUMMARIES} so the number of rows rendered and the
+   * number of per-file summaries the prompt asks the model for cannot drift apart: a smaller prompt
+   * cap would guarantee rows no response could ever fill (#536).
    */
-  static final int MAX_FILE_ROWS = 20;
+  static final int MAX_FILE_ROWS = PrReviewPrompts.MAX_FILE_SUMMARIES;
 
-  /** One changed file in the walkthrough: its path and the diff's authoritative change type. */
-  public record ChangedFile(String path, String changeType) {}
+  /**
+   * Summary cell for a pure-rename row. A pure rename is excluded from AI review by design (its
+   * content is unchanged, so there is nothing to review), which means the model never returns a
+   * summary for it — rendering the bare "-" made that correct behavior read as a failed summary
+   * (#536), so the row states the reason instead.
+   */
+  static final String PURE_RENAME_SUMMARY = "Pure rename — content unchanged";
+
+  /**
+   * One changed file in the walkthrough: its path, the diff's authoritative change type, and
+   * whether it is a pure rename — renamed with no content change, hence never sent to the model and
+   * never carrying a model summary.
+   */
+  public record ChangedFile(String path, String changeType, boolean pureRename) {
+
+    /** A row whose pure-rename status is not distinguished; treated as ordinary content change. */
+    public ChangedFile(String path, String changeType) {
+      this(path, changeType, false);
+    }
+  }
 
   /**
    * Upper bound on the rendered Mermaid source. A diagram larger than this is dropped rather than
@@ -400,7 +423,7 @@ public class PrSummaryGenerator {
           .append("` | ")
           .append(changeTypeLabel(file.changeType()))
           .append(" | ")
-          .append(summary.isBlank() ? "-" : MarkdownSafe.tableCell(summary.strip()))
+          .append(summaryCell(file, summary))
           .append(" |\n");
     }
     int rowsShown = Math.min(changedFiles.size(), MAX_FILE_ROWS);
@@ -409,6 +432,17 @@ public class PrSummaryGenerator {
       sb.append("\n_…and ").append(overflow).append(" more file(s)._\n");
     }
     sb.append("\n");
+  }
+
+  /**
+   * The walkthrough's Summary cell. The model's note wins whenever it supplied one; otherwise a
+   * pure rename says why it has none, and every other unsummarized row keeps the bare dash.
+   */
+  private static String summaryCell(ChangedFile file, String summary) {
+    if (!summary.isBlank()) {
+      return MarkdownSafe.tableCell(summary.strip());
+    }
+    return file.pureRename() ? PURE_RENAME_SUMMARY : "-";
   }
 
   /** Indexes the model's per-file notes by path; a duplicate path keeps the first note. */
