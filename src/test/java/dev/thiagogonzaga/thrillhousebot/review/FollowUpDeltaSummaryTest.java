@@ -122,7 +122,11 @@ class FollowUpDeltaSummaryTest {
     // (F8).
     var truncation =
         new ReviewResult.TruncationDetail(
-            List.of("omitted.java"), List.of("clipped.java"), List.of(), List.of(), false, false);
+            List.of("omitted.java"),
+            List.of("clipped.java"),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE);
     var result =
         new ReviewResult(
             List.of(finding("a.java")),
@@ -154,7 +158,8 @@ class FollowUpDeltaSummaryTest {
     // summary-cut clause in it renders the self-contradictory "the findings themselves are
     // complete, so this covers only part of the diff".
     var truncation =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), true, false);
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
     var result =
         new ReviewResult(
             List.of(finding("a.java")),
@@ -185,7 +190,8 @@ class FollowUpDeltaSummaryTest {
     // token spend ceiling leaves the findings — and this comment's counts — covering the whole
     // diff, so the per-file partial-coverage framing must not render.
     var truncation =
-        new ReviewResult.TruncationDetail(List.of(), List.of(), List.of(), List.of(), false, true);
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.SKIPPED_AT_CEILING);
     var result =
         new ReviewResult(
             List.of(finding("a.java")),

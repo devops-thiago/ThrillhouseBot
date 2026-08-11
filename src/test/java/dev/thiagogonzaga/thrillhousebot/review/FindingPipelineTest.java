@@ -175,7 +175,6 @@ class FindingPipelineTest {
         null,
         null,
         null,
-        null,
         null);
   }
 
@@ -308,8 +307,10 @@ class FindingPipelineTest {
     assertEquals(List.of("a.java"), plan.responseCutFiles());
     assertTrue(plan.runtimeUncoveredFiles().isEmpty());
     assertTrue(plan.truncated());
-    assertFalse(
-        plan.summaryWasCut(), "a batch cut is not a summary cut — the classes are disjoint");
+    assertEquals(
+        SummaryDegradation.NONE,
+        plan.summaryDegradation(),
+        "a batch cut is not a summary degradation — the classes are disjoint");
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("a.java (modified"), changedFiles);
     assertTrue(
@@ -396,12 +397,10 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
-    assertTrue(
-        plan.summaryWasCut(),
+    assertEquals(
+        SummaryDegradation.RESPONSE_CUT,
+        plan.summaryDegradation(),
         "the summary cut must be recorded on the plan so the posted review discloses it");
-    assertFalse(
-        plan.summaryWasSkippedAtCeiling(),
-        "a response cut is not a ceiling skip — disjoint classes");
   }
 
   @Test
@@ -427,8 +426,9 @@ class FindingPipelineTest {
     assertNotNull(result.summary());
     assertEquals("solid", result.summary().overallAssessment());
     assertNotNull(session.getAiResponseJson());
-    assertTrue(
-        plan.summaryWasCut(),
+    assertEquals(
+        SummaryDegradation.RESPONSE_CUT,
+        plan.summaryDegradation(),
         "a salvaged summary is still a shortened one — the cut must be recorded for disclosure");
   }
 
@@ -441,7 +441,7 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null);
     when(aiReviewService.summarize(eq(session), any()))
         .thenThrow(new AiResponseTruncatedException("finish_reason=length", null, true));
 
@@ -451,7 +451,10 @@ class FindingPipelineTest {
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson());
-    assertTrue(plan.summaryWasCut(), "the degenerate path records the summary cut on the plan too");
+    assertEquals(
+        SummaryDegradation.RESPONSE_CUT,
+        plan.summaryDegradation(),
+        "the degenerate path records the summary cut on the plan too");
   }
 
   @Test
@@ -464,7 +467,7 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null);
     when(aiReviewService.summarize(eq(session), any()))
         .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
 
@@ -474,10 +477,10 @@ class FindingPipelineTest {
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary(), "counts-only shape: no model summary");
     assertNotNull(session.getAiResponseJson(), "the degraded review is still persisted and posts");
-    assertTrue(
-        plan.summaryWasSkippedAtCeiling(),
+    assertEquals(
+        SummaryDegradation.SKIPPED_AT_CEILING,
+        plan.summaryDegradation(),
         "the ceiling skip must be recorded on the plan so the posted review disclosures name it");
-    assertFalse(plan.summaryWasCut(), "a ceiling skip is not a response cut — disjoint classes");
   }
 
   @Test
@@ -793,15 +796,7 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("clipped.java")),
-            List.of(),
-            List.of(),
-            true,
-            null,
-            null,
-            null,
-            null,
-            null);
+            List.of(batch("clipped.java")), List.of(), List.of(), true, null, null, null, null);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -821,7 +816,7 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null, null);
+            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -844,7 +839,7 @@ class FindingPipelineTest {
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null, null);
+            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null);
     when(aiReviewService.review(eq(session), any()))
         .thenThrow(new TokenSpendCeilingExceededException(120_000, 100_000));
 
@@ -913,7 +908,7 @@ class FindingPipelineTest {
     var batch = new DiffBudgetPlanner.DiffBatch("### a.java\n### b.java\n", batchFiles, 10);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(batch), List.of(), List.of("a.java"), true, null, null, null, null, null);
+            List.of(batch), List.of(), List.of("a.java"), true, null, null, null, null);
     when(aiReviewService.review(eq(session), any()))
         .thenReturn(
             new ReviewResponse(
@@ -945,7 +940,6 @@ class FindingPipelineTest {
             List.of(),
             List.of("a.java"),
             true,
-            null,
             null,
             null,
             null,
@@ -1042,7 +1036,6 @@ class FindingPipelineTest {
             null,
             null,
             null,
-            null,
             null);
     when(budgetPlanner.perCallInputBudget()).thenReturn(1_000_000);
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -1081,7 +1074,6 @@ class FindingPipelineTest {
             List.of("z.java"),
             List.of("a.java"),
             true,
-            null,
             null,
             null,
             null,
@@ -1280,10 +1272,10 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson());
-    assertTrue(
-        plan.summaryWasSkippedAtCeiling(),
+    assertEquals(
+        SummaryDegradation.SKIPPED_AT_CEILING,
+        plan.summaryDegradation(),
         "the refused summary must be recorded on the plan so the posted review discloses it");
-    assertFalse(plan.summaryWasCut(), "a ceiling refusal is not a response cut — disjoint classes");
   }
 
   @Test
@@ -1310,8 +1302,9 @@ class FindingPipelineTest {
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
     assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
-    assertTrue(
-        plan.summaryWasSkippedAtCeiling(),
+    assertEquals(
+        SummaryDegradation.SKIPPED_AT_CEILING,
+        plan.summaryDegradation(),
         "the skipped summary must be recorded on the plan so the posted review discloses it");
   }
 
@@ -1531,7 +1524,7 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null);
     var summary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "too large", "unknown", List.of());
     var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
     when(aiReviewService.summarize(eq(session), captor.capture()))
@@ -1555,7 +1548,7 @@ class FindingPipelineTest {
         new AiReviewService.PromptInputs("(no changes detected)", "ctx", "base", "s", "t", "", "");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));

@@ -322,7 +322,7 @@ class DiffBudgetPlannerTest {
     // whole review down with it.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     assertTrue(plan.runtimeUncoveredFiles().isEmpty(), "a null accumulator normalizes to empty");
 
@@ -339,7 +339,7 @@ class DiffBudgetPlannerTest {
     // like recordUncoveredFiles does, and the accessor is a defensive copy.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     plan.recordSpendCeilingSkippedFiles(Arrays.asList("a.java", null, "a.java", "b.java"));
 
@@ -357,7 +357,7 @@ class DiffBudgetPlannerTest {
     // moment a ceiling-blocked batch records a skip on the review thread.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     assertTrue(plan.spendCeilingSkippedFiles().isEmpty());
 
@@ -373,7 +373,7 @@ class DiffBudgetPlannerTest {
     // hygiene like the other recorders, and stay behind a defensive copy.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     plan.recordResponseCutFiles(Arrays.asList("a.java", null, "a.java", "b.java"));
 
@@ -389,7 +389,7 @@ class DiffBudgetPlannerTest {
   void aPlanBuiltWithANullResponseCutListStillAcceptsRecords() {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     assertTrue(plan.responseCutFiles().isEmpty());
 
@@ -399,72 +399,64 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
-  void summaryCutFlagIsRecordedLiveButItsAccessorReturnsASnapshot() {
-    // #500 scope A: the flag rides the shared plan like the runtime-gap lists — written after the
-    // plan is built, read by the verdict — and, like them, its record accessor must not leak the
-    // mutable backing.
-    var plan =
-        new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
-    assertFalse(plan.summaryWasCut());
-
-    plan.recordSummaryResponseCut();
-
-    assertTrue(plan.summaryWasCut());
-    assertFalse(plan.truncated(), "a summary cut is not a coverage gap and must not hold approval");
-    var snapshot = plan.summaryResponseCut();
-    snapshot.set(false);
-    assertTrue(plan.summaryWasCut(), "mutating the snapshot must not touch the live flag");
-  }
-
-  @Test
-  void aPlanBuiltWithItsOwnSummaryCutFlagKeepsThatInstanceLive() {
-    var live = new java.util.concurrent.atomic.AtomicBoolean(true);
-    var plan =
-        new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, live, null);
-
-    assertTrue(plan.summaryWasCut());
-    assertNotSame(live, plan.summaryResponseCut(), "the accessor returns a defensive snapshot");
-
-    live.set(false);
-    assertFalse(plan.summaryWasCut(), "the passed-in flag stays the live backing");
-  }
-
-  @Test
-  void summarySkippedAtCeilingFlagIsRecordedLiveButItsAccessorReturnsASnapshot() {
-    // #518: the ceiling sibling of the summary-cut flag rides the shared plan the same way —
-    // written after the plan is built, read by the verdict — and, like it, its record accessor
+  void summaryResponseCutIsRecordedLiveButItsAccessorReturnsASnapshot() {
+    // #500 scope A: the degradation slot rides the shared plan like the runtime-gap lists —
+    // written after the plan is built, read by the verdict — and, like them, its record accessor
     // must not leak the mutable backing.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
-    assertFalse(plan.summaryWasSkippedAtCeiling());
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
 
-    plan.recordSummarySkippedAtCeiling();
+    plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
 
-    assertTrue(plan.summaryWasSkippedAtCeiling());
-    assertFalse(
-        plan.truncated(), "a skipped summary is not a coverage gap and must not hold approval");
-    assertFalse(plan.summaryWasCut(), "the ceiling skip is not a response cut — disjoint classes");
-    var snapshot = plan.summarySkippedAtCeiling();
-    snapshot.set(false);
-    assertTrue(plan.summaryWasSkippedAtCeiling(), "mutating the snapshot must not touch the flag");
+    assertEquals(SummaryDegradation.RESPONSE_CUT, plan.summaryDegradation());
+    assertFalse(plan.truncated(), "a summary cut is not a coverage gap and must not hold approval");
+    var snapshot = plan.summaryDegradationRef();
+    snapshot.set(SummaryDegradation.NONE);
+    assertEquals(
+        SummaryDegradation.RESPONSE_CUT,
+        plan.summaryDegradation(),
+        "mutating the snapshot must not touch the live slot");
   }
 
   @Test
-  void aPlanBuiltWithItsOwnSummarySkipFlagKeepsThatInstanceLive() {
-    var live = new java.util.concurrent.atomic.AtomicBoolean(true);
+  void summarySkippedAtCeilingIsRecordedLiveOverwritingTheSingleSlot() {
+    // #518: the ceiling flavor rides the same single slot — one enum makes the meaningless
+    // cut-and-skipped-at-once state unrepresentable where the old boolean pair allowed it.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, live);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
 
-    assertTrue(plan.summaryWasSkippedAtCeiling());
-    assertNotSame(
-        live, plan.summarySkippedAtCeiling(), "the accessor returns a defensive snapshot");
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
 
-    live.set(false);
-    assertFalse(plan.summaryWasSkippedAtCeiling(), "the passed-in flag stays the live backing");
+    assertEquals(SummaryDegradation.SKIPPED_AT_CEILING, plan.summaryDegradation());
+    assertFalse(
+        plan.truncated(), "a skipped summary is not a coverage gap and must not hold approval");
+    var snapshot = plan.summaryDegradationRef();
+    snapshot.set(SummaryDegradation.NONE);
+    assertEquals(
+        SummaryDegradation.SKIPPED_AT_CEILING,
+        plan.summaryDegradation(),
+        "mutating the snapshot must not touch the live slot");
+  }
+
+  @Test
+  void aPlanBuiltWithItsOwnDegradationSlotKeepsThatInstanceLive() {
+    var live = new java.util.concurrent.atomic.AtomicReference<>(SummaryDegradation.RESPONSE_CUT);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, live);
+
+    assertEquals(SummaryDegradation.RESPONSE_CUT, plan.summaryDegradation());
+    assertNotSame(live, plan.summaryDegradationRef(), "the accessor returns a defensive snapshot");
+
+    live.set(SummaryDegradation.NONE);
+    assertEquals(
+        SummaryDegradation.NONE,
+        plan.summaryDegradation(),
+        "the passed-in slot stays the live backing");
   }
 
   @Test
@@ -473,7 +465,7 @@ class DiffBudgetPlannerTest {
     // "clipped" meaning rather than being reported as wholly uncovered.
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of("src/Clipped.java"), true, null, null, null, null, null);
+            List.of(), List.of(), List.of("src/Clipped.java"), true, null, null, null, null);
 
     assertEquals(List.of("src/Clipped.java"), plan.effectiveClippedFiles());
   }
@@ -488,7 +480,6 @@ class DiffBudgetPlannerTest {
             List.of(),
             List.of("src/Clipped.java", "src/Other.java"),
             true,
-            null,
             null,
             null,
             null,

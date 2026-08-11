@@ -136,7 +136,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(3);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("big.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -149,7 +149,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(3);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -166,7 +166,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     plan.recordUncoveredFiles(List.of("failed.java"));
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -186,7 +186,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of("f.java"), true, null, null, null, null, null);
+            List.of(), List.of(), List.of("f.java"), true, null, null, null, null);
     plan.recordUncoveredFiles(List.of("f.java"));
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -205,7 +205,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("big.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
     plan.recordSpendCeilingSkippedFiles(List.of("skipped.java"));
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -236,7 +236,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     plan.recordResponseCutFiles(List.of("cut.java"));
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -266,7 +266,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of("c.java"), true, null, null, null, null, null);
+            List.of(), List.of(), List.of("c.java"), true, null, null, null, null);
     plan.recordResponseCutFiles(List.of("c.java"));
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -285,15 +285,15 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
-    plan.recordSummaryResponseCut();
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertEquals(0, result.omittedFiles());
     assertFalse(result.truncated());
     assertEquals(ReviewState.APPROVE, result.reviewState());
-    assertTrue(result.truncation().summaryResponseCut());
+    assertEquals(SummaryDegradation.RESPONSE_CUT, result.truncation().summaryDegradation());
     assertTrue(
         result.summaryMarkdown().contains("**Summary shortened.**"), result.summaryMarkdown());
     assertTrue(
@@ -317,15 +317,15 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
-    plan.recordSummarySkippedAtCeiling();
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertEquals(0, result.omittedFiles());
     assertFalse(result.truncated());
     assertEquals(ReviewState.APPROVE, result.reviewState());
-    assertTrue(result.truncation().summarySkippedAtCeiling());
+    assertEquals(SummaryDegradation.SKIPPED_AT_CEILING, result.truncation().summaryDegradation());
     assertTrue(result.summaryMarkdown().contains("**Summary skipped.**"), result.summaryMarkdown());
     assertTrue(
         result.summaryMarkdown().contains("REVIEW_MAX_TOKENS_PER_REVIEW"),
@@ -346,8 +346,8 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("big.java"), List.of(), true, null, null, null, null, null);
-    plan.recordSummarySkippedAtCeiling();
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -372,8 +372,8 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("big.java"), List.of(), true, null, null, null, null, null);
-    plan.recordSummaryResponseCut();
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -412,7 +412,7 @@ class VerdictBuilderTest {
             false,
             true,
             new ReviewResult.TruncationDetail(
-                List.of(), List.of(), List.of(), List.of(), true, false));
+                List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT));
 
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
 
@@ -427,7 +427,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of("huge.java"), true, null, null, null, null, null);
+            List.of(), List.of(), List.of("huge.java"), true, null, null, null, null);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -440,15 +440,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(),
-            List.of("big.java"),
-            List.of("huge.java"),
-            true,
-            null,
-            null,
-            null,
-            null,
-            null);
+            List.of(), List.of("big.java"), List.of("huge.java"), true, null, null, null, null);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -467,7 +459,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(0); // reviewable: a.java
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("a.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("a.java"), List.of(), true, null, null, null, null);
     var rowsCaptor = ArgumentCaptor.forClass(List.class);
 
     builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -491,7 +483,7 @@ class VerdictBuilderTest {
                 new FileDiff("skipped.java", "modified", 1, 0, 1, "")));
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     plan.recordSpendCeilingSkippedFiles(List.of("skipped.java"));
     var rowsCaptor = ArgumentCaptor.forClass(List.class);
 
@@ -521,7 +513,7 @@ class VerdictBuilderTest {
                 new FileDiff("a.java", "modified", 1, 0, 1, "")));
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("a.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("a.java"), List.of(), true, null, null, null, null);
     var rowsCaptor = ArgumentCaptor.forClass(List.class);
 
     builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
@@ -598,7 +590,7 @@ class VerdictBuilderTest {
             BlockingStrictness.BALANCED);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
 
     var result =
         realBuilder.build(
@@ -619,7 +611,7 @@ class VerdictBuilderTest {
             BlockingStrictness.BALANCED);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     var ctx =
         new ReviewContextLoader.ReviewContext(
             List.of(),
@@ -766,7 +758,6 @@ class VerdictBuilderTest {
             null,
             null,
             null,
-            null,
             null);
 
     var result =
@@ -787,7 +778,7 @@ class VerdictBuilderTest {
     // record of what the model saw and must still be the material the decline is checked against.
     var legacyPlan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), false, null, null, null, null, null);
+            List.of(), List.of(), List.of(), false, null, null, null, null);
 
     var result =
         builderWithRealAnalyzer(summaryGenerator)
@@ -808,7 +799,7 @@ class VerdictBuilderTest {
     // would yield nothing; ctx.diff() is the fallback the re-check must use.
     var emptyBudgetedPlan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of("big.java"), List.of(), true, null, null, null, null, null);
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
 
     var result =
         builderWithRealAnalyzer(summaryGenerator)
@@ -826,7 +817,7 @@ class VerdictBuilderTest {
     var ctx = contextWithLineCapOmissions(2);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), false, null, null, null, null, null);
+            List.of(), List.of(), List.of(), false, null, null, null, null);
 
     var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -843,7 +834,7 @@ class VerdictBuilderTest {
 
   private static final DiffBudgetPlanner.BudgetPlan FULL_COVERAGE =
       new DiffBudgetPlanner.BudgetPlan(
-          List.of(), List.of(), List.of(), true, null, null, null, null, null);
+          List.of(), List.of(), List.of(), true, null, null, null, null);
 
   private VerdictBuilder builderWith(CiGatingMode mode) {
     return new VerdictBuilder(
@@ -1019,7 +1010,7 @@ class VerdictBuilderTest {
             null);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), false, null, null, null, null, null);
+            List.of(), List.of(), List.of(), false, null, null, null, null);
 
     builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
@@ -1050,7 +1041,7 @@ class VerdictBuilderTest {
             response,
             CI_CLEAR,
             new DiffBudgetPlanner.BudgetPlan(
-                List.of(), List.of(), List.of(), false, null, null, null, null, null));
+                List.of(), List.of(), List.of(), false, null, null, null, null));
 
     assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
   }
@@ -1079,7 +1070,7 @@ class VerdictBuilderTest {
             response,
             CI_CLEAR,
             new DiffBudgetPlanner.BudgetPlan(
-                List.of(), List.of(), List.of(), false, null, null, null, null, null));
+                List.of(), List.of(), List.of(), false, null, null, null, null));
 
     assertEquals(ReviewState.COMMENT, result.reviewState());
   }
@@ -1204,7 +1195,7 @@ class VerdictBuilderTest {
             response,
             CI_CLEAR,
             new DiffBudgetPlanner.BudgetPlan(
-                List.of(), List.of(), List.of(), false, null, null, null, null, null));
+                List.of(), List.of(), List.of(), false, null, null, null, null));
 
     assertEquals(ReviewState.COMMENT, result.reviewState());
   }
@@ -1278,7 +1269,7 @@ class VerdictBuilderTest {
   void unresolvedCountAcrossAZeroFindingRoundStaysAtTheOneRealFinding() {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     var stillUnresolved =
         new ReviewResponse(
             List.of(),
@@ -1304,7 +1295,7 @@ class VerdictBuilderTest {
   void resolvedPriorFindingNoLongerPhantomHoldsApproveAfterAZeroFindingRound() {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
-            List.of(), List.of(), List.of(), true, null, null, null, null, null);
+            List.of(), List.of(), List.of(), true, null, null, null, null);
     var resolvedNow =
         new ReviewResponse(
             List.of(),
