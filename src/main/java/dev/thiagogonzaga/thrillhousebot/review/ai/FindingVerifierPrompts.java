@@ -48,6 +48,18 @@ public final class FindingVerifierPrompts {
               token: that is demonstrable here, so confirm or reject it against the manifest rather
               than rejecting it as unverifiable remembered behavior. Still reject a config claim
               that genuinely rests on cluster, provider, or registry state not shown in the diff.
+              This ground also does NOT cover documented semantics of the language or its own
+              standard library — that List.max or head on an empty collection throws, that indexing
+              past the end throws, that integer division truncates, that a strict parse throws on
+              malformed input. A reviewer is expected to know those, and they are documented
+              semantics rather than remembered behavior, so do not reject such a finding as "not
+              established by the provided material": judge it on whether the material shows the
+              triggering case (the empty collection, the out-of-range index) can reach the call.
+              Requiring the diff to prove the standard library makes whole classes of real defect
+              unreportable — a correct "crashes with UnsupportedOperationException on an empty
+              list" finding was deleted on exactly that ground. Keep this rejection ground for repo
+              state not shown (files, solution or project files, manifests), for unshown callers,
+              and for unshown configuration; those genuinely are outside the material.
             - suggestion_new is functionally equivalent to suggestion_old (an alias,
               reformatting, or a documented shorthand of the same call) — a fix that changes
               nothing disproves the finding.
@@ -195,6 +207,25 @@ public final class FindingVerifierPrompts {
             provided material, downgrade it to confidence "low" phrased as a verification request
             naming the definition to check — do not reject it as unverifiable framework behavior.
 
+            An injection-sink finding — one naming a sink the provided material shows (a
+            framework's HTML-injection escape hatch such as dangerouslySetInnerHTML,
+            bypassSecurityTrustHtml, v-html or innerHTML; a string-built SQL statement or shell
+            command; a filesystem path built from a request value) that a user-authored or
+            otherwise externally-supplied value reaches, and stating that the material shows
+            nothing sanitizing, escaping, encoding, validating or parameterizing that value on the
+            path to it — is NOT remembered framework behavior. The sink call and the tainted value
+            are both in front of you, so the defect is demonstrated by the material: do not reject
+            it as unverifiable, and do not cap it at "medium" risk / "low" confidence as remembered
+            "routing and rendering semantics" — that cap is what routed a demonstrated stored XSS
+            into the collapsed low-confidence block. A mitigating layer that might exist somewhere
+            not shown lowers CONFIDENCE, never the risk: severity is a property of the defect class
+            and its blast radius, and a sanitizer you cannot see is not a sanitizer. Confidence
+            "low" or "medium" with the sink line quoted and the unshown layer to verify named is
+            the expected shape. Reject it only when the provided material shows the neutralizing
+            step on that path (an escaping or encoding call, a parameterized statement, a
+            validating allow-list), when the value reaching the sink is a literal or is otherwise
+            not attacker-influenced, or when the sink it names is not in the diff at all.
+
             A producer→consumer contract finding (dimension 9) — one tracing a value from where it
             is produced to where it is consumed — spans two locations that are in different
             enclosing units by construction: the producer and the consumer are necessarily
@@ -211,7 +242,12 @@ public final class FindingVerifierPrompts {
             rule, a privileged container, a change that weakens the safety property the PR claims
             to add — IS demonstrable here and may be "high"; do not auto-downgrade it as remembered
             framework behavior. Unverifiable framework-behavior claims are at most "medium" risk
-            with "low" confidence. Claims about the contents or behavior of
+            with "low" confidence — but a claim resting on documented language or standard-library
+            semantics is not one of those, so that cap does not apply to it either; rate it by what
+            the failure costs. An injection-sink finding whose sink and tainted value are both
+            visible in the provided material is likewise demonstrable here and is not capped: keep
+            it at the risk its defect class carries and put any uncertainty about an unshown
+            sanitizing layer on confidence, never on risk. Claims about the contents or behavior of
             artifacts not shown in the diff (base images, registries, installed packages,
             remote services) are not demonstrable here: downgrade any such finding above
             "medium". A config-key documentation-completeness claim backed by the key's quoted
