@@ -930,8 +930,38 @@ class PrReviewPromptsContentTest {
         "the round-4 python missing-file COPY must be named too (#638)");
     assertContains(
         sys,
-        "the build deterministically, on the first run",
-        "an unresolvable reference must be graded on its deterministic build failure (#638)");
+        "deterministically the first time it is exercised, for everyone",
+        "an unresolvable reference must be graded on its deterministic failure (#638)");
+  }
+
+  /**
+   * The shapes in that list do not all fail at the same moment: a {@code COPY} of a missing file
+   * breaks {@code docker build}, while an {@code ENTRYPOINT} naming a binary no stage produces
+   * builds fine and fails when the container starts. The dimension's framing sentence predates #638
+   * and said these defects fail "not at runtime", which the ENTRYPOINT shape contradicts — and a
+   * prompt that teaches the comment-contradicts-code class (dimension 4) is a poor instructor for
+   * it while its own text disagrees with the list it introduces. The grade attaches to the reason,
+   * so a build-time-only framing would invite skipping or misgrading the start-time shapes.
+   */
+  @Test
+  void configIacFramingCoversStartTimeFailureNotOnlyBuildTime() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "at CONTAINER START for an ENTRYPOINT or CMD naming a binary",
+        "the grading reason must cover the shape that fails when the container starts (#638)");
+    assertContains(
+        sys,
+        "do not downgrade the second because its failure is later than the first",
+        "a start-time failure must not be graded below a build-time one (#638)");
+    assertContains(
+        sys,
+        "apply/validation/CI time or when the container starts",
+        "the framing sentence must not claim these defects never fail at run time (#638)");
+    assertContains(
+        sys,
+        "application code path, so judge them on whether the breakage is visible here",
+        "the framing must still refuse to demand a code-exception trace (#638)");
   }
 
   @Test

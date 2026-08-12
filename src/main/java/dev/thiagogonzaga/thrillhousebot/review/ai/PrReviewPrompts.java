@@ -149,11 +149,14 @@ public final class PrReviewPrompts {
                requirement.txt when the file the PR commits is requirements.txt; a workflow step
                consuming an artifact no earlier step uploads; an ENTRYPOINT naming a binary no
                stage builds. Check every path a declarative file names against the names the rest
-               of the provided material actually shows, and treat a mismatch as "high": it breaks
-               the build deterministically, on the first run, for everyone.
-               These fail at apply/validation/CI time, not at
-               "runtime", so judge them on whether the breakage is visible here — not on whether they
-               map to a code exception. Scale severity by impact: a change that will fail
+               of the provided material actually shows, and treat a mismatch as "high": it fails
+               deterministically the first time it is exercised, for everyone — at build time for a
+               COPY or a workflow step, at CONTAINER START for an ENTRYPOINT or CMD naming a binary
+               no stage produces. Both are deterministic and both are demonstrable from the diff;
+               do not downgrade the second because its failure is later than the first.
+               These fail at apply/validation/CI time or when the container starts, not on an
+               application code path, so judge them on whether the breakage is visible here — not on
+               whether they map to a code exception. Scale severity by impact: a change that will fail
                schema/lint/CI validation, or that breaks the safety property the PR itself claims to
                add, is high; a cosmetic or stylistic config nitpick is low. Not a finding when a
                comment or adjacent value justifies the choice, or when correctness depends on
