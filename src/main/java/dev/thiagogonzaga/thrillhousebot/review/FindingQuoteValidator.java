@@ -31,9 +31,19 @@ import java.util.Set;
  * occasionally reviews a paraphrase of the change instead of the change itself and then flags
  * defects in code nobody wrote.
  *
- * <p>The check is conservative: a finding is dropped only when none of its quoted lines exist in
- * the diff (pure phantom). When the quote is partially wrong, the unreliable suggestion block is
- * removed and confidence is capped at "low" so the finding can still surface but cannot block.
+ * <p>The check never deletes a finding. Every unreliable-quote verdict gets the same conservative
+ * response: the suggestion block is removed and confidence is capped at "low", so the finding still
+ * surfaces — carrying its low-confidence disclaimer and unable to block — with its untrusted
+ * suggestion gone.
+ *
+ * <p>Deleting on a fully unmatched quote was tried and cost more than it saved. The match is
+ * per-line and exact, so a quote that matches nothing is not proof of a phantom: a model that
+ * rewraps a construct the source splits across lines — a multi-line SQL literal, an
+ * implicitly-concatenated f-string — writes a quote of which <em>no</em> line equals a diff line
+ * even though the code is wholly in the diff. On files a PR adds in full, where the quoted code is
+ * most certainly present because the entire file is in the diff, that silently destroyed true
+ * findings and left nothing in the posted review to tell a maintainer a finding had existed. An
+ * unanchored true finding is useful; a silently deleted one is not.
  *
  * <p>The same demotion applies when a finding's {@code suggestion_old} genuinely matches the diff
  * but its free-text {@code description} cites a chained call expression as existing source that
@@ -65,50 +75,19 @@ public class FindingQuoteValidator {
     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
-      switch (classifyQuote(finding, index)) {
-        case PARTIAL -> {
-          Log.infof(
-              "Finding '%s' (%s:%d) quotes code only partially present in the diff —"
-                  + DEMOTION_SUFFIX,
-              finding.title(),
-              finding.file(),
-              finding.line());
-          kept.add(withoutSuggestion(finding));
-          changed = true;
-        }
-        case AMBIGUOUS -> {
-          Log.infof(
-              "Finding '%s' (%s:%d) quotes code that appears in multiple locations, but the finding's line is ambiguous —"
-                  + DEMOTION_SUFFIX,
-              finding.title(),
-              finding.file(),
-              finding.line());
-          kept.add(withoutSuggestion(finding));
-          changed = true;
-        }
-        case NONE -> {
-          Log.infof(
-              "Dropping finding '%s' (%s:%d) — the code it quotes does not appear in the diff",
-              finding.title(), finding.file(), finding.line());
-          changed = true;
-        }
-        // FULL and NO_QUOTE fall through here; default also keeps any future verdict rather than
-        // silently dropping it.
-        default -> {
-          if (descriptionCitesAbsentCode(finding, index)) {
-            Log.infof(
-                "Finding '%s' (%s:%d) cites code in its description that appears nowhere in the diff —"
-                    + DEMOTION_SUFFIX,
-                finding.title(),
-                finding.file(),
-                finding.line());
-            kept.add(withoutSuggestion(finding));
-            changed = true;
-          } else {
-            kept.add(finding);
-          }
-        }
+      String reason = demotionReason(finding, index);
+      if (reason == null) {
+        kept.add(finding);
+        continue;
       }
+      Log.infof(
+          "Finding '%s' (%s:%d) %s" + DEMOTION_SUFFIX,
+          finding.title(),
+          finding.file(),
+          finding.line(),
+          reason);
+      kept.add(withoutSuggestion(finding));
+      changed = true;
     }
     if (!changed) {
       return response;
@@ -120,13 +99,35 @@ public class FindingQuoteValidator {
   }
 
   /**
+   * Why this finding's quote cannot be trusted — a log fragment ending in an em dash, to which
+   * {@link #DEMOTION_SUFFIX} is appended — or {@code null} when the finding passes untouched.
+   *
+   * <p>Every verdict but a clean one resolves to a demotion; none deletes the finding. A future
+   * verdict falls through to the sound-quote branch rather than silently suppressing anything.
+   */
+  private static String demotionReason(ReviewResponse.Finding finding, DiffIndex index) {
+    return switch (classifyQuote(finding, index)) {
+      case PARTIAL -> "quotes code only partially present in the diff —";
+      case AMBIGUOUS ->
+          "quotes code that appears in multiple locations, but the finding's line is ambiguous —";
+      case NONE -> "quotes code that does not appear in the diff —";
+      // FULL and NO_QUOTE: the quote itself is sound, so only a fabricated mechanism in the
+      // finding's prose can demote it.
+      default ->
+          descriptionCitesAbsentCode(finding, index)
+              ? "cites code in its description that appears nowhere in the diff —"
+              : null;
+    };
+  }
+
+  /**
    * The quote verdict for one finding. Starts from {@link #matchQuote}'s per-line presence, then
    * tightens a multi-line FULL verdict to also require a contiguous in-order run on one side of the
    * diff — a recombination of real-but-scattered lines is demoted to PARTIAL so a fabricated
    * suggestion is not kept; single-line quotes are trivially contiguous and unaffected. Finally a
    * FULL quote is disambiguated by line when it appears in multiple locations.
    */
-  private QuoteMatch classifyQuote(ReviewResponse.Finding finding, DiffIndex index) {
+  private static QuoteMatch classifyQuote(ReviewResponse.Finding finding, DiffIndex index) {
     List<String> quoted = normalizedLines(finding.suggestionOld());
     QuoteMatch match = matchQuote(quoted, index.linesFor(finding.file()));
     if (match == QuoteMatch.FULL

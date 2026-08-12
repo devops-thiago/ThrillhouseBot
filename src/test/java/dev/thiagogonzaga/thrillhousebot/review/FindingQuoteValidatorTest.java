@@ -62,6 +62,21 @@ class FindingQuoteValidatorTest {
   }
 
   /**
+   * Asserts the response kept exactly one finding and demoted it: suggestion stripped, confidence
+   * capped at "low", risk untouched. This is the validator's only response to an untrustworthy
+   * quote — it never deletes the finding (#607).
+   */
+  private static ReviewResponse.Finding assertSingleDemoted(ReviewResponse result) {
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertNull(kept.suggestionOld());
+    assertNull(kept.suggestionNew());
+    assertEquals("low", kept.confidence());
+    assertEquals("critical", kept.risk());
+    return kept;
+  }
+
+  /**
    * Quotes that match the diff (regardless of indentation, diff markers, or embedded blank lines)
    * and findings without a quote at all must pass through untouched.
    */
@@ -80,15 +95,19 @@ class FindingQuoteValidatorTest {
     assertSame(response, validator.validate(response, DIFF));
   }
 
+  /**
+   * A quote that matches nothing demotes the finding instead of deleting it, and the summary keeps
+   * counting it — nothing is removed, so nothing needs disclosing.
+   */
   @Test
-  void dropsFindingWhoseQuoteIsNowhereInTheDiff() {
+  void demotesFindingWhoseQuoteIsNowhereInTheDiff() {
     var response = response(finding("SHA=\"${ steps.meta.outputs.sha }\""));
 
     var result = validator.validate(response, DIFF);
 
-    assertEquals(0, result.findings().size());
-    assertEquals(0, result.summary().totalFindings());
-    assertEquals(0, result.summary().critical());
+    assertSingleDemoted(result);
+    assertEquals(1, result.summary().totalFindings());
+    assertEquals(1, result.summary().critical());
   }
 
   @Test
@@ -134,20 +153,20 @@ class FindingQuoteValidatorTest {
   void fileHeaderAndHunkLinesAreNotMatchableContent() {
     var response = response(finding("+++ b/src/Main.java"));
 
-    var result = validator.validate(response, DIFF);
-
-    assertEquals(0, result.findings().size());
+    assertSingleDemoted(validator.validate(response, DIFF));
   }
 
   @Test
-  void mixedResponseKeepsValidFindingsAndDropsPhantoms() {
+  void mixedResponseKeepsValidFindingsUntouchedAndDemotesPhantoms() {
     var valid = finding("var repos = new ArrayList<RepoRef>();");
     var phantom = finding("code that was never written");
 
     var result = validator.validate(response(valid, phantom), DIFF);
 
-    assertEquals(1, result.findings().size());
+    assertEquals(2, result.findings().size());
     assertSame(valid, result.findings().get(0));
+    assertNull(result.findings().get(1).suggestionOld());
+    assertEquals("low", result.findings().get(1).confidence());
   }
 
   @Test
@@ -188,8 +207,9 @@ class FindingQuoteValidatorTest {
   }
 
   /**
-   * Misattributed quotes are dropped no matter how the model writes the path: exact, shortened, or
-   * expanded relative to the diff's section header.
+   * Misattributed quotes are demoted no matter how the model writes the path: exact, shortened, or
+   * expanded relative to the diff's section header. Scoping still refuses to let another file's
+   * text validate the quote — it just costs the finding its suggestion rather than its life.
    */
   @ParameterizedTest
   @CsvSource({
@@ -197,10 +217,8 @@ class FindingQuoteValidatorTest {
     "path/B.java, int onlyInA = 1;",
     "repo/nested/path/B.java, int onlyInA = 1;"
   })
-  void misattributedQuotesAreDroppedForAnyPathForm(String file, String quote) {
-    var result = validator.validate(response(findingOn(file, quote)), MULTI_FILE_DIFF);
-
-    assertEquals(0, result.findings().size());
+  void misattributedQuotesAreDemotedForAnyPathForm(String file, String quote) {
+    assertSingleDemoted(validator.validate(response(findingOn(file, quote)), MULTI_FILE_DIFF));
   }
 
   @Test
@@ -246,9 +264,7 @@ class FindingQuoteValidatorTest {
   void ambiguousPathScopesToItsCandidatesNotTheWholeDiff() {
     var misattributed = findingOn("Handler.java", "int inC = 3;");
 
-    var result = validator.validate(response(misattributed), AMBIGUOUS_DIFF);
-
-    assertEquals(0, result.findings().size());
+    assertSingleDemoted(validator.validate(response(misattributed), AMBIGUOUS_DIFF));
   }
 
   @Test
@@ -274,9 +290,7 @@ class FindingQuoteValidatorTest {
         """;
     var misattributed = findingOn("src/Plain.java", "int otherOnly = 4;");
 
-    var result = validator.validate(response(misattributed), diff);
-
-    assertEquals(0, result.findings().size());
+    assertSingleDemoted(validator.validate(response(misattributed), diff));
   }
 
   @Test
@@ -285,7 +299,7 @@ class FindingQuoteValidatorTest {
 
     var result = validator.validate(response, DIFF);
 
-    assertEquals(0, result.findings().size());
+    assertSingleDemoted(result);
     assertNull(result.summary());
   }
 
@@ -980,8 +994,114 @@ class FindingQuoteValidatorTest {
         """;
     var response = response(findingOn("src/Test.java", "\\ No newline at end of file"));
 
-    var result = validator.validate(response, diff);
+    assertSingleDemoted(validator.validate(response, diff));
+  }
 
-    assertEquals(0, result.findings().size());
+  /**
+   * Verbatim section for a wholly-added Go file from the round-4 corpus (ThrillhouseBot-test #28).
+   * Line 32 is the SQL literal the dropped finding quoted.
+   */
+  private static final String ADDED_GO_FILE_DIFF =
+      """
+      ### internal/store/store.go (added, +64 -0)
+      ```diff
+      @@ -0,0 +1,64 @@
+      +// Package store persists certificate check results.
+      +package store
+      +
+      +// Insert records a single check result using a parameterized query.
+      +func (s *Store) Insert(r CheckRecord) error {
+      +\t_, err := s.db.Exec(
+      +\t\t`INSERT INTO cert_checks (domain, checked_at, days_remaining, near_expiry) VALUES (?, ?, ?, ?)`,
+      +\t\tr.Domain, r.CheckedAt, r.DaysRemaining, r.NearExpiry,
+      +\t)
+      +\tif err != nil {
+      +\t\treturn fmt.Errorf("inserting check record: %w", err)
+      +\t}
+      +\treturn nil
+      +}
+      ```
+      """;
+
+  /**
+   * Verbatim section for a wholly-added Python file from the round-4 corpus (ThrillhouseBot-test
+   * #27). Lines 11-17 hold the alert the dropped finding quoted, with its f-string implicitly
+   * concatenated across two physical lines.
+   */
+  private static final String ADDED_PYTHON_FILE_DIFF =
+      """
+      ### src/cert_monitor/alerts.py (added, +27 -0)
+      ```diff
+      @@ -0,0 +1,27 @@
+      +\"\"\"Sends notifications about certificate health.\"\"\"
+      +
+      +
+      +def send_connectivity_alert(unreachable_domains):
+      +    \"\"\"Notify on-call when domains could not be reached at all.\"\"\"
+      +    if unreachable_domains:
+      +        print(
+      +            f"ALERT: {len(unreachable_domains)} domain(s) could not be reached: "
+      +            f"{', '.join(unreachable_domains)}"
+      +        )
+      +        return True
+      +    return False
+      ```
+      """;
+
+  /**
+   * A wholly-added file is indexed like any other section — a byte-exact quote of one of its lines
+   * validates. This rules out "added files are never fed to the matcher" as the cause of #607 and
+   * pins the surviving behavior.
+   */
+  @Test
+  void byteExactQuoteOfAWhollyAddedFileIsKept() {
+    var response =
+        response(
+            findingOn(
+                "internal/store/store.go",
+                "`INSERT INTO cert_checks (domain, checked_at, days_remaining, near_expiry)"
+                    + " VALUES (?, ?, ?, ?)`,"));
+
+    assertSame(response, validator.validate(response, ADDED_GO_FILE_DIFF));
+  }
+
+  /**
+   * #607, instance 1: the model rewrapped a multi-line Go call — the same characters, joined onto
+   * one line and with the trailing comma Go requires before a newline dropped — so no quoted line
+   * equals any diff line. The quoted code is unambiguously in the diff (the whole file is), and the
+   * finding was true. It must survive, demoted rather than deleted.
+   */
+  @Test
+  void rewrappedQuoteOfAWhollyAddedFileIsKeptDemoted() {
+    var response =
+        response(
+            findingOn(
+                "internal/store/store.go",
+                "_, err := s.db.Exec(`INSERT INTO cert_checks (domain, checked_at, days_remaining,"
+                    + " near_expiry) VALUES (?, ?, ?, ?)`, r.Domain, r.CheckedAt, r.DaysRemaining,"
+                    + " r.NearExpiry)"));
+
+    var kept = assertSingleDemoted(validator.validate(response, ADDED_GO_FILE_DIFF));
+
+    assertEquals("Title", kept.title());
+  }
+
+  /**
+   * #607, instance 2: the model collapsed an implicitly-concatenated f-string into a single literal
+   * — dropping the {@code " f"} the source needs between the fragments — so again no quoted line
+   * equals a diff line. This was the corpus's planted producer-consumer defect.
+   */
+  @Test
+  void collapsedFStringQuoteOfAWhollyAddedFileIsKeptDemoted() {
+    var response =
+        response(
+            findingOn(
+                "src/cert_monitor/alerts.py",
+                "        print(f\"ALERT: {len(unreachable_domains)} domain(s) could not be reached:"
+                    + " {', '.join(unreachable_domains)}\")"));
+
+    var kept = assertSingleDemoted(validator.validate(response, ADDED_PYTHON_FILE_DIFF));
+
+    assertEquals("Title", kept.title());
   }
 }
