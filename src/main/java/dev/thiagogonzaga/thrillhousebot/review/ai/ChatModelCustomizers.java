@@ -48,30 +48,40 @@ import java.util.function.BiConsumer;
  * ones it would have its response cap ({@code
  * quarkus.langchain4j.openai.concise.chat-model.max-tokens}, aliased to {@code
  * REVIEW_CONCISE_MAX_OUTPUT_TOKENS}) stomped by the active model's {@code max-output-tokens}. The
- * concise pair therefore applies every shared parameter except the response cap.
+ * concise pair therefore applies every shared parameter except the response cap, and sends the
+ * concise lane's own reasoning effort ({@code thrillhousebot.ai.reasoning.concise-effort}) rather
+ * than the active model's — reasoning tokens are billed against that same response cap, so a high
+ * active-lane effort would otherwise let the verifier reason its whole allowance away and return no
+ * content (#567).
  */
 public final class ChatModelCustomizers {
 
   private ChatModelCustomizers() {}
 
   /**
-   * The {@code reasoning_effort} wire value to send, or empty when the feature is disabled and the
-   * provider default should apply.
+   * The {@code reasoning_effort} wire value one lane sends, or empty when the feature is disabled
+   * and the provider default should apply. The concise lane resolves its own effort instead of
+   * following the active model's (#567) — see {@link
+   * ThrillhouseConfig.AiPricingConfig.ReasoningConfig#resolveConciseEffort}.
    */
-  static Optional<String> reasoningEffort(ThrillhouseConfig config) {
+  static Optional<String> reasoningEffort(ThrillhouseConfig config, boolean concise) {
     var reasoning = config.ai().reasoning();
-    return reasoning.enabled()
-        ? Optional.of(
-            ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(reasoning.effort()))
-        : Optional.empty();
+    if (!reasoning.enabled()) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        concise
+            ? ThrillhouseConfig.AiPricingConfig.ReasoningConfig.resolveConciseEffort(reasoning)
+            : ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(reasoning.effort()));
   }
 
   /**
    * The shared customizer body, applied through one builder flavour's setter references — the
    * blocking and streaming builders share no supertype, so the four customizers adapt via {@link
    * #BLOCKING_TUNING}/{@link #STREAMING_TUNING} instead of each repeating the knob list. {@code
-   * applyResponseCap} is false for the concise pair, which must never see the active model's {@code
-   * max-output-tokens} (it would stomp the named config block's cap).
+   * concise} selects the two ways that lane differs: it sends its own reasoning effort, and it
+   * never sees the active model's {@code max-output-tokens} (which would stomp the named config
+   * block's cap).
    */
   private record SharedTuning<B>(
       BiConsumer<B, String> reasoningEffort,
@@ -83,15 +93,12 @@ public final class ChatModelCustomizers {
       BiConsumer<B, Integer> seed) {
 
     void apply(
-        ThrillhouseConfig config,
-        ActiveModelSettings activeModel,
-        B builder,
-        boolean applyResponseCap) {
-      ChatModelCustomizers.reasoningEffort(config)
+        ThrillhouseConfig config, ActiveModelSettings activeModel, B builder, boolean concise) {
+      ChatModelCustomizers.reasoningEffort(config, concise)
           .ifPresent(v -> reasoningEffort.accept(builder, v));
       activeModel.temperature().ifPresent(v -> temperature.accept(builder, v));
       activeModel.topP().ifPresent(v -> topP.accept(builder, v));
-      if (applyResponseCap) {
+      if (!concise) {
         activeModel.maxOutputTokens().ifPresent(v -> maxTokens.accept(builder, v));
       }
       activeModel.frequencyPenalty().ifPresent(v -> frequencyPenalty.accept(builder, v));
@@ -136,7 +143,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiChatModel.OpenAiChatModelBuilder builder) {
-      BLOCKING_TUNING.apply(config, activeModel, builder, true);
+      BLOCKING_TUNING.apply(config, activeModel, builder, false);
     }
   }
 
@@ -155,16 +162,16 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
-      STREAMING_TUNING.apply(config, activeModel, builder, true);
+      STREAMING_TUNING.apply(config, activeModel, builder, false);
     }
   }
 
   /**
    * Tuning for the concise named model's blocking bean (verifier, replies). Applies the same
-   * reasoning and generation parameters as the default model's customizer, but never {@code
-   * maxTokens}: the concise response cap comes from the named config block and applying the active
-   * model's {@code max-output-tokens} here would overwrite it — customizers run after config
-   * properties.
+   * generation parameters as the default model's customizer, but never {@code maxTokens}: the
+   * concise response cap comes from the named config block and applying the active model's {@code
+   * max-output-tokens} here would overwrite it — customizers run after config properties. The
+   * reasoning effort is the concise lane's own, not the active model's (#567).
    */
   @ApplicationScoped
   @ModelName("concise")
@@ -181,7 +188,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiChatModel.OpenAiChatModelBuilder builder) {
-      BLOCKING_TUNING.apply(config, activeModel, builder, false);
+      BLOCKING_TUNING.apply(config, activeModel, builder, true);
     }
   }
 
@@ -204,7 +211,7 @@ public final class ChatModelCustomizers {
 
     @Override
     public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
-      STREAMING_TUNING.apply(config, activeModel, builder, false);
+      STREAMING_TUNING.apply(config, activeModel, builder, true);
     }
   }
 }

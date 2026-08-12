@@ -84,6 +84,7 @@ class StartupConfigValidatorTest {
     private String ciGating = "strict";
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
+    private Optional<String> conciseReasoningEffort = Optional.empty();
     private String blockingStrictness = "balanced";
     private String modelName = "deepseek-chat";
     private Optional<Integer> conciseMaxOutputTokens = Optional.of(8192);
@@ -160,6 +161,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder conciseReasoningEffort(Optional<String> v) {
+      this.conciseReasoningEffort = v;
+      return this;
+    }
+
     ConfigBuilder blockingStrictness(String v) {
       this.blockingStrictness = v;
       return this;
@@ -194,6 +200,7 @@ class StartupConfigValidatorTest {
       lenient().when(ai.reasoning()).thenReturn(reasoning);
       lenient().when(reasoning.enabled()).thenReturn(reasoningEnabled);
       lenient().when(reasoning.effort()).thenReturn(reasoningEffort);
+      lenient().when(reasoning.conciseEffort()).thenReturn(conciseReasoningEffort);
       lenient().when(github.appId()).thenReturn(appId);
       lenient().when(github.privateKey()).thenReturn(privateKey);
       lenient().when(github.webhookSecret()).thenReturn(webhookSecret);
@@ -776,6 +783,76 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenTheConciseReasoningEffortIsInvalid() {
+    // The concise lane's own effort (#567) rides the same wire as AI_REASONING_EFFORT, so a typo
+    // must be refused at boot rather than rejected by the provider mid-review.
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder().conciseReasoningEffort(Optional.of("minimal")).build());
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "AI_REASONING_EFFORT_CONCISE must be one of none, low, medium, high, xhigh, max"),
+        ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("(thrillhousebot.ai.reasoning.concise-effort): minimal"),
+        ex.getMessage());
+  }
+
+  @Test
+  void acceptsEveryConciseReasoningEffortCaseInsensitivelyWithWhitespace() {
+    for (var effort : new String[] {"none", "LOW", " Medium ", "high", "XHigh", " max "}) {
+      new ConfigBuilder()
+          .reasoningEnabled(true)
+          .conciseReasoningEffort(Optional.of(effort))
+          .build()
+          .validate();
+    }
+  }
+
+  @Test
+  void bannerNamesTheConciseLanesResolvedEffortAndItsKnob() {
+    // The concise cap is already named in the boot banner; the effort has to be too, since it is
+    // the one generation parameter that no longer follows the active model (#567).
+    assertEquals(
+        "low (AI_REASONING_EFFORT_CONCISE)",
+        new ConfigBuilder()
+            .reasoningEnabled(true)
+            .reasoningEffort("max")
+            .build()
+            .conciseReasoningEffortBanner());
+    assertEquals(
+        "high (AI_REASONING_EFFORT_CONCISE)",
+        new ConfigBuilder()
+            .reasoningEnabled(true)
+            .conciseReasoningEffort(Optional.of("HIGH"))
+            .build()
+            .conciseReasoningEffortBanner());
+  }
+
+  @Test
+  void bannerSaysNoEffortIsSentWhileReasoningIsDisabled() {
+    assertEquals(
+        "not sent (AI_REASONING_ENABLED=false)",
+        new ConfigBuilder()
+            .reasoningEnabled(false)
+            .conciseReasoningEffort(Optional.of("high"))
+            .build()
+            .conciseReasoningEffortBanner());
+  }
+
+  @Test
+  void bootsWhenTheConciseReasoningEffortIsUnset() {
+    // Unset is the shipped state: the lane resolves its own default, so there is nothing to reject.
+    new ConfigBuilder()
+        .reasoningEnabled(true)
+        .reasoningEffort("max")
+        .conciseReasoningEffort(Optional.empty())
+        .build()
+        .validate();
+  }
+
+  @Test
   void classifiesDashboardOauthStatusForEveryCombination() {
     assertEquals(
         StartupConfigValidator.DashboardOauthStatus.ENABLED,
@@ -816,6 +893,25 @@ class StartupConfigValidatorTest {
         @WithName("separate-output-budget")
         Optional<Boolean> separateOutputBudget();
       }
+    }
+
+    @Test
+    void theShippedConciseEffortResolvesToUnset() throws Exception {
+      // The shipped line is
+      // thrillhousebot.ai.reasoning.concise-effort=${AI_REASONING_EFFORT_CONCISE:}
+      // — an empty default, so with no env var set the lane must see "unset" (and resolve its own
+      // default) rather than an empty string the provider would reject as a reasoning tier.
+      var shipped =
+          new SmallRyeConfigBuilder()
+              .addDefaultInterceptors()
+              .withValidateUnknown(false)
+              .withSources(
+                  new PropertiesConfigSource(
+                      Paths.get("src/main/resources/application.properties").toUri().toURL()))
+              .build();
+      assertEquals(
+          Optional.empty(),
+          shipped.getOptionalValue("thrillhousebot.ai.reasoning.concise-effort", String.class));
     }
 
     @Test

@@ -280,6 +280,7 @@ will change per provider:
 | `AI_TIMEOUT` | Per-request timeout | `300s` |
 | `AI_REASONING_ENABLED` | Send a reasoning hint to reasoning-capable models; when `false` no reasoning parameter is sent and the provider default applies | `false` |
 | `AI_REASONING_EFFORT` | Effort sent while enabled: `none`/`low`/`medium`/`high`/`xhigh`/`max` (`none` explicitly asks the model not to reason; `xhigh`/`max` are the extended tiers newer reasoning models expose above `high`); reasoning tokens are billed as output tokens | `low` |
+| `AI_REASONING_EFFORT_CONCISE` | Effort for the fixed-shape calls on the `concise` model (final summary, finding verifier, replies), which do **not** follow `AI_REASONING_EFFORT`: reasoning tokens count against `REVIEW_CONCISE_MAX_OUTPUT_TOKENS`, so a high effort there lets the verifier reason its whole allowance away and return an empty response. Same accepted values; unset means `low`, lowered to `AI_REASONING_EFFORT` when that is set below `low` | `low` |
 | `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
@@ -549,13 +550,21 @@ Notes:
   second model binding — the `concise` named model
   (`quarkus.langchain4j.openai.concise.*`) — that points at the same provider,
   credentials, and model through the same `AI_*` variables and follows the
-  active model's temperature/reasoning tuning, but carries its own response
-  cap, `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` (default `8192`). Those responses are
+  active model's temperature tuning, but carries its own response cap,
+  `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` (default `8192`), and its own reasoning
+  effort, `AI_REASONING_EFFORT_CONCISE` (default `low`). Those responses are
   fixed-shape or short, so they don't need — and shouldn't be licensed to
   spend — a cap sized for batch review output. The review itself and the
   command generators (`/describe`, `/changelog`, `/add-docs`, `/improve`,
   `/generate-tests`), whose outputs scale with the diff, stay on the default
   model and its `max-output-tokens`.
+- **Reasoning effort is per lane.** Reasoning tokens are billed as output and
+  count against the response cap, so on the `concise` model a high effort can
+  consume the whole allowance and leave no content — the verifier then reports
+  that it kept its findings unverified. That tail is variable-length, not a
+  size threshold, so raising `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` only shifts the
+  odds. Keep `AI_REASONING_EFFORT_CONCISE` low (the default) and spend the
+  effort budget on `AI_REASONING_EFFORT`, which drives the review itself.
 - **`max-output-tokens` vs `output-buffer-tokens`**: `max-output-tokens` is the
   hard response-length cap sent to the provider; `output-buffer-tokens` only
   reserves input-budget headroom for the map-reduce budgeter. On a shared-window
