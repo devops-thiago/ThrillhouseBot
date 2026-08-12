@@ -226,7 +226,7 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
-  void shouldOmitPurposeAndGapsSectionsWhenAbsent() {
+  void shouldOmitPurposeSectionWhenAbsentAndStillDiscloseTheGapCheck() {
     var blankSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", " ", List.of());
     var nullPurposeSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, null);
     var blankGapsSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, List.of(" ", ""));
@@ -234,15 +234,31 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
+    // A summary came back and reported nothing to flag: the section says so rather than vanishing.
     for (var summary :
         List.of(
-            generator.generate(1, 0, 0, List.of(), null, result),
             generator.generate(1, 0, 0, List.of(), blankSummary, result),
             generator.generate(1, 0, 0, List.of(), nullPurposeSummary, result),
             generator.generate(1, 0, 0, List.of(), blankGapsSummary, result))) {
-      assertFalse(summary.contains("What this PR does"));
-      assertFalse(summary.contains("Description vs. Implementation"));
+      assertFalse(summary.contains("What this PR does"), summary);
+      assertTrue(
+          summary.contains("No mismatch found between the PR description and the change."),
+          summary);
     }
+  }
+
+  @Test
+  void shouldOmitTheGapSectionEntirelyWhenNoSummaryCameBack() {
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    // No summary at all is the one absence that is honest: nothing compared the description to the
+    // diff, and the summary-degradation banners already say why.
+    var summary = generator.generate(1, 0, 0, List.of(), null, result);
+
+    assertFalse(summary.contains("What this PR does"), summary);
+    assertFalse(summary.contains("Description vs. Implementation"), summary);
   }
 
   @Test
@@ -1331,7 +1347,7 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
-  void descriptionGapsSectionDisappearsWhenEveryBulletRestatesAFinding() {
+  void descriptionGapsSectionStatesTheCheckRanWhenEveryBulletRestatesAFinding() {
     var findings =
         List.of(
             new Finding(
@@ -1375,7 +1391,34 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(1, 10, 0, List.of(), aiSummary, result);
 
+    // #588 still collapses the bullet onto the finding — the claim is not stated twice...
+    assertFalse(summary.contains("no rotation logic exists"), summary);
+    // ...but the section itself survives and says the check ran, so a review that compared the
+    // description against the diff no longer reads exactly like one that skipped it (#637).
+    assertTrue(summary.contains("### ⚠️ Description vs. Implementation"), summary);
+    assertTrue(
+        summary.contains(
+            "Every mismatch found between the description and the change is reported as a finding"
+                + " below, so it is not repeated here."),
+        summary);
+    assertFalse(summary.contains("No mismatch found between the PR description"), summary);
+  }
+
+  @Test
+  void descriptionGapsSectionStatesTheCheckFoundNothingWhenTheModelReportedNoGap() {
+    var aiSummary =
+        new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "Adds a cache wrapper.", List.of());
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 10, 0, List.of(), aiSummary, result);
+
+    // A clean result is not a warning, so the heading drops the ⚠️ the mismatch states carry.
+    assertTrue(summary.contains("### Description vs. Implementation"), summary);
     assertFalse(summary.contains("### ⚠️ Description vs. Implementation"), summary);
+    assertTrue(
+        summary.contains("No mismatch found between the PR description and the change."), summary);
   }
 
   @Test
