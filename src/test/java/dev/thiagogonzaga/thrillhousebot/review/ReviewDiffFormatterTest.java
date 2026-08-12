@@ -364,8 +364,58 @@ class ReviewDiffFormatterTest {
     }
 
     @Test
-    void shouldReturnPatchTruncatedPlaceholderWhenBudgetIsOneLine() {
+    void shouldReturnPatchTruncatedPlaceholderWhenBudgetIsOneLineAndSectionHasNoHeader() {
       assertEquals("(patch truncated)\n", ReviewDiffFormatter.truncateSection("a\nb\nc\n", 1));
+    }
+
+    @Test
+    void shouldKeepFileHeaderWhenBudgetIsOneLine() {
+      // #603: the ### header is structural, not clippable content — a one-line clip must still name
+      // the file, or the prompt holds a slot the model cannot attribute a finding to.
+      var section = "### src/App.java (modified, +9 -2)\n```diff\n@@ -1,2 +1,9 @@\n+x\n```\n\n";
+
+      var truncated = ReviewDiffFormatter.truncateSection(section, 1);
+
+      assertTrue(truncated.contains("src/App.java"), "clipped section must still name the file");
+      assertTrue(truncated.startsWith("### "), "the file header must survive as a header line");
+      assertTrue(truncated.contains("patch truncated"), "the dropped patch must stay disclosed");
+      assertEquals(1, ReviewDiffFormatter.lineCount(truncated), "must respect the one-line budget");
+    }
+
+    @Test
+    void shouldKeepFileHeaderParseableAsSectionHeaderWhenBudgetIsOneLine() {
+      // The truncation notice folds into the header's own parenthetical so consumers that scope by
+      // file (FindingQuoteValidator.indexDiff) still read the path out of "### <path> (…)".
+      var section = "### src/App.java (modified, +9 -2)\n```diff\n@@ -1,2 +1,9 @@\n+x\n```\n\n";
+
+      var truncated = ReviewDiffFormatter.truncateSection(section, 1).stripTrailing();
+
+      assertEquals("### src/App.java (modified, +9 -2, patch truncated)", truncated);
+      assertEquals(
+          "src/App.java",
+          truncated.substring(4, truncated.lastIndexOf(" (")).strip(),
+          "path parse");
+    }
+
+    @Test
+    void shouldNameFileWhenHeaderHasNoParentheticalAndBudgetIsOneLine() {
+      var truncated = ReviewDiffFormatter.truncateSection("### src/App.java\n+x\n+y\n", 1);
+
+      assertEquals("### src/App.java (patch truncated)\n", truncated);
+    }
+
+    @Test
+    void shouldKeepFileNamedWhenPlannerClipsSectionToOneLine() {
+      // End-to-end through the line budget: the last section is squeezed to a one-line clip.
+      var formatter = new ReviewDiffFormatter(List.of(), 10);
+      var files =
+          List.of(
+              file("kept.java", "modified", 1, 0, "@@ -1,1 +1,1 @@\n+a"),
+              file("squeezed.java", "modified", 40, 0, "@@ -1,1 +1,40 @@\n+b\n+c\n+d\n+e"));
+
+      var result = formatter.buildDiffString(files);
+
+      assertTrue(result.contains("squeezed.java"), "the clipped file must still be named");
     }
 
     @Test
