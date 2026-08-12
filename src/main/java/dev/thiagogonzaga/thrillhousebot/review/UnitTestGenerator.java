@@ -247,14 +247,18 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
    * <p>Takes the newest prior round that actually raised findings, exactly as the review path does
    * ({@link FollowUpAnalyzer#effectivePreviousFindings}), so a later round that legitimately found
    * nothing does not read as "the review found nothing". Fails soft like every other context load
-   * here: a database problem must degrade to no findings section rather than lose the command.
+   * here, and over the <em>whole</em> load: this is enrichment, so nothing in fetching or
+   * deserializing prior rounds may cost a command that worked without them before.
    */
   private String priorFindings(String owner, String repo, int prNumber) {
-    List<String> priorJsons;
     try {
-      priorJsons =
+      var priorJsons =
           sessionPersistence.findAllPriorAiResponseJsons(
               owner + "/" + repo, prNumber, NO_SESSION_IN_PROGRESS);
+      var priorResponses = followUpAnalyzer.parsePreviousResponses(priorJsons);
+      return renderFindings(
+          FollowUpAnalyzer.effectivePreviousFindings(priorResponses),
+          FollowUpAnalyzer.settledPreviousIds(priorResponses));
     } catch (RuntimeException e) {
       Log.warnf(
           e,
@@ -265,10 +269,6 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
           prNumber);
       return "";
     }
-    var priorResponses = followUpAnalyzer.parsePreviousResponses(priorJsons);
-    return renderFindings(
-        FollowUpAnalyzer.effectivePreviousFindings(priorResponses),
-        FollowUpAnalyzer.settledPreviousIds(priorResponses));
   }
 
   /**
@@ -298,13 +298,19 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       sb.append(i + 1)
           .append(". [")
           .append(text(finding.risk()).toUpperCase(Locale.ROOT))
-          .append("] ")
-          .append(text(finding.file()))
-          .append(':')
-          .append(finding.line())
-          .append(" — ")
-          .append(text(finding.title()))
-          .append('\n');
+          .append("] ");
+      // The location is written only when there is one. line is a primitive, so an absent line
+      // arrives as 0 — appending it would hand the model a file:0 that points nowhere and costs
+      // tokens on every finding that lacks one, which is the same noise a literal "null" would be.
+      var file = text(finding.file());
+      if (!file.isEmpty()) {
+        sb.append(file);
+        if (finding.line() > 0) {
+          sb.append(':').append(finding.line());
+        }
+        sb.append(" — ");
+      }
+      sb.append(text(finding.title())).append('\n');
       var description = text(finding.description());
       if (!description.isEmpty()) {
         sb.append("   ").append(description).append('\n');

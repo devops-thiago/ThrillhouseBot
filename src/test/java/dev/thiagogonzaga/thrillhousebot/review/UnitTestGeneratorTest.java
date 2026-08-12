@@ -655,10 +655,15 @@ class UnitTestGeneratorTest {
   }
 
   @Test
-  void rendersAFindingWhoseFieldsAreAbsentWithoutLeakingTheWordNull() {
-    // The findings come back through Jackson, so any field can be absent; a literal "null" in the
-    // prompt reads to the model as a location or a title of its own.
-    priorRoundFound("{\"line\":7}");
+  void writesNoLocationForAFindingThatHasNone() {
+    // The findings come back through Jackson, so any field can be absent. A literal "null" reads to
+    // the model as a location or a title of its own, and "line" is a primitive, so an absent one
+    // arrives as 0: writing "src/Foo.java:0" — or a bare ":0" — points at a line that exists
+    // nowhere and costs tokens on every call for the privilege.
+    priorRoundFound(
+        "{\"line\":7}",
+        "{\"risk\":\"high\",\"file\":\"src/Foo.java\",\"title\":\"No line\"}",
+        finding("low", "src/Bar.java", 12, "Located", "d"));
     diffReturns();
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
@@ -666,8 +671,12 @@ class UnitTestGeneratorTest {
     generate();
 
     var sent = priorFindingsSentToAssistant();
-    assertTrue(sent.contains("1. [] :7 — "), sent);
+    assertTrue(sent.contains("1. [] \n"), sent);
+    assertTrue(sent.contains("2. [HIGH] src/Foo.java — No line"), sent);
+    assertTrue(sent.contains("3. [LOW] src/Bar.java:12 — Located"), sent);
     assertFalse(sent.contains("null"), sent);
+    assertFalse(sent.contains(":0"), sent);
+    assertFalse(sent.contains(":7"), sent);
   }
 
   @Test
@@ -695,6 +704,43 @@ class UnitTestGeneratorTest {
     // Enrichment context must never cost the command: a database problem degrades to no section.
     when(sessionPersistence.findAllPriorAiResponseJsons(any(), anyInt(), anyLong()))
         .thenThrow(new RuntimeException("db down"));
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    assertNotNull(generate());
+    assertEquals("", priorFindingsSentToAssistant());
+  }
+
+  @Test
+  void stillGeneratesWhenTheStoredRoundsCannotBeDeserialized() {
+    // The fetch is only half the load: deserializing the stored rounds is the other half, and it
+    // runs on inputs written by earlier versions of the bot. A command that worked before this
+    // enrichment existed must not start failing because reading its context threw.
+    var brokenAnalyzer =
+        new FollowUpAnalyzer(new ObjectMapper()) {
+          @Override
+          public List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse>
+              parsePreviousResponses(List<String> priorAiResponseJsons) {
+            throw new IllegalStateException("unreadable stored round");
+          }
+        };
+    generator =
+        new UnitTestGenerator(
+            prClient,
+            diffFormatter,
+            instructionsResolver,
+            repoSettingsResolver,
+            new DiffBudgetPlanner(diffFormatter, new TokenCounter(), config, activeModel),
+            activeModel,
+            config,
+            projectStackResolver,
+            testAssistant,
+            new UnitTestGenerationParser(new ObjectMapper()),
+            new SuggestionFormatter(),
+            sessionPersistence,
+            brokenAnalyzer);
+    priorRoundFound(finding("critical", "src/Foo.java", 42, "Leaky sink", "d"));
     diffReturns();
     prDetails();
     when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
