@@ -27,7 +27,8 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * free Markdown, so the bot — not the model — owns how each test file is fenced and labelled in the
  * posted comment. A focused, single-shot blocking call like {@link DocGenerator}.
  */
-@RegisterAiService
+@RegisterAiService(
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface UnitTestAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

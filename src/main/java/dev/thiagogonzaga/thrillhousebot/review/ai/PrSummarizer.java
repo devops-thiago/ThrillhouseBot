@@ -29,11 +29,14 @@ import jakarta.enterprise.context.ApplicationScoped;
  * count, while the summary returns one fixed-shape object plus {@code previous_findings_status}, so
  * it binds to the {@code concise} named model whose {@code max-tokens} is sized for fixed-shape
  * output ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}). Application-scoped for the same reason as
- * {@link PrReviewer}: there is no chat memory / {@code @MemoryId}, and request scope would break
- * callers on virtual threads without an inherited CDI request context.
+ * {@link PrReviewer}: request scope would break callers on virtual threads without an inherited CDI
+ * request context. Chat memory is disabled explicitly, for the reason documented on {@link
+ * PrReviewer}.
  */
 @ApplicationScoped
-@RegisterAiService(modelName = "concise")
+@RegisterAiService(
+    modelName = "concise",
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface PrSummarizer {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

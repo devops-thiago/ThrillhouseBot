@@ -27,7 +27,8 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * DocGenerationParser}) rather than the streaming, schema-rich response the full review uses — this
  * is a focused, single-shot blocking call like {@link ReplyAssistant}.
  */
-@RegisterAiService
+@RegisterAiService(
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface DocGenerator {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
