@@ -96,6 +96,23 @@ public class ReviewDiffFormatter {
       }
       return false;
     }
+
+    /** Matches `**`-prefixed patterns against the file name and every sub-path of the file. */
+    private static boolean matchesSuffix(PathMatcher suffix, Path path) {
+      if (suffix == null) {
+        return false;
+      }
+      var fileName = path.getFileName();
+      if (fileName != null && suffix.matches(fileName)) {
+        return true;
+      }
+      for (var i = 0; i < path.getNameCount(); i++) {
+        if (suffix.matches(path.subpath(i, path.getNameCount()))) {
+          return true;
+        }
+      }
+      return false;
+    }
   }
 
   /** A formatted diff plus the number of files the line budget dropped (0 when nothing omitted). */
@@ -135,6 +152,12 @@ public class ReviewDiffFormatter {
     return globalGlobs.union(IgnoreGlobs.compile(perRepoPatterns));
   }
 
+  /**
+   * Deliberately <em>not</em> moved into {@link IgnoreGlobs}, its only caller: {@code Log} binds
+   * its category to the enclosing class at build time, so relocating the warning below would
+   * relabel an operator-facing WARN from this class to {@code ReviewDiffFormatter$IgnoreGlobs} and
+   * silently break any log filter keyed on the category.
+   */
   private static List<GlobMatcher> compileGlobMatchers(List<String> patterns) {
     if (patterns == null || patterns.isEmpty()) {
       return List.of();
@@ -173,23 +196,6 @@ public class ReviewDiffFormatter {
    */
   static boolean namesContain(Set<String> names, String filename) {
     return filename != null && names.contains(filename);
-  }
-
-  /** Matches `**`-prefixed patterns against the file name and every sub-path of the file. */
-  private static boolean matchesSuffix(PathMatcher suffix, Path path) {
-    if (suffix == null) {
-      return false;
-    }
-    var fileName = path.getFileName();
-    if (fileName != null && suffix.matches(fileName)) {
-      return true;
-    }
-    for (var i = 0; i < path.getNameCount(); i++) {
-      if (suffix.matches(path.subpath(i, path.getNameCount()))) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**

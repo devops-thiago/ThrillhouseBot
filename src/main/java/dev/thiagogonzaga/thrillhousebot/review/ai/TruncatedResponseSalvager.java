@@ -211,12 +211,6 @@ public class TruncatedResponseSalvager {
   }
 
   /**
-   * Reads the value at the current token completely and maps it onto {@code type}; {@code null} for
-   * a non-object value or one that does not map. Reading always consumes the whole value, so the
-   * parser stays element-aligned — and a value the cut split throws, ending the pass with the
-   * partial value dropped.
-   */
-  /**
    * Closes the parser without letting a close-time failure mask the salvage result. A string-backed
    * parser cannot fail to close in practice — the null guard and the swallow exist for the
    * contract, and are exercised directly by tests because no production input reaches them.
@@ -232,6 +226,12 @@ public class TruncatedResponseSalvager {
     }
   }
 
+  /**
+   * Reads the value at the current token completely and maps it onto {@code type}; {@code null} for
+   * a non-object value or one that does not map. Reading always consumes the whole value, so the
+   * parser stays element-aligned — and a value the cut split throws, ending the pass with the
+   * partial value dropped.
+   */
   private <T> T objectOrNull(JsonParser parser, JsonToken token, Class<T> type) throws IOException {
     JsonNode node = parser.readValueAsTree();
     if (token != JsonToken.START_OBJECT) {
