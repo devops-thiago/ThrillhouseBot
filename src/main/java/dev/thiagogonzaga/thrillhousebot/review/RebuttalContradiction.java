@@ -206,9 +206,17 @@ final class RebuttalContradiction {
    * code that does dispatch concurrently — the false-negative direction this class exists to close.
    *
    * <p>Quote tracking is deliberately shallow: it toggles on an unescaped {@code "}, {@code '} or
-   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to; the
-   * worst an unbalanced quote costs is that a real trailing comment is kept, which only feeds the
-   * scan text of the kind it already sees on every line that carries no {@code //} at all.
+   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to. A
+   * quote that never closes costs only a kept trailing comment, which feeds the scan text of the
+   * kind it already sees on every line carrying no {@code //} at all.
+   *
+   * <p>A <em>multi-character</em> delimiter is the case this shallowness does not cover, and it
+   * fails the other way. A Java text block or a C++ raw string whose content holds an interior
+   * quote ({@code """<a href="//host">x</a>"""}, {@code R"(a"b//c)"}) closes the scanner's
+   * single-quote state early, so a {@code //} still inside the literal truncates the line and drops
+   * any dispatch after it — the same false negative the carve-out above exists to close, one legal
+   * interior quote away from the shapes that are covered. Closing it needs delimiter-aware openers
+   * rather than a toggle; tracked in #651.
    */
   private static String stripLineComment(String line) {
     var quote = '\0';
