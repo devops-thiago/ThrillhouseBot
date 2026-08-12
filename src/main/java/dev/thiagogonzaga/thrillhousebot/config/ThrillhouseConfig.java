@@ -73,6 +73,27 @@ public interface ThrillhouseConfig {
     @WithName("bot-logins")
     @WithDefault("thrillhousebot[bot],thrillhouse-bot[bot]")
     List<String> botLogins();
+
+    /**
+     * Spacing between two content-creating GitHub calls (comments, review comments, thread replies,
+     * reviews), shared process-wide. GitHub secondary-rate-limits rapid content creation and
+     * answers with a 403; its published guidance is no more than one such request per second. Zero
+     * disables pacing. Declared here as the namespace's schema — the limiter itself sits on the
+     * REST clients' write path, which has no CDI, and reads the key directly (see {@code
+     * GitHubWritePacer}).
+     */
+    @WithName("write-min-interval")
+    @WithDefault("1s")
+    Duration writeMinInterval();
+
+    /**
+     * Ceiling on how long one caller waits for its content-creation slot. Past it the call goes out
+     * unpaced and the bounded backoff handles a refusal, so a long queue never parks a finished
+     * command while it holds its per-PR dispatcher slot.
+     */
+    @WithName("write-max-wait")
+    @WithDefault("60s")
+    Duration writeMaxWait();
   }
 
   interface WebhookConfig {
