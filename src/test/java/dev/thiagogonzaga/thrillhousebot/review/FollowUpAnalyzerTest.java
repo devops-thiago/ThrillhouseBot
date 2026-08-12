@@ -2912,6 +2912,21 @@ class FollowUpAnalyzerTest {
             "an underscore continuing the line number must not clear it",
             "@thrillhousebot resolved `src/A.java:1_2` — SQL injection",
             false),
+        // Typographic ranges reach the guard as often as the ASCII hyphen does: smart-punctuation
+        // autocorrect rewrites a typed 1-3 to an en dash, and a range copied out of prose can carry
+        // an em dash or a minus sign. Each one adjacent to the line number is still a range.
+        arguments(
+            "an en-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1–3` — SQL injection",
+            false),
+        arguments(
+            "an em-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1—3` — SQL injection",
+            false),
+        arguments(
+            "a minus-sign line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1−3` — SQL injection",
+            false),
         arguments(
             "the documented em-dash form still clears",
             "@thrillhousebot resolved src/A.java:1 — SQL injection",

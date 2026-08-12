@@ -933,10 +933,19 @@ public class FollowUpAnalyzer {
 
   /**
    * Whether {@code c} extends the locator's line-number token rather than ending it: any letter or
-   * digit, or the {@code _}/{@code -} an identifier or a line range continues with.
+   * digit, the {@code _} an identifier continues with, or any dash a line range continues with.
+   *
+   * <p>Every dash counts, not just the ASCII hyphen: smart-punctuation autocorrect rewrites a typed
+   * {@code 1-3} to an en dash, and a range copied out of prose can carry an em dash or a minus
+   * sign. Missing one of those clears a finding the comment only named the start of, which is the
+   * over-clear direction this guard exists to stop; treating a dash that turns out not to be a
+   * range as a continuation only under-clears, and the maintainer can say so again.
    */
   private static boolean continuesLocator(char c) {
-    return Character.isLetterOrDigit(c) || c == '_' || c == '-';
+    return Character.isLetterOrDigit(c)
+        || c == '_'
+        || Character.getType(c) == Character.DASH_PUNCTUATION
+        || c == '−';
   }
 
   /** A non-bot conversation comment with a body and a write-capable author association. */

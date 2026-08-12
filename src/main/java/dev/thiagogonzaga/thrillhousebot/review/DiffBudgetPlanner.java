@@ -189,25 +189,28 @@ public class DiffBudgetPlanner {
      * Appends every non-null name of {@code filenames} that {@code into} does not already hold,
      * preserving first-seen order.
      *
-     * <p>Membership is tested against a {@link HashSet} snapshot taken once per call rather than
-     * with {@code into.contains(name)} per name. Both accumulators are {@link CopyOnWriteArrayList
-     * copy-on-write} lists, whose {@code contains} <em>and</em> {@code add} are linear, so the
-     * per-name scan made one recording pass quadratic in the batch's file count — a count nothing
-     * bounds, since a token-budgeted batch can hold hundreds of small files, and every failed or
-     * refused batch runs another pass.
+     * <p>Both accumulators are {@link CopyOnWriteArrayList copy-on-write} lists, whose {@code
+     * contains} <em>and</em> {@code add} are linear, so a scan-then-append-per-name pass was
+     * quadratic twice over in the batch's file count — a count nothing bounds, since a
+     * token-budgeted batch can hold hundreds of small files, and every failed or refused batch runs
+     * another pass. Both halves are removed here: membership is tested against a {@link HashSet}
+     * snapshot taken once per call, and the new names are appended in one {@code addAll}, which
+     * copies the backing array once rather than once per appended name.
      *
-     * <p>The snapshot does not weaken the existing concurrency contract: {@code
-     * contains}-then-{@code add} was never atomic either, so two threads recording the same name
-     * concurrently could already both append it. The snapshot only widens that same window within a
-     * single call; the next call re-reads the live list.
+     * <p>Neither change weakens the existing concurrency contract: {@code contains}-then-{@code
+     * add} was never atomic either, so two threads recording the same name concurrently could
+     * already both append it. The snapshot only widens that same window within a single call, and
+     * the batched append narrows it back; the next call re-reads the live list regardless.
      */
     private static void recordDistinct(List<String> into, List<String> filenames) {
       var known = new HashSet<>(into);
+      var added = new ArrayList<String>();
       for (var name : filenames) {
         if (name != null && known.add(name)) {
-          into.add(name);
+          added.add(name);
         }
       }
+      into.addAll(added);
     }
 
     /**
