@@ -364,6 +364,54 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void appliesTheVerdictsThatClosedBeforeTheResponseLengthCapCutTheBody() {
+    // #599: the length-stop lane discarded the response whole. Since #592 the cut body travels on
+    // the truncation as its partial body, so the verdicts that closed before the cut are
+    // recoverable — the same salvage the no-finish-reason lane already runs. Every one of them was
+    // generated and billed; throwing them away bought nothing.
+    ReviewResponse original =
+        response(
+            finding("critical", "high", "Hallucinated API claim"),
+            finding("high", "high", "Speculative"),
+            finding("high", "high", "Verdict cut off"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiTruncated(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "downgraded", "risk": "low", "confidence": "low", "reason": "r"},
+              {"id": 3, "verdict": "confi"""));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(2, result.findings().size());
+    assertEquals("Speculative", result.findings().get(0).title());
+    assertEquals("low", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+    // The candidate whose verdict was on the far side of the cut stays untouched, never rejected.
+    var unverified = result.findings().get(1);
+    assertEquals("Verdict cut off", unverified.title());
+    assertEquals("high", unverified.risk());
+    assertEquals("high", unverified.confidence());
+    assertEquals(2, result.summary().totalFindings());
+  }
+
+  @Test
+  void keepsEveryFindingWhenTheCapCutTheBodyBeforeAnyVerdictClosed() {
+    // The fail-open contract is unchanged where there is nothing to salvage: a cut landing inside
+    // the first verdict, and a truncation carrying no partial body at all, both keep every finding.
+    ReviewResponse original =
+        response(finding("critical", "high", "Bug"), finding("low", "high", "Nit"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiTruncated("{\"verdicts\": [{\"id\": 1, \"verdict\": \"reje"), aiTruncated(null));
+
+    assertSame(original, service.verify(SESSION, original, "diff", "stack", ""));
+    assertSame(original, service.verify(SESSION, original, "diff", "stack", ""));
+  }
+
+  @Test
   void keepsUnverifiedFindingsWithoutParsingWhenTheModelReturnsNoBody() {
     // #534: with the whole output budget spent on reasoning tokens the provider returns a completed
     // response with no content body. That is the unwrap helper's documented "no response" soft
