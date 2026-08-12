@@ -147,18 +147,21 @@ public final class GitHubWriteRetry {
   public <T> T call(String operation, String auth, Function<String, T> operationCall) {
     var credential = auth;
     var refreshable = true;
-    for (int attempt = 1; ; ) {
+    // The loop is unbounded and `attempt` is not what counts it round: an attempt is spent at the
+    // one point below where a wait GitHub asked for has actually been served. A credential swap
+    // repeats the call without advancing it — the "outside the attempt budget" rule above — so a
+    // counted for-loop here would change how many attempts a refreshed call gets.
+    var attempt = 1;
+    while (true) {
       try {
         pacer.acquire(operation);
         return operationCall.apply(credential);
       } catch (WebApplicationException e) {
-        if (refreshable) {
-          var fresh = credentials.replacementFor(operation, credential, e);
-          if (fresh.isPresent()) {
-            credential = fresh.get();
-            refreshable = false;
-            continue;
-          }
+        var fresh = replacementCredential(operation, credential, refreshable, e);
+        if (fresh.isPresent()) {
+          credential = fresh.get();
+          refreshable = false;
+          continue;
         }
         var delay = retryDelay(operation, e, attempt);
         if (delay.isEmpty()) {
@@ -183,10 +186,30 @@ public final class GitHubWriteRetry {
   }
 
   /**
+   * The fresher credential to repeat this failure with, or empty when there is none — either
+   * because the one swap this call is allowed has already been spent, or because {@link
+   * GitHubTokenRefresh} has nothing fresher to offer for this failure. Empty is what sends the
+   * failure on to the backoff below, so a swap that cannot happen costs the caller nothing.
+   */
+  private Optional<String> replacementCredential(
+      String operation, String credential, boolean refreshable, WebApplicationException failure) {
+    if (!refreshable) {
+      return Optional.empty();
+    }
+    return credentials.replacementFor(operation, credential, failure);
+  }
+
+  /**
    * How long to wait before repeating this failure, or empty when it must not be repeated — either
    * because GitHub is refusing rather than throttling, or because the attempts are spent. The
    * spent-attempts case is logged, because it is the one where a completed generation is discarded
    * and the operator needs the response's own words to see why.
+   *
+   * <p>That line sits behind a level check because {@link GitHubApiError#diagnostics()} builds its
+   * string eagerly — a parameter placeholder defers the {@code toString}, not the call that
+   * produces the argument. The message itself is unchanged: this is the warning that surfaced the
+   * issue-624 diagnosis in production, so what it prints when it prints must stay exactly as it
+   * was.
    */
   private Optional<Duration> retryDelay(
       String operation, WebApplicationException failure, int attempt) {
@@ -195,12 +218,14 @@ public final class GitHubWriteRetry {
       return Optional.empty();
     }
     if (attempt >= MAX_ATTEMPTS) {
-      log.warn(
-          "GitHub still throttling {} after {} attempts — the generated content is lost and the"
-              + " command has to be re-run. {}",
-          operation,
-          MAX_ATTEMPTS,
-          error.get().diagnostics());
+      if (log.isWarnEnabled()) {
+        log.warn(
+            "GitHub still throttling {} after {} attempts — the generated content is lost and the"
+                + " command has to be re-run. {}",
+            operation,
+            MAX_ATTEMPTS,
+            error.get().diagnostics());
+      }
       return Optional.empty();
     }
     return Optional.of(min(error.get().retryDelay(attempt, clock.get()), MAX_DELAY_PER_ATTEMPT));

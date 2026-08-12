@@ -191,7 +191,7 @@ public class GitHubAuthClient {
 
     log.info("Generating new installation token for installation {}", installationId);
     var jwt = generateAppJwt();
-    var authHeader = "Bearer " + jwt;
+    var authHeader = BEARER + jwt;
 
     var response =
         tokenApi.createInstallationToken(authHeader, "application/vnd.github+json", installationId);
