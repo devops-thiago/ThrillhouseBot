@@ -24,6 +24,16 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -256,7 +266,7 @@ class GitHubAuthClientTest {
         .thenCallRealMethod();
     var request =
         new GitHubReviewClient.CreateReviewRequest(
-            "a532aff", "the generated review", "COMMENT", java.util.List.of());
+            "a532aff", "the generated review", "COMMENT", List.of());
     var posted =
         new GitHubReviewClient.ReviewResponse(
             94131141478L, "the generated review", "COMMENTED", "a532aff", null);
@@ -280,7 +290,7 @@ class GitHubAuthClientTest {
 
     var fresh = authClient.refreshedAuthHeader(dead);
 
-    assertEquals(java.util.Optional.of("Bearer minted-token"), fresh);
+    assertEquals(Optional.of("Bearer minted-token"), fresh);
     assertEquals(
         "Bearer minted-token",
         authClient.getAuthHeader(installationId),
@@ -304,18 +314,18 @@ class GitHubAuthClientTest {
 
     var second = authClient.refreshedAuthHeader(dead);
 
-    assertEquals(java.util.Optional.of("Bearer minted-token"), second);
+    assertEquals(Optional.of("Bearer minted-token"), second);
     verify(tokenApi, times(2))
         .createInstallationToken(anyString(), anyString(), eq(installationId));
   }
 
   /**
-   * The index that maps a token back to its installation keeps the current one and the one it
-   * replaced, and nothing older — otherwise it would grow with the process's uptime, one entry per
-   * TTL per installation.
+   * Every token stays resolvable while GitHub would still accept it, however many refreshes have
+   * happened since — retention is by age, so no number of newer tokens can strand a holder of an
+   * older one.
    */
   @Test
-  void aTokenTwoGenerationsOldIsForgottenSoTheIndexCannotGrowWithUptime() {
+  void everyTokenStillWithinGitHubsExpiryKeepsNamingItsInstallation() {
     var installationId = 42L;
     when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
         .thenReturn(token("first"), token("second"), token("third"));
@@ -326,21 +336,107 @@ class GitHubAuthClientTest {
 
     assertEquals("Bearer third", third);
     assertEquals(
-        java.util.Optional.of("Bearer third"),
+        Optional.of("Bearer third"),
         authClient.refreshedAuthHeader(second),
         "the token just superseded still names its installation");
     assertEquals(
-        java.util.Optional.empty(),
+        Optional.of("Bearer third"),
         authClient.refreshedAuthHeader(first),
-        "the generation before that is forgotten");
+        "and so does the generation before that, which GitHub would still have accepted");
+  }
+
+  /** Past GitHub's own 60-minute expiry the entry is dead weight and is swept on the next mint. */
+  @Test
+  void aTokenGitHubHasExpiredIsForgottenSoTheIndexCannotGrowWithUptime() {
+    var installationId = 42L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("first"));
+    var first = authClient.getAuthHeader(installationId);
+
+    authClient.forgetTokensIssuedBefore(Instant.now().plus(Duration.ofMinutes(1)));
+
+    assertEquals(Optional.empty(), authClient.refreshedAuthHeader(first));
+    verify(tokenApi, times(1))
+        .createInstallationToken(anyString(), anyString(), eq(installationId));
+  }
+
+  /**
+   * A hand-written token API rather than a mock: this test drives two threads through the mint at
+   * once, and answer sequencing under concurrent invocation is exactly what a mock does not
+   * promise. The gate holds each mint until the other has arrived, or a bounded wait elapses — so
+   * the test still passes if minting is ever serialized, while today it makes the overlap
+   * deterministic.
+   */
+  private static final class GatedTokenApi implements GitHubTokenApi {
+
+    private final AtomicInteger minted = new AtomicInteger();
+    private final CountDownLatch overlap;
+
+    GatedTokenApi(int gatedMints) {
+      this.overlap = new CountDownLatch(gatedMints);
+    }
+
+    @Override
+    public InstallationTokenResponse createInstallationToken(
+        String authorization, String accept, long installationId) {
+      var n = minted.incrementAndGet();
+      if (n > 1) {
+        overlap.countDown();
+        try {
+          overlap.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException(e);
+        }
+      }
+      return token("token-" + n);
+    }
+  }
+
+  /**
+   * #624's cascade with the threads it actually has. {@code ReviewDispatcher} serializes per pull
+   * request, not per installation, and runs each review on its own virtual thread — so two reviews
+   * sharing an installation hold the same cached token, cross its expiry together, and refresh at
+   * the same moment.
+   *
+   * <p>With a one-deep superseded slot their two mints rolled it forward twice and evicted the
+   * original token, so a third write still holding it could name no installation, got no
+   * replacement, and was lost exactly as in the incident. No sequential test reaches that
+   * interleaving.
+   */
+  @Test
+  void concurrentRefreshesOfOneDeadTokenLeaveALaterHolderAbleToResolveIt() throws Exception {
+    var installationId = 42L;
+    var client = new GitHubAuthClient(config, new GatedTokenApi(2));
+    var dead = client.getAuthHeader(installationId);
+    assertEquals("Bearer token-1", dead);
+
+    try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+      var both =
+          Stream.of(1, 2)
+              .map(
+                  _ ->
+                      CompletableFuture.supplyAsync(
+                          () -> client.refreshedAuthHeader(dead), threads))
+              .toList();
+      for (var refresh : both) {
+        var replacement = refresh.get(30, TimeUnit.SECONDS);
+        assertTrue(replacement.isPresent(), "both concurrent refreshes must get a live token");
+        assertNotEquals(dead, replacement.orElseThrow(), "and never the token GitHub just refused");
+      }
+    }
+
+    // The straggler: a third write that read the same header before any of this and 401s now.
+    assertTrue(
+        client.refreshedAuthHeader(dead).isPresent(),
+        "a write still holding the dead token must not be stranded by a concurrent refresh");
   }
 
   @Test
   void aHeaderThisProcessNeverIssuedNamesNoInstallationAndIsNotReplaced() {
-    assertEquals(
-        java.util.Optional.empty(), authClient.refreshedAuthHeader("Bearer someone-elses"));
-    assertEquals(java.util.Optional.empty(), authClient.refreshedAuthHeader("Basic dXNlcjpwdw=="));
-    assertEquals(java.util.Optional.empty(), authClient.refreshedAuthHeader(null));
+    assertEquals(Optional.empty(), authClient.refreshedAuthHeader("Bearer someone-elses"));
+    assertEquals(Optional.empty(), authClient.refreshedAuthHeader("Basic dXNlcjpwdw=="));
+    assertEquals(Optional.empty(), authClient.refreshedAuthHeader(null));
     verify(tokenApi, never()).createInstallationToken(anyString(), anyString(), anyLong());
   }
 }
