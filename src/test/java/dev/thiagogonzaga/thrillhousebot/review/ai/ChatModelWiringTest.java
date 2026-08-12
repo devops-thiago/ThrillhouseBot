@@ -44,8 +44,9 @@ import org.junit.jupiter.api.Test;
  * customizers bind by CDI qualifier ({@code applyCustomizers} selects {@code @Default} beans for
  * the default model and {@code @ModelName}-qualified beans for a named one), so these assertions
  * prove the named model carries its own response cap ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}
- * default 8192) instead of the active model's {@code max-output-tokens}, while still receiving the
- * shared reasoning/temperature tuning — and that the batch-review models keep theirs.
+ * default 8192) instead of the active model's {@code max-output-tokens}, and its own {@code
+ * reasoning_effort} instead of the active model's (#567), while still receiving the shared
+ * temperature tuning — and that the batch-review models keep theirs.
  */
 @QuarkusTest
 @TestProfile(ChatModelWiringTest.TuningEnabled.class)
@@ -93,9 +94,9 @@ class ChatModelWiringTest {
         params.maxOutputTokens(),
         "the concise response cap must apply, not the active model's max-output-tokens");
     assertEquals(
-        "medium",
+        "low",
         params.reasoningEffort(),
-        "the concise model must not silently lose the reasoning setting");
+        "the concise lane sends its own effort, not the active model's 'Medium'");
     assertEquals(0.3, params.temperature());
     assertEquals(0.95, params.topP());
   }
@@ -112,9 +113,9 @@ class ChatModelWiringTest {
         params.maxOutputTokens(),
         "the concise response cap must apply, not the active model's max-output-tokens");
     assertEquals(
-        "medium",
+        "low",
         params.reasoningEffort(),
-        "the concise model must not silently lose the reasoning setting");
+        "the concise lane sends its own effort, not the active model's 'Medium'");
     assertEquals(0.3, params.temperature());
     assertEquals(0.95, params.topP());
   }

@@ -322,7 +322,8 @@ public class StartupConfigValidator {
   /**
    * Validated even while reasoning is disabled: an operator who sets an invalid effort value has
    * expressed clear intent, and rejecting the typo at boot beats discovering it when the flag is
-   * later flipped on.
+   * later flipped on. The concise lane's own effort ({@code AI_REASONING_EFFORT_CONCISE}, #567) is
+   * held to the same list, and only when set — unset resolves to a valid value by construction.
    */
   private static void validateReasoningEffort(
       List<String> problems, ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning) {
@@ -335,6 +336,19 @@ public class StartupConfigValidator {
               + " (thrillhousebot.ai.reasoning.effort): "
               + reasoning.effort());
     }
+    reasoning
+        .conciseEffort()
+        .filter(
+            effort ->
+                !allowed.contains(
+                    ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(effort)))
+        .ifPresent(
+            effort ->
+                problems.add(
+                    "AI_REASONING_EFFORT_CONCISE must be one of "
+                        + String.join(", ", allowed)
+                        + " (thrillhousebot.ai.reasoning.concise-effort): "
+                        + effort));
   }
 
   /**
@@ -477,16 +491,35 @@ public class StartupConfigValidator {
 
   /**
    * Mirrors {@link #logActiveModelStatus}'s per-model line for the {@code concise} named model, so
-   * the boot log states which response cap the summary/verifier/reply calls run under — including
-   * the shipped 8192 default, which applies without any operator action.
+   * the boot log states which response cap and reasoning effort the summary/verifier/reply calls
+   * run under — including the shipped defaults, which apply without any operator action. The effort
+   * is on this line because it is the one generation parameter that no longer follows the active
+   * model (#567), so an operator reading the banner would otherwise draw the wrong conclusion about
+   * where the verifier's output allowance goes.
    */
   private void logConciseModelStatus() {
     log.info(
         "Concise model active for summary/verifier/reply calls: max-output-tokens={}"
-            + " (REVIEW_CONCISE_MAX_OUTPUT_TOKENS); other generation parameters follow the active"
-            + " model '{}'.",
+            + " (REVIEW_CONCISE_MAX_OUTPUT_TOKENS), reasoning_effort={}; other generation"
+            + " parameters follow the active model '{}'.",
         orProviderDefault(conciseMaxOutputTokens),
+        conciseReasoningEffortBanner(),
         activeModel.modelName());
+  }
+
+  /**
+   * The concise lane's {@code reasoning_effort} as the banner states it: the resolved wire value
+   * and the knob that sets it while reasoning is on, and otherwise a note that nothing is sent —
+   * the same "no parameter, so the provider default applies" contract {@code
+   * AI_REASONING_ENABLED=false} carries everywhere else. Package-private so the operator-facing
+   * wording is asserted without a log appender.
+   */
+  String conciseReasoningEffortBanner() {
+    var reasoning = config.ai().reasoning();
+    return reasoning.enabled()
+        ? ThrillhouseConfig.AiPricingConfig.ReasoningConfig.resolveConciseEffort(reasoning)
+            + " (AI_REASONING_EFFORT_CONCISE)"
+        : "not sent (AI_REASONING_ENABLED=false)";
   }
 
   /** Env-var prefix every per-model setting shares. */

@@ -37,6 +37,14 @@ class ChatModelCustomizersTest {
       boolean reasoningEnabled,
       String effort,
       Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models) {
+    return config(reasoningEnabled, effort, Optional.empty(), models);
+  }
+
+  private static ThrillhouseConfig config(
+      boolean reasoningEnabled,
+      String effort,
+      Optional<String> conciseEffort,
+      Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models) {
     var config = mock(ThrillhouseConfig.class);
     var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
     var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
@@ -45,6 +53,7 @@ class ChatModelCustomizersTest {
     lenient().when(ai.models()).thenReturn(models);
     lenient().when(reasoning.enabled()).thenReturn(reasoningEnabled);
     lenient().when(reasoning.effort()).thenReturn(effort);
+    lenient().when(reasoning.conciseEffort()).thenReturn(conciseEffort);
     return config;
   }
 
@@ -187,6 +196,7 @@ class ChatModelCustomizersTest {
     // The concise model's cap comes from its named config block
     // (quarkus.langchain4j.openai.concise.chat-model.max-tokens); customizers run after config
     // properties, so a maxTokens call here would stomp the cap the named model exists to carry.
+    // The reasoning effort is the lane's own default, not the active model's "Medium" (#567).
     var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
     var config =
         config(
@@ -197,7 +207,7 @@ class ChatModelCustomizersTest {
     new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
         .customize(builder);
 
-    verify(builder).reasoningEffort("medium");
+    verify(builder).reasoningEffort("low");
     verify(builder).temperature(0.2);
     verify(builder).topP(0.95);
     verifyNoMoreInteractions(builder);
@@ -215,10 +225,101 @@ class ChatModelCustomizersTest {
     new ChatModelCustomizers.ConciseStreamingChatModelCustomizer(config, activeModel(config))
         .customize(builder);
 
-    verify(builder).reasoningEffort("medium");
+    verify(builder).reasoningEffort("low");
     verify(builder).temperature(0.2);
     verify(builder).topP(0.95);
     verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void conciseModelsDoNotInheritTheActiveModelsMaxEffort() {
+    // #567: reasoning tokens are billed as output and count against the concise response cap, so a
+    // max-effort active model could leave the verifier with no allowance left for content and no
+    // body at all. The lane caps its own effort instead.
+    var blocking = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var streaming = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config = config(true, "max", Map.of());
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(blocking);
+    new ChatModelCustomizers.ConciseStreamingChatModelCustomizer(config, activeModel(config))
+        .customize(streaming);
+
+    verify(blocking).reasoningEffort("low");
+    verify(streaming).reasoningEffort("low");
+    verifyNoMoreInteractions(blocking, streaming);
+  }
+
+  @Test
+  void theActiveLaneKeepsMaxEffortWhileTheConciseLaneIsCapped() {
+    // The dial the operator set still drives the review itself — only the fixed-shape calls change.
+    var blocking = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var streaming = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config = config(true, "max", Map.of());
+
+    new ChatModelCustomizers.ChatModelCustomizer(config, activeModel(config)).customize(blocking);
+    new ChatModelCustomizers.StreamingChatModelCustomizer(config, activeModel(config))
+        .customize(streaming);
+
+    verify(blocking).reasoningEffort("max");
+    verify(streaming).reasoningEffort("max");
+    verifyNoMoreInteractions(blocking, streaming);
+  }
+
+  @Test
+  void anExplicitConciseEffortWinsOverTheLanesDefault() {
+    var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var config = config(true, "max", Optional.of(" High "), Map.of());
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).reasoningEffort("high");
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void theConciseLaneNeverReasonsMoreThanTheActiveLane() {
+    // An operator who asked for 'none' everywhere must not get 'low' on the concise calls just
+    // because that is this lane's ceiling.
+    var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var config = config(true, "None", Map.of());
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).reasoningEffort("none");
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void anUnrecognizedActiveEffortLeavesTheConciseLaneAtItsDefault() {
+    // Boot fails over the typo (StartupConfigValidator); the lane must still resolve to a value it
+    // can send rather than propagating the unknown tier.
+    var builder = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var config = config(true, "maximum", Map.of());
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).reasoningEffort("low");
+    verifyNoMoreInteractions(builder);
+  }
+
+  @Test
+  void conciseModelsSendNoEffortWhileReasoningIsDisabled() {
+    // Disabled still means no reasoning parameter at all on either lane — the concise default must
+    // not smuggle one onto a non-reasoning model.
+    var blocking = mock(OpenAiChatModel.OpenAiChatModelBuilder.class);
+    var streaming = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config = config(false, "max", Optional.of("high"), Map.of());
+
+    new ChatModelCustomizers.ConciseChatModelCustomizer(config, activeModel(config))
+        .customize(blocking);
+    new ChatModelCustomizers.ConciseStreamingChatModelCustomizer(config, activeModel(config))
+        .customize(streaming);
+
+    verifyNoInteractions(blocking, streaming);
   }
 
   @Test

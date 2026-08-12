@@ -554,10 +554,22 @@ public interface ThrillhouseConfig {
      * the configured {@link #effort()} is sent as the OpenAI-compatible {@code reasoning_effort} on
      * every chat call, which providers map to their thinking budgets. Reasoning tokens are billed
      * as output tokens, so this is the operator's cost/quality dial.
+     *
+     * <p>The concise lane (summary, verifier, replies) has its own {@link #conciseEffort()} rather
+     * than following {@link #effort()} — see that method for why.
      */
     interface ReasoningConfig {
       /** Effort values accepted by {@link #effort()}, in ascending cost/quality order. */
       List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high", "xhigh", "max");
+
+      /**
+       * Ceiling applied to the concise lane when {@link #conciseEffort()} is unset. {@code low} and
+       * not {@code none}: {@code none} is not a tier every provider recognizes (an unknown tier is
+       * rejected outright, not downgraded), whereas {@code low} is the value this project already
+       * ships as the {@link #effort()} default, so it is the lowest tier known to be valid wherever
+       * reasoning is enabled at all.
+       */
+      String DEFAULT_CONCISE_EFFORT = "low";
 
       /** Master switch — no reasoning parameter is sent unless this is {@code true}. */
       @WithDefault("false")
@@ -575,9 +587,45 @@ public interface ThrillhouseConfig {
       @WithDefault("low")
       String effort();
 
+      /**
+       * Effort sent on the {@code concise} named model's calls while {@link #enabled()} — the
+       * multi-call review's final summary, the finding verifier, and maintainer replies. Same
+       * accepted values as {@link #effort()}; unset resolves through {@link #resolveConciseEffort}.
+       *
+       * <p>This lane exists as a separate knob because it must NOT follow {@link #effort()} (#567).
+       * Reasoning tokens are billed as output and count against the response cap, so at a high
+       * effort the verifier can spend its whole allowance reasoning and return no content at all —
+       * observed intermittently at {@code max} for the same finding count that succeeded on another
+       * run, which makes it a variable-length reasoning tail rather than a size threshold that a
+       * bigger {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} could clear. The lane's calls are
+       * fixed-shape mechanical work — one verdict per finding, a summary object, a status list — so
+       * capping their effort costs nothing the review itself needs.
+       */
+      @WithName("concise-effort")
+      Optional<String> conciseEffort();
+
       /** An {@link #effort()} value normalized to the lowercase wire value providers expect. */
       static String normalize(String effort) {
         return effort.strip().toLowerCase(java.util.Locale.ROOT);
+      }
+
+      /**
+       * The wire value the concise lane sends while {@link #enabled()}: {@link #conciseEffort()}
+       * verbatim when the operator set one, otherwise {@link #DEFAULT_CONCISE_EFFORT} — lowered to
+       * {@link #effort()} when the active lane is configured below that ceiling, so an operator who
+       * asked for {@code none} everywhere never gets more reasoning on the concise lane than on the
+       * main one. An unrecognized {@link #effort()} is left alone here; {@link
+       * StartupConfigValidator} refuses the boot over it.
+       */
+      static String resolveConciseEffort(ReasoningConfig reasoning) {
+        var explicit = reasoning.conciseEffort().map(ReasoningConfig::normalize);
+        if (explicit.isPresent()) {
+          return explicit.get();
+        }
+        var active = ALLOWED_EFFORTS.indexOf(normalize(reasoning.effort()));
+        return active >= 0 && active < ALLOWED_EFFORTS.indexOf(DEFAULT_CONCISE_EFFORT)
+            ? ALLOWED_EFFORTS.get(active)
+            : DEFAULT_CONCISE_EFFORT;
       }
     }
 
