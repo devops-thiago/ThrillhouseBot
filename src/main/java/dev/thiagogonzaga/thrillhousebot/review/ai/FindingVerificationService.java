@@ -155,6 +155,48 @@ public class FindingVerificationService {
               + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * A conditional clause — a hypothesis the finding raises, not a fact it states. Matches from the
+   * conditional marker to the end of that clause, so only the hypothetical span is removed and
+   * whatever the finding asserts around it survives.
+   *
+   * <p>Both floor defeaters are assertion tests, and neither regex can carry mood: "If the feedback
+   * API sanitizes body on write, the exploit is neutralized" satisfies {@link #MITIGATION_ASSERTED}
+   * on the token pair "API sanitizes" even though the sentence goes on to reject the hypothesis
+   * ("but a sanitizer you cannot see is not a sanitizer"). That phrasing is not incidental — #575's
+   * review prompt REQUIRES a demonstrated-sink finding whose mitigating layer was not shown to name
+   * the exact layer to verify, so the instruction manufactures the wording the defeater then reads
+   * as a mitigation (#608). Scoping to the clause is the same narrowing the hedging scan already
+   * needed for the same reason.
+   *
+   * <p>The clause ends at a real clause boundary — strong punctuation, or a coordinator that opens
+   * the consequent ("but", "so", "then"...) — and deliberately NOT at a comma. A protasis carries
+   * its own commas ("If the feedback API, per its own contract, always sanitizes the body on write,
+   * ..."), and stopping at the first one left the mitigation verb sitting in text read as asserted,
+   * which is the very under-firing this pattern exists to remove. The coordinator boundary is what
+   * keeps the consequent: "If it were stored as plain text this would be moot, but React escapes it
+   * at render" still asserts its mitigation, and that assertion must still defeat the floor, since
+   * over-firing the floor is the dangerous direction (#594).
+   *
+   * <p>Residual trade-off, chosen deliberately: a consequent separated by a bare comma and nothing
+   * else ("If you follow the render path, React escapes the value") is swallowed with the protasis,
+   * so its mitigation no longer defeats the floor. Commas cannot serve both roles, and this is the
+   * safer half — the finding must ALSO name a sink and ALSO claim nothing sanitizes it before the
+   * floor can fire at all, and the floor only lifts risk, leaving confidence and every other signal
+   * where the model put them.
+   *
+   * <p>Plain "should" is NOT a marker. Only inverted "Should the API sanitize ..." is a hypothesis,
+   * and its bare infinitive matches none of {@link #MITIGATION_ASSERTED}'s verb forms, so listing
+   * it bought nothing — while "It should be noted that the API sanitizes body on write" is an
+   * assertion, and treating it as a hypothesis hid a real mitigation from the defeater.
+   */
+  private static final Pattern CONDITIONAL_CLAUSE =
+      Pattern.compile(
+          "\\b(if|unless|whether|in case|assuming|provided that)\\b"
+              + "(?:(?!\\b(but|so|then|however|therefore|otherwise)\\b)"
+              + "[^;:.!?\\n\\r\\u2013\\u2014])*",
+          Pattern.CASE_INSENSITIVE);
+
   /** The floor an unmitigated-injection-sink finding may never publish below (#570). */
   private static final RiskLevel INJECTION_SINK_FLOOR = RiskLevel.HIGH;
 
@@ -363,8 +405,11 @@ public class FindingVerificationService {
    * that happens to say "unvalidated". Both halves are token matches, though, so a sentence that
    * RULES THE SINK OUT can satisfy them out of its own negation ("not concatenated but
    * parameterized, so no SQL injection is possible"); two defeaters — a denied sink, and a
-   * mitigation the finding says IS present — suppress the floor for exactly those. A critical keeps
-   * its level: the floor lifts, never lowers.
+   * mitigation the finding says IS present — suppress the floor for exactly those. Both are read on
+   * what the finding ASSERTS, with {@linkplain #CONDITIONAL_CLAUSE conditional clauses} removed
+   * first: a hypothesis the finding raises and rejects in the same breath is not a statement that
+   * the sink is safe, and the review prompt requires that hypothesis on this very class (#608). A
+   * critical keeps its level: the floor lifts, never lowers.
    */
   static ReviewResponse floorInjectionSinkRisk(ReviewResponse response) {
     if (response.findings().isEmpty()) {
@@ -408,13 +453,17 @@ public class FindingVerificationService {
         (finding.title() == null ? "" : finding.title())
             + "\n"
             + (finding.description() == null ? "" : finding.description());
+    // The trigger is read on the whole finding; the defeaters only on what it ASSERTS. A denial or
+    // a mitigation raised as a hypothesis the finding then rejects is not a statement that the sink
+    // is safe, and the review prompt mandates exactly that hypothesis on this class (#608).
+    String asserted = CONDITIONAL_CLAUSE.matcher(text).replaceAll(" ");
     return namesInjectionSink(text)
         && NO_MITIGATION.matcher(text).find()
-        // Either defeater anywhere in the finding suppresses the floor. Under-firing costs a
-        // finding the lift it should have had, which is where this class already stood; over-firing
-        // escalates a non-defect and, at high confidence, blocks the merge on it.
-        && !SINK_DENIED.matcher(text).find()
-        && !MITIGATION_ASSERTED.matcher(text).find();
+        // Either defeater anywhere in the finding's assertions suppresses the floor. Under-firing
+        // costs a finding the lift it should have had, which is where this class already stood;
+        // over-firing escalates a non-defect and, at high confidence, blocks the merge on it.
+        && !SINK_DENIED.matcher(asserted).find()
+        && !MITIGATION_ASSERTED.matcher(asserted).find();
   }
 
   private static boolean namesInjectionSink(String text) {
