@@ -68,19 +68,30 @@ public class FindingPipeline {
       List<ReviewResponse.Finding> findings,
       List<ReviewResponse.PreviousFindingStatus> statuses) {}
 
+  /** The rendered file-section header {@link ReviewDiffFormatter#formatFileSection} emits. */
+  private static final String SECTION_HEADER_PREFIX = "### ";
+
   /**
    * The shared prompt template for a review call plus the PR-level {@linkplain
    * #withheldMaterialNotice withheld-material notice}, so every call this class assembles material
    * for carries the same disclosure and the prefixing lives in one place. The notice rides inside
    * the diff slot's untrusted fence — the paths in it come from the pull request — while the rule
    * that acts on it is in the trusted system prompt.
+   *
+   * <p>The trailing guidance is extended per batch with the {@linkplain
+   * #heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch) heuristic failure-mode dimension}, whose
+   * trigger is the diff — so it can only be decided once the batch's own text is known.
    */
   private record BatchPrompts(AiReviewService.PromptInputs template, String withheldNotice) {
 
     AiReviewService.PromptInputs forBatch(
         DiffBudgetPlanner.DiffBatch batch, String baseComparison) {
       return withDiff(
-          template, PromptTemplateEscaper.fence(withheldNotice + batch.text()), baseComparison);
+          template,
+          PromptTemplateEscaper.fence(withheldNotice + batch.text()),
+          baseComparison,
+          ReviewPromptAssembler.combineSections(
+              template.repoInstructions(), heuristicFailureModesFor(batch)));
     }
   }
 
@@ -693,16 +704,6 @@ public class FindingPipeline {
   }
 
   /**
-   * Unwraps a failed parallel batch future as {@link IllegalStateException} (preserving the cause).
-   * SpotBugs flags rethrowing a bare {@link RuntimeException}; callers still see {@link
-   * AiReviewException} via {@link Throwable#getCause()}.
-   */
-  static IllegalStateException unwrapParallelFailure(CompletionException e) {
-    var cause = e.getCause() != null ? e.getCause() : e;
-    return new IllegalStateException("Parallel batch review failed", cause);
-  }
-
-  /**
    * Degenerate budgeted plan: every reviewable file overflowed the budget, so no review call can
    * carry any diff within it. Sending the uncapped raw diff instead would bypass the budget on
    * exactly the PR it was meant to bound — skip the review call, keep the summary call (it never
@@ -802,11 +803,18 @@ public class FindingPipeline {
    * walkthrough renders at most {@link PrReviewPrompts#MAX_FILE_SUMMARIES} rows, so every rendered
    * row is grounded with a wide margin. Pinned by {@code
    * FindingPipelineTest#aPr532SizedOverviewKeepsFarMoreRowsThanTheWalkthroughRenders}.
+   *
+   * <p>Only the per-file rows are clampable. The {@linkplain ChangedFilesOverview#header() header
+   * block} — the pure-rename rollup and the PR-scope totals — is rendered first precisely so
+   * clamping can only take the tail, so a budget too small to hold it withholds the overview
+   * outright rather than emitting a rollup note in the header's place (#486 P4). That also keeps
+   * the note's count honest: everything it can drop is a file.
    */
-  private String clampOverview(String overview, AiReviewService.PromptInputs promptInputs) {
+  private String clampOverview(
+      ChangedFilesOverview overview, AiReviewService.PromptInputs promptInputs) {
     var budget = budgetPlanner.perCallInputBudget();
     if (budget == Integer.MAX_VALUE) {
-      return overview;
+      return overview.text();
     }
     var inherited =
         PrReviewPrompts.SUMMARY_SYSTEM
@@ -815,28 +823,29 @@ public class FindingPipeline {
             + promptInputs.previousFindings()
             + promptInputs.repoInstructions();
     var overviewBudget = (budget - tokenCounter.estimateTokens(inherited)) / 2;
-    if (overviewBudget <= 0) {
+    var rows = overview.fileRows();
+    // Rollup-note tokens are reserved up front so post-truncation append cannot exceed the share.
+    var noteReserve = tokenCounter.estimateTokens(overviewRollupNote(rows.length));
+    var headerTokens = tokenCounter.estimateTokens(overview.header());
+    if (overviewBudget - noteReserve < headerTokens) {
       return "(changed-files overview withheld — summary input budget exhausted)\n";
     }
-    var lines = overview.split("\n");
-    // Rollup-note tokens are reserved up front so post-truncation append cannot exceed the share.
-    var noteReserve = tokenCounter.estimateTokens(overviewRollupNote(lines.length));
-    var sb = new StringBuilder();
-    var used = 0;
+    var sb = new StringBuilder(overview.header());
+    var used = headerTokens;
     var listed = 0;
-    while (listed < lines.length) {
-      var lineTokens = tokenCounter.estimateTokens(lines[listed] + "\n");
-      if (used + lineTokens > overviewBudget - noteReserve) {
+    while (listed < rows.length) {
+      var rowTokens = tokenCounter.estimateTokens(rows[listed] + "\n");
+      if (used + rowTokens > overviewBudget - noteReserve) {
         break;
       }
-      sb.append(lines[listed]).append('\n');
-      used += lineTokens;
+      sb.append(rows[listed]).append('\n');
+      used += rowTokens;
       listed++;
     }
-    if (listed == lines.length) {
-      return overview;
+    if (listed == rows.length) {
+      return overview.text();
     }
-    sb.append(overviewRollupNote(lines.length - listed));
+    sb.append(overviewRollupNote(rows.length - listed));
     return sb.toString();
   }
 
@@ -1027,9 +1036,84 @@ public class FindingPipeline {
         : previous + " → " + file.filename();
   }
 
-  /** Copies the shared prompt context, swapping the diff and base-comparison slots. */
+  /**
+   * The heuristic failure-mode review dimension (#123 / #420) for one batch, appended to that
+   * batch's trailing guidance.
+   *
+   * <p>{@link ReviewPromptAssembler} decides this section from {@code ctx.diff()}, which {@link
+   * ReviewContextLoader} leaves empty whenever token budgeting is on — the shipped default — so the
+   * whole dimension was silently absent from every default-configuration review (#486 P3). It is
+   * decided here instead because this is the first point that holds the material the call actually
+   * receives: the plan's batch text. Only the batches whose own slice introduces a decision rule
+   * pay for it, which is stricter than the whole-diff gate it replaces. The two cannot both emit
+   * the section: this runs only on a budgeted plan, and the assembler's gate only has material when
+   * budgeting is off — the loader keys the empty {@code ctx.diff()} on the setting the planner keys
+   * {@code budgeted} on.
+   *
+   * <p>Sizing: the section is a single fixed constant, and the planner sized the shared overhead
+   * before it existed. That mirrors the {@linkplain #withheldMaterialNotice withheld-material
+   * notice} this class already adds after planning, and it is what the token safety margin (10% of
+   * the input cap by default, ~4800 tokens against this section's ~700) is held back for.
+   */
+  private static String heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch batch) {
+    var scanned = heuristicScanSource(batch.text());
+    if (scanned.isBlank()) {
+      // Loud on purpose: an empty input is exactly what made this dimension die unnoticed, and a
+      // detector fed nothing reports "no heuristic code" in the same voice as a detector that read
+      // the diff and found none.
+      Log.warnf(
+          "Review batch covering %d file(s) carries no diff text, so the heuristic failure-mode"
+              + " review dimension has no material to evaluate and is omitted from that call —"
+              + " this is a planning defect, not a pull request that introduces no heuristic code",
+          batch.files().size());
+      return "";
+    }
+    return ReviewPromptAssembler.heuristicFailureModesSection(scanned);
+  }
+
+  /**
+   * The batch text with each rendered {@code ### path (status, +a -d)} header rewritten to the
+   * unified-diff {@code +++ b/path} form {@link HeuristicCodeDetector} scopes files by. Without it
+   * the detector sees one unattributed run of added lines: its test-file exclusion stops applying
+   * (a fixture regex is not new production logic) and its JavaScript regex-literal signal, which is
+   * only enabled for JS/TS paths, never fires. Everything else is passed through verbatim, so the
+   * detector reads exactly the added lines the model was given — clipping included.
+   */
+  static String heuristicScanSource(String batchText) {
+    if (batchText == null || batchText.isBlank()) {
+      return "";
+    }
+    var lines = batchText.split("\n", -1);
+    var sb = new StringBuilder(batchText.length());
+    for (var i = 0; i < lines.length; i++) {
+      if (i > 0) {
+        sb.append('\n');
+      }
+      var line = lines[i];
+      sb.append(line.startsWith(SECTION_HEADER_PREFIX) ? "+++ b/" + sectionFilename(line) : line);
+    }
+    return sb.toString();
+  }
+
+  /**
+   * The path out of a rendered section header, dropping the {@code " (status, +a -d)"} suffix when
+   * one is present — the same parse {@link FindingQuoteValidator} does on the same headers.
+   */
+  private static String sectionFilename(String headerLine) {
+    var name = headerLine.substring(SECTION_HEADER_PREFIX.length());
+    var suffix = name.lastIndexOf(" (");
+    return (suffix > 0 ? name.substring(0, suffix) : name).strip();
+  }
+
+  /**
+   * Copies the shared prompt context, swapping the diff, base-comparison and trailing-guidance
+   * slots.
+   */
   private static AiReviewService.PromptInputs withDiff(
-      AiReviewService.PromptInputs base, String diff, String baseComparison) {
+      AiReviewService.PromptInputs base,
+      String diff,
+      String baseComparison,
+      String repoInstructions) {
     return new AiReviewService.PromptInputs(
         diff,
         base.prContext(),
@@ -1037,7 +1121,7 @@ public class FindingPipeline {
         base.projectStack(),
         base.relatedTests(),
         base.previousFindings(),
-        base.repoInstructions());
+        repoInstructions);
   }
 
   private String findingsJson(List<ReviewResponse.Finding> findings) {
@@ -1050,21 +1134,39 @@ public class FindingPipeline {
   }
 
   /**
+   * The summary call's changed-files overview, split at the seam {@link #clampOverview} clamps on:
+   * the {@code header} block that must survive any clamp (pure-rename rollup, PR-scope totals) and
+   * the newline-separated per-file {@code rows} that may be rolled up by count from the tail.
+   */
+  private record ChangedFilesOverview(String header, String rows) {
+
+    String text() {
+      return header + rows;
+    }
+
+    /** The per-file rows as lines, empty when there are none — never a single blank row. */
+    String[] fileRows() {
+      return rows.isEmpty() ? new String[0] : rows.split("\n");
+    }
+  }
+
+  /**
    * Every changed file by name + change counts, so the summary covers files with no findings too.
    * Hunk-clipped files are marked partially analyzed — presenting them with bare change counts
    * would tell the summary they were fully covered when most of the patch was never sent.
    */
-  private static String changedFilesOverview(
+  private static ChangedFilesOverview changedFilesOverview(
       ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
-    var sb = new StringBuilder();
+    var header = new StringBuilder();
     // Pure-rename rollup first so clampOverview (keeps a prefix) never drops the disclosure on
     // large multi-call reviews (#386).
     var pureRenames = ReviewDiffFormatter.pureRenameFiles(ctx.files());
     if (!pureRenames.isEmpty()) {
-      sb.append(ReviewDiffFormatter.formatPureRenameRollup(pureRenames));
+      header.append(ReviewDiffFormatter.formatPureRenameRollup(pureRenames));
     }
     // Scope totals next, ahead of the per-file rows, for the same reason: clamping drops the tail.
-    sb.append(changeScopeSummary(ctx));
+    header.append(changeScopeSummary(ctx));
+    var sb = new StringBuilder();
     var omitted = Set.copyOf(plan.omittedFiles());
     var uncovered = Set.copyOf(plan.runtimeUncoveredFiles());
     // effectiveClippedFiles drops any clipped file a failed batch left wholly uncovered, so it is
@@ -1097,7 +1199,7 @@ public class FindingPipeline {
           .append(
               " (not reviewed — the review call for it did not complete; treated as uncovered)\n");
     }
-    return sb.toString();
+    return new ChangedFilesOverview(header.toString(), sb.toString());
   }
 
   /** The per-file coverage caveat for the summary overview, or empty for full coverage. */
