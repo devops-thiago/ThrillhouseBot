@@ -53,7 +53,6 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededExcep
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -599,25 +598,6 @@ class FindingPipelineTest {
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), anyInt());
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
-  }
-
-  @Test
-  void unwrapParallelFailureUsesCompletionExceptionWhenCauseMissing() {
-    var missingCause = new CompletionException((Throwable) null);
-    var wrapped = FindingPipeline.unwrapParallelFailure(missingCause);
-    assertEquals("Parallel batch review failed", wrapped.getMessage());
-    assertSame(missingCause, wrapped.getCause());
-  }
-
-  @Test
-  void unwrapParallelFailurePreservesTheUnderlyingCause() {
-    // The caller distinguishes an AI failure from a wiring failure through getCause(), so the
-    // real cause must survive the IllegalStateException wrapper SpotBugs requires.
-    var cause = new IllegalArgumentException("model refused");
-    var wrapped = FindingPipeline.unwrapParallelFailure(new CompletionException(cause));
-
-    assertEquals("Parallel batch review failed", wrapped.getMessage());
-    assertSame(cause, wrapped.getCause());
   }
 
   @Test
@@ -1228,27 +1208,9 @@ class FindingPipelineTest {
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
   }
 
-  @Test
-  void oversizedOverviewIsClampedWithARollupNote() {
-    var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
-    var ctx = reviewContext();
-    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
-    var tokenCounter = new TokenCounter();
-    var inherited = PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d";
-    when(budgetPlanner.perCallInputBudget())
-        .thenReturn(tokenCounter.estimateTokens(inherited) + 20);
-    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
-    when(aiReviewService.summarize(eq(session), captor.capture()))
-        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-
-    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
-
-    assertTrue(
-        captor.getValue().changedFiles().contains("more changed files"),
-        captor.getValue().changedFiles());
-  }
+  // The rollup note at this budget is covered by the two #486 P4 cases at the end of this class:
+  // a budget too small for the scope header withholds the overview instead of emitting a bare
+  // rollup in its place, and a budget that holds the header rolls the row tail up by file count.
 
   /**
    * #547 — the clamp keeps a prefix and drops the tail, so a walkthrough row could in principle be
@@ -1931,5 +1893,287 @@ class FindingPipelineTest {
     assertTrue(
         captor.getValue().findings().contains("more findings not shown"),
         captor.getValue().findings());
+  }
+
+  /**
+   * A batch whose rendered text is one {@link ReviewDiffFormatter#formatFileSection} section
+   * carrying the given added lines — the shape {@link DiffBudgetPlanner} packs.
+   */
+  private static DiffBudgetPlanner.DiffBatch batchAdding(String name, String... addedLines) {
+    var patch = new StringBuilder("@@ -1 +1," + addedLines.length + " @@\n");
+    for (var line : addedLines) {
+      patch.append('+').append(line).append('\n');
+    }
+    var file =
+        new FileDiff(name, "modified", addedLines.length, 0, addedLines.length, patch.toString());
+    var text =
+        "### " + name + " (modified, +" + addedLines.length + " -0)\n```diff\n" + patch + "```\n\n";
+    return new DiffBudgetPlanner.DiffBatch(text, List.of(file), 10);
+  }
+
+  private static final String REGEX_ADDITION =
+      "  private static final Pattern P = Pattern.compile(\"/pause\");";
+
+  /**
+   * #486 P3 — under the shipped default ({@code max-input-tokens=48000}) the context loader leaves
+   * {@code ctx.diff()} empty, so the assembler's {@code ctx.diff()}-gated heuristic section is
+   * always blank: the template's trailing guidance arrives here carrying nothing. The dimension has
+   * to be re-derived from the material the call actually gets — this batch's own text.
+   */
+  @Test
+  void aBudgetedBatchThatIntroducesHeuristicCodeCarriesTheFailureModeDimension() {
+    var session = ReviewSession.create("owner/repo", 1, "Add a trigger regex", "sha");
+    var ctx = reviewContext();
+    // repoInstructions is what assemble() produces under budgeting: no heuristic section in it.
+    var template =
+        new AiReviewService.PromptInputs("", "ctx", "", "stack", "tests", "", "repo rules");
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(
+        session,
+        template,
+        ctx,
+        singleBatchPlan(batchAdding("src/main/java/app/Trigger.java", REGEX_ADDITION), List.of()),
+        new DiffLineResolver(Map.of()));
+
+    var guidance = captor.getValue().repoInstructions();
+    assertTrue(guidance.contains(PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST), guidance);
+    assertTrue(guidance.startsWith("repo rules"), guidance);
+  }
+
+  /** Only the batch whose own slice introduces the rule pays for the dimension. */
+  @Test
+  void theHeuristicDimensionIsScopedToTheBatchThatIntroducesTheRule() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("", "ctx", "", "stack", "tests", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(
+                batchAdding("src/main/java/app/Trigger.java", REGEX_ADDITION),
+                batchAdding("src/main/java/app/Plain.java", "  var total = a + b;")),
+            List.of(),
+            List.of(),
+            true,
+            null,
+            null,
+            null,
+            null);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.reviewBatch(eq(session), captor.capture(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    var withRule =
+        captor.getAllValues().stream()
+            .filter(i -> i.diff().contains("Trigger.java"))
+            .findFirst()
+            .orElseThrow();
+    var withoutRule =
+        captor.getAllValues().stream()
+            .filter(i -> i.diff().contains("Plain.java"))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(
+        withRule.repoInstructions().contains(PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST),
+        withRule.repoInstructions());
+    assertEquals("", withoutRule.repoInstructions());
+  }
+
+  /**
+   * The detector scopes files by the unified-diff {@code +++ b/} header, which a rendered batch
+   * section does not carry — so the batch's own {@code ### path} headers have to be translated, or
+   * its test-file exclusion (a fixture regex is not new production logic) silently stops applying.
+   */
+  @Test
+  void aBatchOfTestFilesDoesNotTriggerTheHeuristicDimension() {
+    var session = ReviewSession.create("owner/repo", 1, "Add a test", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("", "ctx", "", "stack", "tests", "", "");
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(
+        session,
+        template,
+        ctx,
+        singleBatchPlan(
+            batchAdding("src/test/java/app/TriggerTest.java", REGEX_ADDITION), List.of()),
+        new DiffLineResolver(Map.of()));
+
+    assertEquals("", captor.getValue().repoInstructions());
+  }
+
+  /** {@code DiffBatch} does not reject a null text, so the scan source must not dereference one. */
+  @Test
+  void aNullBatchTextScansAsNoMaterial() {
+    assertEquals("", FindingPipeline.heuristicScanSource(null));
+  }
+
+  /** A section header rendered without the {@code " (status, +a -d)"} suffix still scopes. */
+  @Test
+  void aSectionHeaderWithoutItsStatsSuffixStillScopesTheHeuristicDetector() {
+    var session = ReviewSession.create("owner/repo", 1, "Add a test", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("", "ctx", "", "stack", "tests", "", "");
+    var bare =
+        new DiffBudgetPlanner.DiffBatch(
+            "### src/test/java/app/TriggerTest.java\n```diff\n@@ -1 +1 @@\n+"
+                + REGEX_ADDITION
+                + "\n```\n\n",
+            List.of(new FileDiff("src/test/java/app/TriggerTest.java", "modified", 1, 0, 1, "")),
+            10);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(
+        session, template, ctx, singleBatchPlan(bare, List.of()), new DiffLineResolver(Map.of()));
+
+    assertEquals("", captor.getValue().repoInstructions());
+  }
+
+  /**
+   * The failure mode that made the dimension die silently was an empty input, so an empty input is
+   * now stated rather than read as "this PR introduces no heuristic code".
+   */
+  @Test
+  void aBatchWithNoTextSaysTheHeuristicDimensionCouldNotBeEvaluated() {
+    var session = ReviewSession.create("owner/repo", 1, "Empty batch", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("", "ctx", "", "stack", "tests", "", "");
+    var empty =
+        new DiffBudgetPlanner.DiffBatch(
+            "", List.of(new FileDiff("a.java", "modified", 1, 0, 1, "")), 0);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var logged = new ArrayList<String>();
+    var logger = java.util.logging.Logger.getLogger(FindingPipeline.class.getName());
+    var handler =
+        new java.util.logging.Handler() {
+          @Override
+          public void publish(java.util.logging.LogRecord record) {
+            logged.add(String.valueOf(record.getMessage()));
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    logger.addHandler(handler);
+    try {
+      pipeline.run(
+          session,
+          template,
+          ctx,
+          singleBatchPlan(empty, List.of()),
+          new DiffLineResolver(Map.of()));
+    } finally {
+      logger.removeHandler(handler);
+    }
+
+    assertEquals("", captor.getValue().repoInstructions());
+    assertTrue(
+        logged.stream().anyMatch(m -> m.contains("heuristic failure-mode")),
+        "the skipped dimension must be stated, not silent: " + logged);
+  }
+
+  /**
+   * #486 P4 — the packing loop could break at zero listed lines, emitting a bare rollup note in
+   * place of the PR-scope header {@code changedFilesOverview} renders first precisely so clamping
+   * can only take the tail. The note also counted lines while reading "changed files", so the
+   * header rows inflated it above the real file count.
+   */
+  @Test
+  void anOverviewTooSmallForItsScopeHeaderIsWithheldNotReducedToABareRollup() {
+    var session = ReviewSession.create("owner/repo", 1, "Huge PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    var inherited = PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d";
+    when(budgetPlanner.perCallInputBudget())
+        .thenReturn(new TokenCounter().estimateTokens(inherited) + 20);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(changedFiles.contains("overview withheld"), changedFiles);
+    // The PR has two changed files; the line-counting rollup claimed five.
+    assertFalse(changedFiles.contains("more changed files"), changedFiles);
+  }
+
+  /** A clamped overview with no per-file row at all is its header, with no rollup note. */
+  @Test
+  void aClampedOverviewWithNoFileRowsIsJustItsScopeHeader() {
+    var session = ReviewSession.create("owner/repo", 1, "All files ignored", "sha");
+    var ctx = reviewContext(List.of(), List.of(), new ReviewContextLoader.PrTotals(23, 1612, 240));
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    var inherited = PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d";
+    when(budgetPlanner.perCallInputBudget())
+        .thenReturn(new TokenCounter().estimateTokens(inherited) + 400);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertEquals(
+        "PR scope (whole pull request): 23 files changed, +1612 -240\n",
+        captor.getValue().changedFiles());
+  }
+
+  /** With room for the header, the tail is still rolled up — by file count, and only files. */
+  @Test
+  void aClampedOverviewKeepsItsScopeHeaderAndCountsOnlyTheDroppedFiles() {
+    var session = ReviewSession.create("owner/repo", 1, "Wide PR", "sha");
+    var files = new ArrayList<FileDiff>();
+    for (var i = 0; i < 60; i++) {
+      files.add(
+          new FileDiff(
+              String.format("src/main/java/app/Component%02d.java", i), "modified", 3, 0, 3, ""));
+    }
+    var ctx = reviewContext(List.of(), files, null);
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    var inherited = PrReviewPrompts.SUMMARY_SYSTEM + PrReviewPrompts.SUMMARY_USER + "d";
+    when(budgetPlanner.perCallInputBudget())
+        .thenReturn(new TokenCounter().estimateTokens(inherited) + 400);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(changedFiles.startsWith("PR scope (whole pull request): 60 files"), changedFiles);
+    assertTrue(changedFiles.contains("Directories touched: 1"), changedFiles);
+    var listed = 0;
+    var rolledUp = -1;
+    for (var line : changedFiles.split("\n")) {
+      if (line.contains(" (modified, +3 -0)")) {
+        listed++;
+      } else if (line.startsWith("(+")) {
+        rolledUp = Integer.parseInt(line.substring(2, line.indexOf(' ')));
+      }
+    }
+    assertTrue(listed > 0, changedFiles);
+    assertEquals(files.size() - listed, rolledUp, changedFiles);
   }
 }
