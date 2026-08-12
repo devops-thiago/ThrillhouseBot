@@ -2927,6 +2927,26 @@ class FollowUpAnalyzerTest {
             "a minus-sign line range must not clear it",
             "@thrillhousebot resolved `src/A.java:1−3` — SQL injection",
             false),
+        // A range is written with the separator spaced off the line number about as often as
+        // adjacent to it, and the adjacent-character guard cannot see those spellings at all.
+        arguments(
+            "a spaced hyphen line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 - 3` — SQL injection",
+            false),
+        arguments(
+            "a spaced en-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 – 3` — SQL injection",
+            false),
+        arguments(
+            "a dotted line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1..3` — SQL injection",
+            false),
+        // The accepted cost of requiring a digit: a title opening with one reads as a range and
+        // under-clears, which holds the finding a round rather than dropping it.
+        arguments(
+            "a title opening with a digit under-clears rather than risking the separator",
+            "@thrillhousebot resolved src/A.java:1 — 2 call sites of this SQL injection",
+            false),
         arguments(
             "the documented em-dash form still clears",
             "@thrillhousebot resolved src/A.java:1 — SQL injection",

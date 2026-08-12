@@ -803,6 +803,16 @@ public class FollowUpAnalyzer {
   private static final Pattern LOCATOR_SHAPE = Pattern.compile("(?<=\\S):\\d");
 
   /**
+   * A line range's separator and its end line, matched immediately after a locator: optional space,
+   * a dash of any spelling or a {@code ..}, optional space, then the digit that makes it a range
+   * rather than the documented {@code path:line — <title>} separator. Anchored by {@code lookingAt}
+   * at the position after the locator, so it never scans the whole body. See {@link
+   * #startsSpacedRange}.
+   */
+  private static final Pattern SPACED_LINE_RANGE =
+      Pattern.compile("[ \\t]*(?:[-\\u2010-\\u2015\\u2212]|\\.\\.)[ \\t]*\\d");
+
+  /**
    * Whether {@code body} names anything locator-shaped at all. This is a <em>necessary</em>
    * condition of {@link #clearedInConversation}, never a sufficient one: clearing a finding
    * requires its exact {@code path:line}, so a comment carrying no {@code path:line} token
@@ -924,11 +934,30 @@ public class FollowUpAnalyzer {
   private static boolean namesLocator(String body, String locator) {
     for (var at = body.indexOf(locator); at >= 0; at = body.indexOf(locator, at + 1)) {
       var after = at + locator.length();
-      if (after >= body.length() || !continuesLocator(body.charAt(after))) {
+      if (after >= body.length()) {
+        return true;
+      }
+      if (!continuesLocator(body.charAt(after)) && !startsSpacedRange(body, after)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * A line range whose separator is not adjacent to the line number: {@code :1 - 3}, {@code :1 –
+   * 3}, {@code :1..3}. {@link #continuesLocator} catches only the adjacent spellings, and a range
+   * is written both ways about equally often.
+   *
+   * <p>The trailing digit is what tells a range apart from the documented {@code path:line —
+   * <title>} separator, which is spelled identically up to that point, so it is required rather
+   * than optional: {@code :1 — SQL injection} still clears the finding. The cost is a title that
+   * opens with a digit ({@code :1 — 2 call sites}) reading as a range, which under-clears — the
+   * finding is held one more round and the maintainer can name it again, whereas an over-clear
+   * drops it silently.
+   */
+  private static boolean startsSpacedRange(String body, int after) {
+    return SPACED_LINE_RANGE.matcher(body).region(after, body.length()).lookingAt();
   }
 
   /**
