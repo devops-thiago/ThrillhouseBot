@@ -23,6 +23,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -256,5 +257,87 @@ class SummarySurfaceDeduplicatorTest {
         SummarySurfaceDeduplicator.claim("hardcoded failures return").words(),
         SummarySurfaceDeduplicator.claim("hardcodes failure returned").words());
     assertEquals(List.of("use", "log"), SummarySurfaceDeduplicator.claim("use logs").words());
+  }
+
+  /** The #41 shape: a terse title, with the wording a restatement shares sitting in the body. */
+  private static Finding paginationFinding() {
+    return new Finding(
+        RiskLevel.HIGH,
+        "collector/usage.js",
+        88,
+        "next_page_token is ignored after the first request",
+        "list_usage sends one request and returns its items; the response's next_page_token is"
+            + " never followed, so only the first page of usage records is returned.",
+        null,
+        null);
+  }
+
+  @Test
+  void gapCollapsesOntoTheWordingInTheFindingsDescription() {
+    var gap =
+        "The description says the collector walks every page of usage records, but only the first"
+            + " page of usage records is returned.";
+
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(List.of(gap), Map.of(), List.of(paginationFinding()));
+
+    assertTrue(surfaces.descriptionGaps().isEmpty(), surfaces.descriptionGaps().toString());
+  }
+
+  @Test
+  void gapMerelyOverlappingTheDescriptionsVocabularyIsKept() {
+    // Every content word of this gap appears in the finding's description, so the overlap
+    // coefficient would collapse it — but the two share no run of adjacent content words, and
+    // shared vocabulary alone means little across a long description. Kept, per the bias this
+    // class takes everywhere: a surviving duplicate repeats a claim, a false collapse deletes one.
+    var gap = "The PR description says the response items are returned from one request.";
+
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(List.of(gap), Map.of(), List.of(paginationFinding()));
+
+    assertEquals(List.of(gap), surfaces.descriptionGaps());
+  }
+
+  @Test
+  void doubleCheckFindingRestatingAnInlineFindingNamesIt() {
+    var inline = paginationFinding();
+    var lowConfidence =
+        new Finding(
+            RiskLevel.MEDIUM,
+            Confidence.LOW,
+            "collector/usage.js",
+            91,
+            "Only the first page of usage records reaches the aggregator",
+            "desc",
+            null,
+            null);
+
+    assertEquals(
+        Optional.of(inline), SummarySurfaceDeduplicator.restatedBy(lowConfidence, List.of(inline)));
+  }
+
+  @Test
+  void doubleCheckFindingWithNothingInCommonNamesNoFinding() {
+    var unrelated =
+        new Finding(
+            RiskLevel.LOW,
+            Confidence.LOW,
+            "collector/config.js",
+            12,
+            "Timeout is hardcoded to 30 seconds",
+            "desc",
+            null,
+            null);
+
+    assertEquals(
+        Optional.empty(),
+        SummarySurfaceDeduplicator.restatedBy(unrelated, List.of(paginationFinding())));
+    // A finding with no title reduces to a claim with no words, and matches nothing.
+    var titleless =
+        new Finding(
+            RiskLevel.LOW, Confidence.LOW, "collector/config.js", 12, null, "d", null, null);
+    assertEquals(
+        Optional.empty(),
+        SummarySurfaceDeduplicator.restatedBy(titleless, List.of(paginationFinding())));
   }
 }
