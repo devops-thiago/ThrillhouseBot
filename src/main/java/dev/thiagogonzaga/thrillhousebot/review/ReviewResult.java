@@ -261,13 +261,28 @@ public record ReviewResult(
           + " <the finding's title>` on this PR.";
 
   /**
+   * The same sentence as the previous release emitted it, before #548 appended the threadless-clear
+   * instructions. Review bodies are read back from the pull request, so this recognizer outlives
+   * the producer that wrote them: on every round after an upgrade the stored bodies still end this
+   * way, and a recognizer pinned to the current wording alone hands the bot its own status sentence
+   * back as an issue "flagged in the previous review" — #455's exact failure mode — until a fresh
+   * round overwrites it. Kept as a second verbatim suffix rather than a loosened prefix match, so
+   * it accepts exactly one more producer and nothing else.
+   */
+  private static final String UNRESOLVED_PREVIOUS_SUFFIX_LEGACY =
+      " previous finding(s) remain unresolved — fix them, or reply on their review thread (where"
+          + " one exists) with why they are deferred.";
+
+  /**
    * Whether {@code text} is {@link #unresolvedPreviousMessage(long)} for some count — the bot's own
    * sentence about previous findings, which carries no finding of its own. Recognizing it is what
    * lets the previous-findings context reject a review body the bot wrote itself instead of
    * offering it to the model as an issue "flagged in the previous review" (#455).
    *
    * <p>Both ends are required, because everything this accepts is discarded: a body that only opens
-   * with the same words is a human review carrying a real finding. Absent text matches nothing.
+   * with the same words is a human review carrying a real finding. Absent text matches nothing. The
+   * tail may be the current wording or {@link #UNRESOLVED_PREVIOUS_SUFFIX_LEGACY}, since the bodies
+   * this reads were written by whichever release was deployed when the round ran.
    */
   public static boolean isUnresolvedPreviousMessage(String text) {
     if (text == null) {
@@ -275,7 +290,8 @@ public record ReviewResult(
     }
     var stripped = text.strip();
     return stripped.startsWith(UNRESOLVED_PREVIOUS_PREFIX)
-        && stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX);
+        && (stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX)
+            || stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX_LEGACY));
   }
 
   /**

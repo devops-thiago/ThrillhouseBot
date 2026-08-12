@@ -544,14 +544,19 @@ public class ConfigKeyContextResolver {
     var snippets = new ArrayList<String>();
     var lastRendered = -1;
     for (var i = 0; i < lines.length && snippets.size() < MAX_SNIPPETS_PER_KEY; i++) {
-      var from = Math.max(0, i - CONTEXT_LINES_BEFORE);
       var defines =
           exactOnly
               ? definesExactly(normalizedLines[i], normalizedToken)
               : definesBySuffix(normalizedLines[i], normalizedToken);
-      // from > lastRendered skips a match the previous window already shows: adjacent matches (a
+      // i <= lastRendered skips a match the previous window already shows: adjacent matches (a
       // property and its override on consecutive lines) share one snippet rather than repeating it.
-      if (defines && from > lastRendered) {
+      // The comparison is against the match's own line, not its context start: gating on the start
+      // dropped a definition whose only overlap with the previous window was its leading context
+      // line — two definitions exactly CONTEXT_LINES_AFTER + 1 apart lost the second one entirely,
+      // silently, even though its line was never rendered.
+      if (defines && i > lastRendered) {
+        // Start past the previous window so the shared boundary line is still rendered only once.
+        var from = Math.max(Math.max(0, i - CONTEXT_LINES_BEFORE), lastRendered + 1);
         var to = Math.min(lines.length - 1, i + CONTEXT_LINES_AFTER);
         var snippet = renderSnippet(path, lines, from, to);
         snippets.add(exactOnly ? snippet : snippet + "\n" + SUFFIX_MATCH_NOTE);

@@ -285,6 +285,8 @@ will change per provider:
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
 | `GITHUB_BOT_LOGINS` | Comma-separated bot account login(s) the bot skips to avoid replying to itself; override when deployed under a different App slug (`<app-slug>[bot]`) | `thrillhousebot[bot],thrillhouse-bot[bot]` |
+| `GITHUB_WRITE_MIN_INTERVAL` | Duration spacing two content-creating GitHub calls (comments, review comments, thread replies, reviews), shared process-wide. GitHub secondary-rate-limits rapid content creation and answers `403`; pacing keeps the bot inside that envelope instead of discovering it by rejection — its published guidance is no more than one such request per second. `0` disables pacing | `1s` |
+| `GITHUB_WRITE_MAX_WAIT` | Duration ceiling on how long one caller waits for its content-creation slot. Past it the call goes out unpaced and the bounded backoff handles a refusal, so a long queue never parks a finished command | `60s` |
 | `WEBHOOK_DEDUP_TTL` | Webhook deduplication time-to-live for GitHub redeliveries | `24h` |
 | `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |
 | `MANUAL_TRIGGER_AUTH_TIMEOUT` | Upper bound on the manual-trigger write-access check on the webhook ACK thread; fails closed (denies) if GitHub is slower | `5s` |
