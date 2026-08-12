@@ -67,21 +67,35 @@ public class GitHubAuthClient {
   private final Map<Long, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
   /**
+   * How long a token this process minted stays traceable back to its installation. GitHub expires
+   * an installation token 60 minutes after issuing it, so past that no write can still be holding a
+   * usable one and the entry is dead weight.
+   */
+  static final Duration OWNER_RETENTION = Duration.ofMinutes(60);
+
+  /** A token this process minted: the installation it belongs to, and when it was issued. */
+  private record TokenOwner(long installationId, Instant issuedAt) {}
+
+  /**
    * Which installation a token this process minted belongs to, so a write GitHub answered with 401
    * can be traced back to the installation whose token has to be replaced.
    *
-   * <p>Bounded to the current and the immediately superseded token per installation. The superseded
-   * one has to stay resolvable: a dead token does not fail one write, it fails every write still
-   * holding it — five within five seconds in #624 — and each of those after the first is presenting
-   * a token the cache has already replaced. Forgetting it would leave every write but the first
-   * unable to name its own installation.
+   * <p>Entries are retired by <em>age</em>, not by generation, and that distinction is the whole
+   * correctness argument. Refreshes of one installation are not serialized: {@code
+   * ReviewDispatcher} serializes per pull request, not per installation, and runs each PR's review
+   * on its own virtual thread — so two reviews in the same installation share one cached token,
+   * cross its expiry together, and refresh concurrently. Both mint, which costs an extra token
+   * request and no more, because GitHub does not invalidate one installation token by issuing
+   * another.
+   *
+   * <p>Keeping only "the current and the one it replaced" would not survive that. Two concurrent
+   * mints roll a one-deep superseded slot forward twice, and the second one's bookkeeping evicts
+   * the <em>original</em> token while a third write is still about to present it. That write's 401
+   * then finds no owner, gets no replacement, and is lost — precisely the failure this class exists
+   * to prevent, reintroduced by the bookkeeping meant to bound the index. An age cannot be raced: a
+   * token minted seconds ago is resolvable no matter how many refreshes have happened since.
    */
-  private final Map<String, Long> tokenOwners = new ConcurrentHashMap<>();
-
-  /**
-   * The token each installation replaced most recently, the only one {@link #tokenOwners} keeps.
-   */
-  private final Map<Long, String> supersededTokens = new ConcurrentHashMap<>();
+  private final Map<String, TokenOwner> tokenOwners = new ConcurrentHashMap<>();
 
   private final AtomicReference<RSAPrivateKey> cachedPrivateKey = new AtomicReference<>();
 
@@ -141,17 +155,24 @@ public class GitHubAuthClient {
     var response =
         tokenApi.createInstallationToken(authHeader, "application/vnd.github+json", installationId);
 
-    var newToken = new CachedToken(response.token(), Instant.now().plus(TOKEN_TTL), installationId);
-    var previous = tokenCache.put(installationId, newToken);
-    tokenOwners.put(newToken.token(), installationId);
-    if (previous != null) {
-      // Keep the token just superseded resolvable for the writes still holding it, and forget the
-      // one before it so the index cannot grow with the process's uptime.
-      var forgotten = supersededTokens.put(installationId, previous.token());
-      Optional.ofNullable(forgotten).ifPresent(tokenOwners::remove);
-    }
+    var issuedAt = Instant.now();
+    var newToken = new CachedToken(response.token(), issuedAt.plus(TOKEN_TTL), installationId);
+    tokenCache.put(installationId, newToken);
+    // Every token this process hands out stays traceable until GitHub's own expiry, so a write
+    // still holding an older one can always name the installation that has to replace it.
+    tokenOwners.put(newToken.token(), new TokenOwner(installationId, issuedAt));
+    forgetTokensIssuedBefore(issuedAt.minus(OWNER_RETENTION));
 
     return newToken.token();
+  }
+
+  /**
+   * Drops index entries for tokens issued before {@code cutoff} — GitHub has expired them, so no
+   * write can still present one and no replacement for one is worth minting. Swept on every mint,
+   * which bounds the index at the tokens issued in the last {@link #OWNER_RETENTION}.
+   */
+  void forgetTokensIssuedBefore(Instant cutoff) {
+    tokenOwners.values().removeIf(owner -> owner.issuedAt().isBefore(cutoff));
   }
 
   /** Returns an Authorization header value for GitHub API calls. */
@@ -164,10 +185,17 @@ public class GitHubAuthClient {
    * when {@code deadAuthHeader} is not one this process issued and so names no installation.
    *
    * <p>Bound into {@link GitHubTokenRefresh} at construction; see that class for why a 401 is worth
-   * repeating at all. The cache entry is dropped only while it still holds the dead token, because
-   * a 401 arrives from every in-flight write at once: the first one through mints the replacement,
-   * and the rest must be handed <em>that</em> replacement rather than each evicting it and minting
-   * another, which would leave every write chasing a token the next one has already thrown away.
+   * repeating at all.
+   *
+   * <p>A dead token does not fail one write, it fails every write still holding it — five within
+   * five seconds in #624 — and those writes are on different threads. Nothing here coordinates
+   * them, and nothing needs to: the cache entry is expired only while it still holds the dead
+   * token, so a refresher arriving after another has already replaced it reads the replacement
+   * instead of minting again; two that arrive together both mint, and two valid installation tokens
+   * are as good as one, since GitHub does not invalidate either. What must not happen is a holder
+   * losing the ability to name its installation, and {@link #tokenOwners} retires by age precisely
+   * so that cannot be raced. A lock across the token endpoint's round trip would buy only the saved
+   * request.
    *
    * <p>Kept separate from the method the constructor binds only because a constructor must not hand
    * out a reference to an overridable method — CDI subclasses this bean.
@@ -181,10 +209,11 @@ public class GitHubAuthClient {
       return Optional.empty();
     }
     var dead = deadAuthHeader.substring(BEARER.length());
-    var installationId = tokenOwners.get(dead);
-    if (installationId == null) {
+    var owner = tokenOwners.get(dead);
+    if (owner == null) {
       return Optional.empty();
     }
+    var installationId = owner.installationId();
     log.info(
         "Installation token for installation {} was rejected — minting a replacement",
         installationId);
