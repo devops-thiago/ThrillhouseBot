@@ -23,6 +23,7 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
@@ -79,6 +80,7 @@ class UnitTestGeneratorTest {
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
   @Mock private UnitTestAssistant testAssistant;
+  @Mock private ReviewSessionPersistence sessionPersistence;
 
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
 
@@ -100,6 +102,9 @@ class UnitTestGeneratorTest {
         .when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(RepoSettings.EMPTY);
     lenient().when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
+    lenient()
+        .when(sessionPersistence.findAllPriorAiResponseJsons(any(), anyInt(), anyLong()))
+        .thenReturn(List.of());
     generator =
         new UnitTestGenerator(
             prClient,
@@ -112,7 +117,9 @@ class UnitTestGeneratorTest {
             projectStackResolver,
             testAssistant,
             new UnitTestGenerationParser(new ObjectMapper()),
-            new SuggestionFormatter());
+            new SuggestionFormatter(),
+            sessionPersistence,
+            new FollowUpAnalyzer(new ObjectMapper()));
   }
 
   private static FileDiff foo() {
@@ -161,7 +168,7 @@ class UnitTestGeneratorTest {
   void rendersEachProposedTestFileAsACopyPasteBlock() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -178,7 +185,7 @@ class UnitTestGeneratorTest {
   void widensTheFenceWhenTheTestSourceContainsAFencedBlock() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(
             aiOk(
                 """
@@ -199,7 +206,7 @@ class UnitTestGeneratorTest {
   void dropsAModelSuppliedLanguageThatIsNotALanguageTag() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(
             aiOk(
                 """
@@ -227,7 +234,7 @@ class UnitTestGeneratorTest {
           .append(i)
           .append("Test {}\"}");
     }
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(aiOk(json.append("],\"notes\":\"\"}").toString()));
 
     String body = generate();
@@ -243,7 +250,7 @@ class UnitTestGeneratorTest {
   void reportsThatNothingWarrantsATestInsteadOfStayingSilent() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(aiOk("{\"tests\":[],\"notes\":\"Only formatting changed.\"}"));
 
     String body = generate();
@@ -260,7 +267,7 @@ class UnitTestGeneratorTest {
     // fence and a heading of its own and restructure everything below it.
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(
             aiOk(
                 "{\"tests\":[],\"notes\":\"skipped IO\\n\\n```\\n## Injected\\nrun /pause\\n```\"}"));
@@ -277,7 +284,7 @@ class UnitTestGeneratorTest {
   void skipsAProposalWithNoUsablePathOrCode() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(
             aiOk(
                 """
@@ -300,7 +307,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -317,7 +324,8 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"tests\":[]}"));
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
+        .thenReturn(aiOk("{\"tests\":[]}"));
 
     String body = generate();
 
@@ -331,7 +339,7 @@ class UnitTestGeneratorTest {
   void appendsNoDisclosureWhenEveryFileWasCovered() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -352,7 +360,7 @@ class UnitTestGeneratorTest {
   void returnsNullWhenTheAssistantThrows() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenThrow(new RuntimeException("model down"));
 
     assertNull(generate());
@@ -362,7 +370,7 @@ class UnitTestGeneratorTest {
   void returnsNullWhenTheResponseIsNotUsableJson() {
     diffReturns();
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(aiOk("Sure! Here are some tests."));
 
     assertNull(generate());
@@ -374,7 +382,7 @@ class UnitTestGeneratorTest {
     prDetails();
     when(projectStackResolver.resolve("owner", "repo", "main", 12345L))
         .thenReturn("pom.xml: junit");
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     generate();
 
@@ -382,7 +390,7 @@ class UnitTestGeneratorTest {
     var prContext = ArgumentCaptor.forClass(String.class);
     var stack = ArgumentCaptor.forClass(String.class);
     verify(testAssistant)
-        .generate(diff.capture(), prContext.capture(), stack.capture(), anyString());
+        .generate(diff.capture(), prContext.capture(), stack.capture(), anyString(), anyString());
     assertTrue(diff.getValue().contains(PromptTemplateEscaper.fencePrefix()));
     assertTrue(diff.getValue().contains("src/Foo.java"));
     assertTrue(prContext.getValue().contains("title"));
@@ -395,11 +403,11 @@ class UnitTestGeneratorTest {
     prDetails();
     when(projectStackResolver.resolve(any(), any(), any(), anyLong()))
         .thenThrow(new RuntimeException("github down"));
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     assertNotNull(generate());
     var stack = ArgumentCaptor.forClass(String.class);
-    verify(testAssistant).generate(any(), any(), stack.capture(), any());
+    verify(testAssistant).generate(any(), any(), stack.capture(), any(), any());
     assertEquals("", stack.getValue());
   }
 
@@ -408,18 +416,18 @@ class UnitTestGeneratorTest {
     diffReturns();
     when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     assertNotNull(generate());
     var prContext = ArgumentCaptor.forClass(String.class);
-    verify(testAssistant).generate(any(), prContext.capture(), any(), any());
+    verify(testAssistant).generate(any(), prContext.capture(), any(), any(), any());
     assertEquals("", prContext.getValue());
   }
 
   /** The diff text of every batch call the assistant received, in order. */
   private List<String> diffsSentToAssistant() {
     var diff = ArgumentCaptor.forClass(String.class);
-    verify(testAssistant, atLeastOnce()).generate(diff.capture(), any(), any(), any());
+    verify(testAssistant, atLeastOnce()).generate(diff.capture(), any(), any(), any(), any());
     return diff.getAllValues();
   }
 
@@ -431,7 +439,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     generate();
 
@@ -453,7 +461,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenReturn(aiOk(ONE_TEST))
         .thenReturn(
             aiOk(
@@ -467,7 +475,7 @@ class UnitTestGeneratorTest {
     assertNotNull(body);
     assertTrue(body.contains("src/test/java/com/example/FooTest.java"), body);
     assertTrue(body.contains("t/OtherTest.java"), body);
-    verify(testAssistant, times(2)).generate(any(), any(), any(), any());
+    verify(testAssistant, times(2)).generate(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -477,7 +485,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     String body = generate();
 
@@ -518,7 +526,7 @@ class UnitTestGeneratorTest {
             new RepoSettings(List.of("src/Other.java"), List.of(), ".github/thrillhousebot.yml"));
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
     generate();
 
@@ -532,7 +540,7 @@ class UnitTestGeneratorTest {
     budgetWithDiffRoom(40);
     prWithFiles(foo(), otherFile());
     prDetails();
-    when(testAssistant.generate(any(), any(), any(), any()))
+    when(testAssistant.generate(any(), any(), any(), any(), any()))
         .thenAnswer(
             call -> {
               if (call.<String>getArgument(0).contains("src/Other.java")) {
@@ -563,6 +571,214 @@ class UnitTestGeneratorTest {
     assertTrue(body.contains("src/Foo.java"), body);
     assertTrue(body.contains("src/Other.java"), body);
     verifyNoInteractions(testAssistant);
+  }
+
+  /** The PR's persisted prior review rounds, newest first, as the persistence returns them. */
+  private void priorRounds(String... responseJson) {
+    when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 7, -1L))
+        .thenReturn(List.of(responseJson));
+  }
+
+  /** A single persisted prior round whose response carries exactly these findings. */
+  private void priorRoundFound(String... findingsJson) {
+    priorRounds("{\"findings\":[" + String.join(",", findingsJson) + "]}");
+  }
+
+  private static String finding(String risk, String file, int line, String title, String desc) {
+    return """
+        {"risk":"%s","file":"%s","line":%d,"title":"%s","description":"%s"}"""
+        .formatted(risk, file, line, title, desc);
+  }
+
+  /** The prior-findings section of the first batch call the assistant received. */
+  private String priorFindingsSentToAssistant() {
+    var findings = ArgumentCaptor.forClass(String.class);
+    verify(testAssistant, atLeastOnce()).generate(any(), any(), any(), any(), findings.capture());
+    return findings.getAllValues().get(0);
+  }
+
+  @Test
+  void tellsTheGeneratorWhatTheReviewAlreadyFoundOnThisPr() {
+    // The point of #606: the review's findings are persisted, so the generator is told about the
+    // defect rather than left to stumble across it — or to pin it as the expected behavior (#571).
+    priorRoundFound(
+        finding(
+            "critical",
+            "src/Foo.java",
+            42,
+            "Unsanitized HTML sink",
+            "User input reaches innerHTML unescaped."));
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    generate();
+
+    var sent = priorFindingsSentToAssistant();
+    assertTrue(sent.contains("1. [CRITICAL] src/Foo.java:42 — Unsanitized HTML sink"), sent);
+    assertTrue(sent.contains("User input reaches innerHTML unescaped."), sent);
+  }
+
+  @Test
+  void sendsNoFindingsSectionWhenThePrHasNoPriorReviewRound() {
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    generate();
+
+    assertEquals("", priorFindingsSentToAssistant());
+  }
+
+  @Test
+  void leavesOutAFindingALaterRoundAlreadyClosed() {
+    // The section is presented to the model as behavior that is wrong today, so a finding a later
+    // round resolved does not belong in it. Its id slot is skipped rather than renumbered, so the
+    // surviving ids still match the ones the review posted.
+    priorRounds(
+        "{\"findings\":[],\"previous_findings_status\":"
+            + "[{\"id\":1,\"status\":\"resolved\",\"note\":\"fixed\"}]}",
+        "{\"findings\":["
+            + finding("critical", "src/Foo.java", 42, "Already fixed", "was wrong")
+            + ","
+            + finding("high", "src/Bar.java", 9, "Still open", "is wrong")
+            + "]}");
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    generate();
+
+    var sent = priorFindingsSentToAssistant();
+    assertFalse(sent.contains("Already fixed"), sent);
+    assertTrue(sent.contains("2. [HIGH] src/Bar.java:9 — Still open"), sent);
+  }
+
+  @Test
+  void rendersAFindingWhoseFieldsAreAbsentWithoutLeakingTheWordNull() {
+    // The findings come back through Jackson, so any field can be absent; a literal "null" in the
+    // prompt reads to the model as a location or a title of its own.
+    priorRoundFound("{\"line\":7}");
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    generate();
+
+    var sent = priorFindingsSentToAssistant();
+    assertTrue(sent.contains("1. [] :7 — "), sent);
+    assertFalse(sent.contains("null"), sent);
+  }
+
+  @Test
+  void capsThePriorFindingsSectionAndCountsTheRest() {
+    // The section repeats on every batch call, so an unbounded one eats the diff budget it shares.
+    var findings = new String[UnitTestGenerator.MAX_PRIOR_FINDINGS + 2];
+    for (int i = 0; i < findings.length; i++) {
+      findings[i] = finding("high", "src/F" + i + ".java", i + 1, "Finding " + i, "d" + i);
+    }
+    priorRoundFound(findings);
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    generate();
+
+    var sent = priorFindingsSentToAssistant();
+    assertTrue(sent.contains("Finding 9"), sent);
+    assertFalse(sent.contains("Finding 10"), sent);
+    assertTrue(sent.contains("(2 further finding(s) were reported"), sent);
+  }
+
+  @Test
+  void stillGeneratesWhenThePriorFindingsCannotBeLoaded() {
+    // Enrichment context must never cost the command: a database problem degrades to no section.
+    when(sessionPersistence.findAllPriorAiResponseJsons(any(), anyInt(), anyLong()))
+        .thenThrow(new RuntimeException("db down"));
+    diffReturns();
+    prDetails();
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    assertNotNull(generate());
+    assertEquals("", priorFindingsSentToAssistant());
+  }
+
+  @Test
+  void countsThePriorFindingsInTheBudgetSoBatchesAreNotOversized() {
+    // The findings ride on every call exactly like the project stack, so leaving them out of the
+    // overhead would let a batch that measures "in budget" overshoot the real input limit. With a
+    // findings section far larger than the room left for diff text, no file can fit.
+    priorRoundFound(finding("high", "src/Foo.java", 1, "t", "x ".repeat(20_000)));
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    prDetails();
+
+    String body = generate();
+
+    verifyNoInteractions(testAssistant);
+    assertNotNull(body);
+    assertTrue(body.startsWith(UnitTestGenerator.NOT_COVERED), body);
+  }
+
+  /** One changed file whose rendered diff section is a few hundred tokens. */
+  private static FileDiff chunky(int index) {
+    var patch = new StringBuilder("@@ -0,0 +1,20 @@");
+    for (int i = 0; i < 20; i++) {
+      patch.append("\n+var alpha").append(i).append(" = beta.gamma(delta, epsilon, zeta);");
+    }
+    return new FileDiff("src/Chunk" + index + ".java", "modified", 20, 0, 20, patch.toString());
+  }
+
+  @Test
+  void keepsEveryBatchCallWithinThePerCallInputBudgetWithTheFindingsCounted() {
+    // The invariant the overhead exists for, asserted on what the calls actually carry rather than
+    // by reading the plan: system prompt + user template + every section + the batch's diff must
+    // fit the per-call input budget. A findings section left out of the overhead makes the planner
+    // hand a batch the room the findings are already spending, and the assembled call overshoots.
+    priorRoundFound(finding("high", "src/Foo.java", 1, "Leaky sink", "detail ".repeat(400)));
+    // Empty title/body/instructions, so the only sections in play are the diff and the findings
+    // and the budget arithmetic has no unrelated slack to hide an overshoot in.
+    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(new PullRequestDetails("", "", null, null));
+    prWithFiles(chunky(1), chunky(2), chunky(3), chunky(4));
+    var counter = new TokenCounter();
+    int overhead =
+        counter.estimateTokens(
+            UnitTestAssistantPrompts.systemPrompt()
+                + UnitTestAssistantPrompts.userPrompt()
+                + PromptTemplateEscaper.fence(" "));
+    when(activeModel.maxInputTokens()).thenReturn(overhead + 900);
+    when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
+
+    generate();
+
+    var diff = ArgumentCaptor.forClass(String.class);
+    var prContext = ArgumentCaptor.forClass(String.class);
+    var stack = ArgumentCaptor.forClass(String.class);
+    var instructions = ArgumentCaptor.forClass(String.class);
+    var findings = ArgumentCaptor.forClass(String.class);
+    verify(testAssistant, atLeastOnce())
+        .generate(
+            diff.capture(),
+            prContext.capture(),
+            stack.capture(),
+            instructions.capture(),
+            findings.capture());
+    int budget = overhead + 900;
+    for (int i = 0; i < diff.getAllValues().size(); i++) {
+      int sent =
+          counter.estimateTokens(
+              UnitTestAssistantPrompts.systemPrompt()
+                  + UnitTestAssistantPrompts.userPrompt()
+                  + diff.getAllValues().get(i)
+                  + prContext.getAllValues().get(i)
+                  + stack.getAllValues().get(i)
+                  + instructions.getAllValues().get(i)
+                  + findings.getAllValues().get(i));
+      assertTrue(
+          sent <= budget,
+          "batch call " + i + " sent " + sent + " tokens against a " + budget + "-token budget");
+    }
   }
 
   @Test

@@ -17,10 +17,12 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestGenerationParser;
@@ -32,6 +34,8 @@ import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -52,6 +56,12 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * tests written from its first N lines with the rest of the changed code unseen — which for this
  * command is the worst version of the failure, because "nothing here warrants a test" would then be
  * a verdict on a diff the model never saw.
+ *
+ * <p>Every batch call also carries the findings the bot's own review already published on the same
+ * PR, read back from the persisted prior rounds. They are the one piece of context this command
+ * cannot derive from the diff: told about them, it can aim a test at the exact sink the review
+ * flagged instead of rediscovering the defect — or pinning it as expected behavior (#571). The
+ * section repeats on every call, so it is part of the overhead {@code planBatches} subtracts.
  *
  * <p>The reduce is local, so no call is reserved: per-batch test files are unioned and deduplicated
  * by path. Batches partition the file list, so two batches usually propose disjoint paths; when
@@ -96,10 +106,27 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
   /** The union reduce is assembled locally, so the whole allowance goes to batch calls. */
   private static final int REDUCE_CALLS = 0;
 
+  /**
+   * Prior findings rendered into the prompt before the rest are rolled up by count. The section
+   * rides on <em>every</em> batch call, so an unbounded one would eat the diff budget it shares — a
+   * review that raised thirty findings would leave no room for the code they are about, and the
+   * command would answer {@link #NOT_COVERED} for a PR it could otherwise have tested.
+   */
+  static final int MAX_PRIOR_FINDINGS = 10;
+
+  /**
+   * No review session is in progress on the suggestion path, so nothing is excluded from the prior
+   * rounds. Negative rather than 0 because the sequence-generated ids start at 1 and the query
+   * excludes by equality — a value no row can hold reads as "exclude nothing" unambiguously.
+   */
+  private static final long NO_SESSION_IN_PROGRESS = -1L;
+
   private final ProjectStackResolver projectStackResolver;
   private final UnitTestAssistant testAssistant;
   private final UnitTestGenerationParser parser;
   private final SuggestionFormatter suggestionFormatter;
+  private final ReviewSessionPersistence sessionPersistence;
+  private final FollowUpAnalyzer followUpAnalyzer;
 
   @Inject
   public UnitTestGenerator(
@@ -113,7 +140,9 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       ProjectStackResolver projectStackResolver,
       UnitTestAssistant testAssistant,
       UnitTestGenerationParser parser,
-      SuggestionFormatter suggestionFormatter) {
+      SuggestionFormatter suggestionFormatter,
+      ReviewSessionPersistence sessionPersistence,
+      FollowUpAnalyzer followUpAnalyzer) {
     super(
         prClient,
         diffFormatter,
@@ -126,6 +155,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
     this.testAssistant = testAssistant;
     this.parser = parser;
     this.suggestionFormatter = suggestionFormatter;
+    this.sessionPersistence = sessionPersistence;
+    this.followUpAnalyzer = followUpAnalyzer;
   }
 
   /**
@@ -160,15 +191,20 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
             new CommandTarget(owner, repo, defaultBranch, installationId),
             COMMAND,
             inputs.reviewableFiles());
-    // The project stack rides on every batch call, so it has to be part of the overhead the
-    // planner subtracts before sizing batches — see the six-argument planBatches.
+    var extras =
+        new ExtraSections(
+            PromptTemplateEscaper.escape(stack),
+            PromptTemplateEscaper.escape(priorFindings(owner, repo, prNumber)));
+    // The project stack and the prior findings ride on every batch call, so both have to be part
+    // of the overhead the planner subtracts before sizing batches — see the six-argument
+    // planBatches.
     var plan =
         planBatches(
             reviewable,
             inputs,
             UnitTestAssistantPrompts.systemPrompt(),
             UnitTestAssistantPrompts.userPrompt(),
-            PromptTemplateEscaper.escape(stack),
+            extras.all(),
             REDUCE_CALLS);
     if (plan.batches().isEmpty()) {
       Log.debugf("No file of %s/%s #%d fit a %s batch", owner, repo, prNumber, COMMAND);
@@ -177,7 +213,7 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       // the model never saw. Nothing covered and nothing omitted means no file was in scope.
       return plan.truncated() ? NOT_COVERED + disclosure(plan) : null;
     }
-    var generated = generateEachBatch(inputs, stack, plan);
+    var generated = generateEachBatch(inputs, extras, plan);
     if (generated == null) {
       return null;
     }
@@ -185,6 +221,107 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
         + batchFailureNote(
             generated.failedBatches(), COMMAND, "the code in them has no tests proposed here.")
         + disclosure(plan);
+  }
+
+  /**
+   * The two sections this command adds on top of {@link #sharedPromptOverhead}, each escaped
+   * exactly as it is sent. Both ride on every batch call, so they are built once and handed to the
+   * planner and to the calls: what the planner subtracts as overhead cannot then drift from what a
+   * call actually carries, which is the drift that lets an "in-budget" batch overshoot the model's
+   * real input limit.
+   */
+  private record ExtraSections(String projectStack, String priorFindings) {
+
+    /** Both sections as the planner sizes them — concatenated exactly as the call sends them. */
+    String all() {
+      return projectStack + priorFindings;
+    }
+  }
+
+  /**
+   * The findings the bot's own review already reported on this PR, rendered for the prompt, or
+   * empty when there is no prior round (or it raised nothing). Without this the command runs blind
+   * to a defect the bot found, described and published on the very PR it is writing tests for, and
+   * can only rediscover it — or, worse, pin it as the expected behavior (#571).
+   *
+   * <p>Takes the newest prior round that actually raised findings, exactly as the review path does
+   * ({@link FollowUpAnalyzer#effectivePreviousFindings}), so a later round that legitimately found
+   * nothing does not read as "the review found nothing". Fails soft like every other context load
+   * here: a database problem must degrade to no findings section rather than lose the command.
+   */
+  private String priorFindings(String owner, String repo, int prNumber) {
+    List<String> priorJsons;
+    try {
+      priorJsons =
+          sessionPersistence.findAllPriorAiResponseJsons(
+              owner + "/" + repo, prNumber, NO_SESSION_IN_PROGRESS);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Could not load prior review findings for %s on %s/%s #%d, continuing without them",
+          COMMAND,
+          owner,
+          repo,
+          prNumber);
+      return "";
+    }
+    var priorResponses = followUpAnalyzer.parsePreviousResponses(priorJsons);
+    return renderFindings(
+        FollowUpAnalyzer.effectivePreviousFindings(priorResponses),
+        FollowUpAnalyzer.settledPreviousIds(priorResponses));
+  }
+
+  /**
+   * One line per still-open finding — risk, location, title — with its description underneath,
+   * numbered by the 1-based position the review published as the finding's id so a maintainer
+   * reading both can line them up. Capped at {@link #MAX_PRIOR_FINDINGS}, with the remainder
+   * counted rather than dropped silently. Empty when nothing is left to show.
+   *
+   * <p>A finding a later round already closed is skipped: the prompt presents this list as behavior
+   * that is wrong <em>today</em>, and a resolved one is not. Its id slot is skipped rather than
+   * renumbered, so the ids still match the ones the review posted.
+   */
+  private static String renderFindings(
+      List<ReviewResponse.Finding> findings, Set<Integer> settledIds) {
+    var sb = new StringBuilder();
+    int shown = 0;
+    int overCap = 0;
+    for (var i = 0; i < findings.size(); i++) {
+      if (settledIds.contains(i + 1)) {
+        continue;
+      }
+      if (shown == MAX_PRIOR_FINDINGS) {
+        overCap++;
+        continue;
+      }
+      var finding = findings.get(i);
+      sb.append(i + 1)
+          .append(". [")
+          .append(text(finding.risk()).toUpperCase(Locale.ROOT))
+          .append("] ")
+          .append(text(finding.file()))
+          .append(':')
+          .append(finding.line())
+          .append(" — ")
+          .append(text(finding.title()))
+          .append('\n');
+      var description = text(finding.description());
+      if (!description.isEmpty()) {
+        sb.append("   ").append(description).append('\n');
+      }
+      shown++;
+    }
+    if (overCap > 0) {
+      sb.append("(")
+          .append(overCap)
+          .append(" further finding(s) were reported but are not listed here.)\n");
+    }
+    return sb.toString();
+  }
+
+  /** A finding field as prompt text: absent fields are blanks, not the literal {@code null}. */
+  private static String text(String value) {
+    return value == null ? "" : value.strip();
   }
 
   /**
@@ -204,14 +341,14 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
    * Returns {@code null} only when every batch failed, which is a failed run rather than a verdict.
    */
   private Generated generateEachBatch(
-      Inputs inputs, String stack, DiffBudgetPlanner.BudgetPlan plan) {
+      Inputs inputs, ExtraSections extras, DiffBudgetPlanner.BudgetPlan plan) {
     var merged = new ArrayList<UnitTestGenerationResponse.GeneratedTestFile>();
     var seenPaths = new HashSet<String>();
     var notes = new ArrayList<String>();
     int failed = 0;
     int dropped = 0;
     for (var batch : plan.batches()) {
-      var response = generateOne(inputs, stack, batch);
+      var response = generateOne(inputs, extras, batch);
       if (response == null) {
         failed++;
         continue;
@@ -238,7 +375,7 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
    * One batch's proposals, or {@code null} when the call failed or the response would not parse.
    */
   private UnitTestGenerationResponse generateOne(
-      Inputs inputs, String stack, DiffBudgetPlanner.DiffBatch batch) {
+      Inputs inputs, ExtraSections extras, DiffBudgetPlanner.DiffBatch batch) {
     String raw =
         callAssistant(
             COMMAND,
@@ -247,8 +384,9 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
                     PromptTemplateEscaper.fence(batch.text()),
                     PromptTemplateEscaper.escape(
                         PromptSections.prContext(inputs.title(), inputs.body())),
-                    PromptTemplateEscaper.escape(stack),
-                    PromptTemplateEscaper.escape(inputs.instructions())));
+                    extras.projectStack(),
+                    PromptTemplateEscaper.escape(inputs.instructions()),
+                    extras.priorFindings()));
     if (raw == null) {
       return null;
     }
