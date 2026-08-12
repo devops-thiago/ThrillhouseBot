@@ -950,6 +950,31 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorAFindingThatDeniesTheExposureRatherThanTheSinkByName() {
+    // The denial the finding words about the exposure ("not exploitable") instead of about the
+    // class ("no SQL injection"): it names no sink of its own, so it is the wording most easily
+    // lost when the denials are read as two patterns rather than one alternation.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/main/java/Report.java",
+                31,
+                "Unescaped title in the offline CSV export",
+                "The value reaches document.write with no escaping, but the sheet is rendered by a"
+                    + " build step and served to nobody, so this is not exploitable.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void doesNotFloorAFindingThatDescribesTheMitigationAsPresent() {
     // The other half of the same defect: no negated sink here, but the finding affirmatively
     // states the value IS escaped. An absence claim about one layer ("unvalidated" at storage)

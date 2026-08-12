@@ -95,14 +95,23 @@ public class FindingVerificationService {
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * Injection sinks and vulnerability classes named explicitly, per the review prompt's dimension-2
-   * list. Matching one of these is only the first half of the floor's test.
+   * Vulnerability classes named explicitly, per the review prompt's dimension-2 list. Matching one
+   * of these is only the first half of the floor's test.
    */
   private static final Pattern INJECTION_SINK =
       Pattern.compile(
           "\\b(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
-              + "|path traversal|directory traversal|(unsafe|insecure) deserializ\\w*"
-              + "|dangerouslysetinnerhtml|bypasssecuritytrusthtml|v-html|inner_?html|outerhtml"
+              + "|path traversal|directory traversal|(unsafe|insecure) deserializ\\w*)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The raw-HTML sinks from the same list, named as the API rather than as a class. Read as a union
+   * with {@link #INJECTION_SINK} — a finding naming either names a sink — and kept a second pattern
+   * only because one alternation of both lists is more than the regex complexity budget allows.
+   */
+  private static final Pattern HTML_SINK_API =
+      Pattern.compile(
+          "\\b(dangerouslysetinnerhtml|bypasssecuritytrusthtml|v-html|inner_?html|outerhtml"
               + "|insertadjacenthtml|document\\.write)\\b",
           Pattern.CASE_INSENSITIVE);
 
@@ -115,15 +124,26 @@ public class FindingVerificationService {
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * The finding's own statement that nothing neutralizes the tainted value. Deliberately keyed on
-   * an ABSENCE claim: it is what turns "this code uses innerHTML" into "user data reaches an
-   * injection sink unmitigated", which is the class the prompt floors at "high".
+   * The finding's own statement that nothing neutralizes the tainted value, worded as an adjective
+   * on the value itself. Deliberately keyed on an ABSENCE claim: it is what turns "this code uses
+   * innerHTML" into "user data reaches an injection sink unmitigated", which is the class the
+   * prompt floors at "high".
    */
-  private static final Pattern NO_MITIGATION =
+  private static final Pattern UNMITIGATED_ADJECTIVE =
       Pattern.compile(
-          "\\b(unsanitiz\\w*|unescaped|unvalidated|unparameteriz\\w*|non-parameteriz\\w*"
-              + "|(no|not|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
-              + "(sanitiz|escap|validat|parameteriz|encod)\\w*)",
+          "\\b(unsanitiz\\w*|unescaped|unvalidated|unparameteriz\\w*|non-parameteriz\\w*)",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The same absence claim worded as a missing step ("no sanitization", "never escaped"), with room
+   * for a few words between the negator and the neutralizing verb. Read as a union with {@link
+   * #UNMITIGATED_ADJECTIVE}; the two are one claim split across two patterns only because one
+   * alternation of both wordings is more than the regex complexity budget allows.
+   */
+  private static final Pattern MITIGATION_ABSENT =
+      Pattern.compile(
+          "\\b(no|not|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
+              + "(sanitiz|escap|validat|parameteriz|encod)\\w*",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -136,9 +156,19 @@ public class FindingVerificationService {
    */
   private static final Pattern SINK_DENIED =
       Pattern.compile(
-          "\\b(no|not|never)\\s+(\\w+[\\s-]+){0,1}"
+          "\\b(no|not|never)\\s+(\\w+[\\s-]+)?"
               + "(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
-              + "|path traversal|directory traversal|vulnerab\\w*|exploitab\\w*)\\b",
+              + "|path traversal|directory traversal)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The same denial worded about the exposure rather than the class ("not exploitable", "no
+   * vulnerability here"). Read as a union with {@link #SINK_DENIED}, from which it is separated
+   * only because one alternation of both wordings is more than the regex complexity budget allows.
+   */
+  private static final Pattern EXPLOITABILITY_DENIED =
+      Pattern.compile(
+          "\\b(no|not|never)\\s+(\\w+[\\s-]+)?(vulnerab|exploitab)\\w*\\b",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -146,6 +176,11 @@ public class FindingVerificationService {
    * them"). An absence claim about one layer must not floor the class when the same text says
    * another layer neutralizes the value. Negated forms are excluded, so "is not escaped" and "was
    * never sanitized" stay absence claims instead of defeating themselves.
+   *
+   * <p>Left exactly as it stands, {@code {0,1}} and all: its complexity is over the analyzer's
+   * budget and cannot come under it without dropping a copula, a verb form or the one-word gap,
+   * each of which narrows what it matches (#594, #608). Rewriting the quantifier alone would move
+   * that unfixable finding onto this change's own lines while fixing nothing.
    */
   private static final Pattern MITIGATION_ASSERTED =
       Pattern.compile(
@@ -497,17 +532,29 @@ public class FindingVerificationService {
     // is safe, and the review prompt mandates exactly that hypothesis on this class (#608).
     String asserted = CONDITIONAL_CLAUSE.matcher(text).replaceAll(" ");
     return namesInjectionSink(text)
-        && NO_MITIGATION.matcher(text).find()
+        && claimsNothingNeutralizesIt(text)
         // Either defeater anywhere in the finding's assertions suppresses the floor. Under-firing
-        // costs a finding the lift it should have had, which is where this class already stood;
-        // over-firing escalates a non-defect and, at high confidence, blocks the merge on it.
-        && !SINK_DENIED.matcher(asserted).find()
+        // only costs a finding the lift it should have had (which is where this class already
+        // stood), while over-firing escalates a non-defect and, at high confidence, blocks the
+        // merge on it.
+        && !deniesTheSink(asserted)
         && !MITIGATION_ASSERTED.matcher(asserted).find();
   }
 
   private static boolean namesInjectionSink(String text) {
     return INJECTION_SINK.matcher(text).find()
+        || HTML_SINK_API.matcher(text).find()
         || (SQL.matcher(text).find() && STRING_BUILT.matcher(text).find());
+  }
+
+  /** The absence claim in either of its two wordings; one claim, two patterns. */
+  private static boolean claimsNothingNeutralizesIt(String text) {
+    return UNMITIGATED_ADJECTIVE.matcher(text).find() || MITIGATION_ABSENT.matcher(text).find();
+  }
+
+  /** The sink denied by class ("no SQL injection") or by exposure ("not exploitable"). */
+  private static boolean deniesTheSink(String asserted) {
+    return SINK_DENIED.matcher(asserted).find() || EXPLOITABILITY_DENIED.matcher(asserted).find();
   }
 
   private static boolean isBlockingEligible(ReviewResponse.Finding finding) {
