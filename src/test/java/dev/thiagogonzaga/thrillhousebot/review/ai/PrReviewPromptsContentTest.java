@@ -747,6 +747,42 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void aDefectOnAnotherDimensionMustBePromotedOutOfTheFindingItSupports() {
+    // #587: six of eight languages analysed the mock-fidelity defect correctly and filed none of
+    // them — the reasoning landed inside another finding's body, a walkthrough row or a
+    // description_gaps entry, surfaces that carry no severity, no anchor line and no thread.
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "EVERY defect gets its OWN finding, on the dimension it belongs to",
+        "a defect on another dimension must be filed, not cited as evidence (#587)");
+    assertContains(
+        sys,
+        "summary.file_summaries row, or in a description_gaps entry is NOT",
+        "stating a defect on a non-finding surface must not count as reporting it (#587)");
+    assertContains(
+        sys,
+        "this one forbids burying a SECOND defect inside the",
+        "the no-burying rule must be disambiguated from the report-once rule (#587)");
+    assertContains(
+        sys,
+        "promote each one into its own finding",
+        "the response must be swept for defects no finding covers (#587)");
+    assertContains(
+        sys,
+        "this is a promotion step, not new analysis",
+        "the sweep must be framed as promotion of material already written (#587)");
+    assertContains(
+        sys,
+        "Emit the mock-fidelity finding anyway",
+        "dimension 8 must say the contradiction is filed even when it is also evidence (#587)");
+    assertContains(
+        PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+        "File it as its own finding",
+        "the injected mock-fidelity block must carry the same promotion rule (#587)");
+  }
+
+  @Test
   void confidenceCapsGovernWordingRatherThanWhetherToReport() {
     String sys = PrReviewPrompts.SYSTEM;
     assertContains(
