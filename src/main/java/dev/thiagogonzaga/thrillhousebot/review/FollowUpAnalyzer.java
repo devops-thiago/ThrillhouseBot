@@ -803,14 +803,11 @@ public class FollowUpAnalyzer {
   private static final Pattern LOCATOR_SHAPE = Pattern.compile("(?<=\\S):\\d");
 
   /**
-   * A line range's separator and its end line, matched immediately after a locator: optional space,
-   * a dash of any spelling or a {@code ..}, optional space, then the digit that makes it a range
-   * rather than the documented {@code path:line — <title>} separator. Anchored by {@code lookingAt}
-   * at the position after the locator, so it never scans the whole body. See {@link
-   * #startsSpacedRange}.
+   * How much whitespace may sit either side of a range's separator before the text stops reading as
+   * one range. A separator is spaced off its operands by a character or two at most; a longer run
+   * is two separate thoughts, and the bound keeps the scan over untrusted comment prose linear.
    */
-  private static final Pattern SPACED_LINE_RANGE =
-      Pattern.compile("[ \\t]*(?:[-\\u2010-\\u2015\\u2212]|\\.\\.)[ \\t]*\\d");
+  private static final int MAX_RANGE_SPACING = 16;
 
   /**
    * Whether {@code body} names anything locator-shaped at all. This is a <em>necessary</em>
@@ -955,9 +952,34 @@ public class FollowUpAnalyzer {
    * opens with a digit ({@code :1 — 2 call sites}) reading as a range, which under-clears — the
    * finding is held one more round and the maintainer can name it again, whereas an over-clear
    * drops it silently.
+   *
+   * <p>Written as a scan rather than a pattern so the separator test is literally {@link #isDash},
+   * the one {@link #continuesLocator} applies to the adjacent spelling. An enumerated character
+   * class drifts from the category test the moment either is edited, and the two guards disagreeing
+   * about the same character means a dash rejected adjacent is accepted spaced — the over-clear
+   * this exists to stop, arrived at through the fix for it.
    */
   private static boolean startsSpacedRange(String body, int after) {
-    return SPACED_LINE_RANGE.matcher(body).region(after, body.length()).lookingAt();
+    var at = skipSpacing(body, after);
+    if (at < body.length() && isDash(body.charAt(at))) {
+      at++;
+    } else if (at + 1 < body.length() && body.charAt(at) == '.' && body.charAt(at + 1) == '.') {
+      at += 2;
+    } else {
+      return false;
+    }
+    at = skipSpacing(body, at);
+    return at < body.length() && Character.isDigit(body.charAt(at));
+  }
+
+  /** Index of the first character at or after {@code from} that is not range spacing. */
+  private static int skipSpacing(String body, int from) {
+    var at = from;
+    var limit = Math.min(body.length(), from + MAX_RANGE_SPACING);
+    while (at < limit && (body.charAt(at) == ' ' || body.charAt(at) == '\t')) {
+      at++;
+    }
+    return at;
   }
 
   /**
@@ -971,10 +993,21 @@ public class FollowUpAnalyzer {
    * range as a continuation only under-clears, and the maintainer can say so again.
    */
   private static boolean continuesLocator(char c) {
-    return Character.isLetterOrDigit(c)
-        || c == '_'
-        || Character.getType(c) == Character.DASH_PUNCTUATION
-        || c == '−';
+    return Character.isLetterOrDigit(c) || c == '_' || isDash(c);
+  }
+
+  /**
+   * Whether {@code c} is a dash a line range may be written with — the whole {@code Pd} category
+   * plus the minus sign, which Unicode files under {@code Sm} but readers and autocorrect treat as
+   * a hyphen.
+   *
+   * <p>The category test rather than an enumeration: {@code Pd} holds a fullwidth hyphen-minus and
+   * a wave dash as well as the four dashes anyone lists from memory, and a range typed on a CJK
+   * keyboard is not a rarer input than one carrying an en dash from smart punctuation. Both places
+   * that ask this question call here, so neither can drift into accepting a dash the other rejects.
+   */
+  private static boolean isDash(char c) {
+    return Character.getType(c) == Character.DASH_PUNCTUATION || c == '−';
   }
 
   /** A non-bot conversation comment with a body and a write-capable author association. */

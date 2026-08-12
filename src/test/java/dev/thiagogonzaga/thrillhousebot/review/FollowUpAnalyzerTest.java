@@ -2941,12 +2941,44 @@ class FollowUpAnalyzerTest {
             "a dotted line range must not clear it",
             "@thrillhousebot resolved `src/A.java:1..3` — SQL injection",
             false),
+        // Both guards ask isDash, so a dash either rejects in both spellings or neither. A
+        // fullwidth hyphen-minus and a wave dash are Pd but appear in nobody's enumeration.
+        arguments(
+            "a spaced fullwidth-hyphen line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 － 3` — SQL injection",
+            false),
+        arguments(
+            "a spaced wave-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 〜 3` — SQL injection",
+            false),
         // The accepted cost of requiring a digit: a title opening with one reads as a range and
         // under-clears, which holds the finding a round rather than dropping it.
         arguments(
             "a title opening with a digit under-clears rather than risking the separator",
             "@thrillhousebot resolved src/A.java:1 — 2 call sites of this SQL injection",
             false),
+        arguments(
+            "a tab-spaced line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1\t-\t3` — SQL injection",
+            false),
+        // Everything a range scan must not swallow: prose that merely continues after the locator,
+        // and a separator too far away or with nothing after it to be one.
+        arguments(
+            "a sentence-ending period is not a range and still clears",
+            "@thrillhousebot resolved src/A.java:1. SQL injection is gone",
+            true),
+        arguments(
+            "a locator trailed by spaces to the end still clears",
+            "@thrillhousebot resolved SQL injection at src/A.java:1   ",
+            true),
+        arguments(
+            "a dash ending the comment is not a range and still clears",
+            "@thrillhousebot resolved SQL injection at src/A.java:1 -",
+            true),
+        arguments(
+            "a separator spaced further than a range is written still clears",
+            "@thrillhousebot resolved src/A.java:1                    - 3 SQL injection",
+            true),
         arguments(
             "the documented em-dash form still clears",
             "@thrillhousebot resolved src/A.java:1 — SQL injection",
