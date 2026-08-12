@@ -548,7 +548,7 @@ public class ConfigKeyContextResolver {
           exactOnly
               ? definesExactly(normalizedLines[i], normalizedToken)
               : definesBySuffix(normalizedLines[i], normalizedToken);
-      // i > lastRendered skips a match the previous window already shows: adjacent matches (a
+      // i <= lastRendered skips a match the previous window already shows: adjacent matches (a
       // property and its override on consecutive lines) share one snippet rather than repeating it.
       // The comparison is against the match's own line, not its context start: gating on the start
       // dropped a definition whose only overlap with the previous window was its leading context
