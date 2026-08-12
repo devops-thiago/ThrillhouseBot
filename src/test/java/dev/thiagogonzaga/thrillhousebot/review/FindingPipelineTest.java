@@ -2060,15 +2060,19 @@ class FindingPipelineTest {
     var handler =
         new java.util.logging.Handler() {
           @Override
-          public void publish(java.util.logging.LogRecord record) {
-            logged.add(String.valueOf(record.getMessage()));
+          public void publish(java.util.logging.LogRecord entry) {
+            logged.add(String.valueOf(entry.getMessage()));
           }
 
           @Override
-          public void flush() {}
+          public void flush() {
+            // Records land straight in the list; nothing is buffered.
+          }
 
           @Override
-          public void close() {}
+          public void close() {
+            // The list outlives the handler; nothing to release.
+          }
         };
     logger.addHandler(handler);
     try {

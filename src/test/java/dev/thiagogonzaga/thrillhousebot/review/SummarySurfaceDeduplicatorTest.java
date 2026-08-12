@@ -19,10 +19,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class SummarySurfaceDeduplicatorTest {
 
@@ -30,17 +35,33 @@ class SummarySurfaceDeduplicatorTest {
     return new Finding(RiskLevel.HIGH, "src/A.java", 1, title, "desc", null, null);
   }
 
-  @Test
-  void keepsAGapThatStatesSomethingNoFindingStates() {
-    var gaps =
-        List.of("The PR promises a health check before dispatch, but no health field is present.");
-    var surfaces =
-        SummarySurfaceDeduplicator.collapse(
-            gaps,
-            Map.of(),
-            List.of(finding("Worker registry pagination not followed; only first page returned")));
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("gapsNoFindingRestates")
+  void keepsAGapNoFindingRestates(String label, String gap, String findingTitle) {
+    var gaps = List.of(gap);
 
-    assertEquals(gaps, surfaces.descriptionGaps());
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(gaps, Map.of(), List.of(finding(findingTitle)));
+
+    assertEquals(gaps, surfaces.descriptionGaps(), label);
+  }
+
+  static Stream<Arguments> gapsNoFindingRestates() {
+    return Stream.of(
+        arguments(
+            "a gap that states something no finding states",
+            "The PR promises a health check before dispatch, but no health field is present.",
+            "Worker registry pagination not followed; only first page returned"),
+        arguments(
+            "a finding with no title matches nothing",
+            "The PR description omits the new retry budget entirely.",
+            null),
+        // Identical but for the negation: "does"/"not" used to be stop words, so both sides
+        // tokenized the same and the gap was deleted as a duplicate of the claim it contradicts.
+        arguments(
+            "a negated paraphrase contradicts the finding instead of restating it",
+            "Path traversal: unvalidated client source does not reach fopen path",
+            "Path traversal: unvalidated client source reaches fopen path"));
   }
 
   @Test
@@ -58,15 +79,6 @@ class SummarySurfaceDeduplicatorTest {
 
     assertEquals(1, surfaces.descriptionGaps().size());
     assertTrue(surfaces.descriptionGaps().get(0).startsWith("RunSummary.degraded"));
-  }
-
-  @Test
-  void aFindingWithNoTitleMatchesNothing() {
-    var gaps = List.of("The PR description omits the new retry budget entirely.");
-
-    var surfaces = SummarySurfaceDeduplicator.collapse(gaps, Map.of(), List.of(finding(null)));
-
-    assertEquals(gaps, surfaces.descriptionGaps());
   }
 
   @Test
@@ -135,20 +147,6 @@ class SummarySurfaceDeduplicatorTest {
 
     assertEquals(
         "Added HTTP client for worker registry", surfaces.fileSummaries().get("src/A.java"));
-  }
-
-  @Test
-  void aNegatedParaphraseContradictsTheFindingInsteadOfRestatingIt() {
-    // Identical but for the negation: "does"/"not" used to be stop words, so both sides tokenized
-    // the same and the gap was deleted as a duplicate of the claim it contradicts.
-    var gaps = List.of("Path traversal: unvalidated client source does not reach fopen path");
-    var surfaces =
-        SummarySurfaceDeduplicator.collapse(
-            gaps,
-            Map.of(),
-            List.of(finding("Path traversal: unvalidated client source reaches fopen path")));
-
-    assertEquals(gaps, surfaces.descriptionGaps());
   }
 
   @Test

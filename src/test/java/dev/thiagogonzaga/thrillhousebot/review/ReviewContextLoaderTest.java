@@ -989,9 +989,9 @@ class ReviewContextLoaderTest {
     @Test
     void shouldNameTheCeilingAsTheFullPagedWalk() {
       assertEquals(
-          GitHubCommentClient.COMMENTS_PER_PAGE * GitHubCommentClient.MAX_COMMENT_PAGES,
           ReviewContextLoader.MAX_CONVERSATION_COMMENTS,
-          "the documented ceiling must be the walk the client actually performs");
+          GitHubCommentClient.COMMENTS_PER_PAGE * GitHubCommentClient.MAX_COMMENT_PAGES,
+          "the walk the client actually performs must reach the documented ceiling");
     }
 
     @Test

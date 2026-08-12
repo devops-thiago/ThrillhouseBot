@@ -58,8 +58,8 @@ class GitHubErrorLoggerTest {
     capture =
         new Handler() {
           @Override
-          public void publish(LogRecord record) {
-            logged.add(record);
+          public void publish(LogRecord entry) {
+            logged.add(entry);
           }
 
           @Override
@@ -83,8 +83,8 @@ class GitHubErrorLoggerTest {
 
   private String warnings() {
     return logged.stream()
-        .filter(record -> record.getLevel().intValue() >= Level.WARNING.intValue())
-        .map(record -> record.getMessage() + " " + Arrays.toString(record.getParameters()))
+        .filter(entry -> entry.getLevel().intValue() >= Level.WARNING.intValue())
+        .map(entry -> entry.getMessage() + " " + Arrays.toString(entry.getParameters()))
         .reduce("", (left, right) -> left + right);
   }
 
@@ -147,7 +147,7 @@ class GitHubErrorLoggerTest {
 
     assertEquals("", warnings());
     assertTrue(
-        logged.stream().anyMatch(record -> record.getLevel().intValue() < Level.INFO.intValue()),
+        logged.stream().anyMatch(entry -> entry.getLevel().intValue() < Level.INFO.intValue()),
         "still recorded, just at debug");
   }
 }
