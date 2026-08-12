@@ -854,16 +854,92 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
-  void aPatchlessFileWithNoNameIsSkippedInsteadOfFailingThePlan() {
+  void aPatchlessFileWithNoNameIsCountedAsAGapInsteadOfFailingThePlan() {
     // GitHub returns a null/blank patch for binaries and oversized text diffs, and FileDiff does
     // not validate its filename. A null name reaching the plan's omitted list makes List.copyOf in
-    // the BudgetPlan constructor throw, failing the whole review at plan time — for a file the
-    // disclosure could not have named anyway.
+    // the BudgetPlan constructor throw, failing the whole review at plan time (#550). Dropping it
+    // instead would be the worse failure and a silent one: the list size is what holds APPROVE, so
+    // the only omission vanishing would let the bot approve a PR it never read (#473).
     var files = Arrays.asList(new FileDiff(null, "modified", 7, 0, 7, ""));
 
     var plan = planner.plan(files, 10000, 3);
 
-    assertTrue(plan.omittedFiles().isEmpty(), plan.omittedFiles().toString());
+    assertEquals(List.of("(unnamed file)"), plan.omittedFiles());
     assertTrue(plan.clippedFiles().isEmpty(), plan.clippedFiles().toString());
+    assertTrue(plan.truncated(), "an unreviewed file must keep withholding approval");
+  }
+
+  @Test
+  void anUnnamedFileTyingOnSizeDoesNotBlowUpTheImpactSort() {
+    // #473: the name tie-break only runs between files of equal additions+deletions, and
+    // Comparator.thenComparing's natural ordering throws on a null key. Two 7-change files, one
+    // unnamed, are exactly that tie.
+    var files =
+        Arrays.asList(
+            file("src/App.java", 7, patch(7)), new FileDiff(null, "modified", 7, 0, 7, ""));
+
+    var plan = planner.plan(files, 10_000, 3);
+
+    assertEquals(List.of("src/App.java"), coveredFilenames(plan));
+    assertEquals(List.of("(unnamed file)"), plan.omittedFiles(), "the patchless file has no diff");
+  }
+
+  @Test
+  void anUnnamedFileSortsAfterItsEquallySizedNamedPeers() {
+    // Which side of the tie the unnamed file lands on is a choice, not a mechanical detail: packing
+    // is impact-descending, so whatever sorts last is what the bin cap omits first. Unnamed last
+    // keeps a degenerate entry from displacing a well-formed file — findings on a file the model
+    // cannot name have no path to anchor an inline comment to.
+    var named = file("src/App.java", 7, patch(7));
+    var unnamed = new FileDiff(null, "modified", 7, 0, 7, patch(7));
+    var budget = sectionTokens(named) + 10; // room for exactly one of the two
+
+    var plan = planner.plan(Arrays.asList(unnamed, named), budget, 1);
+
+    assertEquals(List.of("src/App.java"), coveredFilenames(plan), "the named file keeps the bin");
+    assertEquals(List.of("(unnamed file)"), plan.omittedFiles());
+    assertTrue(plan.truncated());
+  }
+
+  @Test
+  void anUnnamedFileOverflowingEveryBinIsCountedNotDropped() {
+    // The bin-packing omission site: a file that fits its own budget but not the remaining bins.
+    // Its count is what VerdictBuilder reads for DiffStats.truncated(), so a nameless omission has
+    // to occupy a slot — otherwise the single omission disappears and APPROVE is no longer held.
+    var big = file("src/Big.java", 40, patch(8));
+    var unnamed = new FileDiff(null, "modified", 8, 0, 8, patch(8));
+    var budget = sectionTokens(big) + 10; // one file per bin, one bin
+
+    var plan = planner.plan(Arrays.asList(big, unnamed), budget, 1);
+
+    assertEquals(List.of("src/Big.java"), coveredFilenames(plan));
+    assertEquals(List.of("(unnamed file)"), plan.omittedFiles());
+    assertEquals(1, plan.omittedFiles().size(), "the gap count must stay honest");
+    assertTrue(plan.truncated(), "an unreviewed file must keep withholding approval");
+  }
+
+  @Test
+  void aCondensedPreviousFindingsContextStillLeavesAnUnnamedGapHoldingApproval() {
+    // The two accounts this class keeps are separate and must stay separate: #583 elides prompt
+    // text (findings the model is re-shown), #473 counts file coverage gaps. Run both at once — a
+    // previous-findings block far past its share, and a file GitHub named nothing — and the
+    // condensation must not absorb the coverage gap, nor the placeholder leak into the prompt.
+    budget(20_000);
+    var named = file("src/App.java", 5, patch(5));
+    var unnamed = new FileDiff(null, "modified", 7, 0, 7, "");
+    var inputs = inputsWith(PromptTemplateEscaper.fence(previousFindingsBlock(300, 6)));
+
+    var plan = planner.plan(Arrays.asList(named, unnamed), inputs);
+
+    assertEquals(List.of("src/App.java"), coveredFilenames(plan), "the named file is reviewed");
+    assertEquals(
+        List.of("(unnamed file)"), plan.omittedFiles(), "the nameless gap is still counted");
+    assertTrue(plan.truncated(), "an unreviewed file must keep withholding approval");
+    assertFalse(
+        planner
+            .boundPreviousFindings(inputs)
+            .previousFindings()
+            .contains(DiffBudgetPlanner.UNNAMED_FILE),
+        "the coverage placeholder has no business in the previous-findings prompt text");
   }
 }
