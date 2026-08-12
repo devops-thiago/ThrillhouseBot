@@ -151,7 +151,11 @@ public final class PrReviewPrompts {
                nonetheless untested, which is precisely the failure nobody notices — and note that
                the mandated low/medium CONFIDENCE describes how firmly you may word the claim, not
                whether the finding is worth emitting. A green test whose mocks contradict the
-               real collaborator is not evidence the production path works.
+               real collaborator is not evidence the production path works. You will most often
+               notice the unfaithful stub while building some OTHER finding — the fixture that
+               cannot distinguish the two cases, the mock that makes a broken path look proven.
+               Emit the mock-fidelity finding anyway: a contradiction stated only inside another
+               finding's body, or in a walkthrough row, has not been reported.
             9. PRODUCER → CONSUMER CONTRACT: hunks are judged locally, so a change can be correct
                line by line and still wrong end to end. Once per PR, for the change's PRIMARY new
                or modified data structure — a returned collection, a flag, a computed verdict —
@@ -257,6 +261,26 @@ public final class PrReviewPrompts {
               differs, the difference is coming from your uncertainty rather than from the defect,
               and it belongs in confidence — pin the risk to the class and lower the confidence
               instead.
+            - EVERY defect gets its OWN finding, on the dimension it belongs to. While writing one
+              finding you will often state a SECOND, different defect as supporting evidence — a
+              stale comment quoted to show what the code was meant to do, a stub that cannot
+              happen in production, a scan the input does not bound, a page never walked, a
+              fixture that cannot tell the two cases apart. That second defect is a finding in its
+              own right and must be emitted as one. Stating it inside another finding's
+              description, in a summary.file_summaries row, or in a description_gaps entry is NOT
+              reporting it — those surfaces carry no severity, no anchor line and no review
+              thread, so a defect that appears only there reaches nobody. This does not conflict
+              with "report each underlying defect exactly once" below: that rule forbids restating
+              ONE defect at several lines; this one forbids burying a SECOND defect inside the
+              first, even when it is what makes the first one true.
+            - Before you finish, re-read what you have written — each finding's description, each
+              file_summaries line, each description_gaps entry — for any statement that describes
+              a defect no finding in your list covers, and promote each one into its own finding
+              at the risk and confidence its own dimension prescribes. The material is already
+              written, so this is a promotion step, not new analysis. The dimensions this loses
+              most often are the ones whose evidence is naturally cited in support of something
+              else: an unfaithful stub (dimension 8), an added quadratic shape (dimension 5), and
+              a comment contradicting the code (dimension 4).
 
             Confidence calibration:
             - confidence "high" means another reviewer could confirm the issue using only the
@@ -790,6 +814,10 @@ public final class PrReviewPrompts {
               declared SIGNATURE counts as shown material: a stub that returns null against a
               non-null contract, throws a checked exception the method does not declare, or
               returns a value the declared type excludes is contradicted by the signature alone.
+            - File it as its own finding. Noticing the contradiction while building a different
+              finding is the usual case — it turns up as the reason that finding's evidence is
+              weak — and citing it there, or in a walkthrough row, does not report it. Emit the
+              mock-fidelity finding in addition to the one you were writing.
             - A faithful stub that matches the real contract is not a finding."""
           .stripIndent();
 
