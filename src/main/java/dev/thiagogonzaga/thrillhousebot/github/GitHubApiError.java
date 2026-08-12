@@ -132,6 +132,17 @@ public final class GitHubApiError {
   }
 
   /**
+   * Whether GitHub rejected the credential rather than the request. 401 is the only status an
+   * installation token that has expired, been revoked or been replaced can draw, and GitHub decides
+   * it before routing the request — so the call never reached the handler that would have written
+   * anything, and it is worth repeating once a fresh token has been minted. See {@link
+   * GitHubTokenRefresh}.
+   */
+  public boolean isExpiredCredential() {
+    return status == 401;
+  }
+
+  /**
    * Whether this failure is worth a warning in the log. Reads probe for optional files ({@code
    * .github/instructions}, the repo settings file) and treat 404 as "absent", so a 404 is expected
    * traffic and only clutters the log at warning level; an auth, throttle or server failure is not.

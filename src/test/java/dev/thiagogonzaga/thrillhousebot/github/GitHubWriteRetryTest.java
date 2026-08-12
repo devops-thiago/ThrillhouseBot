@@ -27,7 +27,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -286,5 +288,257 @@ class GitHubWriteRetryTest {
     // The flag is restored so the shutdown the interrupt announced is not swallowed here.
     assertTrue(Thread.interrupted(), "interrupt status restored");
     assertFalse(Thread.currentThread().isInterrupted());
+  }
+
+  /**
+   * The #624 half: the one failure the backoff above cannot fix by repeating, because every repeat
+   * presents the same dead installation token. The seam here belongs to this retry instance, so
+   * nothing in these tests touches the process-wide binding.
+   */
+  @Nested
+  class ExpiredCredentials {
+
+    private static final String DEAD = "Bearer expired-token";
+    private static final String FRESH = "Bearer minted-token";
+
+    private final GitHubTokenRefresh credentials = new GitHubTokenRefresh();
+
+    private final GitHubWriteRetry refreshing =
+        new GitHubWriteRetry(
+            slept::add,
+            () -> Instant.ofEpochSecond(1_800_000_000L),
+            GitHubWritePacer.NONE,
+            credentials);
+
+    private final AtomicInteger mints = new AtomicInteger();
+
+    private WebApplicationException badCredentials() {
+      return failure(401, "{\"message\":\"Bad credentials\",\"status\":\"401\"}");
+    }
+
+    private void minting(String replacement) {
+      credentials.bind(
+          _ -> {
+            mints.incrementAndGet();
+            return Optional.ofNullable(replacement);
+          });
+    }
+
+    @Test
+    void aRejectedCredentialIsReplacedAndTheWriteRepeatedWithIt() {
+      minting(FRESH);
+      var presented = new ArrayList<String>();
+
+      var result =
+          refreshing.call(
+              "a review on o/r #532",
+              DEAD,
+              credential -> {
+                presented.add(credential);
+                if (DEAD.equals(credential)) {
+                  throw badCredentials();
+                }
+                return "posted";
+              });
+
+      // The generation was already paid for; a fresh token is the only thing that can save it.
+      assertEquals("posted", result);
+      assertEquals(List.of(DEAD, FRESH), presented);
+      // A rejected credential was never throttled, so the repeat costs no wait and no attempt.
+      assertEquals(List.of(), slept);
+    }
+
+    @Test
+    void aCredentialIsReplacedOnlyOncePerCall() {
+      minting(FRESH);
+      var calls = new AtomicInteger();
+
+      assertThrows(
+          WebApplicationException.class,
+          () ->
+              refreshing.call(
+                  "a review on o/r #532",
+                  DEAD,
+                  _ -> {
+                    calls.incrementAndGet();
+                    throw badCredentials();
+                  }));
+
+      // The installation itself is refusing; a third token would be no fresher than the second.
+      assertEquals(2, calls.get());
+      assertEquals(1, mints.get());
+    }
+
+    @Test
+    void aThrottleIsNotMistakenForADeadCredential() {
+      minting(FRESH);
+      var calls = new AtomicInteger();
+
+      var result =
+          refreshing.call(
+              "a comment on o/r #7",
+              DEAD,
+              credential -> {
+                if (calls.incrementAndGet() == 1) {
+                  throw throttled("Retry-After", "3");
+                }
+                return "posted with " + credential;
+              });
+
+      assertEquals("posted with " + DEAD, result);
+      assertEquals(0, mints.get(), "a 403 says nothing about the credential");
+      assertEquals(List.of(Duration.ofSeconds(3)), slept);
+    }
+
+    @Test
+    void aCredentialThatCannotBeReplacedFailsOnTheFirstAttempt() {
+      minting(null);
+      var calls = new AtomicInteger();
+      var rejection = badCredentials();
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  refreshing.call(
+                      "a review on o/r #532",
+                      DEAD,
+                      _ -> {
+                        calls.incrementAndGet();
+                        throw rejection;
+                      }));
+
+      assertSame(rejection, thrown);
+      assertEquals(1, calls.get());
+    }
+
+    @Test
+    void aReplacementIdenticalToTheRejectedCredentialIsNotWorthRepeating() {
+      minting(DEAD);
+      var calls = new AtomicInteger();
+
+      assertThrows(
+          WebApplicationException.class,
+          () ->
+              refreshing.call(
+                  "a review on o/r #532",
+                  DEAD,
+                  _ -> {
+                    calls.incrementAndGet();
+                    throw badCredentials();
+                  }));
+
+      // The cache is already holding the newest token GitHub will issue and it is still refused.
+      assertEquals(1, calls.get());
+    }
+
+    @Test
+    void aFailureWhileMintingLeavesTheRejectionThatExplainsTheLoss() {
+      credentials.bind(
+          _ -> {
+            throw new IllegalStateException("the token endpoint is down too");
+          });
+      var rejection = badCredentials();
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  refreshing.call(
+                      "a review on o/r #532",
+                      DEAD,
+                      _ -> {
+                        throw rejection;
+                      }));
+
+      assertSame(rejection, thrown, "the 401 is what the operator needs to see, not a mint error");
+    }
+
+    @Test
+    void aCallCarryingNoCredentialHasNothingToReplace() {
+      minting(FRESH);
+      var rejection = badCredentials();
+
+      assertThrows(
+          WebApplicationException.class,
+          () ->
+              refreshing.call(
+                  "a check of o/r",
+                  () -> {
+                    throw rejection;
+                  }));
+
+      assertEquals(0, mints.get());
+    }
+
+    @Test
+    void theOneShotFormLeavesAWriteThatSucceedsAlone() {
+      minting(FRESH);
+
+      var result = credentials.retrying("check run 1 on o/r", DEAD, credential -> credential);
+
+      assertEquals(DEAD, result);
+      assertEquals(0, mints.get(), "a credential GitHub accepted is never replaced");
+    }
+
+    /** The one-shot form, for the writes that have no backoff loop of their own. */
+    @Test
+    void theOneShotFormReplacesAndRepeatsExactlyOnce() {
+      minting(FRESH);
+      var presented = new ArrayList<String>();
+
+      var result =
+          credentials.retrying(
+              "check run 94131141478 on o/r",
+              DEAD,
+              credential -> {
+                presented.add(credential);
+                if (DEAD.equals(credential)) {
+                  throw badCredentials();
+                }
+                return "updated";
+              });
+
+      assertEquals("updated", result);
+      assertEquals(List.of(DEAD, FRESH), presented);
+    }
+
+    @Test
+    void theOneShotFormRethrowsWhenNothingCanBeMinted() {
+      minting(null);
+      var rejection = badCredentials();
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  credentials.retrying(
+                      "check run 1 on o/r",
+                      DEAD,
+                      _ -> {
+                        throw rejection;
+                      }));
+
+      assertSame(rejection, thrown);
+    }
+
+    @Test
+    void anUnboundSeamLeavesEveryRefusalExactlyAsItWas() {
+      credentials.bind(null);
+      var rejection = badCredentials();
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  credentials.retrying(
+                      "check run 1 on o/r",
+                      DEAD,
+                      _ -> {
+                        throw rejection;
+                      }));
+
+      assertSame(rejection, thrown);
+    }
   }
 }

@@ -65,9 +65,10 @@ public interface GitHubCommentClient {
         notice ->
             GitHubWriteRetry.DEFAULT.call(
                 "a comment on " + owner + "/" + repo + " #" + issueNumber,
-                () ->
+                auth,
+                credential ->
                     createCommentOnce(
-                        auth,
+                        credential,
                         accept,
                         owner,
                         repo,
@@ -151,7 +152,8 @@ public interface GitHubCommentClient {
       CreateCommentRequest request) {
     return GitHubWriteRetry.DEFAULT.call(
         "an edit of comment " + commentId + " on " + owner + "/" + repo,
-        () -> updateCommentOnce(auth, accept, owner, repo, commentId, request));
+        auth,
+        credential -> updateCommentOnce(credential, accept, owner, repo, commentId, request));
   }
 
   record CreateCommentRequest(String body) {

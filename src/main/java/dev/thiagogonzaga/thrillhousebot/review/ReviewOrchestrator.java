@@ -526,13 +526,27 @@ public class ReviewOrchestrator {
         });
   }
 
-  /** Applies failure fields to the in-memory session and persisted entity together. */
+  /**
+   * Applies failure fields to the in-memory session and persisted entity together, carrying the
+   * model's response with them when the run got far enough to have one.
+   *
+   * <p>#624: a review that dies while publishing has already paid for every model call it made, and
+   * the response was written to the database only on the success path — so the one failure mode
+   * where the findings are still worth something was the one that discarded them. Persisting it
+   * here leaves the finished work on the session and on its dashboard page instead of only in a log
+   * line. It stays out of the follow-up history either way: {@code findPreviousAiResponseJson} and
+   * {@code findAllPriorAiResponseJsons} both select on {@code STATUS_COMPLETED}, so a failed round
+   * cannot make the next one treat findings it never posted as already raised.
+   */
   void applyReviewFailure(ReviewSession session, String errorMessage) {
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_FAILED);
           s.setErrorMessage(errorMessage);
+          if (session.getAiResponseJson() != null) {
+            s.setAiResponseJson(session.getAiResponseJson());
+          }
         });
   }
 
