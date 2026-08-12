@@ -49,13 +49,20 @@ public final class GitHubApiError {
    * GitHub App/PAT/OAuth token prefixes and bearer/JWT shapes. GitHub does not echo credentials in
    * an error body, but a body is untrusted text on its way to a log file, so a token-shaped run of
    * characters is masked rather than trusted to be harmless.
+   *
+   * <p>Deliberately ONE alternation rather than one pattern per shape: the shapes overlap, and a
+   * single pass masks each overlap as the leftmost match, whereas masking in passes decides the
+   * overlap by pass order and leaves material the one-pass form masks. Whichever order is chosen,
+   * {@code "…ghp_<7 chars>Bearer <20 chars>"} keeps its token prefix unmasked if the bearer pass
+   * runs first, and {@code "Bearer ghp_<10 chars>.<tail>"} keeps the tail of the bearer value if
+   * the token pass does. So this stays one pattern even though it reads as four.
    */
   private static final Pattern CREDENTIAL_SHAPED =
       Pattern.compile(
-          "(?i)(gh[pousr]_[A-Za-z0-9_]{10,})"
-              + "|(github_pat_[A-Za-z0-9_]{10,})"
-              + "|(bearer\\s+[A-Za-z0-9._~+/=-]{10,})"
-              + "|(eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})");
+          "(?i)(gh[pousr]_\\w{10,})"
+              + "|(github_pat_\\w{10,})"
+              + "|(bearer\\s+[\\w.~+/=-]{10,})"
+              + "|(eyJ[\\w-]{8,}\\.[\\w-]{8,}\\.[\\w-]{8,})");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -159,9 +166,9 @@ public final class GitHubApiError {
    * window has reopened and the call can go straight back out.
    */
   public Duration retryDelay(int attempt, Instant now) {
-    var retryAfter = retryAfterSeconds();
-    if (retryAfter.isPresent()) {
-      return atLeastZero(Duration.ofSeconds(retryAfter.get()));
+    var fromHeader = retryAfterSeconds();
+    if (fromHeader.isPresent()) {
+      return atLeastZero(Duration.ofSeconds(fromHeader.get()));
     }
     var reset = parseLong(rateLimitReset);
     if (reset.isPresent()) {
