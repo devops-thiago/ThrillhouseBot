@@ -239,7 +239,24 @@ public class VerdictBuilder {
     return CheckRunManager.CHECK_NAME;
   }
 
+  /**
+   * The check-run summary line. Every branch below explains a verdict, so the confidence-hold
+   * clause is appended once around all of them rather than woven into each: a critical/high finding
+   * kept from blocking by its confidence can be a new finding (the counts branch) or an unresolved
+   * previous one (the no-new-findings branches), and #645's whole complaint is that the effect was
+   * silent. Empty whenever confidence was not what decided the verdict, so no existing summary
+   * changes.
+   */
   static String checkSummaryForResult(ReviewResult result) {
+    if (!result.confidenceHeldTheVerdict()) {
+      return verdictSummaryFor(result);
+    }
+    return verdictSummaryFor(result)
+        + " "
+        + ReviewResult.confidenceHoldBrief(result.blockingWithheldByConfidence());
+  }
+
+  private static String verdictSummaryFor(ReviewResult result) {
     var truncationSuffix = truncationSuffixFor(result);
     if (result.hasIssues()) {
       return String.format(
@@ -488,6 +505,15 @@ public class VerdictBuilder {
     var outstanding = new ArrayList<Finding>(tally.findings());
     outstanding.addAll(unresolvedPrevious);
     ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
+    // #645: count the outstanding findings whose severity cleared the mode's bar but whose
+    // confidence did not, and only when the review is not requesting changes anyway — that is
+    // exactly when the hedge, not the risk, is what produced the verdict a maintainer is looking
+    // at. On a review that already blocks the same hedge changed nothing, and a banner that
+    // changes nothing is the noise a check run cannot afford.
+    var withheldByConfidence =
+        state == ReviewState.REQUEST_CHANGES
+            ? 0
+            : (int) outstanding.stream().filter(blockingStrictness::withheldByConfidence).count();
     // Backstop statuses reach the gate but never `outstanding`, keeping the hold downgrade-only
     // (APPROVE → COMMENT, never REQUEST_CHANGES). Keep the toStatuses list as-is on the common
     // no-backstop path — no ArrayList wrap/copy when there is nothing to append.
@@ -530,7 +556,8 @@ public class VerdictBuilder {
                 diffStats.omittedFiles(),
                 ciUnreadable,
                 requiredContextsKnown,
-                diffStats.truncation()));
+                diffStats.truncation(),
+                withheldByConfidence));
     if (pureRenameRollup != null && !pureRenameRollup.isBlank()) {
       summaryMarkdown =
           summaryMarkdown.replace(
@@ -539,6 +566,11 @@ public class VerdictBuilder {
                   + "\n\n> **AI review scope:** "
                   + pureRenameRollup.strip()
                   + "\n\n");
+    }
+    // Prepended before the coverage banners so those stay outermost: a diff the review never saw
+    // in full is the larger caveat, and it is the first thing a reader should meet.
+    if (withheldByConfidence > 0) {
+      summaryMarkdown = ReviewResult.confidenceHoldNotice(withheldByConfidence) + summaryMarkdown;
     }
     if (diffStats.truncated()) {
       summaryMarkdown =
@@ -571,7 +603,8 @@ public class VerdictBuilder {
         diffStats.omittedFiles(),
         ciUnreadable,
         requiredContextsKnown,
-        diffStats.truncation());
+        diffStats.truncation(),
+        withheldByConfidence);
   }
 
   /**

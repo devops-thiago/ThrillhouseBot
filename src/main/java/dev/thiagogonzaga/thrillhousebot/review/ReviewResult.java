@@ -38,7 +38,11 @@ public record ReviewResult(
     // False when the required-context set could not be resolved; rendered CI copy then drops
     // "required".
     boolean requiredContextsKnown,
-    TruncationDetail truncation) {
+    TruncationDetail truncation,
+    // How many outstanding findings were severe enough to block but were denied eligibility by
+    // their confidence alone, on a review that did not end up requesting changes — see
+    // #confidenceHoldNotice(int). Zero whenever the hedge was not what decided the verdict.
+    int blockingWithheldByConfidence) {
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
@@ -48,6 +52,47 @@ public record ReviewResult(
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
+  }
+
+  /**
+   * Convenience constructor for results built before the confidence-hold count existed (and tests):
+   * nothing was withheld from blocking by confidence, so no such disclosure is rendered. The
+   * production path ({@code VerdictBuilder}) passes the real count through the canonical
+   * constructor.
+   */
+  public ReviewResult(
+      List<Finding> findings,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      RiskLevel highestRisk,
+      ReviewState reviewState,
+      boolean isFirstReview,
+      String summaryMarkdown,
+      List<PreviousFindingStatus> previousStatuses,
+      List<CiCheck> offendingCiChecks,
+      int omittedFiles,
+      boolean ciUnreadable,
+      boolean requiredContextsKnown,
+      TruncationDetail truncation) {
+    this(
+        findings,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        highestRisk,
+        reviewState,
+        isFirstReview,
+        summaryMarkdown,
+        previousStatuses,
+        offendingCiChecks,
+        omittedFiles,
+        ciUnreadable,
+        requiredContextsKnown,
+        truncation,
+        0);
   }
 
   /** Convenience constructor for results whose CI status was fully readable (the common case). */
@@ -339,6 +384,62 @@ public record ReviewResult(
        findings themselves are complete.
 
       """;
+
+  /**
+   * True when at least one outstanding finding was severe enough to block but its confidence, not
+   * its risk, is why this review is not requesting changes.
+   */
+  public boolean confidenceHeldTheVerdict() {
+    return blockingWithheldByConfidence > 0;
+  }
+
+  /**
+   * Lead-in of {@link #confidenceHoldNotice(int)}. Shared with the surfaces that render or
+   * recognize the banner so the two cannot drift, exactly like {@link #TRUNCATION_NOTICE_LEAD_IN}.
+   */
+  static final String CONFIDENCE_HOLD_LEAD_IN = "> ⚠️ **Severity did not decide this verdict.**";
+
+  /**
+   * The shared "N finding(s) … hedged" clause behind both confidence-hold surfaces, so the summary
+   * banner and the check-run summary never drift on the count or on what the hedge means.
+   */
+  private static String confidenceHoldClause(int withheld) {
+    return String.format(
+        "%d finding(s) were severe enough to block on their own, but the review hedged its"
+            + " confidence in them",
+        withheld);
+  }
+
+  /**
+   * Banner prepended to the summary when confidence, not severity, is why the review did not
+   * request changes (#645).
+   *
+   * <p>Under the default {@code balanced} mode a critical/high finding blocks only when the review
+   * is highly confident in it, and the review prompt mandates a hedge whenever a mitigation is not
+   * visible in the diff — so the very class the severity floor exists to protect (an injection sink
+   * with no visible sanitizer) is hedged by construction and quietly loses the floor's consequence.
+   * Round 6 of the dogfood corpus measured that on a stored-XSS sink and a verified build-breaking
+   * defect, both non-blocking, with nothing in the review saying why.
+   *
+   * <p>The gate itself is deliberately left alone: an operator who wants severity alone to decide
+   * already has {@code REVIEW_BLOCKING_STRICTNESS=strict}, and widening the default would collapse
+   * {@code balanced} into it, leaving no mode that means "only demonstrated findings block". What
+   * was wrong was that the choice was invisible, so this states it and names the knob.
+   */
+  static String confidenceHoldNotice(int withheld) {
+    return String.format(
+        CONFIDENCE_HOLD_LEAD_IN
+            + " %s, so this review comments instead of requesting changes. A hedge means the"
+            + " finding could not be confirmed from the diff alone — not that it was disproven —"
+            + " so read those findings before merging. Set `REVIEW_BLOCKING_STRICTNESS=strict` to"
+            + " let severity alone decide.%n%n",
+        confidenceHoldClause(withheld));
+  }
+
+  /** The one-sentence check-run form of {@link #confidenceHoldNotice(int)}. */
+  static String confidenceHoldBrief(int withheld) {
+    return "Not blocking: " + confidenceHoldClause(withheld) + ".";
+  }
 
   /**
    * The shared "N file(s) were omitted …" clause, so the review banner and the on-demand-command
