@@ -28,7 +28,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -197,6 +202,58 @@ class GitHubWriteRetryTest {
     assertSame(lastFailure, thrown);
     assertEquals(3, calls.get());
     assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+  }
+
+  @Test
+  void aSpentBudgetStillGivesUpSilentlyWhenWarningsAreOff() {
+    // The give-up line sits behind a level check, because diagnostics() builds its string eagerly
+    // and a parameter placeholder only defers the toString. With the logger off nothing may be
+    // logged, and the retry must still spend the same three attempts and rethrow the same failure.
+    var julLogger = Logger.getLogger(GitHubWriteRetry.class.getName());
+    var logged = new CopyOnWriteArrayList<LogRecord>();
+    var capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            logged.add(entry);
+          }
+
+          @Override
+          public void flush() {
+            // Nothing is buffered.
+          }
+
+          @Override
+          public void close() {
+            // Nothing to release.
+          }
+        };
+    var originalLevel = julLogger.getLevel();
+    julLogger.setLevel(Level.OFF);
+    julLogger.addHandler(capture);
+    var calls = new AtomicInteger();
+    var lastFailure = throttled("Retry-After", "4");
+
+    try {
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  retry.call(
+                      "a comment on o/r #7",
+                      () -> {
+                        calls.incrementAndGet();
+                        throw lastFailure;
+                      }));
+
+      assertSame(lastFailure, thrown);
+      assertEquals(3, calls.get());
+      assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+      assertTrue(logged.isEmpty(), logged.toString());
+    } finally {
+      julLogger.removeHandler(capture);
+      julLogger.setLevel(originalLevel);
+    }
   }
 
   @Test
