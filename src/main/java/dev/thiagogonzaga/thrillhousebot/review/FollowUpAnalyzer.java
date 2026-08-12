@@ -902,16 +902,33 @@ public class FollowUpAnalyzer {
    * Whether {@code body} names {@code path:line} as a whole locator. A bare {@code contains} would
    * let a comment about {@code src/A.java:10} clear the distinct finding at {@code src/A.java:1},
    * whose locator is a prefix of it — an over-clear, and the direction that must never happen — so
-   * a match followed by another digit is skipped and the scan continues.
+   * a match the following character continues is skipped and the scan continues.
+   *
+   * <p>Rejecting only a following <em>digit</em> was too narrow: it left every other continuation
+   * of the line-number token reading as a whole match. {@code src/A.java:10-12} (a maintainer
+   * naming a range) and {@code src/A.java:10x} both cleared the finding at line 10, and a locator
+   * whose printed form the summary never emits is not a naming this hatch may act on. The summary
+   * prints {@code path:line} followed by a space, a backtick or an em dash, and the documented
+   * directive form ({@code @thrillhousebot resolved path/to/File.java:42 — <title>}) is spelled the
+   * same way, so no legitimate naming ends in one of these characters — under-clearing here only
+   * leaves the finding held for one more round, which is the safe direction.
    */
   private static boolean namesLocator(String body, String locator) {
     for (var at = body.indexOf(locator); at >= 0; at = body.indexOf(locator, at + 1)) {
       var after = at + locator.length();
-      if (after >= body.length() || !Character.isDigit(body.charAt(after))) {
+      if (after >= body.length() || !continuesLocator(body.charAt(after))) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether {@code c} extends the locator's line-number token rather than ending it: any letter or
+   * digit, or the {@code _}/{@code -} an identifier or a line range continues with.
+   */
+  private static boolean continuesLocator(char c) {
+    return Character.isLetterOrDigit(c) || c == '_' || c == '-';
   }
 
   /** A non-bot conversation comment with a body and a write-capable author association. */

@@ -2897,6 +2897,24 @@ class FollowUpAnalyzerTest {
         arguments(
             "a match ending the comment counts",
             "@thrillhousebot resolved SQL injection at src/A.java:1",
+            true),
+        // A following digit used to be the only continuation the guard rejected, so every other
+        // way of continuing the line-number token still read as a whole locator and over-cleared.
+        arguments(
+            "a line range starting at the finding's line must not clear it",
+            "@thrillhousebot resolved `src/A.java:1-3` — SQL injection",
+            false),
+        arguments(
+            "a letter continuing the line number must not clear it",
+            "@thrillhousebot resolved `src/A.java:1x` — SQL injection",
+            false),
+        arguments(
+            "an underscore continuing the line number must not clear it",
+            "@thrillhousebot resolved `src/A.java:1_2` — SQL injection",
+            false),
+        arguments(
+            "the documented em-dash form still clears",
+            "@thrillhousebot resolved src/A.java:1 — SQL injection",
             true));
   }
 
