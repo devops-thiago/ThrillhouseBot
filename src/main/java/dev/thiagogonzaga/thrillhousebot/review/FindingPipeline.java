@@ -173,7 +173,14 @@ public class FindingPipeline {
               .forBatch(budgetedBatch, promptInputs.baseComparison());
       quoteSource = budgetedBatch.text();
     }
-    var aiResponse = aiReviewService.review(session, singleInputs);
+    ReviewResponse aiResponse;
+    try {
+      aiResponse = aiReviewService.review(session, singleInputs);
+    } catch (AiResponseTruncatedException e) {
+      // #580: the call was made and billed, and its body is well-formed up to the cut. Losing the
+      // whole review to it would discard exactly the paid work the multi-call lane already keeps.
+      aiResponse = salvageTruncatedSingleCall(session, e, budgetedBatch, plan);
+    }
     if (budgetedBatch != null && !aiResponse.previousFindingsStatus().isEmpty()) {
       // Same scoping as the multi-call path: the single budgeted batch may carry clipped files
       // (and, at maxBatches=1, omit others entirely), so a "resolved" claim is only trusted for a
@@ -194,6 +201,87 @@ public class FindingPipeline {
         ctx.priorAiResponseJsons(),
         ctx.inlineComments(),
         lineResolver);
+  }
+
+  /**
+   * The disclose step for a single-call review the model cut at its length cap (#580): the same
+   * salvage the multi-call lane's {@link #salvageTruncatedBatch} runs, applied to the lane that had
+   * none. The complete leading findings and statuses are recovered from the buffered partial body
+   * and returned as an ordinary response, so the caller's status scoping and {@link #refine} chain
+   * treat them exactly like parsed ones — a salvaged finding faces every check a parsed finding
+   * does. The summary object rides along when it closed before the cut (it is last in the response
+   * shape, so usually it did not); {@code null} then leaves the renderer's counts-only shape, the
+   * same degradation the multi-call summary seam produces. No {@link SummaryDegradation} is
+   * recorded for it, though: that class's copy states the findings are complete, which is exactly
+   * what a salvaged review's are not — the honest disclosure here is the response-cut file class
+   * below, which says the findings up to the cut were kept.
+   *
+   * <p>A salvaged review covers the diff only up to the cut, so the files it was given are recorded
+   * as {@linkplain DiffBudgetPlanner.BudgetPlan#recordResponseCutFiles response-cut} — the existing
+   * partially-reviewed class, which holds APPROVE and makes the posted review say why. This makes
+   * no AI call of its own and never re-enters the retry lane: the truncation was already refused a
+   * retry (#495) because an identical call would cut identically.
+   *
+   * <p>When nothing salvages — the cut landed before the first element closed — the truncation is
+   * rethrown, keeping today's behaviour. Unlike a batch, whose siblings still carry the review,
+   * this lane's failed call is the whole review: there would be no finding, no status and no
+   * summary to post, so failing loudly (the orchestrator's notice names the cap and the knob to
+   * raise) beats posting an empty review whose only content is a disclosure.
+   */
+  private ReviewResponse salvageTruncatedSingleCall(
+      ReviewSession session,
+      AiResponseTruncatedException truncation,
+      DiffBudgetPlanner.DiffBatch budgetedBatch,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    var salvaged = salvager.salvage(truncation.partialBody());
+    if (!salvaged.hasFindingsOrStatuses()) {
+      Log.warnf(
+          "The review call for session %d hit the model's response-length cap and nothing could be"
+              + " salvaged from the partial response; failing the review rather than posting one"
+              + " with neither findings nor coverage",
+          ledgerSessionId(session));
+      throw truncation;
+    }
+    discloseSingleCallResponseCut(session, budgetedBatch, plan, salvaged);
+    return new ReviewResponse(
+        salvaged.findings(), salvaged.previousFindingsStatus(), salvaged.summary());
+  }
+
+  /**
+   * Records what a salvaged single call could not cover. A budgeted plan's single batch is the
+   * natural unit — it is exactly the material the call was given — so its files are disclosed as
+   * partially reviewed. With no batch to name (budgeting disabled by {@code max-input-tokens <= 0},
+   * or a plan that produced none) there is no per-file unit to record and {@link VerdictBuilder}
+   * ignores the plan's file classes on that path anyway, so the cut is stated here in the log
+   * instead of being disclosed silently as nothing at all.
+   */
+  private void discloseSingleCallResponseCut(
+      ReviewSession session,
+      DiffBudgetPlanner.DiffBatch budgetedBatch,
+      DiffBudgetPlanner.BudgetPlan plan,
+      TruncatedResponseSalvager.Salvaged salvaged) {
+    if (budgetedBatch == null) {
+      Log.warnf(
+          "The review call for session %d hit the model's response-length cap; not retrying —"
+              + " salvaged %d complete finding(s) and %d status(es) from the partial response."
+              + " The plan carries no batch (budgeting disabled, or no reviewable file), so the"
+              + " covered files cannot be named and the posted review cannot mark the diff beyond"
+              + " the cut as unreviewed; enable budgeting (REVIEW_MAX_INPUT_TOKENS) for that"
+              + " disclosure",
+          ledgerSessionId(session),
+          salvaged.findings().size(),
+          salvaged.previousFindingsStatus().size());
+      return;
+    }
+    Log.warnf(
+        "The review call for session %d hit the model's response-length cap; not retrying —"
+            + " salvaged %d complete finding(s) and %d status(es) from the partial response and"
+            + " disclosing its %d file(s) as partially reviewed",
+        ledgerSessionId(session),
+        salvaged.findings().size(),
+        salvaged.previousFindingsStatus().size(),
+        budgetedBatch.files().size());
+    plan.recordResponseCutFiles(filenamesOf(budgetedBatch.files()));
   }
 
   /**
