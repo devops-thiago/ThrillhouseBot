@@ -81,8 +81,8 @@ class GitHubCommentThrottleTest {
     capture =
         new Handler() {
           @Override
-          public void publish(LogRecord record) {
-            logged.add(record);
+          public void publish(LogRecord entry) {
+            logged.add(entry);
           }
 
           @Override
@@ -110,7 +110,7 @@ class GitHubCommentThrottleTest {
 
   private String log() {
     return logged.stream()
-        .map(record -> record.getMessage() + " " + Arrays.toString(record.getParameters()))
+        .map(entry -> entry.getMessage() + " " + Arrays.toString(entry.getParameters()))
         .reduce("", (left, right) -> left + right);
   }
 
@@ -173,16 +173,11 @@ class GitHubCommentThrottleTest {
 
     // The registered logger raises nothing of its own, so callers keep the exception — and the
     // fail-soft handling built on it — that they had before #568.
+    var request = new GitHubCommentClient.CreateCommentRequest("the generated reply");
+
     assertThrows(
         WebApplicationException.class,
-        () ->
-            client.createComment(
-                "Bearer token",
-                ACCEPT,
-                "owner",
-                "repo",
-                7,
-                new GitHubCommentClient.CreateCommentRequest("the generated reply")));
+        () -> client.createComment("Bearer token", ACCEPT, "owner", "repo", 7, request));
 
     assertEquals(1, attempts.get(), "a refusal that will never succeed is not repeated");
     var log = log();

@@ -77,6 +77,12 @@ class GitHubLostWritesTest {
         });
   }
 
+  /** Posts on {@code target} and asserts the post is thrown away by {@code failure}. */
+  private void assertPostLost(
+      GitHubLostWrites.Target target, List<String> carried, WebApplicationException failure) {
+    assertThrows(WebApplicationException.class, () -> post(target, carried, failure));
+  }
+
   @Test
   void aPostOnAPullRequestThatLostNothingCarriesNoNotice() {
     var carried = new ArrayList<String>();
@@ -90,7 +96,7 @@ class GitHubLostWritesTest {
   void aDroppedReplyIsAnnouncedOnTheNextCommentThatLandsOnThatPullRequest() {
     var carried = new ArrayList<String>();
 
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     post(PR, carried, null);
 
     // The notice cannot be posted on its own — it would be the very call being throttled — so the
@@ -105,7 +111,7 @@ class GitHubLostWritesTest {
   void theNoticeIsSaidOnceAndNotOnEveryCommentAfterwards() {
     var carried = new ArrayList<String>();
 
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     post(PR, carried, null);
     post(PR, carried, null);
 
@@ -116,9 +122,9 @@ class GitHubLostWritesTest {
   void aNoticeThatCouldNotBeDeliveredIsKeptForTheNextTry() {
     var carried = new ArrayList<String>();
 
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     // The post that should have carried the notice is itself thrown away.
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     post(PR, carried, null);
 
     // Two losses now, and the notice was never cleared by the post that failed to deliver it.
@@ -128,7 +134,7 @@ class GitHubLostWritesTest {
   @Test
   void aLossThatArrivesWhileTheNoticeIsInFlightIsStillAnnouncedNext() {
     var carried = new ArrayList<String>();
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
 
     lost.carrying(
         PR,
@@ -148,7 +154,7 @@ class GitHubLostWritesTest {
   @Test
   void aLossThatLandsWhileTwoPostsCarryTheSameNoticeIsStillAnnouncedAfterwards() {
     var carried = new ArrayList<String>();
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
 
     // Two posts on the same pull request overlap — the inner one runs entirely between the outer
     // one's read of the pending notice and its completion, the interleaving a PR under a burst of
@@ -191,7 +197,7 @@ class GitHubLostWritesTest {
   void aNoticeIsScopedToThePullRequestThatLostThePost() {
     var carried = new ArrayList<String>();
 
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     post(OTHER_PR, carried, null);
 
     assertEquals("", carried.get(1));
@@ -201,7 +207,7 @@ class GitHubLostWritesTest {
   void aRefusalThatWillNeverWorkIsNotAnnouncedOnThePullRequest() {
     var carried = new ArrayList<String>();
 
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, refusal()));
+    assertPostLost(PR, carried, refusal());
     post(PR, carried, null);
 
     // A missing permission is a defect to fix, not a command to re-run.
@@ -212,7 +218,7 @@ class GitHubLostWritesTest {
   void aNoticeGoesStaleRatherThanBeingGluedOntoAMuchLaterComment() {
     var carried = new ArrayList<String>();
 
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     now.set(now.get().plus(Duration.ofHours(7)));
     post(PR, carried, null);
 
@@ -225,13 +231,13 @@ class GitHubLostWritesTest {
 
     // Both of the two slots this fixture allows are used and then settled: each pull request lost
     // a post and each was told about it on its next comment.
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
     post(PR, carried, null);
-    assertThrows(WebApplicationException.class, () -> post(OTHER_PR, carried, throttled()));
+    assertPostLost(OTHER_PR, carried, throttled());
     post(OTHER_PR, carried, null);
 
     var third = new GitHubLostWrites.Target("owner", "repo", 9);
-    assertThrows(WebApplicationException.class, () -> post(third, carried, throttled()));
+    assertPostLost(third, carried, throttled());
     post(third, carried, null);
 
     // Nothing is owed to either of the first two any more, so holding their slots until the TTL
@@ -249,7 +255,7 @@ class GitHubLostWritesTest {
   @Test
   void aCarrierLeftOverFromASettledEntryCannotRetireALaterLoss() {
     var carried = new ArrayList<String>();
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
 
     lost.carrying(
         PR,
@@ -271,13 +277,13 @@ class GitHubLostWritesTest {
   @Test
   void aFloodOfLosingPullRequestsCannotGrowTheRegistryWithoutEnd() {
     var carried = new ArrayList<String>();
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
-    assertThrows(WebApplicationException.class, () -> post(OTHER_PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
+    assertPostLost(OTHER_PR, carried, throttled());
 
     var third = new GitHubLostWrites.Target("owner", "repo", 9);
-    assertThrows(WebApplicationException.class, () -> post(third, carried, throttled()));
+    assertPostLost(third, carried, throttled());
     // A PR already holding a notice still counts its second loss even at capacity.
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
 
     post(third, carried, null);
     post(PR, carried, null);
@@ -288,12 +294,12 @@ class GitHubLostWritesTest {
   @Test
   void anExpiredNoticeMakesRoomForANewOne() {
     var carried = new ArrayList<String>();
-    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
-    assertThrows(WebApplicationException.class, () -> post(OTHER_PR, carried, throttled()));
+    assertPostLost(PR, carried, throttled());
+    assertPostLost(OTHER_PR, carried, throttled());
     now.set(now.get().plus(Duration.ofHours(7)));
 
     var third = new GitHubLostWrites.Target("owner", "repo", 9);
-    assertThrows(WebApplicationException.class, () -> post(third, carried, throttled()));
+    assertPostLost(third, carried, throttled());
     post(third, carried, null);
 
     assertTrue(carried.get(3).contains("An earlier reply"), carried.get(3));

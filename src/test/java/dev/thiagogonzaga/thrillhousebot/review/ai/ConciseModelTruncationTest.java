@@ -70,13 +70,12 @@ class ConciseModelTruncationTest {
         .when(conciseStreamingChatModel)
         .chat(any(ChatRequest.class), any(StreamingChatResponseHandler.class));
 
+    var session = reviewSession();
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
+
     var thrown =
         assertThrows(
-            AiResponseTruncatedException.class,
-            () ->
-                aiReviewService.summarize(
-                    reviewSession(),
-                    new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "")));
+            AiResponseTruncatedException.class, () -> aiReviewService.summarize(session, inputs));
 
     assertTrue(
         thrown.getMessage().contains("max-output-tokens"),
