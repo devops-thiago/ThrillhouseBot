@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
@@ -597,6 +598,243 @@ class DiffBudgetPlannerTest {
     models.put(MODEL, modelSettings(Optional.of(64_000), Optional.empty(), Optional.empty()));
     when(reviewConfig.maxInputTokens()).thenReturn(0);
     assertEquals(Integer.MAX_VALUE, planner.perCallInputBudget());
+  }
+
+  /**
+   * A previous-findings block in the shape {@code FollowUpAnalyzer} builds: numbered entries with
+   * id, risk, location and title on one line, prose and quoted thread replies indented under it,
+   * then the unnumbered "answered in earlier rounds" list.
+   */
+  private static String previousFindingsBlock(int findings, int descriptionLines) {
+    var sb = new StringBuilder();
+    for (var i = 1; i <= findings; i++) {
+      sb.append(i)
+          .append(". [HIGH] src/File")
+          .append(i)
+          .append(".java:")
+          .append(i * 3)
+          .append(" — Finding ")
+          .append(i)
+          .append(" title\n");
+      for (var d = 0; d < descriptionLines; d++) {
+        sb.append("   The call site never checks the returned handle, so a failure here is")
+            .append(" swallowed and the caller proceeds on stale state, line ")
+            .append(d)
+            .append(".\n");
+      }
+      sb.append("   Thread replies:\n").append("   - @maintainer: not fixing this right now\n");
+    }
+    sb.append("\nAnswered in earlier rounds — do NOT raise these again and do NOT")
+        .append(" include them in previous_findings_status:\n")
+        .append("- src/Old.java:12 — An older answered finding\n")
+        .append("   Thread replies:\n")
+        .append("   - @maintainer: answered already\n");
+    return sb.toString();
+  }
+
+  private static AiReviewService.PromptInputs inputsWith(String previousFindings) {
+    return new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", previousFindings, "");
+  }
+
+  /** Budget knobs with no safety margin and no output buffer, so the per-call budget is exact. */
+  private void budget(int maxInputTokens) {
+    models.put(
+        MODEL, modelSettings(Optional.of(maxInputTokens), Optional.empty(), Optional.empty()));
+    when(reviewConfig.maxInputTokens()).thenReturn(maxInputTokens);
+    lenient().when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
+    lenient().when(reviewConfig.outputBufferTokens()).thenReturn(0);
+    lenient().when(reviewConfig.maxAiCalls()).thenReturn(6);
+  }
+
+  @Test
+  void anAccumulatedPreviousFindingsBlockNoLongerStarvesTheDiffBudget() {
+    // #583: the block is shared overhead — every batch call repeats it in full — and it grows every
+    // round on a long-lived PR whose head keeps advancing and whose findings therefore never
+    // retire. Unbounded, it swallows the whole input budget and every file is omitted by name: the
+    // review stops reading code in order to re-read what it already said.
+    budget(20_000);
+    var files = List.of(file("dir/f1.java", 5, patch(5)), file("dir/f2.java", 5, patch(5)));
+
+    var plan =
+        planner.plan(files, inputsWith(PromptTemplateEscaper.fence(previousFindingsBlock(300, 6))));
+
+    assertTrue(plan.omittedFiles().isEmpty(), "the diff budget must survive the previous findings");
+    assertEquals(List.of("dir/f1.java", "dir/f2.java"), coveredFilenames(plan));
+  }
+
+  @Test
+  void anOversizedBlockIsCondensedToIdentityRatherThanTruncated() {
+    // Blind truncation would make the follow-up pass forget findings it already reported. What that
+    // pass needs is identity and location — the id it reports a status for, the file:line it looks
+    // at, the title it matches on — not the prose, so every entry keeps its own line and loses only
+    // its continuation lines.
+    budget(20_000);
+    var inputs = inputsWith(PromptTemplateEscaper.fence(previousFindingsBlock(40, 6)));
+
+    var bounded = planner.boundPreviousFindings(inputs);
+
+    for (var i = 1; i <= 40; i++) {
+      assertTrue(
+          bounded
+              .previousFindings()
+              .contains(i + ". [HIGH] src/File" + i + ".java:" + (i * 3) + " — Finding " + i),
+          "finding " + i + " lost its identity line");
+    }
+    assertTrue(
+        bounded.previousFindings().contains("- src/Old.java:12 — An older answered finding"),
+        "the answered-earlier list keeps its entries too");
+    assertFalse(
+        bounded.previousFindings().contains("The call site never checks"), "prose must be dropped");
+    assertFalse(bounded.previousFindings().contains("@maintainer"), "replies must be dropped");
+    assertTrue(
+        bounded.previousFindings().contains("condensed to id, location and title"),
+        "the elision must be disclosed");
+    assertFalse(
+        bounded.previousFindings().contains("Answered in earlier rounds"),
+        "the section header is a detail line and condenses away with the rest");
+    assertTrue(
+        bounded.previousFindings().contains("answered in an earlier round"),
+        "so the disclosure carries its meaning instead, outside the fence");
+    assertFalse(
+        bounded.previousFindings().contains("did not fit and were omitted entirely"),
+        "nothing was dropped, so nothing may claim it was");
+    assertTrue(
+        tokenCounter.estimateTokens(bounded.previousFindings()) <= 20_000 / 4,
+        "the bounded block must fit its share of the budget");
+    assertEquals("d", bounded.diff(), "no other prompt section is touched");
+    assertEquals("ctx", bounded.prContext());
+    assertEquals("base", bounded.baseComparison());
+    assertEquals("s", bounded.projectStack());
+    assertEquals("t", bounded.relatedTests());
+    assertEquals("", bounded.repoInstructions());
+  }
+
+  @Test
+  void condensingKeepsTheUntrustedRegionFencedWithTheDisclosureOutsideIt() {
+    // The fence is the data/instruction boundary. Dropping the closing line would leave the notice
+    // — our own instruction — inside the untrusted region, so both lines survive the cut.
+    budget(20_000);
+    var fenced = PromptTemplateEscaper.fence(previousFindingsBlock(40, 6));
+    var fence = fenced.lines().findFirst().orElseThrow();
+
+    var bounded = planner.boundPreviousFindings(inputsWith(fenced)).previousFindings();
+
+    var lines = bounded.lines().toList();
+    assertEquals(fence, lines.get(0), "the opening fence must survive");
+    assertEquals(2, lines.stream().filter(fence::equals).count(), "the fence must stay balanced");
+    assertTrue(
+        bounded.indexOf("condensed to id, location and title") > bounded.lastIndexOf(fence),
+        "the disclosure must sit outside the fence");
+  }
+
+  @Test
+  void entriesThatStillDoNotFitAreDroppedFromTheTailAndDisclosed() {
+    // Real forgetting, so it degrades the safe way: the numbered ids previous_findings_status is
+    // keyed to outlive the advisory answered-earlier list, and the model is told never to call a
+    // finding it cannot see resolved — the approve backstop then holds it open by itself.
+    budget(1_200);
+    var inputs = inputsWith(previousFindingsBlock(60, 2));
+
+    var bounded = planner.boundPreviousFindings(inputs).previousFindings();
+
+    assertTrue(bounded.contains("1. [HIGH] src/File1.java:3"), "the ids in use must be kept");
+    assertFalse(bounded.contains("60. [HIGH] src/File60.java"), "the tail must be dropped");
+    assertFalse(
+        bounded.contains("- src/Old.java:12"), "the advisory list yields before the numbered ids");
+    assertTrue(
+        bounded.contains("did not fit and were omitted entirely"), "the drop must be disclosed");
+    assertTrue(
+        bounded.contains("Never report a finding you cannot see as resolved"),
+        "the dangerous inference must be forbidden explicitly");
+    assertTrue(tokenCounter.estimateTokens(bounded) <= 300, "the cap must actually hold");
+  }
+
+  @Test
+  void aBlockTooSmallToHoldItsOwnDisclosureStillCarriesTheDisclosure() {
+    // Pathological cap: not one entry fits. The disclosure is the one thing that must not be what
+    // gets dropped — a silently empty block is exactly the forgetting this bound exists to prevent.
+    // A block that opens with a section header (the answered-earlier list, when no round raised
+    // numbered findings) loses the header without it counting as a dropped finding: the count
+    // must report findings, not lines.
+    budget(4);
+    var inputs =
+        inputsWith(
+            "Answered in earlier rounds — do NOT raise these again:\n"
+                + "- src/Old.java:12 — An older answered finding");
+
+    var bounded = planner.boundPreviousFindings(inputs).previousFindings();
+
+    assertFalse(bounded.contains("src/Old.java"), "nothing fits under this cap");
+    assertFalse(bounded.contains("Answered in earlier rounds — do NOT"), "nor does the header");
+    assertTrue(bounded.contains("1 further previous finding(s) did not fit"));
+  }
+
+  @Test
+  void aBlockWithinItsShareIsUntouchedAndBoundingIsIdempotent() {
+    // An ordinary follow-up round must pay nothing for this, and re-bounding an already bounded
+    // block must not stack disclosures — plan() bounds again when it sizes the shared overhead.
+    budget(20_000);
+    var small = inputsWith(previousFindingsBlock(3, 1));
+
+    assertSame(small, planner.boundPreviousFindings(small));
+
+    var big = inputsWith(PromptTemplateEscaper.fence(previousFindingsBlock(40, 6)));
+    var bounded = planner.boundPreviousFindings(big);
+    assertNotSame(big, bounded);
+    assertSame(bounded, planner.boundPreviousFindings(bounded));
+  }
+
+  @Test
+  void anUnfencedBlockIsBoundedToo() {
+    // The review path fences the block, but the bound is a property of the text, not of its
+    // wrapper: an unfenced block condenses the same way, with no fence line invented for it.
+    budget(20_000);
+
+    var bounded =
+        planner.boundPreviousFindings(inputsWith(previousFindingsBlock(40, 6))).previousFindings();
+
+    assertFalse(
+        bounded.contains(PromptTemplateEscaper.fencePrefix()), "no fence may be invented here");
+    assertTrue(bounded.contains("40. [HIGH] src/File40.java:120"), "every id must survive");
+    assertFalse(bounded.contains("The call site never checks"));
+  }
+
+  @Test
+  void aBlockThatOnlyLooksFencedIsCondensedAsPlainText() {
+    // A leading fence line with no matching closing line is not a fence — that block was already
+    // unterminated — so it is condensed as ordinary text rather than having a boundary invented.
+    budget(20_000);
+    var fenced = PromptTemplateEscaper.fence(previousFindingsBlock(40, 6));
+    var fence = fenced.lines().findFirst().orElseThrow();
+
+    var bounded =
+        planner.boundPreviousFindings(inputsWith(fenced + "\ntrailing text")).previousFindings();
+
+    assertEquals(
+        1,
+        bounded.lines().filter(fence::equals).count(),
+        "the unmatched line is ordinary text: none is added, and the one buried among the entries"
+            + " condenses away like any other detail line");
+    assertTrue(bounded.contains("40. [HIGH] src/File40.java:120"));
+  }
+
+  @Test
+  void anAbsentOrEmptyBlockIsLeftAlone() {
+    budget(20_000);
+    var absent = inputsWith(null);
+    var empty = inputsWith("   ");
+
+    assertSame(absent, planner.boundPreviousFindings(absent));
+    assertSame(empty, planner.boundPreviousFindings(empty));
+  }
+
+  @Test
+  void disabledBudgetingLeavesThePreviousFindingsBlockUncapped() {
+    // max-input-tokens=0 is an explicit "no cap at all"; this is not the place to reintroduce one.
+    when(reviewConfig.maxInputTokens()).thenReturn(0);
+    var inputs = inputsWith(PromptTemplateEscaper.fence(previousFindingsBlock(300, 6)));
+
+    assertSame(inputs, planner.boundPreviousFindings(inputs));
   }
 
   @Test

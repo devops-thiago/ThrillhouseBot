@@ -260,7 +260,9 @@ public class ReviewOrchestrator {
       var inlineComments = ctx.inlineComments();
       var lineResolver = ctx.lineResolver();
 
-      var promptInputs = promptAssembler.assemble(ctx, req);
+      // Bound the one prompt section that grows every round before anything is sized or sent, so
+      // the plan's overhead estimate and the text the calls actually carry are the same (#583).
+      var promptInputs = budgetPlanner.boundPreviousFindings(promptAssembler.assemble(ctx, req));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       final var ciReq = req;
