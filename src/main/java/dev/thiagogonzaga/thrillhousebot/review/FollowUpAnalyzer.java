@@ -725,7 +725,15 @@ public class FollowUpAnalyzer {
   private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
       Set.of("OWNER", "MEMBER", "COLLABORATOR");
 
-  private static boolean mayHoldWriteAccess(String authorAssociation) {
+  /**
+   * Package-private rather than private so {@link MaintainerReplyService} can acknowledge a clear
+   * directive against the very gate that will decide it. The acknowledgment is written before any
+   * review runs, and the two used to disagree: the mention path admits a login on the
+   * manual-trigger allowlist whatever its association, while {@link #clearedInConversation}
+   * requires a write-capable one, so an allowlist-only commenter was promised a closure that never
+   * came.
+   */
+  static boolean mayHoldWriteAccess(String authorAssociation) {
     return authorAssociation != null
         && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
