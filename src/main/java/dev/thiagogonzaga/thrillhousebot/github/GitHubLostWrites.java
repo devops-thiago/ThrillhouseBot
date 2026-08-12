@@ -72,8 +72,25 @@ public final class GitHubLostWrites {
     }
   }
 
-  /** How many posts this pull request has lost, and when the last one went. */
-  private record Loss(int count, Instant at) {}
+  /**
+   * What this pull request has lost, as two running totals and the time of the last loss.
+   *
+   * <p>They are watermarks rather than a single "outstanding" count on purpose. Two posts on the
+   * same pull request can be in flight at once, each having read the same pending total, and a
+   * fresh loss can land between their reads and their completions. Subtracting each carrier's
+   * snapshot from a shared counter double-counts that overlap and can retire a loss neither post
+   * actually announced — the user then never hears about it, which is the failure #578 exists to
+   * remove. Advancing {@code announced} monotonically towards {@code lost} instead can only ever
+   * repeat a notice, never drop one, and repeating is the harmless direction.
+   */
+  private record Loss(long lost, long announced, Instant at) {
+    int pending() {
+      return (int) (lost - announced);
+    }
+  }
+
+  /** Stands in for a pull request with nothing pending, so no code path handles a null loss. */
+  private static final Loss NOTHING = new Loss(0, 0, Instant.EPOCH);
 
   /** The process-wide registry: a loss recorded on one code path is announced by any other. */
   static final GitHubLostWrites SHARED =
@@ -93,13 +110,14 @@ public final class GitHubLostWrites {
   /**
    * Runs a content-creating call whose body lands in the pull request's conversation, handing it
    * the pending notice to carry (or an empty string when there is nothing to say). The notice is
-   * only cleared once the call has actually succeeded, so a post that is itself dropped does not
-   * take the notice with it.
+   * only marked announced once the call has actually succeeded, so a post that is itself dropped
+   * does not take the notice with it, and a loss that lands while this post is in flight is still
+   * waiting for the next one.
    */
   public <T> T carrying(Target target, Function<String, T> send) {
-    int carried = pendingCount(target);
-    var result = recording(target, () -> send.apply(notice(carried)));
-    settle(target, carried);
+    var carried = snapshot(target);
+    var result = recording(target, () -> send.apply(notice(carried.pending())));
+    announce(target, carried);
     return result;
   }
 
@@ -141,26 +159,34 @@ public final class GitHubLostWrites {
     return body == null || body.isBlank() ? notice : notice + "\n\n" + body;
   }
 
-  private int pendingCount(Target target) {
+  /** What this pull request has pending right now, or {@link #NOTHING} when it has nothing. */
+  private Loss snapshot(Target target) {
     var loss = pending.get(target);
     if (loss == null) {
-      return 0;
+      return NOTHING;
     }
     if (expired(loss, clock.get())) {
       pending.remove(target, loss);
-      return 0;
+      return NOTHING;
     }
-    return loss.count();
+    return loss;
   }
 
-  /** Drops what was just announced, keeping anything lost while this post was in flight. */
-  private void settle(Target target, int carried) {
-    if (carried == 0) {
+  /**
+   * Marks everything the delivered post carried as announced. The watermark only moves forward, so
+   * a second carrier that read the same snapshot cannot retire a loss recorded after it — the entry
+   * is left in place with the newer loss still pending rather than being cleared.
+   */
+  private void announce(Target target, Loss carried) {
+    if (carried.pending() == 0) {
       return;
     }
     pending.computeIfPresent(
         target,
-        (key, loss) -> loss.count() > carried ? new Loss(loss.count() - carried, loss.at()) : null);
+        (key, loss) ->
+            loss.announced() >= carried.lost()
+                ? loss
+                : new Loss(loss.lost(), carried.lost(), loss.at()));
   }
 
   private void remember(Target target) {
@@ -176,12 +202,15 @@ public final class GitHubLostWrites {
       return;
     }
     var total =
-        pending.merge(target, new Loss(1, now), (old, one) -> new Loss(old.count() + 1, now));
+        pending.merge(
+            target,
+            new Loss(1, 0, now),
+            (old, one) -> new Loss(old.lost() + 1, old.announced(), now));
     log.warn(
         "Lost a throttled post on {} — the next comment the bot lands there will say so ({} now"
             + " pending)",
         target,
-        total.count());
+        total.pending());
   }
 
   private boolean expired(Loss loss, Instant now) {

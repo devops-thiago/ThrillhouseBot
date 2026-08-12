@@ -146,6 +146,48 @@ class GitHubLostWritesTest {
   }
 
   @Test
+  void aLossThatLandsWhileTwoPostsCarryTheSameNoticeIsStillAnnouncedAfterwards() {
+    var carried = new ArrayList<String>();
+    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+
+    // Two posts on the same pull request overlap — the inner one runs entirely between the outer
+    // one's read of the pending notice and its completion, the interleaving a PR under a burst of
+    // commands produces — and a third post is thrown away while both are on the wire.
+    lost.carrying(
+        PR,
+        outerNotice -> {
+          carried.add(outerNotice);
+          lost.carrying(
+              PR,
+              innerNotice -> {
+                carried.add(innerNotice);
+                assertThrows(
+                    WebApplicationException.class,
+                    () -> lost.recording(PR, () -> throwIt(throttled())));
+                return "posted";
+              });
+          return "posted";
+        });
+    post(PR, carried, null);
+
+    // Both overlapping posts carried the first loss and neither carried the one that landed
+    // between them, so it has to still be waiting. Retiring it here — which subtracting each
+    // carrier's snapshot from one shared count does — is a user never hearing that their content
+    // was dropped, the exact silence #578 exists to remove.
+    assertTrue(
+        carried.get(1).contains("An earlier reply"), () -> "outer post carried: " + carried.get(1));
+    assertTrue(
+        carried.get(2).contains("An earlier reply"), () -> "inner post carried: " + carried.get(2));
+    assertTrue(
+        carried.get(3).contains("An earlier reply"),
+        () ->
+            "the loss recorded between the two overlapping posts was retired without ever being"
+                + " announced; the next comment carried: \""
+                + carried.get(3)
+                + "\"");
+  }
+
+  @Test
   void aNoticeIsScopedToThePullRequestThatLostThePost() {
     var carried = new ArrayList<String>();
 
