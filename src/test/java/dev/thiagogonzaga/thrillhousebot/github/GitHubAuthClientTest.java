@@ -16,6 +16,9 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -200,5 +203,144 @@ class GitHubAuthClientTest {
     when(githubConfig.privateKey()).thenReturn("");
 
     assertThrows(RuntimeException.class, () -> authClient.generateAppJwt());
+  }
+
+  /**
+   * #624: the margin the TTL leaves against GitHub's 60-minute expiry is the whole budget a review
+   * has between reading its header and its last write. With {@code AI_TIMEOUT=900s} a single model
+   * call may take 15 minutes on its own, and a review makes several — the old 50-minute TTL left 10
+   * minutes, so a review acquiring a token late in the window could not finish one call inside it.
+   */
+  @Test
+  void theCacheMustLeaveRoomForAWholeModelCallBeforeTheTokenExpires() {
+    var githubExpiry = java.time.Duration.ofMinutes(60);
+    var longestSingleModelCall = java.time.Duration.ofMinutes(15);
+
+    var margin = githubExpiry.minus(GitHubAuthClient.TOKEN_TTL);
+
+    assertTrue(
+        margin.compareTo(longestSingleModelCall) >= 0,
+        "a cached token must outlive one full-length model call, but only " + margin + " is left");
+  }
+
+  private static GitHubTokenApi.InstallationTokenResponse token(String value) {
+    return new GitHubTokenApi.InstallationTokenResponse(value, "2026-01-01T00:00:00Z");
+  }
+
+  /** What GitHub answers a write with once the installation token behind it has expired. */
+  private static jakarta.ws.rs.WebApplicationException badCredentials() {
+    return new jakarta.ws.rs.WebApplicationException(
+        jakarta.ws.rs.core.Response.status(401)
+            .entity("{\"message\":\"Bad credentials\",\"status\":\"401\"}")
+            .build());
+  }
+
+  /**
+   * The regression #624 is about, end to end and with nothing stubbed between the two halves: a
+   * review reads its {@code Authorization} header when it starts, spends fourteen minutes on the
+   * model, and posts with a token GitHub has since stopped accepting. Before the fix the 401
+   * propagated and the finished, paid-for review was discarded; now the rejection mints a
+   * replacement and the same generation is posted with it.
+   */
+  @Test
+  void aReviewPostThatOutlivedItsInstallationTokenIsRepostedWithAFreshToken() {
+    var installationId = 532L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("expired-token"), token("minted-token"));
+    var auth = authClient.getAuthHeader(installationId);
+    assertEquals("Bearer expired-token", auth);
+
+    var reviewClient = mock(GitHubReviewClient.class);
+    when(reviewClient.createReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        .thenCallRealMethod();
+    var request =
+        new GitHubReviewClient.CreateReviewRequest(
+            "a532aff", "the generated review", "COMMENT", java.util.List.of());
+    var posted =
+        new GitHubReviewClient.ReviewResponse(
+            94131141478L, "the generated review", "COMMENTED", "a532aff", null);
+    when(reviewClient.createReviewOnce("Bearer expired-token", "json", "o", "r", 532, request))
+        .thenThrow(badCredentials());
+    when(reviewClient.createReviewOnce("Bearer minted-token", "json", "o", "r", 532, request))
+        .thenReturn(posted);
+
+    var result = reviewClient.createReview(auth, "json", "o", "r", 532, request);
+
+    assertSame(posted, result, "the review the model already produced must survive the 401");
+    verify(reviewClient).createReviewOnce("Bearer minted-token", "json", "o", "r", 532, request);
+  }
+
+  @Test
+  void refreshingReplacesTheRejectedTokenSoLaterCallersGetTheNewOne() {
+    var installationId = 42L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("expired-token"), token("minted-token"));
+    var dead = authClient.getAuthHeader(installationId);
+
+    var fresh = authClient.refreshedAuthHeader(dead);
+
+    assertEquals(java.util.Optional.of("Bearer minted-token"), fresh);
+    assertEquals(
+        "Bearer minted-token",
+        authClient.getAuthHeader(installationId),
+        "the replacement must be cached, not minted again for every later call");
+    verify(tokenApi, times(2))
+        .createInstallationToken(anyString(), anyString(), eq(installationId));
+  }
+
+  /**
+   * A dead token does not fail one write, it fails every write still holding it — the #624 log has
+   * five 401s in five seconds. The second one through must be handed the replacement the first one
+   * minted rather than evicting it and minting a third.
+   */
+  @Test
+  void aSecondWriteHoldingTheSameDeadTokenGetsTheReplacementAlreadyMinted() {
+    var installationId = 42L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("expired-token"), token("minted-token"));
+    var dead = authClient.getAuthHeader(installationId);
+    authClient.refreshedAuthHeader(dead);
+
+    var second = authClient.refreshedAuthHeader(dead);
+
+    assertEquals(java.util.Optional.of("Bearer minted-token"), second);
+    verify(tokenApi, times(2))
+        .createInstallationToken(anyString(), anyString(), eq(installationId));
+  }
+
+  /**
+   * The index that maps a token back to its installation keeps the current one and the one it
+   * replaced, and nothing older — otherwise it would grow with the process's uptime, one entry per
+   * TTL per installation.
+   */
+  @Test
+  void aTokenTwoGenerationsOldIsForgottenSoTheIndexCannotGrowWithUptime() {
+    var installationId = 42L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("first"), token("second"), token("third"));
+    var first = authClient.getAuthHeader(installationId);
+    var second = authClient.refreshedAuthHeader(first).orElseThrow();
+
+    var third = authClient.refreshedAuthHeader(second).orElseThrow();
+
+    assertEquals("Bearer third", third);
+    assertEquals(
+        java.util.Optional.of("Bearer third"),
+        authClient.refreshedAuthHeader(second),
+        "the token just superseded still names its installation");
+    assertEquals(
+        java.util.Optional.empty(),
+        authClient.refreshedAuthHeader(first),
+        "the generation before that is forgotten");
+  }
+
+  @Test
+  void aHeaderThisProcessNeverIssuedNamesNoInstallationAndIsNotReplaced() {
+    assertEquals(
+        java.util.Optional.empty(), authClient.refreshedAuthHeader("Bearer someone-elses"));
+    assertEquals(java.util.Optional.empty(), authClient.refreshedAuthHeader("Basic dXNlcjpwdw=="));
+    assertEquals(java.util.Optional.empty(), authClient.refreshedAuthHeader(null));
+    verify(tokenApi, never()).createInstallationToken(anyString(), anyString(), anyLong());
   }
 }

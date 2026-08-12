@@ -4361,6 +4361,51 @@ class ReviewOrchestratorTest {
   }
 
   @Nested
+  class ApplyReviewFailure {
+
+    /**
+     * #624: a review that dies while publishing has already paid for every model call it made. The
+     * response was written to the database only on the success path, so the one failure mode where
+     * the findings are still worth something was the one that discarded them.
+     */
+    @Test
+    void shouldKeepTheModelResponseOfAReviewThatDiedWhilePublishing() {
+      var session = new ReviewSession();
+      session.id = 9L;
+      session.setAiResponseJson("{\"findings\":[{\"title\":\"paid for\"}]}");
+
+      orchestrator.applyReviewFailure(session, "GitHub review rejected: 401");
+
+      assertEquals(ReviewSession.STATUS_FAILED, session.getStatus());
+      var updater = ArgumentCaptor.forClass(java.util.function.Consumer.class);
+      verify(sessionPersistence).update(eq(9L), updater.capture());
+      var managed = new ReviewSession();
+      updater.getValue().accept(managed);
+      assertEquals(ReviewSession.STATUS_FAILED, managed.getStatus());
+      assertEquals("GitHub review rejected: 401", managed.getErrorMessage());
+      assertEquals(
+          "{\"findings\":[{\"title\":\"paid for\"}]}",
+          managed.getAiResponseJson(),
+          "the completed AI work must survive the failed post");
+    }
+
+    @Test
+    void shouldSkipAiResponseJsonWhenTheRunNeverGotOne() {
+      var session = new ReviewSession();
+      session.id = 10L;
+
+      orchestrator.applyReviewFailure(session, "context load failed");
+
+      var updater = ArgumentCaptor.forClass(java.util.function.Consumer.class);
+      verify(sessionPersistence).update(eq(10L), updater.capture());
+      var managed = new ReviewSession();
+      updater.getValue().accept(managed);
+      assertEquals(ReviewSession.STATUS_FAILED, managed.getStatus());
+      assertNull(managed.getAiResponseJson());
+    }
+  }
+
+  @Nested
   class PersistAiResponse {
 
     @Test

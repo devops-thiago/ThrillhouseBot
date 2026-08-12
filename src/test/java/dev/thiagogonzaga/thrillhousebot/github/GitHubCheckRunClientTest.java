@@ -16,8 +16,17 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
+import java.util.Optional;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 class GitHubCheckRunClientTest {
@@ -177,5 +186,69 @@ class GitHubCheckRunClientTest {
     assertNull(out.title());
     assertNull(out.summary());
     assertNull(out.text());
+  }
+
+  /**
+   * #624: the check-run conclusion is written after the model work and after the review has been
+   * posted — exactly where a token read at the top of a long review has already expired. Three of
+   * that incident's 401s landed here, leaving the merge gate stuck in progress on a pull request
+   * whose review had actually finished.
+   */
+  @Nested
+  class ExpiredCredentials {
+
+    private static final String DEAD = "Bearer expired-token";
+    private static final String FRESH = "Bearer minted-token";
+    private static final GitHubCheckRunClient.UpdateCheckRunRequest CONCLUSION =
+        new GitHubCheckRunClient.UpdateCheckRunRequest(null, "success", null, null, null);
+
+    @AfterEach
+    void unbind() {
+      GitHubTokenRefresh.SHARED.bind(null);
+    }
+
+    private GitHubCheckRunClient updatingClient() {
+      var client = mock(GitHubCheckRunClient.class);
+      doCallRealMethod()
+          .when(client)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      return client;
+    }
+
+    private static WebApplicationException badCredentials() {
+      return new WebApplicationException(
+          Response.status(401).entity("{\"message\":\"Bad credentials\"}").build());
+    }
+
+    @Test
+    void aConclusionRejectedForItsCredentialIsWrittenWithAFreshOne() {
+      GitHubTokenRefresh.SHARED.bind(_ -> Optional.of(FRESH));
+      var client = updatingClient();
+      doThrow(badCredentials())
+          .when(client)
+          .updateCheckRunOnce(DEAD, "json", "o", "r", 94131141478L, CONCLUSION);
+
+      client.updateCheckRun(DEAD, "json", "o", "r", 94131141478L, CONCLUSION);
+
+      // The gate ends up green instead of stuck in progress for good.
+      verify(client).updateCheckRunOnce(FRESH, "json", "o", "r", 94131141478L, CONCLUSION);
+    }
+
+    @Test
+    void aRejectionThatNoFreshTokenCanFixStillPropagates() {
+      var client = updatingClient();
+      var rejection = badCredentials();
+      doThrow(rejection).when(client).updateCheckRunOnce(DEAD, "json", "o", "r", 1L, CONCLUSION);
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () -> client.updateCheckRun(DEAD, "json", "o", "r", 1L, CONCLUSION));
+
+      // CheckRunManager's own fail-soft handling is left exactly as it was.
+      assertSame(rejection, thrown);
+      verify(client, times(1))
+          .updateCheckRunOnce(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+    }
   }
 }

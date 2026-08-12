@@ -44,17 +44,47 @@ public interface GitHubCheckRunClient {
       @PathParam("repo") String repo,
       CreateCheckRunRequest request);
 
+  /** One HTTP attempt at updating a check run. Callers want {@link #updateCheckRun} instead. */
   @PATCH
   @Path("/repos/{owner}/{repo}/check-runs/{checkRunId}")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  void updateCheckRun(
+  void updateCheckRunOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("checkRunId") long checkRunId,
       UpdateCheckRunRequest request);
+
+  /**
+   * Updates a check run, minting a fresh installation token and repeating the PATCH once when
+   * GitHub rejects the credential (#624).
+   *
+   * <p>This is the call that decides whether a review's merge gate ends up green, red, or stuck in
+   * neither. It runs after the model work and after the review has been posted, which is exactly
+   * where a token read at the top of a long review has expired — in the incident this fixes, the
+   * completion update, its conclusion-only fallback and the mark-as-failed update all drew 401 in
+   * the same second, leaving the check run permanently in progress on a PR whose review had already
+   * finished. A PATCH against a known check-run id is also the least ambiguous write there is:
+   * repeating it either applies the same state or nothing, never a duplicate. See {@link
+   * GitHubTokenRefresh}.
+   */
+  default void updateCheckRun(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      long checkRunId,
+      UpdateCheckRunRequest request) {
+    GitHubTokenRefresh.SHARED.retrying(
+        "check run " + checkRunId + " on " + owner + "/" + repo,
+        auth,
+        credential -> {
+          updateCheckRunOnce(credential, accept, owner, repo, checkRunId, request);
+          return null;
+        });
+  }
 
   @GET
   @Path("/repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks")

@@ -62,9 +62,10 @@ public interface GitHubReviewClient {
         notice ->
             GitHubWriteRetry.DEFAULT.call(
                 "a review on " + owner + "/" + repo + " #" + pullNumber,
-                () ->
+                auth,
+                credential ->
                     createReviewOnce(
-                        auth,
+                        credential,
                         accept,
                         owner,
                         repo,
@@ -197,8 +198,10 @@ public interface GitHubReviewClient {
         () ->
             GitHubWriteRetry.DEFAULT.call(
                 "an inline comment on " + owner + "/" + repo + " #" + pullNumber,
-                () ->
-                    createPullRequestCommentOnce(auth, accept, owner, repo, pullNumber, request)));
+                auth,
+                credential ->
+                    createPullRequestCommentOnce(
+                        credential, accept, owner, repo, pullNumber, request)));
   }
 
   /** One HTTP attempt at a thread reply. Callers want {@link #replyToReviewComment} instead. */
@@ -233,9 +236,10 @@ public interface GitHubReviewClient {
         () ->
             GitHubWriteRetry.DEFAULT.call(
                 "a reply to comment " + commentId + " on " + owner + "/" + repo + " #" + pullNumber,
-                () ->
+                auth,
+                credential ->
                     replyToReviewCommentOnce(
-                        auth, accept, owner, repo, pullNumber, commentId, request)));
+                        credential, accept, owner, repo, pullNumber, commentId, request)));
   }
 
   @DELETE

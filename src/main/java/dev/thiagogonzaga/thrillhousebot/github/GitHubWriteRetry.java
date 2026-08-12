@@ -19,6 +19,7 @@ import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,12 +36,23 @@ import org.slf4j.LoggerFactory;
  *
  * A retry is attempted only when {@link GitHubApiError#isThrottled()} holds — a 429, or a 403 that
  * carries a {@code Retry-After}, an exhausted {@code x-ratelimit-remaining}, or GitHub's rate-limit
- * wording in the body. GitHub rejects a throttled content-creating request at the edge, before the
- * comment exists; the response is the rejection itself, not a report about a write that happened.
- * The ambiguous failures — a connection reset, a read timeout, a 5xx — are the ones where a write
- * may well have landed, and those are deliberately <em>not</em> retried here: they propagate on the
- * first attempt exactly as they did before. That is the whole duplicate-suppression argument, and
- * it is why the throttle test is a positive signal rather than "not a success".
+ * wording in the body — or when {@link GitHubApiError#isExpiredCredential()} holds and a fresher
+ * installation token can be minted. GitHub rejects a throttled content-creating request at the
+ * edge, before the comment exists, and rejects an unauthenticated one earlier still; the response
+ * is the rejection itself, not a report about a write that happened. The ambiguous failures — a
+ * connection reset, a read timeout, a 5xx — are the ones where a write may well have landed, and
+ * those are deliberately <em>not</em> retried here: they propagate on the first attempt exactly as
+ * they did before. That is the whole duplicate-suppression argument, and it is why the throttle
+ * test is a positive signal rather than "not a success".
+ *
+ * <h2>Why a repeat alone was not enough</h2>
+ *
+ * #624: the backoff below re-read the same {@code Authorization} header on every attempt, so a
+ * review whose installation token expired mid-run drew {@code 401 Bad credentials} three times over
+ * and threw the generation away anyway. A dead credential is the one failure a repeat cannot fix on
+ * its own, so an attempt that draws a 401 swaps the credential through {@link GitHubTokenRefresh}
+ * before repeating. That happens at most once per call and does not spend a backoff attempt — the
+ * refreshed request has not been throttled, it has not been sent.
  *
  * <h2>Why this cannot stall the pipeline</h2>
  *
@@ -69,24 +81,37 @@ public final class GitHubWriteRetry {
     void sleep(Duration delay) throws InterruptedException;
   }
 
-  /** The instance production uses: real sleeping, real clock, the shared write pacer. */
+  /** The instance production uses: real sleeping, real clock, the shared pacer and token seam. */
   static final GitHubWriteRetry DEFAULT =
       new GitHubWriteRetry(
-          delay -> Thread.sleep(delay.toMillis()), Instant::now, GitHubWritePacer.DEFAULT);
+          delay -> Thread.sleep(delay.toMillis()),
+          Instant::now,
+          GitHubWritePacer.DEFAULT,
+          GitHubTokenRefresh.SHARED);
 
   private final Sleeper sleeper;
   private final Supplier<Instant> clock;
   private final GitHubWritePacer pacer;
+  private final GitHubTokenRefresh credentials;
 
   /** A retry that only backs off, for the tests that pin the backoff rather than the pacing. */
   GitHubWriteRetry(Sleeper sleeper, Supplier<Instant> clock) {
-    this(sleeper, clock, GitHubWritePacer.NONE);
+    this(sleeper, clock, GitHubWritePacer.NONE, new GitHubTokenRefresh());
   }
 
   GitHubWriteRetry(Sleeper sleeper, Supplier<Instant> clock, GitHubWritePacer pacer) {
+    this(sleeper, clock, pacer, new GitHubTokenRefresh());
+  }
+
+  GitHubWriteRetry(
+      Sleeper sleeper,
+      Supplier<Instant> clock,
+      GitHubWritePacer pacer,
+      GitHubTokenRefresh credentials) {
     this.sleeper = sleeper;
     this.clock = clock;
     this.pacer = pacer;
+    this.credentials = credentials;
   }
 
   /**
@@ -102,11 +127,39 @@ public final class GitHubWriteRetry {
    * @param operation what is being posted, for the log — never credentials or comment text
    */
   public <T> T call(String operation, Supplier<T> operationCall) {
-    for (int attempt = 1; ; attempt++) {
+    return call(operation, null, _ -> operationCall.get());
+  }
+
+  /**
+   * The same, for a call that presents an installation token. {@code operationCall} is handed the
+   * credential to use rather than closing over one, so an attempt GitHub answers with 401 can be
+   * repeated with a freshly minted token instead of re-sending the dead one (#624).
+   *
+   * <p>The refresh happens at most once per call and outside the attempt budget: a request that was
+   * turned away for its credential was never throttled, so charging it a backoff attempt would
+   * spend the budget that exists for the throttling this cannot prevent. Once the credential has
+   * been swapped a second 401 is final — the installation itself is refusing, and nothing fresher
+   * exists to try.
+   *
+   * @param auth the {@code Authorization} header to start with, or {@code null} for a call that
+   *     carries no credential of its own and so has nothing to refresh
+   */
+  public <T> T call(String operation, String auth, Function<String, T> operationCall) {
+    var credential = auth;
+    var refreshable = true;
+    for (int attempt = 1; ; ) {
       try {
         pacer.acquire(operation);
-        return operationCall.get();
+        return operationCall.apply(credential);
       } catch (WebApplicationException e) {
+        if (refreshable) {
+          var fresh = credentials.replacementFor(operation, credential, e);
+          if (fresh.isPresent()) {
+            credential = fresh.get();
+            refreshable = false;
+            continue;
+          }
+        }
         var delay = retryDelay(operation, e, attempt);
         if (delay.isEmpty()) {
           throw e;
@@ -124,6 +177,7 @@ public final class GitHubWriteRetry {
           log.warn("Interrupted while backing off {} — the payload is lost", operation);
           throw e;
         }
+        attempt++;
       }
     }
   }
