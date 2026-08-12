@@ -47,6 +47,11 @@ public interface GitHubCommentClient {
    * — 7 of 56 responses in the burst that motivated this. {@link GitHubWriteRetry} repeats the post
    * only on a positively identified throttle, never on an ambiguous failure that might already have
    * created the comment, so no reply is ever posted twice.
+   *
+   * <p>This is also the surface that tells the user when a post was lost anyway (#578): a comment
+   * dropped once the budget is spent leaves a notice behind, and the next comment to land on the
+   * same pull request carries it up front. See {@link GitHubLostWrites} for why the notice travels
+   * with a comment rather than being posted as one.
    */
   default CommentResponse createComment(
       String auth,
@@ -55,9 +60,20 @@ public interface GitHubCommentClient {
       String repo,
       int issueNumber,
       CreateCommentRequest request) {
-    return GitHubWriteRetry.DEFAULT.call(
-        "a comment on " + owner + "/" + repo + " #" + issueNumber,
-        () -> createCommentOnce(auth, accept, owner, repo, issueNumber, request));
+    return GitHubLostWrites.SHARED.carrying(
+        new GitHubLostWrites.Target(owner, repo, issueNumber),
+        notice ->
+            GitHubWriteRetry.DEFAULT.call(
+                "a comment on " + owner + "/" + repo + " #" + issueNumber,
+                () ->
+                    createCommentOnce(
+                        auth,
+                        accept,
+                        owner,
+                        repo,
+                        issueNumber,
+                        new CreateCommentRequest(
+                            GitHubLostWrites.prepend(notice, request.body())))));
   }
 
   // GitHub serves 30 issue comments per page by default; 100 is the maximum.

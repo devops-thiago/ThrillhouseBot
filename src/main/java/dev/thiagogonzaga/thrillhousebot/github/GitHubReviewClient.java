@@ -45,6 +45,10 @@ public interface GitHubReviewClient {
    * Posts the review, backing off and reposting while GitHub is throttling (#568). The review body
    * and every inline finding in it are the run's model output, so a throttled 403 here discards the
    * whole generation. See {@link GitHubWriteRetry} for why the repeat cannot post it twice.
+   *
+   * <p>The review body is the second surface that can carry a dropped-post notice (#578): it lands
+   * in the pull request's conversation, so a reply GitHub threw away earlier is announced here when
+   * a review is what comes next.
    */
   default ReviewResponse createReview(
       String auth,
@@ -53,9 +57,23 @@ public interface GitHubReviewClient {
       String repo,
       int pullNumber,
       CreateReviewRequest request) {
-    return GitHubWriteRetry.DEFAULT.call(
-        "a review on " + owner + "/" + repo + " #" + pullNumber,
-        () -> createReviewOnce(auth, accept, owner, repo, pullNumber, request));
+    return GitHubLostWrites.SHARED.carrying(
+        new GitHubLostWrites.Target(owner, repo, pullNumber),
+        notice ->
+            GitHubWriteRetry.DEFAULT.call(
+                "a review on " + owner + "/" + repo + " #" + pullNumber,
+                () ->
+                    createReviewOnce(
+                        auth,
+                        accept,
+                        owner,
+                        repo,
+                        pullNumber,
+                        new CreateReviewRequest(
+                            request.commitId(),
+                            GitHubLostWrites.prepend(notice, request.body()),
+                            request.event(),
+                            request.comments()))));
   }
 
   // GitHub serves 30 reviews per page by default; request the 100 max and bound the page walk.
@@ -161,7 +179,12 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       CreatePullRequestCommentRequest request);
 
-  /** Posts an inline comment, with the throttle backoff described on {@link GitHubWriteRetry}. */
+  /**
+   * Posts an inline comment, with the throttle backoff described on {@link GitHubWriteRetry}. An
+   * inline comment is anchored to a diff line, so it is a poor place to announce an unrelated
+   * dropped post and does not carry a notice — but losing one is still a loss the pull request
+   * should hear about, so it leaves a notice for the next comment to carry (#578).
+   */
   default PullRequestCommentResponse createPullRequestComment(
       String auth,
       String accept,
@@ -169,9 +192,13 @@ public interface GitHubReviewClient {
       String repo,
       int pullNumber,
       CreatePullRequestCommentRequest request) {
-    return GitHubWriteRetry.DEFAULT.call(
-        "an inline comment on " + owner + "/" + repo + " #" + pullNumber,
-        () -> createPullRequestCommentOnce(auth, accept, owner, repo, pullNumber, request));
+    return GitHubLostWrites.SHARED.recording(
+        new GitHubLostWrites.Target(owner, repo, pullNumber),
+        () ->
+            GitHubWriteRetry.DEFAULT.call(
+                "an inline comment on " + owner + "/" + repo + " #" + pullNumber,
+                () ->
+                    createPullRequestCommentOnce(auth, accept, owner, repo, pullNumber, request)));
   }
 
   /** One HTTP attempt at a thread reply. Callers want {@link #replyToReviewComment} instead. */
@@ -190,6 +217,8 @@ public interface GitHubReviewClient {
 
   /**
    * Replies in a review thread, with the throttle backoff described on {@link GitHubWriteRetry}.
+   * Like an inline comment it belongs to its thread rather than to the conversation, so it leaves a
+   * dropped-post notice behind (#578) without carrying one.
    */
   default PullRequestCommentResponse replyToReviewComment(
       String auth,
@@ -199,9 +228,14 @@ public interface GitHubReviewClient {
       int pullNumber,
       long commentId,
       ReplyToReviewCommentRequest request) {
-    return GitHubWriteRetry.DEFAULT.call(
-        "a reply to comment " + commentId + " on " + owner + "/" + repo + " #" + pullNumber,
-        () -> replyToReviewCommentOnce(auth, accept, owner, repo, pullNumber, commentId, request));
+    return GitHubLostWrites.SHARED.recording(
+        new GitHubLostWrites.Target(owner, repo, pullNumber),
+        () ->
+            GitHubWriteRetry.DEFAULT.call(
+                "a reply to comment " + commentId + " on " + owner + "/" + repo + " #" + pullNumber,
+                () ->
+                    replyToReviewCommentOnce(
+                        auth, accept, owner, repo, pullNumber, commentId, request)));
   }
 
   @DELETE
