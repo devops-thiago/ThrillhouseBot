@@ -1001,6 +1001,126 @@ class FindingPipelineTest {
   }
 
   @Test
+  void singleCallSalvagesTheCompleteFindingsFromATruncatedReviewResponse() {
+    // #580: the single-call lane had no truncation handling at all, so the one paid call's cut
+    // body discarded the whole review. It must salvage exactly like the multi-call lane does:
+    // complete leading findings through the normal validate/verify chain, and the batch's files
+    // disclosed as PARTIALLY reviewed so approval is held and the posted review says why.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(
+            new AiResponseTruncatedException("finish_reason=length", partialBatchBody(), false));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    // #495's no-retry stands: salvage replaces the disclose step, never re-enters the retry lane.
+    verify(aiReviewService, times(1)).review(eq(session), any());
+    // The salvaged findings face every check a parsed response's do, against the batch's own text.
+    verify(quoteValidator).validate(any(), eq("### a.java\n"));
+    verify(findingVerificationService, times(1)).verify(anyLong(), any(), any(), any(), any());
+
+    assertEquals(3, result.findings().size());
+    assertEquals("S1", result.findings().get(0).title());
+    assertEquals("S3", result.findings().get(2).title());
+    // The complete status before the cut is kept; the cut-off one is dropped.
+    assertEquals(1, result.previousFindingsStatus().size());
+    assertEquals(1, result.previousFindingsStatus().get(0).id());
+    assertNull(result.summary(), "the cut landed before the summary object, so there is none");
+    assertNotNull(session.getAiResponseJson(), "a salvaged review is persisted like any other");
+
+    // Partially reviewed — the existing response-cut class: named, holding APPROVE back, and not
+    // claimed as never-reviewed.
+    assertEquals(List.of("a.java"), plan.responseCutFiles());
+    assertTrue(plan.runtimeUncoveredFiles().isEmpty());
+    assertTrue(plan.truncated());
+    assertEquals(
+        SummaryDegradation.NONE,
+        plan.summaryDegradation(),
+        "the findings are NOT complete here, so the summary-degradation copy must not be used");
+  }
+
+  @Test
+  void singleCallSalvageKeepsASummaryObjectThatClosedBeforeTheCut() {
+    // The single call's summary rides in the same body as its findings, so a cut that lands after
+    // the summary object closed leaves usable prose — it must be kept, not thrown away with the
+    // rest of the paid response.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    var body =
+        "{\"findings\":["
+            + bodyFinding("S1")
+            + "],\"summary\":{\"total_findings\":1,\"critical\":0,\"high\":0,\"medium\":1,"
+            + "\"low\":0,\"overall_assessment\":\"ok\",\"pr_purpose\":\"does things\"},"
+            + "\"previous_findings_status\":[{\"id\":1,\"status\":\"unres";
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length", body, false));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertEquals(1, result.findings().size());
+    assertNotNull(result.summary());
+    assertEquals("does things", result.summary().prPurpose());
+    assertEquals(List.of("a.java"), plan.responseCutFiles());
+  }
+
+  @Test
+  void singleCallSalvageOnTheLegacyUncappedPathKeepsTheFindingsWithoutNamingFiles() {
+    // Budgeting disabled (max-input-tokens <= 0): the plan carries no batch to name, so there is
+    // no per-file unit to disclose — the paid findings are still kept rather than the whole review
+    // discarded, and the cut is stated in the log instead.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null);
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(
+            new AiResponseTruncatedException("finish_reason=length", partialBatchBody(), false));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertEquals(3, result.findings().size());
+    // The legacy path quote-validates against the raw diff, salvaged findings included.
+    verify(quoteValidator).validate(any(), eq("raw legacy diff"));
+    assertTrue(plan.responseCutFiles().isEmpty(), "no batch to name means no per-file disclosure");
+    assertFalse(plan.truncated());
+  }
+
+  @Test
+  void singleCallStillFailsWhenTheCutPrecedesTheFirstCompleteFinding() {
+    // A cut before the first element closed leaves nothing salvageable, and unlike a batch this
+    // lane has no sibling call carrying the review: failing loudly (the orchestrator's notice
+    // names the cap) beats posting a review whose only content is a disclosure. Green-only by
+    // necessity — this IS the pre-#580 behaviour; the guard pins that salvage never invents a
+    // "partially reviewed" claim out of an empty salvage.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(
+            new AiResponseTruncatedException(
+                "finish_reason=length", "{\"findings\":[{\"risk\":\"hi", false));
+
+    var resolver = new DiffLineResolver(Map.of());
+    assertThrows(
+        AiResponseTruncatedException.class,
+        () -> pipeline.run(session, template, ctx, plan, resolver));
+
+    verify(aiReviewService, times(1)).review(eq(session), any());
+    assertTrue(plan.responseCutFiles().isEmpty());
+    assertFalse(plan.truncated());
+    assertNull(session.getAiResponseJson(), "nothing salvageable persists nothing");
+  }
+
+  @Test
   void resolvedFromABatchThatNeverSawTheFileIsDemotedToUnresolved() {
     var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
     var ctx = reviewContext();
