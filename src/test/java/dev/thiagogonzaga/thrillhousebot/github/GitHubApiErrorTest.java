@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import jakarta.ws.rs.WebApplicationException;
@@ -259,7 +260,7 @@ class GitHubApiErrorTest {
 
       assertEquals(SECONDARY_LIMIT_BODY, loggedBody(response));
       // Buffered first, so the exception the caller receives can still be read.
-      org.mockito.Mockito.verify(response).bufferEntity();
+      verify(response).bufferEntity();
     }
 
     @Test

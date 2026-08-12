@@ -343,9 +343,12 @@ class RebuttalContradictionTest {
     // The dispatch is mentioned only in a // comment on an added line — commented-out or
     // explanatory text, not live code — so it must not refute the decline (F3).
     var commentedDispatch =
-        "diff --git a/Worker.java\n@@ -1,2 +1,3 @@\n"
-            + "+    // executor.submit(() -> run(ctx)); removed, now synchronous\n"
-            + "+    run(ctx);\n";
+        """
+        diff --git a/Worker.java
+        @@ -1,2 +1,3 @@
+        +    // executor.submit(() -> run(ctx)); removed, now synchronous
+        +    run(ctx);
+        """;
 
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", commentedDispatch).isEmpty(),
@@ -357,9 +360,12 @@ class RebuttalContradictionTest {
     // A "://" URL scheme must not be mistaken for a // line-comment start when stripping comments
     // from right-side code, so a dispatch on a later line is still seen as live evidence (F3).
     var codeWithUrl =
-        "diff --git a/Worker.java\n@@ -1,2 +1,3 @@\n"
-            + "+    var docs = \"http://example.com/submit\";\n"
-            + "+    executor.submit(() -> run(ctx));\n";
+        """
+        diff --git a/Worker.java
+        @@ -1,2 +1,3 @@
+        +    var docs = "http://example.com/submit";
+        +    executor.submit(() -> run(ctx));
+        """;
 
     var contradiction = RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeWithUrl);
 

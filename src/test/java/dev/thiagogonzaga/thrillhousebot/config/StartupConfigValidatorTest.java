@@ -1136,10 +1136,10 @@ class StartupConfigValidatorTest {
 
     @Test
     void theShippedConciseEffortResolvesToUnset() throws Exception {
-      // The shipped line is
-      // thrillhousebot.ai.reasoning.concise-effort=${AI_REASONING_EFFORT_CONCISE:}
-      // — an empty default, so with no env var set the lane must see "unset" (and resolve its own
-      // default) rather than an empty string the provider would reject as a reasoning tier.
+      // The shipped property thrillhousebot.ai.reasoning.concise-effort takes its value from the
+      // AI_REASONING_EFFORT_CONCISE env var with an empty default, so with no env var set the lane
+      // must see "unset" (and resolve its own default) rather than an empty string the provider
+      // would reject as a reasoning tier.
       var shipped =
           new SmallRyeConfigBuilder()
               .addDefaultInterceptors()
