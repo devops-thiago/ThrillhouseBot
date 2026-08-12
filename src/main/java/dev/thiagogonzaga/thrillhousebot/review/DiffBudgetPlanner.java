@@ -62,6 +62,13 @@ public class DiffBudgetPlanner {
    */
   private static final Pattern NUMBERED_ENTRY = Pattern.compile("^\\d+\\. \\[");
 
+  /**
+   * Stand-in for a coverage gap on a file GitHub gave no name. It keeps the gap counted — the
+   * omitted/clipped list sizes are what hold APPROVE — while naming it as honestly as the input
+   * allows. See {@link #recordName}.
+   */
+  static final String UNNAMED_FILE = "(unnamed file)";
+
   private final ReviewDiffFormatter formatter;
   private final TokenCounter tokenCounter;
   private final ThrillhouseConfig config;
@@ -546,11 +553,17 @@ public class DiffBudgetPlanner {
   private Rendered renderAndSize(
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens) {
     var ordered = new ArrayList<>(reviewable);
+    // The name tie-break only fires between files of equal size, and natural ordering on a null
+    // key throws. Unnamed last: packing is impact-descending, so whatever sorts last is what the
+    // bin cap omits first, and a degenerate entry must never displace a well-formed file — a
+    // finding on a file the model cannot name has no path to anchor an inline comment to anyway.
     ordered.sort(
         Comparator.comparingInt(
                 (GitHubPullRequestClient.FileDiff f) -> f.additions() + f.deletions())
             .reversed()
-            .thenComparing(GitHubPullRequestClient.FileDiff::filename));
+            .thenComparing(
+                GitHubPullRequestClient.FileDiff::filename,
+                Comparator.nullsLast(Comparator.naturalOrder())));
 
     var reviewableNames = ReviewDiffFormatter.namesOf(reviewable);
     var rendered = new Rendered(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
@@ -601,22 +614,30 @@ public class DiffBudgetPlanner {
   }
 
   /**
+   * Records a coverage-gap filename, standing in for a null one. {@code FileDiff.filename()} is not
+   * validated at construction, and a null name reaching the plan's name lists makes the {@code
+   * List.copyOf} in the {@link BudgetPlan} constructor throw — failing the whole review at plan
+   * time for a file the disclosure could not have named anyway.
+   *
+   * <p>Dropping the entry instead would be worse than the crash it avoids, and silently: these
+   * lists are not only display text, their <em>size</em> is what {@link BudgetPlan#truncated()}
+   * gates APPROVE on. If the unnamed file were the only gap, the count would fall to zero and a
+   * file the model never read would stop withholding approval — the bot approving a PR it did not
+   * fully see. So the gap keeps a slot and the disclosure names it as best it can (#473).
+   *
+   * <p>Two unnamed gaps in different classes can collide on the placeholder and be deduplicated by
+   * the omitted/clipped disjointness filter. Both are gaps and both hold approval, so the outcome
+   * stays honest in the direction that matters.
+   */
+  private static void recordName(List<String> names, String filename) {
+    names.add(filename == null ? UNNAMED_FILE : filename);
+  }
+
+  /**
    * A reviewable file GitHub reported with real additions/deletions but no patch text (binary, or a
    * text diff too large to display). It survives {@link ReviewDiffFormatter#isPureRename} (which
    * needs a zero change count) yet has no diff to review, so it must be omitted, not packed.
    */
-  /**
-   * Records a coverage-gap filename, skipping a null one. {@code FileDiff.filename()} is not
-   * validated at construction, and a null name reaching the plan's name lists makes the {@code
-   * List.copyOf} in the {@link BudgetPlan} constructor throw — failing the whole review at plan
-   * time for a file the disclosure could not have named anyway.
-   */
-  private static void recordName(List<String> names, String filename) {
-    if (filename != null) {
-      names.add(filename);
-    }
-  }
-
   private static boolean isPatchlessWithChanges(GitHubPullRequestClient.FileDiff file) {
     var patch = file.patch();
     return (patch == null || patch.isBlank()) && file.additions() + file.deletions() > 0;
@@ -647,7 +668,7 @@ public class DiffBudgetPlanner {
         target = binSections.size() - 1;
       }
       if (target < 0) {
-        omitted.add(s.file().filename());
+        recordName(omitted, s.file().filename());
         continue;
       }
       binSections.get(target).add(s);
