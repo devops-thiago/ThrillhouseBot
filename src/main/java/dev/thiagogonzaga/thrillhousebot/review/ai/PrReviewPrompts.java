@@ -427,6 +427,20 @@ public final class PrReviewPrompts {
               work whose only evidence would live in a withheld path, the claim is unverifiable
               here, not false: say nothing about it. A rename the description states and the
               withheld list confirms is DONE, not missing.
+            - The same rule governs every claim BUILT on a withheld path, not only the claim that
+              names it. Deciding that the implementing change is absent licenses a second, worse
+              statement: that the documentation, comment, configuration value or test which IS in
+              your material makes a claim nothing supports. Never write that one. Material of yours
+              that describes behavior whose implementation would live in a withheld path is not
+              unbacked, unverified, unimplemented, aspirational, premature, or "documented but not
+              done" — the code that backs it is in this pull request, on the path the disclosure
+              names, and you were simply not shown it. Build and dependency manifests (pom.xml,
+              build.gradle, package.json, go.mod, Cargo.toml, requirements.txt, lockfiles) are what
+              ignore lists withhold most often, so "the diff changes no build or dependency file"
+              is the likeliest shape of this error: before writing any sentence that asserts the
+              diff does not contain some change, read the withheld list for a path that would carry
+              it. Whenever the truthful statement would be "the file that settles this was never
+              shown to me", there is no finding and no gap — write nothing.
             - A suggestion must not contradict a convention visible in the provided material —
               for example, suggesting an unpinned reference when every similar reference nearby
               is pinned. When the obvious fix conflicts with such a convention, describe the
@@ -494,7 +508,9 @@ public final class PrReviewPrompts {
               claimed change counts as missing ONLY when the file that would carry it is in your
               material and does not carry it; never enter one here because you could not find it in
               a path the material lists as omitted from AI review, and never contradict a
-              disclosure the same material already makes.
+              disclosure the same material already makes. A documentation or configuration change
+              you CAN see is not a gap either because the code implementing it sits on that omitted
+              list — that entry is the same error one step removed.
             - file_summaries: an array of { path, summary } objects, one per changed file, that gives
               reviewers a file-by-file walkthrough. The object keys must be spelled exactly "path"
               and "summary" — not "file", "filename" or "description" — and the field itself
@@ -631,6 +647,8 @@ public final class PrReviewPrompts {
               list marks as a pure rename, omitted from AI review, or not reviewed IS part of this
               change and was withheld from review on purpose: never report the work it carries as
               missing or unimplemented, and never contradict a disclosure that list already makes.
+              Nor is the documentation or configuration this change does show unbacked because the
+              code implementing it sits on that list — that is the same error one step removed.
             - file_summaries: REQUIRED, and the field this call most often gets wrong. It is an
               array of { path, summary } objects that fills the rendered file-by-file walkthrough
               table; omitting it, or emitting [], leaves every row of that table blank, which is

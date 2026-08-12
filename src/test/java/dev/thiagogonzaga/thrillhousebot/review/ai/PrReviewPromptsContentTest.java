@@ -915,6 +915,40 @@ class PrReviewPromptsContentTest {
   }
 
   /**
+   * #566 — the production instance on this repo's own PR #564. {@code **}{@code /pom.xml} is on the
+   * shipped default ignore list, so the review was handed the README and application.properties
+   * comments describing a dependency-scope change but not the pom hunk performing it. It said the
+   * diff contained no pom.xml change, and then — building on that — that the documentation it COULD
+   * see claimed something nothing in the diff implemented. One withheld file, two false statements,
+   * covering the pull request's entire substantive change. Refusing only the first sentence leaves
+   * the second, so the rule has to reach every claim derived from the withheld path.
+   */
+  @Test
+  void aClaimBuiltOnAWithheldPathIsRefusedAlongWithTheClaimThatNamesIt() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "The same rule governs every claim BUILT on a withheld path",
+        "the withheld-material rule must extend past the sentence that names the path (#566)");
+    assertContains(
+        sys,
+        "unbacked, unverified, unimplemented, aspirational, premature",
+        "visible documentation must not be called unsupported when its code was withheld (#566)");
+    assertContains(
+        sys,
+        "build.gradle, package.json, go.mod, Cargo.toml, requirements.txt",
+        "the manifests ignore lists withhold most often must be named outright (#566)");
+    assertContains(
+        sys,
+        "read the withheld list for a path that would carry",
+        "the check must fire before an absence is asserted, not after (#566)");
+    assertContains(
+        sys,
+        "there is no finding and no gap — write nothing",
+        "an unverifiable-because-withheld claim must be dropped, not hedged (#566)");
+  }
+
+  /**
    * #570 — the round-2 corpus planted the same stored-XSS defect in Angular ({@code
    * bypassSecurityTrustHtml}) and React ({@code dangerouslySetInnerHTML}) and got HIGH inline for
    * one and LOW in the collapsed section for the other, on the reasoning that the backend might
@@ -990,5 +1024,14 @@ class PrReviewPromptsContentTest {
         PrReviewPrompts.SUMMARY_SYSTEM,
         "pure rename, omitted from AI review, or not reviewed IS part of this",
         "the summary call's description_gaps must exclude withheld paths (#569)");
+    // #566 — the derived form: the visible docs called unbacked because their code was withheld.
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "is not a gap either because the code implementing it sits",
+        "the review call's description_gaps must refuse the derived claim too (#566)");
+    assertContains(
+        PrReviewPrompts.SUMMARY_SYSTEM,
+        "Nor is the documentation or configuration this change does show unbacked",
+        "the summary call's description_gaps must refuse the derived claim too (#566)");
   }
 }
