@@ -155,6 +155,31 @@ public class FindingVerificationService {
               + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * A conditional clause — a hypothesis the finding raises, not a fact it states. Matches from the
+   * conditional marker to the end of that clause (the next comma, colon, dash or sentence end), so
+   * only the hypothetical span is removed and whatever the finding asserts around it survives.
+   *
+   * <p>Both floor defeaters are assertion tests, and neither regex can carry mood: "If the feedback
+   * API sanitizes body on write, the exploit is neutralized" satisfies {@link #MITIGATION_ASSERTED}
+   * on the token pair "API sanitizes" even though the sentence goes on to reject the hypothesis
+   * ("but a sanitizer you cannot see is not a sanitizer"). That phrasing is not incidental — #575's
+   * review prompt REQUIRES a demonstrated-sink finding whose mitigating layer was not shown to name
+   * the exact layer to verify, so the instruction manufactures the wording the defeater then reads
+   * as a mitigation (#608). Scoping to the clause is the same narrowing the hedging scan already
+   * needed for the same reason.
+   *
+   * <p>Scoped to the conditional CLAUSE rather than the sentence carrying it, because over-firing
+   * the floor is the dangerous direction (#594): "If you follow the render path, React escapes the
+   * value" asserts the mitigation outside its conditional, and that assertion must still defeat the
+   * floor.
+   */
+  private static final Pattern CONDITIONAL_CLAUSE =
+      Pattern.compile(
+          "\\b(if|unless|whether|in case|assuming|provided that|should)\\b"
+              + "[^,;:.!?\\n\\r\\u2013\\u2014]*",
+          Pattern.CASE_INSENSITIVE);
+
   /** The floor an unmitigated-injection-sink finding may never publish below (#570). */
   private static final RiskLevel INJECTION_SINK_FLOOR = RiskLevel.HIGH;
 
@@ -363,8 +388,11 @@ public class FindingVerificationService {
    * that happens to say "unvalidated". Both halves are token matches, though, so a sentence that
    * RULES THE SINK OUT can satisfy them out of its own negation ("not concatenated but
    * parameterized, so no SQL injection is possible"); two defeaters — a denied sink, and a
-   * mitigation the finding says IS present — suppress the floor for exactly those. A critical keeps
-   * its level: the floor lifts, never lowers.
+   * mitigation the finding says IS present — suppress the floor for exactly those. Both are read on
+   * what the finding ASSERTS, with {@linkplain #CONDITIONAL_CLAUSE conditional clauses} removed
+   * first: a hypothesis the finding raises and rejects in the same breath is not a statement that
+   * the sink is safe, and the review prompt requires that hypothesis on this very class (#608). A
+   * critical keeps its level: the floor lifts, never lowers.
    */
   static ReviewResponse floorInjectionSinkRisk(ReviewResponse response) {
     if (response.findings().isEmpty()) {
@@ -408,13 +436,17 @@ public class FindingVerificationService {
         (finding.title() == null ? "" : finding.title())
             + "\n"
             + (finding.description() == null ? "" : finding.description());
+    // The trigger is read on the whole finding; the defeaters only on what it ASSERTS. A denial or
+    // a mitigation raised as a hypothesis the finding then rejects is not a statement that the sink
+    // is safe, and the review prompt mandates exactly that hypothesis on this class (#608).
+    String asserted = CONDITIONAL_CLAUSE.matcher(text).replaceAll(" ");
     return namesInjectionSink(text)
         && NO_MITIGATION.matcher(text).find()
-        // Either defeater anywhere in the finding suppresses the floor. Under-firing costs a
-        // finding the lift it should have had, which is where this class already stood; over-firing
-        // escalates a non-defect and, at high confidence, blocks the merge on it.
-        && !SINK_DENIED.matcher(text).find()
-        && !MITIGATION_ASSERTED.matcher(text).find();
+        // Either defeater anywhere in the finding's assertions suppresses the floor. Under-firing
+        // costs a finding the lift it should have had, which is where this class already stood;
+        // over-firing escalates a non-defect and, at high confidence, blocks the merge on it.
+        && !SINK_DENIED.matcher(asserted).find()
+        && !MITIGATION_ASSERTED.matcher(asserted).find();
   }
 
   private static boolean namesInjectionSink(String text) {

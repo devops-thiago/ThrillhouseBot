@@ -926,6 +926,85 @@ class FindingVerificationServiceTest {
     assertEquals("low", result.findings().get(0).risk());
   }
 
+  /**
+   * Round 4's React half of the planted pair, verbatim from ThrillhouseBot-test #38: it names the
+   * unshown layer to verify exactly as the review prompt requires, then rejects that hypothesis in
+   * the same sentence and concludes the class is critical.
+   */
+  private static ReviewResponse.Finding reactConditionalXss(String risk, String confidence) {
+    return new ReviewResponse.Finding(
+        risk,
+        confidence,
+        "src/components/FeedbackItem.tsx",
+        37,
+        "Stored XSS: feedback body rendered via dangerouslySetInnerHTML with no sanitization",
+        "No sanitization, escaping, or validation of body is visible anywhere in the provided"
+            + " material. This is the stored-XSS defect class: user-authored stored content"
+            + " rendered back to other users via a raw-HTML sink. If the feedback API sanitizes"
+            + " body on write, the exploit is neutralized — verify that layer — but a"
+            + " sanitizer you cannot see is not a sanitizer, so severity stays at critical while"
+            + " confidence is medium.",
+        null,
+        null);
+  }
+
+  @Test
+  void floorsAnInjectionSinkFindingWhoseOnlySanitizerMentionIsAConditionalItRejects() {
+    // #608: the finding argues its own severity is critical and publishes MEDIUM, because
+    // MITIGATION_ASSERTED read "API sanitizes" out of the conditional "If the feedback API
+    // sanitizes body on write" — a hypothesis the very next clause rejects. #575's prompt REQUIRES
+    // that clause on this class, so the defeater fired on wording the prompt guarantees is there.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original = response(reactConditionalXss("medium", "medium"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("medium", result.findings().get(0).confidence());
+    assertEquals(1, result.summary().high());
+    assertEquals(0, result.summary().medium());
+  }
+
+  @Test
+  void ratesTheConditionallyHedgedHalfOfThePlantedPairLikeItsTwin() {
+    // #608's acceptance case: the same class in two frameworks, one of them phrased with the
+    // mandated verification clause, must publish at the same severity and both inline.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(angularXss("critical", "high"), reactConditionalXss("medium", "medium"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertTrue(Finding.fromAiResponse(result.findings().get(0)).postsInline());
+    assertTrue(Finding.fromAiResponse(result.findings().get(1)).postsInline());
+    assertEquals("critical", result.findings().get(0).risk());
+    assertEquals("high", result.findings().get(1).risk());
+  }
+
+  @Test
+  void stillHonoursAMitigationAssertedOutsideTheConditionalClause() {
+    // The scoping is the conditional clause itself, not the sentence carrying it: over-firing the
+    // floor is the dangerous direction (#594), so a finding whose conditional is incidental and
+    // which then states the mitigation as fact must still defeat the floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Profile.tsx",
+                12,
+                "dangerouslySetInnerHTML receives an unsanitized note",
+                "If you follow the render path, React escapes the value before it reaches the DOM.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
   @Test
   void leavesCriticalInjectionFindingsAndUnrelatedRatingsAlone() {
     // The floor only lifts, so a critical keeps its level; and it never fires unless the finding
