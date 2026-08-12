@@ -1184,4 +1184,251 @@ class PrSummaryGeneratorTest {
     }
     return count;
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // #588 — one observation, one surface. The corpus below is the verbatim text ThrillhouseBot
+  // published on devops-thiago/ThrillhouseBot-test #23 (Java) and #22 (C), where the same claim was
+  // asserted as an inline finding, again as a description-gap bullet, and again as its own clause
+  // in a Changed Files walkthrough row.
+  // ---------------------------------------------------------------------------------------------
+
+  @Test
+  void restatedDescriptionGapAndWalkthroughClauseCollapseToTheInlineFinding() {
+    var findings =
+        List.of(
+            new Finding(
+                RiskLevel.HIGH,
+                "src/main/java/com/thrillhouse/scheduler/Main.java",
+                22,
+                "Main passes a hardcoded empty task list, so nothing is ever dispatched",
+                "desc",
+                null,
+                null));
+    var aiSummary =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            1,
+            0,
+            0,
+            "ok",
+            null,
+            List.of(
+                "The runnable entry point passes a hardcoded empty task list to `dispatchDueTasks`,"
+                    + " so the shipped service cannot actually dispatch any task.",
+                "PR says TaskRunRepository persists run history, but the added class only contains"
+                    + " searchRunsByTaskName; no insert/update/upsert write path is present in the"
+                    + " diff."),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary(
+                    "src/main/java/com/thrillhouse/scheduler/Main.java",
+                    "Added one-shot entry point; hardcodes an empty task list and reads only"
+                        + " registry URL env var")),
+            null);
+    var result =
+        new ReviewResult(
+            findings,
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary =
+        generator.generate(
+            1,
+            30,
+            0,
+            List.of(
+                new PrSummaryGenerator.ChangedFile(
+                    "src/main/java/com/thrillhouse/scheduler/Main.java", "added")),
+            aiSummary,
+            result);
+
+    // The claim keeps its most specific surface: the inline finding.
+    assertTrue(
+        summary.contains(
+            "**HIGH:** Main passes a hardcoded empty task list, so nothing is ever dispatched"),
+        summary);
+    // ...and is gone from the other two.
+    assertFalse(summary.contains("the shipped service cannot actually dispatch any task"), summary);
+    assertFalse(summary.contains("hardcodes an empty task list"), summary);
+    // The walkthrough row survives, still summarising the file (the deliberate nuance in #588).
+    assertTrue(
+        summary.contains(
+            "| `src/main/java/com/thrillhouse/scheduler/Main.java` | Added | Added one-shot entry"
+                + " point |"),
+        summary);
+    // A gap that states something no finding states is untouched.
+    assertTrue(summary.contains("no insert/update/upsert write path"), summary);
+    assertTrue(summary.contains("### ⚠️ Description vs. Implementation"), summary);
+  }
+
+  @Test
+  void restatedGapCollapsesEvenWhenTheFindingIsNotAKeyFinding() {
+    // ThrillhouseBot-test #22: the dead-config claim was 8th by severity, so it never reached the
+    // Key Findings list — the dedupe still has to see it as published.
+    var findings = new java.util.ArrayList<Finding>();
+    for (int i = 0; i < 5; i++) {
+      findings.add(
+          new Finding(
+              RiskLevel.CRITICAL, "src/other" + i + ".c", i, "Unrelated " + i, "d", null, null));
+    }
+    findings.add(
+        new Finding(
+            RiskLevel.MEDIUM,
+            "src/main.c",
+            45,
+            "LOGD_BAN_REFRESH_INTERVAL is dead config; banlist is never refreshed",
+            "desc",
+            null,
+            null));
+    var aiSummary =
+        new ReviewResponse.Summary(
+            6,
+            5,
+            0,
+            1,
+            0,
+            "ok",
+            null,
+            List.of(
+                "Periodic banned-IP refresh claimed in the PR is not implemented: banlist_fetch is"
+                    + " called only once at startup (src/main.c:45) and LOGD_BAN_REFRESH_INTERVAL"
+                    + " is read into cfg.ban_refresh_interval (src/config.c:46) but never used.",
+                "Duplicate skipping is claimed to last 'within a connection's lifetime', but dedup"
+                    + " state is process-global in rotator.c (already_seen/remember), so identical"
+                    + " messages from different clients/connections are also dropped."),
+            List.of(),
+            List.of(),
+            null);
+    var result =
+        new ReviewResult(
+            findings,
+            5,
+            0,
+            1,
+            0,
+            RiskLevel.CRITICAL,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(2, 60, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("Periodic banned-IP refresh claimed in the PR"), summary);
+    assertTrue(summary.contains("dedup state is process-global in rotator.c"), summary);
+  }
+
+  @Test
+  void descriptionGapsSectionDisappearsWhenEveryBulletRestatesAFinding() {
+    var findings =
+        List.of(
+            new Finding(
+                RiskLevel.HIGH,
+                "src/rotator.c",
+                45,
+                "LOGD_MAX_FILE_SIZE never enforced; no rotation despite docs",
+                "desc",
+                null,
+                null));
+    var aiSummary =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            1,
+            0,
+            0,
+            "ok",
+            null,
+            List.of(
+                "Per-source 'rotated' log files and LOGD_MAX_FILE_SIZE rollover claimed in the PR"
+                    + " and docs: rotator_write always appends to <source>.log and never reads"
+                    + " r->max_file_size (src/rotator.c:13,45); no rotation logic exists."),
+            List.of(),
+            List.of(),
+            null);
+    var result =
+        new ReviewResult(
+            findings,
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(1, 10, 0, List.of(), aiSummary, result);
+
+    assertFalse(summary.contains("### ⚠️ Description vs. Implementation"), summary);
+  }
+
+  @Test
+  void walkthroughRowThatOnlySummarisesItsFileIsNeverTrimmed() {
+    var findings =
+        List.of(
+            new Finding(
+                RiskLevel.CRITICAL,
+                "src/rotator.c",
+                43,
+                "Path traversal: unvalidated client source reaches fopen path",
+                "desc",
+                null,
+                null));
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary(
+                "src/rotator.c",
+                "Dedup + append to <source>.log using an unvalidated client source path"),
+            new ReviewResponse.FileSummary("src/banlist.h", "Declares banlist API"));
+    var result =
+        new ReviewResult(
+            findings,
+            1,
+            0,
+            0,
+            0,
+            RiskLevel.CRITICAL,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary =
+        generator.generate(
+            2,
+            20,
+            0,
+            List.of(
+                new PrSummaryGenerator.ChangedFile("src/rotator.c", "added"),
+                new PrSummaryGenerator.ChangedFile("src/banlist.h", "added")),
+            aiSummary,
+            result);
+
+    // A single-clause row is the file's summary, not a re-assertion — it stays verbatim even
+    // though it overlaps the inline finding heavily.
+    assertTrue(
+        summary.contains(
+            "| `src/rotator.c` | Added | Dedup + append to <source>.log using an unvalidated"
+                + " client source path |"),
+        summary);
+    assertTrue(summary.contains("| `src/banlist.h` | Added | Declares banlist API |"), summary);
+  }
 }
