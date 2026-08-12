@@ -140,6 +140,19 @@ class GitHubErrorLoggerTest {
   }
 
   @Test
+  void staysSilentAndStillMapsTheResponseWhenLoggingIsOff() {
+    // Both lines sit behind a level check, because diagnostics() builds its string eagerly and a
+    // parameter placeholder only defers the toString. With the logger off neither branch may log,
+    // and the mapper must still hand the response on to the runtime's default mapper.
+    julLogger.setLevel(Level.OFF);
+
+    assertNull(mapper.toThrowable(response(403, SECONDARY_LIMIT_BODY)));
+    assertNull(mapper.toThrowable(response(404, "{\"message\":\"Not Found\"}")));
+
+    assertTrue(logged.isEmpty(), logged.toString());
+  }
+
+  @Test
   void doesNotWarnAboutAnAbsentOptionalRepositoryFile() {
     // The bot probes for .github/instructions and the settings file and reads 404 as "absent";
     // warning on those would bury the failures that matter under ordinary traffic.

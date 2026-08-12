@@ -69,6 +69,25 @@ record LargePrNudge(boolean enabled, int minFiles, int minChangedLines) {
   /** Section heading of the rendered note; also the marker tests and callers match on. */
   static final String NUDGE_HEADING = "### ⚠️ Large PR — no inline findings";
 
+  /**
+   * Everything the note says after the size sentence: why a clean result on a change this size is
+   * worth re-checking, and what to run.
+   *
+   * <p>Two details of the literal are load-bearing. It opens with a space, because it is appended
+   * straight onto a sentence that ends in {@code .} or {@code above).}. It ends with a blank line
+   * before the closing delimiter, which is the trailing {@code \n\n} that separates this section
+   * from whatever the summary appends next.
+   */
+  private static final String CLOSING_ADVICE =
+      """
+       A change this size coming back clean is worth a second look: it may genuinely be clean, \
+      but it is also what a shallow pass looks like.
+
+      Re-run `/review` for a fresh pass, or `/improve` for a whole-PR improvement pass, before \
+      treating this as a clean bill of health. This note is advisory — it does not hold approval.
+
+      """;
+
   static LargePrNudge from(ThrillhouseConfig.LargePrNudgeConfig config) {
     return new LargePrNudge(config.enabled(), config.minFiles(), config.minChangedLines());
   }
@@ -105,13 +124,7 @@ record LargePrNudge(boolean enabled, int minFiles, int minChangedLines) {
           .append(
               " too low-confidence to post on the diff (see \"Things to double-check\" above).");
     }
-    sb.append(
-        " A change this size coming back clean is worth a second look: it may genuinely be"
-            + " clean, but it is also what a shallow pass looks like.\n\n");
-    sb.append(
-        "Re-run `/review` for a fresh pass, or `/improve` for a whole-PR improvement pass, before"
-            + " treating this as a clean bill of health. This note is advisory — it does not hold"
-            + " approval.\n\n");
+    sb.append(CLOSING_ADVICE);
     return Optional.of(sb.toString());
   }
 

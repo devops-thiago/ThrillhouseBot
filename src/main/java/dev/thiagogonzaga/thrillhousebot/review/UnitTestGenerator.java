@@ -292,30 +292,10 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       }
       if (shown == MAX_PRIOR_FINDINGS) {
         overCap++;
-        continue;
+      } else {
+        appendFinding(sb, i + 1, findings.get(i));
+        shown++;
       }
-      var finding = findings.get(i);
-      sb.append(i + 1)
-          .append(". [")
-          .append(text(finding.risk()).toUpperCase(Locale.ROOT))
-          .append("] ");
-      // The location is written only when there is one. line is a primitive, so an absent line
-      // arrives as 0 — appending it would hand the model a file:0 that points nowhere and costs
-      // tokens on every finding that lacks one, which is the same noise a literal "null" would be.
-      var file = text(finding.file());
-      if (!file.isEmpty()) {
-        sb.append(file);
-        if (finding.line() > 0) {
-          sb.append(':').append(finding.line());
-        }
-        sb.append(" — ");
-      }
-      sb.append(text(finding.title())).append('\n');
-      var description = text(finding.description());
-      if (!description.isEmpty()) {
-        sb.append("   ").append(description).append('\n');
-      }
-      shown++;
     }
     if (overCap > 0) {
       sb.append("(")
@@ -323,6 +303,29 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
           .append(" further finding(s) were reported but are not listed here.)\n");
     }
     return sb.toString();
+  }
+
+  /**
+   * One rendered finding: {@code id. [RISK] file:line — title}, with its description underneath.
+   */
+  private static void appendFinding(StringBuilder sb, int id, ReviewResponse.Finding finding) {
+    sb.append(id).append(". [").append(text(finding.risk()).toUpperCase(Locale.ROOT)).append("] ");
+    // The location is written only when there is one. line is a primitive, so an absent line
+    // arrives as 0 — appending it would hand the model a file:0 that points nowhere and costs
+    // tokens on every finding that lacks one, which is the same noise a literal "null" would be.
+    var file = text(finding.file());
+    if (!file.isEmpty()) {
+      sb.append(file);
+      if (finding.line() > 0) {
+        sb.append(':').append(finding.line());
+      }
+      sb.append(" — ");
+    }
+    sb.append(text(finding.title())).append('\n');
+    var description = text(finding.description());
+    if (!description.isEmpty()) {
+      sb.append("   ").append(description).append('\n');
+    }
   }
 
   /** A finding field as prompt text: absent fields are blanks, not the literal {@code null}. */
