@@ -799,6 +799,131 @@ class PrReviewPromptsContentTest {
         "unbounded growth and a linear per-item lookup must not collapse into one (#537)");
   }
 
+  /**
+   * #638 rounds 4/5 — the same shape as #537 above, on two more dimensions. In go #40 the review
+   * read {@code WEBHOOKRELAY_ALLOWED_TOPICS}, filed a better bug (parsed but never applied) and
+   * never returned to the documentation question; in node #41 and java #43 it filed the deliberate
+   * unpinned-base-image bait on the Dockerfile and not the planted defect on the same file. Every
+   * miss was clean, so this is displacement while the artifact is in hand, not suppression.
+   */
+  @Test
+  void aFindingOnAConfigKeyOrDeclarativeFileMustNotEndTheExaminationOfIt() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "Finding a defect on a config key or a declarative file does not finish that key or",
+        "one filed defect must not close a config key or an IaC file to a second one (#638)");
+    assertContains(
+        sys,
+        "finding you already have is precisely what makes the artifact feel read",
+        "the miss must be framed as displacement by a real finding, not inattention (#638)");
+    assertContains(
+        sys,
+        "question open: does the documentation this diff changes state its type, list",
+        "a code-level finding on a key must still trigger the documentation question (#638)");
+    assertContains(
+        sys,
+        "parsed and never applied",
+        "the go #40 shape — a better bug on the same key — must be named (#638)");
+    assertContains(
+        sys,
+        "unpinned base image, a missing lockfile, a broad permission",
+        "the near-miss findings that displaced the planted IaC defect must be named (#638)");
+    assertContains(
+        sys,
+        "does every path, filename and artifact it",
+        "a filed IaC finding must still trigger the reference-resolution question (#638)");
+    assertContains(
+        sys,
+        "a USER directive in a Dockerfile, runAsNonRoot in a",
+        "a filed IaC finding must still trigger the drop-privilege question (#638)");
+    assertContains(
+        sys,
+        "not alternatives to each other",
+        "the hardening nit must sit beside the planted defect, not replace it (#638)");
+  }
+
+  /**
+   * The recall trigger above must not become a licence to report every key and file it looks at:
+   * round 5 produced only four false positives across twelve languages.
+   */
+  @Test
+  void theConfigAndIacTriggerDoesNotLowerEitherDimensionsEvidenceBar() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "NOT lower either dimension's evidence bar",
+        "asking the dimension's question must not relax its evidence requirement (#638)");
+    assertContains(
+        sys,
+        "neither does a file whose references all resolve",
+        "a complete doc entry or a resolving reference must produce nothing (#638)");
+    assertContains(
+        sys,
+        "Say nothing rather than file a weaker finding to satisfy the check",
+        "the trigger must not manufacture a finding to answer itself (#638)");
+  }
+
+  /**
+   * #638 dimension 9 — the misses on python #39, angular #49, csharp #47, rust #42 and go #40 all
+   * define their key somewhere {@code ConfigKeyContextResolver} cannot reach ({@code Program.cs} is
+   * not even a supported extension; {@code main.go}, {@code main.py}, {@code Main.java} and {@code
+   * app-config.service.ts} are not config stems), so the section never renders and the dimension's
+   * old {@code AND a "Config key definitions…" section supplies} gate closed it outright. The
+   * self-check below already accepted a definition quoted from the diff; the dimension did not.
+   */
+  @Test
+  void theConfigDocDimensionAcceptsTheDiffsOwnParsingLineAsTheDefinition() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "the provided material anywhere establishes that key's DEFINITION",
+        "the dimension must not gate on the resolver section alone (#638)");
+    assertContains(
+        sys,
+        "CODE IN THIS SAME DIFF THAT READS, PARSES OR BINDS THE KEY",
+        "the diff's own parsing line must count as the key's definition (#638)");
+    assertContains(
+        sys,
+        "strings.Split(raw, \",\")",
+        "the parsing forms the corpus actually plants must be named (#638)");
+    assertContains(
+        sys,
+        "section that will usually be absent",
+        "the prompt must say the definitions section is normally missing (#638)");
+    assertContains(
+        sys,
+        "Say nothing when NEITHER the section nor the",
+        "an unparseable, undefined key must still yield no finding (#638)");
+  }
+
+  /**
+   * #638 dimension 6 — java #43 planted a {@code COPY} of a jar Maven never produces and round 4's
+   * python PR planted {@code COPY requirement.txt} against a committed {@code requirements.txt}.
+   * Both break {@code docker build} deterministically, and neither was among the defect shapes
+   * dimension 7 enumerated, which listed only schema/parse/constraint failures.
+   */
+  @Test
+  void configIacDimensionEnumeratesTheUnproducedArtifactReferenceShape() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "BUILD OR RUN INSTRUCTION NAMING A PATH, FILENAME OR",
+        "the unresolvable-reference shape must be an enumerated dimension-7 defect (#638)");
+    assertContains(
+        sys,
+        "or output-name override — make the produced artifact a different filename",
+        "the java #43 jar-name mismatch must be named as the shape's canonical case (#638)");
+    assertContains(
+        sys,
+        "requirement.txt when the file the PR commits is requirements.txt",
+        "the round-4 python missing-file COPY must be named too (#638)");
+    assertContains(
+        sys,
+        "the build deterministically, on the first run",
+        "an unresolvable reference must be graded on its deterministic build failure (#638)");
+  }
+
   @Test
   void mockFidelityIsReportableFromTheSignatureAndLandsAtMedium() {
     assertContains(
