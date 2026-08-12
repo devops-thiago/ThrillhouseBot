@@ -27,6 +27,7 @@ import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.Finding;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -718,5 +719,203 @@ class FindingVerificationServiceTest {
     service.verify(SESSION, original, "the-diff", "the-stack", null);
 
     verify(verifier).verify(anyString(), eq("the-diff"), eq("the-stack"), eq(""));
+  }
+
+  /**
+   * #570's controlled pair, as the dogfood corpus plants it: the same stored-XSS class behind two
+   * frameworks' HTML-injection escape hatches, each finding stating that no sanitizer is present.
+   */
+  private static ReviewResponse.Finding angularXss(String risk, String confidence) {
+    return new ReviewResponse.Finding(
+        risk,
+        confidence,
+        "src/app/incident-timeline/event-item/event-item.component.ts",
+        16,
+        "Stored XSS: responder note rendered via bypassSecurityTrustHtml without sanitization",
+        "The responder note is user-authored and reaches the sink with no sanitizer in the diff.",
+        null,
+        null);
+  }
+
+  private static ReviewResponse.Finding reactXss(String risk, String confidence) {
+    return new ReviewResponse.Finding(
+        risk,
+        confidence,
+        "src/components/ResultItem.tsx",
+        23,
+        "Unsanitized API-supplied snippetHtml injected via dangerouslySetInnerHTML (XSS)",
+        "snippetHtml comes straight from the API response and is rendered as raw HTML.",
+        null,
+        null);
+  }
+
+  @Test
+  void floorsAnUnsanitizedInjectionSinkFindingTheModelRatedBelowHigh() {
+    // #570: the React half of the planted pair published MEDIUM while the Angular half published
+    // CRITICAL. Severity is a property of the defect class, so the class floors at high; the
+    // model's uncertainty stays where it belongs — on confidence.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original = response(reactXss("medium", "low"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+    assertEquals(1, result.summary().high());
+    assertEquals(0, result.summary().medium());
+  }
+
+  @Test
+  void floorsStringBuiltSqlNamedByItsShapeRatherThanTheWordsSqlInjection() {
+    // #570's second round-3 instance: the C# tenant filter. Its title never says "SQL injection",
+    // it says the value is concatenated into SQL with no parameterization — the same class.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Tenant filter is concatenated into SQL with no parameterization",
+                "The account code is interpolated into the command text.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void keepsAnInjectionSinkFindingAtHighRiskWhenTheVerifierDowngradesIt() {
+    // #570: the verifier's "remembered framework / rendering semantics" ground caps such a claim at
+    // medium risk with low confidence, which is what routed a demonstrated XSS into the collapsed
+    // block. The verifier may still take the confidence down; it may not take the class below high.
+    ReviewResponse original = response(reactXss("high", "high"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [{"id": 1, "verdict": "downgraded", "risk": "medium",
+            "confidence": "low", "reason": "rendering semantics are not verifiable here"}]}
+            """));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+    assertEquals(1, result.summary().high());
+    assertEquals(0, result.summary().medium());
+  }
+
+  @Test
+  void ratesBothHalvesOfThePlantedXssPairTheSameAndKeepsBothInline() {
+    // The regression test #570 asks for: the same class in two frameworks must publish at the same
+    // severity AND the same placement. Placement follows from severity — a high finding opens an
+    // inline thread however low its confidence is.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original = response(angularXss("high", "high"), reactXss("medium", "low"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(result.findings().get(0).risk(), result.findings().get(1).risk());
+    assertTrue(Finding.fromAiResponse(result.findings().get(0)).postsInline());
+    assertTrue(Finding.fromAiResponse(result.findings().get(1)).postsInline());
+  }
+
+  @Test
+  void keepsBlockingConfidenceWhenTheOnlyHedgeSitsInAVerificationRequest() {
+    // #570: the review prompt REQUIRES a demonstrated-sink finding to name the unshown layer to
+    // verify, which puts a hedge word into the description of every such finding by construction.
+    // Reading that mandated clause as a hedge of the claim strips the finding's blocking
+    // confidence (BlockingStrictness.BALANCED needs high) and stamps a "verify before acting"
+    // disclaimer on a defect the diff demonstrates.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "high",
+                "high",
+                "src/main/java/Repo.java",
+                27,
+                "SQL injection in findPendingByChannel via unsanitized channel",
+                "The channel value is concatenated into the query text. Verify whether a layer"
+                    + " above this method might sanitize it; that layer is not shown here.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("high", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void stillDemotesWhenAHedgeSitsOutsideTheVerificationRequest() {
+    // The narrowing is clause-scoped, not a blanket exemption: a finding that hedges the claim
+    // itself still loses its blocking confidence even when it also asks for a verification.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "high",
+                "high",
+                "f",
+                1,
+                "Query build",
+                "This could fail under load. Verify whether the pool size might be the cause.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("medium", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void leavesCriticalInjectionFindingsAndUnrelatedRatingsAlone() {
+    // The floor only lifts, so a critical keeps its level; and it never fires unless the finding
+    // states both halves — a named sink AND the absence of any sanitization.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            angularXss("critical", "high"),
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/ResultItem.tsx",
+                23,
+                "dangerouslySetInnerHTML renders a constant template",
+                "The markup is a literal in this file, so nothing user-authored reaches it.",
+                null,
+                null),
+            new ReviewResponse.Finding(
+                "medium",
+                "high",
+                "docs/config.md",
+                4,
+                "Documented key omits its separator semantics with no validation of the list form",
+                "The table shows one value and never says the binding is comma-separated.",
+                null,
+                null),
+            // Names SQL, but as a query whose RESULT is unsanitized on the way out — nothing here
+            // builds the statement from a value, so this is not the string-built-SQL shape.
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/Report.java",
+                8,
+                "Unsanitized SQL row count is written straight into the report header",
+                null,
+                null,
+                null),
+            new ReviewResponse.Finding(
+                "low", "high", "src/Report.java", 12, null, "Totals are unvalidated.", null, null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
   }
 }

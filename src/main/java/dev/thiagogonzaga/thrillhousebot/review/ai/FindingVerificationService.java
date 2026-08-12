@@ -74,6 +74,63 @@ public class FindingVerificationService {
   private static final Pattern HEDGING =
       Pattern.compile("\\b(may|might|could|potentially|possibly)\\b", Pattern.CASE_INSENSITIVE);
 
+  /**
+   * Sentence/clause boundaries the hedging scan splits on, so a hedge is judged against the clause
+   * it actually qualifies rather than against the whole finding body.
+   */
+  private static final Pattern CLAUSE_BOUNDARY = Pattern.compile("(?<=[.;!?])\\s+|\\R");
+
+  /**
+   * A clause that asks the reader to check something rather than hedging the defect itself. The
+   * review prompt REQUIRES this clause on a finding whose sink and tainted value are both in the
+   * diff but whose mitigation might live in a layer that was not shown: "lower the confidence, name
+   * in the description the exact layer to verify". Counting the hedge word inside that mandated
+   * clause as a hedge of the claim charges the same uncertainty twice, on a security class where
+   * the prompt guarantees the clause is present.
+   */
+  private static final Pattern VERIFICATION_CUE =
+      Pattern.compile(
+          "\\b(verify|verifying|verification|confirm\\w*|unverifiable|not shown|not visible"
+              + "|outside the diff|not in the diff)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * Injection sinks and vulnerability classes named explicitly, per the review prompt's dimension-2
+   * list. Matching one of these is only the first half of the floor's test.
+   */
+  private static final Pattern INJECTION_SINK =
+      Pattern.compile(
+          "\\b(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
+              + "|path traversal|directory traversal|(unsafe|insecure) deserializ\\w*"
+              + "|dangerouslysetinnerhtml|bypasssecuritytrusthtml|v-html|inner_?html|outerhtml"
+              + "|insertadjacenthtml|document\\.write)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** String-built SQL, which findings usually name by its shape rather than as "SQL injection". */
+  private static final Pattern SQL = Pattern.compile("\\bsql\\b", Pattern.CASE_INSENSITIVE);
+
+  private static final Pattern STRING_BUILT =
+      Pattern.compile(
+          "\\b(concatenat\\w*|interpolat\\w*|string[- ]?built|built from)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The finding's own statement that nothing neutralizes the tainted value. Deliberately keyed on
+   * an ABSENCE claim: it is what turns "this code uses innerHTML" into "user data reaches an
+   * injection sink unmitigated", which is the class the prompt floors at "high".
+   */
+  private static final Pattern NO_MITIGATION =
+      Pattern.compile(
+          "\\b(unsanitiz\\w*|unescaped|unvalidated|unparameteriz\\w*|non-parameteriz\\w*"
+              + "|(no|not|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
+              + "(sanitiz|escap|validat|parameteriz|encod)\\w*)",
+          Pattern.CASE_INSENSITIVE);
+
+  /** The floor an unmitigated-injection-sink finding may never publish below (#570). */
+  private static final RiskLevel INJECTION_SINK_FLOOR = RiskLevel.HIGH;
+
+  private static final String HIGH_LABEL = "high";
+
   private static final String MEDIUM_LABEL = "medium";
 
   /** The verifier response's only field, and the array salvage keys on when the body is cut. */
@@ -88,6 +145,17 @@ public class FindingVerificationService {
    * spend ceiling is reached the call is skipped fail-open, keeping the unverified findings.
    */
   public ReviewResponse verify(
+      long ledgerSessionId,
+      ReviewResponse response,
+      String diff,
+      String projectStack,
+      String previousFindings) {
+    return floorInjectionSinkRisk(
+        audit(ledgerSessionId, response, diff, projectStack, previousFindings));
+  }
+
+  /** The audit itself; {@link #verify} applies the deterministic severity floor to its result. */
+  private ReviewResponse audit(
       long ledgerSessionId,
       ReviewResponse response,
       String diff,
@@ -203,6 +271,12 @@ public class FindingVerificationService {
    * blocking-eligible finding whose own wording hedges ("may", "might", "could"...) is by
    * definition not a demonstrated failure, so its confidence drops to medium — it still posts, but
    * can no longer request changes on its own.
+   *
+   * <p>The hedge is read clause by clause: a hedge word inside a clause that names something to
+   * verify is the verification request the prompt mandates next to a demonstrated defect, not a
+   * hedge of the defect. Scanning the whole body made that mandated clause self-defeating on the
+   * security class it was written for — a demonstrated injection whose description named the
+   * unshown sanitizing layer lost its blocking confidence for saying so (#570).
    */
   static ReviewResponse demoteHedgedBlockingFindings(ReviewResponse response) {
     if (response.findings().isEmpty()) {
@@ -236,6 +310,79 @@ public class FindingVerificationService {
     return new ReviewResponse(adjusted, response.previousFindingsStatus(), response.summary());
   }
 
+  /**
+   * Deterministic severity floor for the one class the review prompt already pins (#570): a finding
+   * that names an injection sink AND states that nothing sanitizes, escapes, validates, encodes or
+   * parameterizes the value reaching it publishes at no less than "high" risk.
+   *
+   * <p>Applied to the audit's OUTPUT, so it holds however the level was arrived at — the review
+   * call rating the class low in one framework and high in another, or the verifier taking it down
+   * because a rendering or query-dialect semantic "is not verifiable here". Both were observed on
+   * the same planted defect in two frameworks, published as CRITICAL inline against MEDIUM
+   * collapsed; the prompt-side floor alone did not hold, because nothing downstream enforced it.
+   *
+   * <p>Only risk moves, and only upward: severity is a property of the defect class and its blast
+   * radius, while "some layer I was not shown might neutralize this" is a statement about
+   * confidence. Confidence is therefore left exactly where the model or the verifier put it — the
+   * hedge survives, the misclassification does not. Placement follows: {@code Finding.postsInline}
+   * keeps a high-risk finding on an inline thread however low its confidence, so the same defect
+   * class stops landing in the collapsed "Things to double-check" block in one framework and on the
+   * diff in another.
+   *
+   * <p>The trigger needs BOTH halves stated in the finding's own words, so it never fires on a
+   * mention of a sink in passing (a sink rendering a literal template) or on an unrelated finding
+   * that happens to say "unvalidated". A critical keeps its level: the floor lifts, never lowers.
+   */
+  static ReviewResponse floorInjectionSinkRisk(ReviewResponse response) {
+    if (response.findings().isEmpty()) {
+      return response;
+    }
+    var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
+    var changed = false;
+    for (ReviewResponse.Finding finding : response.findings()) {
+      if (!belowInjectionSinkFloor(finding)) {
+        adjusted.add(finding);
+        continue;
+      }
+      Log.infof(
+          "Raising unmitigated-injection-sink finding '%s' from %s to %s risk; confidence stays %s",
+          finding.title(), finding.risk(), HIGH_LABEL, finding.confidence());
+      adjusted.add(
+          new ReviewResponse.Finding(
+              HIGH_LABEL,
+              finding.confidence(),
+              finding.file(),
+              finding.line(),
+              finding.title(),
+              finding.description(),
+              finding.suggestionOld(),
+              finding.suggestionNew()));
+      changed = true;
+    }
+    if (!changed) {
+      return response;
+    }
+    return new ReviewResponse(
+        adjusted, response.previousFindingsStatus(), recount(response.summary(), adjusted));
+  }
+
+  private static boolean belowInjectionSinkFloor(ReviewResponse.Finding finding) {
+    // Both enums declare constants most- to least-severe, so a higher ordinal is a lower rating.
+    if (RiskLevel.fromString(finding.risk()).ordinal() <= INJECTION_SINK_FLOOR.ordinal()) {
+      return false;
+    }
+    String text =
+        (finding.title() == null ? "" : finding.title())
+            + "\n"
+            + (finding.description() == null ? "" : finding.description());
+    return namesInjectionSink(text) && NO_MITIGATION.matcher(text).find();
+  }
+
+  private static boolean namesInjectionSink(String text) {
+    return INJECTION_SINK.matcher(text).find()
+        || (SQL.matcher(text).find() && STRING_BUILT.matcher(text).find());
+  }
+
   private static boolean isBlockingEligible(ReviewResponse.Finding finding) {
     RiskLevel risk = RiskLevel.fromString(finding.risk());
     return (risk == RiskLevel.CRITICAL || risk == RiskLevel.HIGH)
@@ -243,8 +390,25 @@ public class FindingVerificationService {
   }
 
   private static boolean containsHedging(ReviewResponse.Finding finding) {
-    return (finding.title() != null && HEDGING.matcher(finding.title()).find())
-        || (finding.description() != null && HEDGING.matcher(finding.description()).find());
+    return hedgesTheClaim(finding.title()) || hedgesTheClaim(finding.description());
+  }
+
+  /**
+   * Whether the finding's own wording hedges the DEFECT, judged clause by clause. A hedge word
+   * inside a clause that names something to verify does not hedge the claim — it is the
+   * verification request the prompt asks for alongside a defect the material demonstrates, so on
+   * its own it must not cost the finding its blocking confidence (#570).
+   */
+  private static boolean hedgesTheClaim(String text) {
+    if (text == null) {
+      return false;
+    }
+    for (String clause : CLAUSE_BOUNDARY.split(text)) {
+      if (HEDGING.matcher(clause).find() && !VERIFICATION_CUE.matcher(clause).find()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** The shape each candidate is presented in; ids are 1-based positions in the findings list. */
@@ -360,7 +524,7 @@ public class FindingVerificationService {
     }
     return switch (value.strip().toLowerCase(Locale.ROOT)) {
       case "critical" -> RiskLevel.CRITICAL;
-      case "high" -> RiskLevel.HIGH;
+      case HIGH_LABEL -> RiskLevel.HIGH;
       case MEDIUM_LABEL -> RiskLevel.MEDIUM;
       case "low" -> RiskLevel.LOW;
       default -> null;
@@ -372,7 +536,7 @@ public class FindingVerificationService {
       return null;
     }
     return switch (value.strip().toLowerCase(Locale.ROOT)) {
-      case "high" -> Confidence.HIGH;
+      case HIGH_LABEL -> Confidence.HIGH;
       case MEDIUM_LABEL -> Confidence.MEDIUM;
       case "low" -> Confidence.LOW;
       default -> null;
