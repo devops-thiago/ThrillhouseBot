@@ -279,12 +279,21 @@ public class PrSummaryGenerator {
    * Collapsed section for low-confidence medium/low findings that were withheld from inline
    * threads. Keeps the signal visible and clearly non-blocking without opening a review thread that
    * maintainers must triage and resolve.
+   *
+   * <p>A bullet that says what an inline finding already says is cross-referenced to it. This list
+   * never passed through the deduplicator — {@code collapse} weighs the gap bullets and walkthrough
+   * rows against the findings and stops there — so one defect reported both inline and here read as
+   * two independent defects, which is exactly the repetition-reads-as-severity failure the
+   * deduplicator exists to prevent (#639). The bullet is annotated instead of dropped because it is
+   * the finding's only rendered surface: it is the one place the {@code path:line} a maintainer
+   * needs to clear it from the PR conversation is printed (#548).
    */
   private static void appendDoubleCheckFindings(StringBuilder sb, ReviewResult result) {
     var findings = result.doubleCheckFindings();
     if (findings.isEmpty()) {
       return;
     }
+    var inline = result.findings().stream().filter(Finding::postsInline).toList();
     sb.append("### Things to double-check\n");
     sb.append("<details>\n");
     sb.append("<summary>")
@@ -305,10 +314,28 @@ public class PrSummaryGenerator {
           .append(":")
           .append(f.line())
           .append("`) ")
-          .append(SuggestionFormatter.confidenceDisclaimer(Confidence.LOW))
-          .append("\n");
+          .append(SuggestionFormatter.confidenceDisclaimer(Confidence.LOW));
+      SummarySurfaceDeduplicator.restatedBy(f, inline)
+          .ifPresent(published -> sb.append(" ").append(sameIssueNote(published)));
+      sb.append("\n");
     }
     sb.append("\n</details>\n\n");
+  }
+
+  /** Opening of the cross-reference appended to a double-check bullet that restates a finding. */
+  static final String SAME_ISSUE_PREFIX = "_Same issue as the inline finding on ";
+
+  /**
+   * The cross-reference naming the inline finding a double-check bullet restates, by the locator
+   * that finding's own row and review thread carry, so a reader can see the two are one defect.
+   */
+  private static String sameIssueNote(Finding published) {
+    return SAME_ISSUE_PREFIX
+        + "`"
+        + MarkdownSafe.inlineCode(published.file())
+        + ":"
+        + published.line()
+        + "`._";
   }
 
   /**

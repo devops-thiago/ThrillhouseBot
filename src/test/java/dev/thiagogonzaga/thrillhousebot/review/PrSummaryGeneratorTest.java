@@ -133,6 +133,143 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void doubleCheckBulletThatRestatesAnInlineFindingIsCrossReferenced() {
+    // ThrillhouseBot-test #39: the pagination defect was filed twice — once inline, once as a
+    // lower-confidence item — and the summary presented the pair as two independent defects.
+    var inline =
+        new Finding(
+            RiskLevel.HIGH,
+            Confidence.HIGH,
+            "collector/usage.py",
+            88,
+            "list_usage stops after the first page of usage records",
+            "The loop sends one request and returns its items; next_page_token is never followed.",
+            null,
+            null);
+    var lowConfidence =
+        new Finding(
+            RiskLevel.MEDIUM,
+            Confidence.LOW,
+            "collector/usage.py",
+            91,
+            "Only the first page of usage records reaches the aggregator",
+            "desc",
+            null,
+            null);
+    var result =
+        new ReviewResult(
+            List.of(inline, lowConfidence),
+            0,
+            1,
+            1,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(1, 30, 4, List.of(), null, result);
+
+    // The bullet keeps its claim and its own locator — nothing is deleted...
+    assertTrue(
+        summary.contains("Only the first page of usage records reaches the aggregator"), summary);
+    assertTrue(summary.contains("`collector/usage.py:91`"), summary);
+    // ...but it now names the inline finding it repeats, so it no longer reads as a second defect.
+    assertTrue(
+        summary.contains("_Same issue as the inline finding on `collector/usage.py:88`._"),
+        summary);
+  }
+
+  @Test
+  void doubleCheckBulletStatingSomethingElseIsNotCrossReferenced() {
+    var inline =
+        new Finding(
+            RiskLevel.HIGH,
+            Confidence.HIGH,
+            "collector/usage.py",
+            88,
+            "list_usage stops after the first page of usage records",
+            "The loop sends one request and returns its items; next_page_token is never followed.",
+            null,
+            null);
+    var unrelated =
+        new Finding(
+            RiskLevel.LOW,
+            Confidence.LOW,
+            "collector/config.py",
+            12,
+            "Timeout is hardcoded to 30 seconds",
+            "desc",
+            null,
+            null);
+    var result =
+        new ReviewResult(
+            List.of(inline, unrelated),
+            0,
+            1,
+            0,
+            1,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(2, 30, 4, List.of(), null, result);
+
+    assertTrue(summary.contains("Timeout is hardcoded to 30 seconds"), summary);
+    assertFalse(summary.contains("Same issue as the inline finding"), summary);
+  }
+
+  @Test
+  void twoInlineFindingsOnOneDefectAreBothKept() {
+    // The same root cause filed from two angles stays as two findings: the list drives the risk
+    // counts, the verdict, the inline threads and the backstop, so nothing here may edit it.
+    var producer =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/cache.js",
+            40,
+            "staleEntries is cleared before the consumer reads it",
+            "desc",
+            null,
+            null);
+    var consumer =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/cache.js",
+            62,
+            "The consumer reads staleEntries after it is cleared",
+            "desc",
+            null,
+            null);
+    var result =
+        new ReviewResult(
+            List.of(producer, consumer),
+            0,
+            2,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(1, 20, 3, List.of(), null, result);
+
+    assertTrue(summary.contains("staleEntries is cleared before the consumer reads it"), summary);
+    assertTrue(summary.contains("The consumer reads staleEntries after it is cleared"), summary);
+  }
+
+  @Test
   void shouldPluralizeDoubleCheckSummaryWhenMultipleLowConfidenceFindings() {
     var findings =
         List.of(

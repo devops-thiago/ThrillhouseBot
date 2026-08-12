@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -40,6 +41,16 @@ import java.util.regex.Pattern;
  *       also carries an inline finding is normal and useful — and drops only the clauses appended
  *       after it that restate an already-published claim.
  * </ul>
+ *
+ * <p>A fourth surface, the collapsed "Things to double-check" list, carries findings that never
+ * opened an inline thread. It is cross-referenced rather than collapsed ({@link #restatedBy}): a
+ * bullet there is a finding's only rendered surface, so annotating it says "this is the finding
+ * above, not a second defect" without risking the deletion of a claim on a mistaken match.
+ *
+ * <p>Two <em>inline</em> findings stating one defect from different angles are deliberately left
+ * alone. Nothing here may edit the finding list: it drives the risk counts, the review verdict, the
+ * inline threads and the resolution backstop, and a finding removed from it is removed from all of
+ * them. That duplicate is the reader's to judge.
  *
  * <p>Two texts state the same claim when they share a contiguous run of {@value #PHRASE_TOKENS}
  * content words, or when their content words overlap by {@value #OVERLAP_THRESHOLD} of the shorter
@@ -96,11 +107,67 @@ final class SummarySurfaceDeduplicator {
   private static final Pattern CONTRACTED_NEGATION =
       Pattern.compile("(?:ca|wo|sha|ai)?n['\u2019]t\\b");
 
-  /** One text reduced to what it asserts: its content words in order, and whether it negates. */
-  record Claim(List<String> words, boolean negated) {}
+  /**
+   * One text reduced to what it asserts: its content words in order, and whether it negates. {@code
+   * phraseOnly} marks a claim only the contiguous-run arm may match — the shape used for a
+   * finding's description, which is long prose where the overlap coefficient would happily fire on
+   * two different observations that merely discuss the same code (#639).
+   */
+  record Claim(List<String> words, boolean negated, boolean phraseOnly) {
+
+    /** A claim judged on both arms — a bullet, a walkthrough clause, or a finding title. */
+    Claim(List<String> words, boolean negated) {
+      this(words, negated, false);
+    }
+  }
 
   /** The description-gap bullets and per-path walkthrough notes left after collapsing. */
   record Surfaces(List<String> descriptionGaps, Map<String, String> fileSummaries) {}
+
+  /**
+   * What one finding publishes, as claims to match other surfaces against: its title on both arms,
+   * and its description on the contiguous-run arm only.
+   *
+   * <p>The title alone was too thin a target. A finding title is a terse label ("nextToken is
+   * ignored after the first request") while the surface restating it quotes the PR description at
+   * length, so the overlap coefficient — measured over the shorter side, the title — divided a
+   * handful of shared words by the title's own length and fell short, leaving the duplicate
+   * standing (#639). The wording the two genuinely share usually sits in the finding's description,
+   * which states the same defect in the same terms the restatement uses.
+   *
+   * <p>Only the phrase arm reads it. A run of {@value #PHRASE_TOKENS} adjacent content words
+   * surviving stop-word removal in both texts is specific evidence; letting a long description into
+   * the overlap arm as well would collapse claims that are merely about the same function, and a
+   * false collapse deletes a claim outright where a surviving duplicate only repeats one.
+   */
+  private static List<Claim> claimsOf(Finding finding) {
+    var description = claim(finding.description());
+    return List.of(
+        claim(finding.title()), new Claim(description.words(), description.negated(), true));
+  }
+
+  /**
+   * The published finding {@code candidate} restates, if any — the finding-to-finding comparison
+   * {@link #collapse} never makes, since it only ever weighs another surface against the findings.
+   *
+   * <p>Used to cross-reference a "Things to double-check" bullet that says what an inline finding
+   * already says (#639). The bullet is annotated rather than dropped: unlike a gap bullet, it is a
+   * finding's only rendered surface — the one place its {@code path:line} locator is printed, which
+   * is what a maintainer needs to clear it from the PR conversation (#548) — so deleting it on a
+   * mistaken match would take the claim away entirely.
+   */
+  static Optional<Finding> restatedBy(Finding candidate, List<Finding> published) {
+    // Both sides come from ReviewResult.findings(), whose List.copyOf rejects null elements, so no
+    // null guard earns its keep here. A titleless finding is the real degenerate case, and claim()
+    // reduces it to a claim with no words, which matches nothing.
+    var candidateClaim = claim(candidate.title());
+    for (Finding finding : published) {
+      if (restates(candidateClaim, claimsOf(finding))) {
+        return Optional.of(finding);
+      }
+    }
+    return Optional.empty();
+  }
 
   /**
    * Collapses {@code descriptionGaps} and {@code fileSummaries} against the findings already
@@ -108,9 +175,9 @@ final class SummarySurfaceDeduplicator {
    */
   static Surfaces collapse(
       List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> findings) {
-    var claims = new ArrayList<Claim>(findings.size() + descriptionGaps.size());
+    var claims = new ArrayList<Claim>(2 * findings.size() + descriptionGaps.size());
     for (Finding finding : findings) {
-      claims.add(claim(finding.title()));
+      claims.addAll(claimsOf(finding));
     }
     var keptGaps = new ArrayList<String>(descriptionGaps.size());
     for (String gap : descriptionGaps) {
@@ -165,7 +232,7 @@ final class SummarySurfaceDeduplicator {
         continue;
       }
       if (sharesPhrase(candidatePhrases, claim.words())
-          || overlaps(candidateWords, claim.words())) {
+          || (!claim.phraseOnly() && overlaps(candidateWords, claim.words()))) {
         return true;
       }
     }
