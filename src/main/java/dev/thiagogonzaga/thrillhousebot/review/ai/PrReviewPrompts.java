@@ -141,9 +141,22 @@ public final class PrReviewPrompts {
                will not pass schema validation (a missing required field, a mistyped value, an
                invalid apiVersion/kind pairing), a Helm/template expression that renders to invalid
                output, a workflow that will not parse, or a value that contradicts a constraint
-               stated elsewhere in the same file. These fail at apply/validation/CI time, not at
-               "runtime", so judge them on whether the breakage is visible here — not on whether they
-               map to a code exception. Scale severity by impact: a change that will fail
+               stated elsewhere in the same file. One shape belongs on this list and is the one
+               most often passed over: a BUILD OR RUN INSTRUCTION NAMING A PATH, FILENAME OR
+               ARTIFACT THAT NOTHING IN THE PROVIDED MATERIAL PRODUCES. A Dockerfile COPY of
+               target/<name>.jar when the build file's artifactId and version — with no finalName
+               or output-name override — make the produced artifact a different filename; a COPY of
+               requirement.txt when the file the PR commits is requirements.txt; a workflow step
+               consuming an artifact no earlier step uploads; an ENTRYPOINT naming a binary no
+               stage builds. Check every path a declarative file names against the names the rest
+               of the provided material actually shows, and treat a mismatch as "high": it fails
+               deterministically the first time it is exercised, for everyone — at build time for a
+               COPY or a workflow step, at CONTAINER START for an ENTRYPOINT or CMD naming a binary
+               no stage produces. Both are deterministic and both are demonstrable from the diff;
+               do not downgrade the second because its failure is later than the first.
+               These fail at apply/validation/CI time or when the container starts, not on an
+               application code path, so judge them on whether the breakage is visible here — not on
+               whether they map to a code exception. Scale severity by impact: a change that will fail
                schema/lint/CI validation, or that breaks the safety property the PR itself claims to
                add, is high; a cosmetic or stylistic config nitpick is low. Not a finding when a
                comment or adjacent value justifies the choice, or when correctness depends on
@@ -194,9 +207,9 @@ public final class PrReviewPrompts {
                producer and consumer agree, or when the consumer is not in the provided material —
                say nothing rather than narrating the data flow of an ordinary local change.
             10. CONFIG KEY DOCUMENTATION COMPLETENESS: when the diff documents a configuration key
-               — an environment variable or property named in a .md, .env* or config table — AND a
-               "Config key definitions from the repository" section supplies that key's definition,
-               read the documented description against that definition and flag it when the
+               — an environment variable or property named in a .md, .env* or config table — AND
+               the provided material anywhere establishes that key's DEFINITION, read the
+               documented description against that definition and flag it when the
                description omits a FORMAT-CRITICAL fact an operator needs to set the value
                correctly: the value TYPE, LIST/SEPARATOR semantics (a List-typed binding is
                comma-separated in SmallRye/Quarkus config, so documentation that shows one value
@@ -211,10 +224,22 @@ public final class PrReviewPrompts {
                missing example, and any fact the definition does not establish are not findings.
                The starkest form of the same gap counts too — a key the diff ADDS while also
                changing a documentation/config file that lists sibling keys without listing the new
-               one is undocumented; report that here. Say nothing when the definition is not in the
-               provided material, when the documentation already states the fact anywhere in the
-               changed material, or when the diff changes no documentation/config file at all (you
-               cannot see whether documentation for the key exists elsewhere).
+               one is undocumented; report that here.
+               The definition can reach you two ways, and the SECOND is the ordinary one. A
+               "Config key definitions from the repository" section is supplied only when the
+               repository's key is defined in a file that section's resolver can find; most
+               projects define theirs somewhere it does not look. So the definition is equally the
+               CODE IN THIS SAME DIFF THAT READS, PARSES OR BINDS THE KEY: strings.Split(raw, ","),
+               .split(","), raw.Split(',', …), a List<String> / string[] / Vec<String> / list-typed
+               binding, Duration.ofMillis(parsed), os.environ.get(KEY, DEFAULT), a parse with a
+               fallback constant. That line does not merely hint at the format — it IS the format,
+               and it establishes the omitted fact exactly as a rendered definition would. Read the
+               diff's own parsing line against the diff's own documentation line; do not wait for a
+               section that will usually be absent. Say nothing when NEITHER the section nor the
+               provided material shows how the key is read, parsed or bound, when the documentation
+               already states the fact anywhere in the changed material, or when the diff changes no
+               documentation/config file at all (you cannot see whether documentation for the key
+               exists elsewhere).
 
             For each finding, provide:
             - risk: "critical" | "high" | "medium" | "low"
@@ -307,6 +332,34 @@ public final class PrReviewPrompts {
               pass which lookup it uses. "Grows without bound" and "is scanned linearly per item"
               are two different defects on two different dimensions; naming either one does not
               report the other, and a finding about the accumulator's scope covers neither.
+            - Finding a defect on a config key or a declarative file does not finish that key or
+              that file. Here the displacement is the ordinary outcome, not the exception: the
+              finding you already have is precisely what makes the artifact feel read, and the
+              dimension-specific question then never gets asked. Two artifacts carry such a
+              question, and a real finding on the same artifact does not answer it:
+              (a) A CONFIG KEY you touched for any reason — the diff parses it, or you filed a
+                  finding on how the code applies it (parsed and never used, applied to the wrong
+                  branch, defaulted wrongly, read at the wrong scope) — still has dimension 10's
+                  question open: does the documentation this diff changes state its type, list
+                  separator, unit or duration format, allowed values and default? "This variable is
+                  parsed and never applied" and "this variable's documentation never says it is
+                  comma-separated" are two defects on two dimensions; the more serious one does not
+                  contain the other, and finding the more serious one is the usual reason the
+                  documentation gap is lost.
+              (b) A DOCKERFILE, WORKFLOW, MANIFEST OR TERRAFORM FILE you filed one finding on — an
+                  unpinned base image, a missing lockfile, a broad permission — still has two
+                  questions open before you leave it: does every path, filename and artifact it
+                  names exist in the material (dimension 7), and does it drop privilege before
+                  running the application — a USER directive in a Dockerfile, runAsNonRoot in a
+                  manifest (dimension 2)? The hardening nit and the build-breaking reference are
+                  not alternatives to each other, and the one that is easier to see is not the one
+                  the file most needs reported. File each.
+              This asks an already-open question of an artifact you are already reviewing; it does
+              NOT lower either dimension's evidence bar. A key whose documentation already states
+              every format-critical fact, or one whose parsing you cannot see, yields no second
+              finding; neither does a file whose references all resolve and which already switches
+              user. Say nothing rather than file a weaker finding to satisfy the check — asking the
+              question and answering "no gap" is the check working.
             - Before you finish, re-read what you have written — each finding's description, each
               file_summaries line, each description_gaps entry — for any statement that describes
               a defect no finding in your list covers, and promote each one into its own finding
