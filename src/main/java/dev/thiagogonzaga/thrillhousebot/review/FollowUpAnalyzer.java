@@ -361,8 +361,8 @@ public class FollowUpAnalyzer {
     var sb = new StringBuilder();
     var id = 1;
     for (var finding : previous) {
-      // A finding a newer round already closed keeps its id slot (so the surviving ids do not
-      // shift) but is not re-shown as open for the model to re-account for (#470).
+      // A finding a newer round already closed keeps its id slot, so the surviving ids do not
+      // shift, but it is not re-shown as open for the model to re-account for. See issue 470.
       if (settledIds.contains(id)) {
         id++;
         continue;
@@ -784,8 +784,15 @@ public class FollowUpAnalyzer {
   /**
    * The shape every locator has — a path, a colon, a line number. Only ever used to prove a
    * <em>negative</em>; see {@link #namesALocator}.
+   *
+   * <p>Written as a lookbehind rather than the obvious {@code \S+:\d+}, which is the same predicate
+   * but quadratic on this input. {@code :} is itself a {@code \S}, so in the obvious form every
+   * colon gives the engine another way to split the same prefix and the body — arbitrary text from
+   * a PR comment — drives the backtracking. The two forms accept exactly the same strings: {@code
+   * \S+:\d+} matches iff some colon has a non-space character before it and a digit after it, which
+   * is what this states directly, with no quantifier to backtrack over.
    */
-  private static final Pattern LOCATOR_SHAPE = Pattern.compile("\\S+:\\d+");
+  private static final Pattern LOCATOR_SHAPE = Pattern.compile("(?<=\\S):\\d");
 
   /**
    * Whether {@code body} names anything locator-shaped at all. This is a <em>necessary</em>
@@ -873,10 +880,8 @@ public class FollowUpAnalyzer {
     }
     String locator = finding.file() + ":" + finding.line();
     for (var comment : conversationComments) {
-      if (!isMaintainerConversationComment(comment, botIdentity)) {
-        continue;
-      }
-      if (!isClearDirective(comment.body())) {
+      if (!isMaintainerConversationComment(comment, botIdentity)
+          || !isClearDirective(comment.body())) {
         continue;
       }
       // The naming may sit in backticks (the shape the summary prints); only the directive token

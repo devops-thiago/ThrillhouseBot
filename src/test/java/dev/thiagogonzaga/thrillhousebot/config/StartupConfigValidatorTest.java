@@ -1078,6 +1078,20 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void bootsWithoutBuildingTheConciseBannerWhenInfoLoggingIsOff() {
+    // Both banner arguments are produced by a call, so the line sits behind a level check. With
+    // INFO off that check is false and nothing is formatted — validation must still complete.
+    var julLogger = java.util.logging.Logger.getLogger(StartupConfigValidator.class.getName());
+    var originalLevel = julLogger.getLevel();
+    julLogger.setLevel(java.util.logging.Level.WARNING);
+    try {
+      assertDoesNotThrow(() -> new ConfigBuilder().build().validate());
+    } finally {
+      julLogger.setLevel(originalLevel);
+    }
+  }
+
+  @Test
   void bootsWhenTheConciseReasoningEffortIsUnset() {
     // Unset is the shipped state: the lane resolves its own default, so there is nothing to reject.
     new ConfigBuilder()

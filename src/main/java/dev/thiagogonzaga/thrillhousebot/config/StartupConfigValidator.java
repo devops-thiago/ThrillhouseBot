@@ -49,6 +49,14 @@ public class StartupConfigValidator {
   private static final String APP_ID_PROPERTY = "thrillhousebot.github.app-id";
 
   /**
+   * The opening of every refusal about the reserved output buffer. Three separate rules quote the
+   * effective buffer back to the operator — the safety-margin floor, the shared-window ceiling and
+   * the concise-lane ceiling — and they are meant to read as one family, so the wording lives in
+   * one place rather than being kept in step by hand.
+   */
+  private static final String EFFECTIVE_OUTPUT_BUFFER = "the effective output buffer (";
+
+  /**
    * The remedy carried by every {@code GITHUB_PRIVATE_KEY} problem. A fresh clone fails here with
    * placeholder text copied straight out of {@code .env.example} (#593), and the refusal is where
    * the reader actually is — so it states the accepted format, the single-line spelling {@code
@@ -313,7 +321,7 @@ public class StartupConfigValidator {
         && margin <= 1.0
         && (int) (maxInputTokens * margin) - outputBuffer <= 0) {
       problems.add(
-          "the effective output buffer ("
+          EFFECTIVE_OUTPUT_BUFFER
               + outputBuffer
               + ") must be less than the effective max input tokens x safety margin ("
               + (int) (maxInputTokens * margin)
@@ -333,7 +341,7 @@ public class StartupConfigValidator {
           .ifPresent(
               maxOutput ->
                   problems.add(
-                      "the effective output buffer ("
+                      EFFECTIVE_OUTPUT_BUFFER
                           + outputBuffer
                           + ") must be >= max-output-tokens ("
                           + maxOutput
@@ -517,7 +525,7 @@ public class StartupConfigValidator {
           .ifPresent(
               v ->
                   problems.add(
-                      "the effective output buffer ("
+                      EFFECTIVE_OUTPUT_BUFFER
                           + outputBuffer
                           + ") must be >= REVIEW_CONCISE_MAX_OUTPUT_TOKENS ("
                           + v
@@ -618,15 +626,22 @@ public class StartupConfigValidator {
    * is on this line because it is the one generation parameter that no longer follows the active
    * model (#567), so an operator reading the banner would otherwise draw the wrong conclusion about
    * where the verifier's output allowance goes.
+   *
+   * <p>Behind a level check because both banner arguments are built by a call, and a parameter
+   * placeholder only defers the {@code toString} — not the work that produces the argument. The
+   * line itself is unchanged; it simply stops formatting a banner nobody will read when {@code
+   * INFO} is off.
    */
   private void logConciseModelStatus() {
-    log.info(
-        "Concise model active for summary/verifier/reply calls: max-output-tokens={}"
-            + " (REVIEW_CONCISE_MAX_OUTPUT_TOKENS), reasoning_effort={}; other generation"
-            + " parameters follow the active model '{}'.",
-        orProviderDefault(conciseMaxOutputTokens),
-        conciseReasoningEffortBanner(),
-        activeModel.modelName());
+    if (log.isInfoEnabled()) {
+      log.info(
+          "Concise model active for summary/verifier/reply calls: max-output-tokens={}"
+              + " (REVIEW_CONCISE_MAX_OUTPUT_TOKENS), reasoning_effort={}; other generation"
+              + " parameters follow the active model '{}'.",
+          orProviderDefault(conciseMaxOutputTokens),
+          conciseReasoningEffortBanner(),
+          activeModel.modelName());
+    }
   }
 
   /**

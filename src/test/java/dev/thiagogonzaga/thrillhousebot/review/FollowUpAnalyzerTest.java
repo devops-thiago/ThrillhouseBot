@@ -3115,4 +3115,26 @@ class FollowUpAnalyzerTest {
         FollowUpAnalyzer.namesALocator("> @thrillhousebot resolved src/A.java:10 — title"),
         "a quoted locator names nothing, matching where the clear actually looks");
   }
+
+  @Test
+  void namesALocatorShouldReadTheSameShapeOnColonHeavyText() {
+    // The shape test is written as a lookbehind so an arbitrarily long comment body cannot drive
+    // backtracking. These are the inputs where that rewrite could have drifted from the plain
+    // "non-space, colon, digit" reading it replaces.
+    assertTrue(
+        FollowUpAnalyzer.namesALocator("resolved C:/work/src/A.java:10"),
+        "a colon earlier in the token does not hide the one before the line number");
+    assertTrue(
+        FollowUpAnalyzer.namesALocator("resolved src/A.java::10"),
+        "a doubled colon still leaves a colon with a non-space before it and a digit after");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("resolved :10"),
+        "a colon opening a token has no path in front of it, so it names nothing");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("resolved src/A.java: 10"),
+        "a space between the colon and the number is not a locator");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("a:".repeat(2000)),
+        "colon-heavy text with no line number still resolves to no locator");
+  }
 }

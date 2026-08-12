@@ -62,13 +62,22 @@ public class GitHubErrorLogger implements ResponseExceptionMapper<Throwable> {
   /**
    * Logs the failure and returns {@code null} so the runtime's default mapper still builds the
    * exception the callers are written against.
+   *
+   * <p>Both lines are behind a level check because {@link GitHubApiError#diagnostics()} builds its
+   * string eagerly — a parameter placeholder defers the {@code toString}, not the call that
+   * produces the argument. The debug line is the one that pays: it runs on every optional-file
+   * probe, which is ordinary traffic, and debug is off in production. The messages themselves are
+   * unchanged; this is the diagnosis path that identified the {@code 401 Bad credentials} failure
+   * in issue 624, so what it prints when it prints must stay exactly as it was.
    */
   @Override
   public Throwable toThrowable(Response response) {
     var error = GitHubApiError.from(response);
     if (error.isSevere()) {
-      log.warn("GitHub API call failed: {}", error.diagnostics());
-    } else {
+      if (log.isWarnEnabled()) {
+        log.warn("GitHub API call failed: {}", error.diagnostics());
+      }
+    } else if (log.isDebugEnabled()) {
       log.debug("GitHub API call returned an error: {}", error.diagnostics());
     }
     return null;
