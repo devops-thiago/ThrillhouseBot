@@ -47,20 +47,67 @@ class ChangelogEntryGeneratorTest {
 
   private static final String AUTH = "token gh-abc";
 
+  /**
+   * Filler lines appended to each fixture patch, on top of its three meaningful ones.
+   *
+   * <p>The batching tests below assert a <em>plan shape</em> — one file per batch, nothing clipped
+   * — that the planner decides by comparing each file section's token estimate against the diff
+   * budget. That budget is only approximate, and not because of the estimator: {@link
+   * PromptTemplateEscaper#fence} mints a fresh CSPRNG token per call, so the shared-prompt overhead
+   * {@link #budgetFor} sizes from one draw and the overhead the planner subtracts from another draw
+   * differ by however much the two random tokens differ in BPE width — around 30 tokens, either
+   * way. The effective diff budget therefore lands in a window that wide around the requested one.
+   *
+   * <p>So every margin here has to be wider than that window. With the original three-line patches
+   * a section was ~50 tokens against a 40-token request, leaving a ~10-token margin the swing
+   * cleared often enough to flip the plan about once in 1500 runs — #586, seen once in CI and never
+   * locally. Padding the sections to a few hundred tokens (and {@link #ROOM_FOR_ONE_FILE} with
+   * them) makes the fence swing a rounding error rather than the deciding term. {@link
+   * #batchingFixturesLeaveMarginWiderThanTheFenceJitter} pins the margins so shrinking either one
+   * fails loudly instead of flaking.
+   */
+  private static final int PAD_LINES = 30;
+
+  /**
+   * Upper bound on how far two {@link PromptTemplateEscaper#fence} draws can differ in BPE width. A
+   * fence wraps its content in two identical lines whose only variable part is a 32-character hex
+   * token, so 64 characters vary across the pair — and no BPE token covers fewer than one
+   * character, so no two draws can differ by more than 64 tokens. Every batching margin below is
+   * required to exceed this.
+   */
+  private static final int FENCE_JITTER_TOKENS = 64;
+
+  /** Added lines per fixture file: its three meaningful ones plus {@link #PAD_LINES} of filler. */
+  private static final int ADDED_LINES = 3 + PAD_LINES;
+
+  /**
+   * Diff room requested for the tests that need each fixture file in a batch of its own: above any
+   * one section (so nothing is clipped) and below two of them (so they cannot share a bin), with
+   * margins far wider than the fence swing described on {@link #PAD_LINES}.
+   */
+  private static final int ROOM_FOR_ONE_FILE = 400;
+
+  /** Diff room that comfortably fits every fixture file in a single batch. */
+  private static final int ROOM_FOR_EVERY_FILE = 4000;
+
   private static final String PATCH =
-      """
-      @@ -0,0 +1,3 @@
-      +var in = Files.newInputStream(path);
-      +int total = 0;
-      +total += items.size();""";
+      patchOf("var in = Files.newInputStream(path);", "int total = 0;", "total += items.size();");
 
   /** A second file, so the line cap has something to drop and the planner something to batch. */
   private static final String OTHER_PATCH =
-      """
-      @@ -0,0 +1,3 @@
-      +int retries = 0;
-      +while (retries < 3) { call(); }
-      +log.info("done");""";
+      patchOf("int retries = 0;", "while (retries < 3) { call(); }", "log.info(\"done\");");
+
+  /** A unified-diff patch adding {@code lines}, padded out to {@link #ADDED_LINES} added lines. */
+  private static String patchOf(String... lines) {
+    var patch = new StringBuilder("@@ -0,0 +1,").append(ADDED_LINES).append(" @@");
+    for (var line : lines) {
+      patch.append("\n+").append(line);
+    }
+    for (var i = 0; i < PAD_LINES; i++) {
+      patch.append("\n+int filler").append(i).append(" = ").append(i).append(";");
+    }
+    return patch.toString();
+  }
 
   @Mock private GitHubPullRequestClient prClient;
   @Mock private InstructionsResolver instructionsResolver;
@@ -106,11 +153,11 @@ class ChangelogEntryGeneratorTest {
   }
 
   private static FileDiff foo() {
-    return new FileDiff("src/Foo.java", "modified", 3, 0, 3, PATCH);
+    return new FileDiff("src/Foo.java", "modified", ADDED_LINES, 0, ADDED_LINES, PATCH);
   }
 
   private static FileDiff otherFile() {
-    return new FileDiff("src/Other.java", "modified", 3, 0, 3, OTHER_PATCH);
+    return new FileDiff("src/Other.java", "modified", ADDED_LINES, 0, ADDED_LINES, OTHER_PATCH);
   }
 
   private void prWithFiles(FileDiff... files) {
@@ -143,10 +190,15 @@ class ChangelogEntryGeneratorTest {
   }
 
   /**
-   * A per-call input budget of exactly the shared prompt overhead plus {@code diffTokens}. Derived
+   * A per-call input budget of about the shared prompt overhead plus {@code diffTokens}. Derived
    * from {@code /changelog}'s own prompts rather than hardcoded, so editing a prompt cannot
    * silently turn these tests into no-ops by making every file overflow — and so a regression that
    * sized the overhead from another command's prompts would show up here.
+   *
+   * <p><em>About</em>, not exactly: the fence line this counts is drawn from a CSPRNG here and
+   * again inside the planner, and the two draws differ in BPE width, so the diff room the planner
+   * actually ends up with is {@code diffTokens} give or take ~30 tokens. Callers must leave margins
+   * wider than that — see {@link #PAD_LINES}.
    */
   private static int budgetFor(int diffTokens) {
     var overhead =
@@ -345,12 +397,42 @@ class ChangelogEntryGeneratorTest {
   // ---------------------------------------------------------------------------------------------
 
   @Test
+  void batchingFixturesLeaveMarginWiderThanTheFenceJitter() {
+    // #586: every batching test below asserts a plan shape the planner decides by comparing a file
+    // section's tokens against the diff room, and that room is only accurate to a fence draw (see
+    // PAD_LINES). Pin the three margins that shape rests on here, so shrinking a fixture or a room
+    // constant fails on this one test rather than as a rare flake spread across the whole class.
+    var tokenCounter = new TokenCounter();
+    var names = ReviewDiffFormatter.namesOf(List.of(foo(), otherFile()));
+    var biggestSection = 0;
+    var bothSections = 0;
+    for (var file : List.of(foo(), otherFile())) {
+      var tokens = tokenCounter.estimateTokens(diffFormatter.formatFileSection(file, names));
+      biggestSection = Math.max(biggestSection, tokens);
+      bothSections += tokens;
+    }
+
+    // Room for one file: above the larger section, so neither file is ever clipped…
+    assertTrue(
+        ROOM_FOR_ONE_FILE - biggestSection > FENCE_JITTER_TOKENS,
+        "biggest section " + biggestSection + " too close to room " + ROOM_FOR_ONE_FILE);
+    // …and below both together, so the two files never share a batch.
+    assertTrue(
+        bothSections - ROOM_FOR_ONE_FILE > FENCE_JITTER_TOKENS,
+        "both sections " + bothSections + " too close to room " + ROOM_FOR_ONE_FILE);
+    // Room for every file: above both together, so one batch always covers the whole PR.
+    assertTrue(
+        ROOM_FOR_EVERY_FILE - bothSections > FENCE_JITTER_TOKENS,
+        "both sections " + bothSections + " too close to room " + ROOM_FOR_EVERY_FILE);
+  }
+
+  @Test
   void draftsFromFilesThatTheLineCapWouldHaveDroppedEntirely() {
     // The whole point of the change. With a line cap this small the rendered diff string keeps only
     // the first file, so the pre-batching implementation drafted the entry from a diff that never
     // mentioned src/Other.java. Batching sizes by tokens over the file list instead.
     var lineCapped = new ReviewDiffFormatter(List.of(), 4);
-    budgetWithDiffRoom(4000);
+    budgetWithDiffRoom(ROOM_FOR_EVERY_FILE);
     prWithFiles(foo(), otherFile());
     draftReturns("### Added\n- x (#7)");
 
@@ -367,7 +449,7 @@ class ChangelogEntryGeneratorTest {
     // Two batches produce two candidate entries. The command must post exactly one entry, and two
     // candidates that describe the same change in different words can only be collapsed by the
     // merge call — so its answer is what gets posted, not the concatenation.
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile());
     when(changelogAssistant.draft(any(), any(), any(), any(), any()))
         .thenAnswer(
@@ -412,7 +494,7 @@ class ChangelogEntryGeneratorTest {
   void spendsNoMergeCallWhenOnlyOneBatchFoundAnythingWorthReporting() {
     // A batch that declines with NONE contributes no candidate, so a PR whose changelog-worthy
     // change sits in one batch still posts that batch's entry unmerged.
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile());
     when(changelogAssistant.draft(any(), any(), any(), any(), any()))
         .thenAnswer(
@@ -431,7 +513,7 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void returnsNullWhenEveryBatchDeclines() {
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile());
     draftReturns("NONE");
 
@@ -443,7 +525,7 @@ class ChangelogEntryGeneratorTest {
   void returnsNullWhenTheMergeDeclines() {
     // The merge may still conclude that nothing is worth an entry; a literal NONE must never be
     // posted as if it were the changelog text.
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile());
     draftReturns("### Added\n- x (#7)");
     when(changelogAssistant.merge(any(), any(), any(), any(), any())).thenReturn(aiOk("**NONE**"));
@@ -456,7 +538,7 @@ class ChangelogEntryGeneratorTest {
     // max-ai-calls bounds the whole run, merge included: with an allowance of 3 the command may
     // spend at most 2 batch calls, or the reduce step would push the run over the operator's cap.
     when(reviewConfig.maxAiCalls()).thenReturn(3);
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile(), thirdFile());
     draftReturns("### Added\n- x (#7)");
     when(changelogAssistant.merge(any(), any(), any(), any(), any()))
@@ -474,7 +556,7 @@ class ChangelogEntryGeneratorTest {
     // Drafting from only the first N batches and saying nothing would be the same class of defect
     // as the line cap this replaced, just relocated, so the uncovered files are named.
     when(reviewConfig.maxAiCalls()).thenReturn(2);
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile());
     draftReturns("### Added\n- x (#7)");
 
@@ -523,7 +605,7 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void discloseTheShortfallWhenOneBatchFails() {
-    budgetWithDiffRoom(40);
+    budgetWithDiffRoom(ROOM_FOR_ONE_FILE);
     prWithFiles(foo(), otherFile());
     when(changelogAssistant.draft(any(), any(), any(), any(), any()))
         .thenAnswer(
