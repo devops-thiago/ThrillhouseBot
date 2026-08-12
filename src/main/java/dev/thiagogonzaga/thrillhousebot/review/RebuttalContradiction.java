@@ -194,14 +194,44 @@ final class RebuttalContradiction {
 
   /**
    * Drops a trailing {@code //} line comment, leaving any code before it intact. A {@code ://}
-   * sequence (a URL scheme) is not treated as a comment start.
+   * sequence (a URL scheme) is not treated as a comment start, and neither is a {@code //} that
+   * sits inside a string literal.
+   *
+   * <p>The string-literal carve-out matters because cutting at the wrong {@code //} silently throws
+   * away the rest of the line — including any dispatch construct on it. A line such as {@code
+   * String base = "//cdn.example.com"; executor.submit(task);}, a Go or C++ raw string ({@code
+   * `a//b`}, {@code R"(a//b)"}), or any quoted path holding a doubled slash used to be truncated at
+   * the quoted slashes, so the {@code executor.submit(} after them never reached {@link
+   * #CONCURRENT_DISPATCHES}. A maintainer's "it runs serially" decline then stood unchallenged over
+   * code that does dispatch concurrently — the false-negative direction this class exists to close.
+   *
+   * <p>Quote tracking is deliberately shallow: it toggles on an unescaped {@code "}, {@code '} or
+   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to; the
+   * worst an unbalanced quote costs is that a real trailing comment is kept, which only feeds the
+   * scan text of the kind it already sees on every line that carries no {@code //} at all.
    */
   private static String stripLineComment(String line) {
-    var idx = line.indexOf("//");
-    while (idx > 0 && line.charAt(idx - 1) == ':') {
-      idx = line.indexOf("//", idx + 2);
+    var quote = '\0';
+    for (var i = 0; i < line.length(); i++) {
+      var c = line.charAt(i);
+      if (c == '\\') {
+        i++;
+      } else if (quote != '\0') {
+        if (c == quote) {
+          quote = '\0';
+        }
+      } else if (c == '"' || c == '\'' || c == '`') {
+        quote = c;
+      } else if (c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/') {
+        // A URL scheme's "://" is not a comment start; step past it and keep scanning.
+        if (i > 0 && line.charAt(i - 1) == ':') {
+          i++;
+          continue;
+        }
+        return line.substring(0, i);
+      }
     }
-    return idx < 0 ? line : line.substring(0, idx);
+    return line;
   }
 
   /**

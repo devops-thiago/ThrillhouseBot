@@ -16,10 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class RebuttalContradictionTest {
@@ -148,6 +152,67 @@ class RebuttalContradictionTest {
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", oneThread).isEmpty(),
         "a one-thread pool genuinely serializes, so it does not refute the decline");
+  }
+
+  /**
+   * A {@code //} inside a string literal is not a comment start. Cutting the line there threw away
+   * the dispatch that followed it, so the decline stood over code that does dispatch concurrently.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A protocol-relative URL in a Java/JS string literal.
+        "+    var base = \"//cdn.example.com\"; executor.submit(() -> run(ctx));",
+        // A Go raw string literal.
+        "+    raw := `a//b`; executor.submit(func() { run(ctx) })",
+        // A C++ raw string literal, whose R\"( opener the scan must not read as a comment either.
+        "+    auto path = R\"(prefix//rest)\"; executor.submit([]{ run(ctx); });",
+        // A single-quoted literal.
+        "+    var sep = '//'; executor.submit(() -> run(ctx));",
+      })
+  void shouldKeepDispatchEvidenceThatFollowsAQuotedDoubleSlash(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the // sits inside a string literal, so the dispatch after it is live code: " + codeLine);
+  }
+
+  static Stream<Arguments> commentScanEdgeCases() {
+    return Stream.of(
+        arguments(
+            "an escaped quote does not close the literal, so the // after it is still quoted",
+            "+    var s = \"a\\\"//b\"; executor.submit(() -> run(ctx));",
+            true),
+        arguments(
+            "a URL scheme's :// is not a comment start",
+            "+    var u = http://example.com; executor.submit(() -> run(ctx));",
+            true),
+        arguments(
+            "a line opening with // is comment from its very first character",
+            "// executor.submit(() -> run(ctx));",
+            false),
+        arguments(
+            "a lone / is division, and a trailing / ends the line without opening a comment",
+            "+    var half = total / 2; executor.submit(() -> run(ctx)); /",
+            true));
+  }
+
+  /** Edge shapes of the comment scan, each turning on one decision the scan makes alone. */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("commentScanEdgeCases")
+  void shouldFindTheCommentStartOutsideStringLiterals(String name, String code, boolean refuted) {
+    assertEquals(
+        refuted,
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isPresent(),
+        name);
+  }
+
+  @Test
+  void shouldStillStripARealTrailingLineCommentAfterAStringLiteral() {
+    var commented = "+    var base = \"//cdn.example.com\"; // executor.submit(() -> run(ctx));\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", commented).isEmpty(),
+        "a dispatch that only appears in a line comment is not live code");
   }
 
   @Test
