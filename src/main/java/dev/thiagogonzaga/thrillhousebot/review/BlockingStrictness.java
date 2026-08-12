@@ -65,17 +65,39 @@ public enum BlockingStrictness {
     };
   }
 
-  /** Whether this finding alone is enough to escalate the review to {@code REQUEST_CHANGES}. */
+  /**
+   * Whether this finding alone is enough to escalate the review to {@code REQUEST_CHANGES}. Two
+   * independent gates, kept separate on purpose (#645): {@link #severityQualifies(RiskLevel)} asks
+   * whether the defect class is severe enough for this mode, and the confidence gate asks whether
+   * the review demonstrated it. Only {@link #STRICT} drops the second one.
+   */
   public boolean isBlocking(Finding finding) {
     if (finding == null) {
       return false;
     }
-    return switch (this) {
-      case BALANCED -> isCriticalOrHigh(finding.risk()) && finding.confidence() == Confidence.HIGH;
-      case STRICT -> isCriticalOrHigh(finding.risk());
-      case LENIENT ->
-          finding.risk() == RiskLevel.CRITICAL && finding.confidence() == Confidence.HIGH;
-    };
+    return severityQualifies(finding.risk())
+        && (this == STRICT || finding.confidence() == Confidence.HIGH);
+  }
+
+  /**
+   * Whether this finding cleared the severity gate but was denied blocking eligibility by the
+   * confidence gate alone — the case where the verdict turns on a hedge rather than on the risk.
+   *
+   * <p>This is the silent demotion #645 measured: a hedge the review prompt itself mandates when a
+   * mitigation is not visible in the diff (#575) removes a HIGH finding from blocking
+   * consideration, and the published finding says only "verify before acting". Surfacing the
+   * predicate is what lets {@link VerdictBuilder} say so where the verdict is explained; the gate
+   * itself is unchanged, so no finding starts or stops blocking because of this method.
+   *
+   * <p>Always {@code false} under {@link #STRICT}, which has no confidence gate to withhold on.
+   */
+  public boolean withheldByConfidence(Finding finding) {
+    return finding != null && severityQualifies(finding.risk()) && !isBlocking(finding);
+  }
+
+  /** Whether the finding's risk alone meets this mode's bar, before confidence is considered. */
+  private boolean severityQualifies(RiskLevel risk) {
+    return this == LENIENT ? risk == RiskLevel.CRITICAL : isCriticalOrHigh(risk);
   }
 
   private static boolean isCriticalOrHigh(RiskLevel risk) {

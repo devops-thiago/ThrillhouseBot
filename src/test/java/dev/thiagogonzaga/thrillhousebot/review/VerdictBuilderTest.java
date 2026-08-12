@@ -1319,4 +1319,163 @@ class VerdictBuilderTest {
         result.reviewState(),
         "a PR with no genuine outstanding findings must be approvable again");
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // #645 — a confidence hedge silently removes blocking eligibility. The gate is unchanged; what
+  // the review must no longer do is stay silent about which gate produced the verdict.
+  // ---------------------------------------------------------------------------------------------
+
+  private static final String CONFIDENCE_HOLD_HEADLINE = "Severity did not decide this verdict";
+
+  private static final String CONFIDENCE_HOLD_CLAUSE =
+      "1 finding(s) were severe enough to block on their own, but the review hedged its confidence"
+          + " in them";
+
+  private static final VerdictBuilder.DiffStats ONE_FILE = new VerdictBuilder.DiffStats(1, 1, 0);
+
+  private static ReviewResponse.Finding aiFinding(String risk, String confidence) {
+    return new ReviewResponse.Finding(
+        risk, confidence, "a.java", 1, "sink", "reaches a sink", null, null);
+  }
+
+  private static ReviewResponse responseWithFindings(ReviewResponse.Finding... findings) {
+    return new ReviewResponse(List.of(findings), List.of(), null);
+  }
+
+  private ReviewResult verdictFor(VerdictBuilder verdictBuilder, ReviewResponse response) {
+    return verdictBuilder.buildResult(
+        response, true, ONE_FILE, List.of(), List.of(), CI_CLEAR, List.of());
+  }
+
+  private VerdictBuilder builderWith(BlockingStrictness strictness) {
+    return new VerdictBuilder(
+        summaryGenerator,
+        followUpAnalyzer,
+        BotIdentity.from(List.of("thrillhousebot[bot]")),
+        strictness);
+  }
+
+  /**
+   * The round-6 React case: a HIGH finding the model hedged to medium confidence is removed from
+   * blocking consideration entirely, so the PR gets a comment instead of a request for changes. The
+   * verdict may stand, but both surfaces that explain it must say the hedge is what produced it.
+   */
+  @Test
+  void aHedgedHighFindingSaysWhyItDidNotBlock() {
+    var result = verdictFor(builder, responseWithFindings(aiFinding("high", "medium")));
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    var markdown = result.summaryMarkdown();
+    assertTrue(markdown.contains(CONFIDENCE_HOLD_HEADLINE), markdown);
+    assertTrue(
+        markdown.contains(
+            CONFIDENCE_HOLD_CLAUSE + ", so this review comments instead of requesting changes"),
+        markdown);
+    assertTrue(markdown.contains("`REVIEW_BLOCKING_STRICTNESS=strict`"), markdown);
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("Not blocking: " + CONFIDENCE_HOLD_CLAUSE + "."), checkSummary);
+  }
+
+  /**
+   * The Angular counter-case: another finding already carries the verdict, so the hedge changed
+   * nothing. Disclosing it there would put a paragraph on every blocking review explaining an
+   * outcome the review did not have — the noise a check run cannot afford.
+   */
+  @Test
+  void aReviewThatAlreadyRequestsChangesDoesNotDiscloseAHold() {
+    var result =
+        verdictFor(
+            builder, responseWithFindings(aiFinding("high", "medium"), aiFinding("high", "high")));
+
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    assertEquals(0, result.blockingWithheldByConfidence());
+    assertFalse(result.summaryMarkdown().contains(CONFIDENCE_HOLD_HEADLINE));
+    assertFalse(VerdictBuilder.checkSummaryForResult(result).contains("Not blocking:"));
+  }
+
+  /** Severity, not confidence, is why a hedged medium does not block — nothing to disclose. */
+  @Test
+  void aHedgedMediumFindingIsNotAConfidenceHold() {
+    var result = verdictFor(builder, responseWithFindings(aiFinding("medium", "medium")));
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(0, result.blockingWithheldByConfidence());
+    assertFalse(result.summaryMarkdown().contains(CONFIDENCE_HOLD_HEADLINE));
+  }
+
+  /** Each mode discloses the hold for exactly the severities its own severity gate would block. */
+  @Test
+  void theHoldIsReportedPerModeAgainstThatModesSeverityBar() {
+    var lenient = builderWith(BlockingStrictness.LENIENT);
+    var hedgedHigh = verdictFor(lenient, responseWithFindings(aiFinding("high", "medium")));
+    assertEquals(0, hedgedHigh.blockingWithheldByConfidence());
+    assertFalse(hedgedHigh.summaryMarkdown().contains(CONFIDENCE_HOLD_HEADLINE));
+
+    var hedgedCritical = verdictFor(lenient, responseWithFindings(aiFinding("critical", "medium")));
+    assertEquals(1, hedgedCritical.blockingWithheldByConfidence());
+    assertTrue(hedgedCritical.summaryMarkdown().contains(CONFIDENCE_HOLD_HEADLINE));
+
+    // STRICT has no confidence gate, so the same finding blocks and nothing is withheld.
+    var strict =
+        verdictFor(
+            builderWith(BlockingStrictness.STRICT),
+            responseWithFindings(aiFinding("high", "medium")));
+    assertEquals(ReviewState.REQUEST_CHANGES, strict.reviewState());
+    assertEquals(0, strict.blockingWithheldByConfidence());
+  }
+
+  /**
+   * The hedge is equally decisive on a previous finding still open, which reaches the gate through
+   * {@code outstanding} but produces no new-finding counts — so the disclosure must survive the
+   * check-run summary's no-new-findings branch too.
+   */
+  @Test
+  void anUnresolvedPreviousHedgedHighIsDisclosedWithNoNewFindings() {
+    when(followUpAnalyzer.toStatuses(any()))
+        .thenReturn(List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still open")));
+    var previous =
+        new Finding(RiskLevel.HIGH, Confidence.MEDIUM, "a.java", 7, "sink", "d", null, null);
+
+    var result =
+        builder.buildResult(
+            CLEAN_RESPONSE, false, ONE_FILE, List.of(), List.of(previous), CI_CLEAR, List.of());
+
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(1, result.blockingWithheldByConfidence());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(checkSummary.contains("previous finding(s) remain unresolved"), checkSummary);
+    assertTrue(
+        checkSummary.contains("Not blocking: " + CONFIDENCE_HOLD_CLAUSE + "."), checkSummary);
+  }
+
+  /** A diff the review never saw in full is the larger caveat and keeps the top of the summary. */
+  @Test
+  void theCoverageBannerStaysAboveTheConfidenceHold() {
+    var truncated =
+        new VerdictBuilder.DiffStats(
+            1,
+            1,
+            0,
+            1,
+            new ReviewResult.TruncationDetail(
+                List.of("f.java"), List.of(), List.of(), List.of(), SummaryDegradation.NONE));
+
+    var result =
+        builder.buildResult(
+            responseWithFindings(aiFinding("high", "medium")),
+            true,
+            truncated,
+            List.of(),
+            List.of(),
+            CI_CLEAR,
+            List.of());
+
+    var markdown = result.summaryMarkdown();
+    assertTrue(markdown.startsWith(ReviewResult.TRUNCATION_NOTICE_LEAD_IN), markdown);
+    assertTrue(
+        markdown.indexOf(ReviewResult.TRUNCATION_NOTICE_LEAD_IN)
+            < markdown.indexOf(CONFIDENCE_HOLD_HEADLINE),
+        markdown);
+  }
 }

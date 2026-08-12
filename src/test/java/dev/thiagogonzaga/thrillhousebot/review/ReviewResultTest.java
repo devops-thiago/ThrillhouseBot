@@ -601,4 +601,54 @@ class ReviewResultTest {
         message.contains("where one exists"),
         "the gap must be closed with a path, not admitted in a parenthetical");
   }
+
+  /**
+   * #645 — a result built without the confidence-hold count (every caller that predates it)
+   * discloses nothing, so the banner appears only where {@code VerdictBuilder} measured a hold.
+   */
+  @Test
+  void aResultBuiltWithoutTheConfidenceHoldCountDisclosesNothing() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            ReviewResult.TruncationDetail.EMPTY);
+
+    assertEquals(0, result.blockingWithheldByConfidence());
+    assertFalse(result.confidenceHeldTheVerdict());
+  }
+
+  /**
+   * #645 — the hold banner must name the count, say what a hedge does and does not mean, and point
+   * at the mode that already exists for operators who want severity alone to decide. Its check-run
+   * form carries the same clause so the two surfaces cannot drift.
+   */
+  @Test
+  void theConfidenceHoldNoticeExplainsTheHedgeAndNamesTheKnob() {
+    var notice = ReviewResult.confidenceHoldNotice(2);
+
+    assertTrue(notice.startsWith(ReviewResult.CONFIDENCE_HOLD_LEAD_IN), notice);
+    assertTrue(notice.contains("2 finding(s) were severe enough to block on their own"), notice);
+    assertTrue(notice.contains("could not be confirmed from the diff alone"), notice);
+    assertTrue(notice.contains("not that it was disproven"), notice);
+    assertTrue(notice.contains("`REVIEW_BLOCKING_STRICTNESS=strict`"), notice);
+    assertTrue(notice.endsWith(System.lineSeparator().repeat(2)), notice);
+
+    var brief = ReviewResult.confidenceHoldBrief(2);
+    assertTrue(brief.startsWith("Not blocking: "), brief);
+    assertTrue(brief.contains("2 finding(s) were severe enough to block on their own"), brief);
+    assertTrue(brief.endsWith("."), brief);
+  }
 }
