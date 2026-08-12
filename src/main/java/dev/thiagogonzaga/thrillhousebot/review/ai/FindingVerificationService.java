@@ -157,8 +157,8 @@ public class FindingVerificationService {
 
   /**
    * A conditional clause — a hypothesis the finding raises, not a fact it states. Matches from the
-   * conditional marker to the end of that clause (the next comma, colon, dash or sentence end), so
-   * only the hypothetical span is removed and whatever the finding asserts around it survives.
+   * conditional marker to the end of that clause, so only the hypothetical span is removed and
+   * whatever the finding asserts around it survives.
    *
    * <p>Both floor defeaters are assertion tests, and neither regex can carry mood: "If the feedback
    * API sanitizes body on write, the exploit is neutralized" satisfies {@link #MITIGATION_ASSERTED}
@@ -169,15 +169,32 @@ public class FindingVerificationService {
    * as a mitigation (#608). Scoping to the clause is the same narrowing the hedging scan already
    * needed for the same reason.
    *
-   * <p>Scoped to the conditional CLAUSE rather than the sentence carrying it, because over-firing
-   * the floor is the dangerous direction (#594): "If you follow the render path, React escapes the
-   * value" asserts the mitigation outside its conditional, and that assertion must still defeat the
-   * floor.
+   * <p>The clause ends at a real clause boundary — strong punctuation, or a coordinator that opens
+   * the consequent ("but", "so", "then"...) — and deliberately NOT at a comma. A protasis carries
+   * its own commas ("If the feedback API, per its own contract, always sanitizes the body on write,
+   * ..."), and stopping at the first one left the mitigation verb sitting in text read as asserted,
+   * which is the very under-firing this pattern exists to remove. The coordinator boundary is what
+   * keeps the consequent: "If it were stored as plain text this would be moot, but React escapes it
+   * at render" still asserts its mitigation, and that assertion must still defeat the floor, since
+   * over-firing the floor is the dangerous direction (#594).
+   *
+   * <p>Residual trade-off, chosen deliberately: a consequent separated by a bare comma and nothing
+   * else ("If you follow the render path, React escapes the value") is swallowed with the protasis,
+   * so its mitigation no longer defeats the floor. Commas cannot serve both roles, and this is the
+   * safer half — the finding must ALSO name a sink and ALSO claim nothing sanitizes it before the
+   * floor can fire at all, and the floor only lifts risk, leaving confidence and every other signal
+   * where the model put them.
+   *
+   * <p>Plain "should" is NOT a marker. Only inverted "Should the API sanitize ..." is a hypothesis,
+   * and its bare infinitive matches none of {@link #MITIGATION_ASSERTED}'s verb forms, so listing
+   * it bought nothing — while "It should be noted that the API sanitizes body on write" is an
+   * assertion, and treating it as a hypothesis hid a real mitigation from the defeater.
    */
   private static final Pattern CONDITIONAL_CLAUSE =
       Pattern.compile(
-          "\\b(if|unless|whether|in case|assuming|provided that|should)\\b"
-              + "[^,;:.!?\\n\\r\\u2013\\u2014]*",
+          "\\b(if|unless|whether|in case|assuming|provided that)\\b"
+              + "(?:(?!\\b(but|so|then|however|therefore|otherwise)\\b)"
+              + "[^;:.!?\\n\\r\\u2013\\u2014])*",
           Pattern.CASE_INSENSITIVE);
 
   /** The floor an unmitigated-injection-sink finding may never publish below (#570). */

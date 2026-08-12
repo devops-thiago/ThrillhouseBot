@@ -985,7 +985,8 @@ class FindingVerificationServiceTest {
   void stillHonoursAMitigationAssertedOutsideTheConditionalClause() {
     // The scoping is the conditional clause itself, not the sentence carrying it: over-firing the
     // floor is the dangerous direction (#594), so a finding whose conditional is incidental and
-    // which then states the mitigation as fact must still defeat the floor.
+    // which then states the mitigation as fact must still defeat the floor. The consequent is
+    // recognised by the coordinator that opens it, which is what survives the clause scan.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original =
         response(
@@ -995,7 +996,59 @@ class FindingVerificationServiceTest {
                 "src/components/Profile.tsx",
                 12,
                 "dangerouslySetInnerHTML receives an unsanitized note",
-                "If you follow the render path, React escapes the value before it reaches the DOM.",
+                "If it were stored as plain text this would be moot, but React escapes it at"
+                    + " render, so the exposure is limited.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsAnInjectionSinkFindingWhoseConditionalCarriesItsOwnCommas() {
+    // A protasis carries its own commas, so ending the conditional at the FIRST one left the
+    // mitigation verb ("always sanitizes") in text read as asserted and the floor stayed suppressed
+    // — the #608 failure reached through a sentence one comma away from the one it names.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "medium",
+                "src/components/FeedbackItem.tsx",
+                37,
+                "Stored XSS: feedback body rendered via dangerouslySetInnerHTML",
+                "No sanitization or escaping of body is visible in the provided material. If the"
+                    + " feedback API, per its own contract, always sanitizes the body on write, the"
+                    + " exploit is neutralized.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("medium", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotReadAnAssertiveShouldFrameAsAConditional() {
+    // "should" is an ordinary auxiliary in an assertive frame, so treating it as a hypothesis hid a
+    // genuine mitigation from the defeater and floored a finding that says the value IS sanitized.
+    // Only inverted "Should the API sanitize ..." is a hypothesis, and its bare infinitive matches
+    // none of the defeater's verb forms — so the marker only ever cost accuracy.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/FeedbackItem.tsx",
+                37,
+                "Feedback body reaches dangerouslySetInnerHTML unsanitized in this component",
+                "It should be noted that the API sanitizes body on write.",
                 null,
                 null));
 
