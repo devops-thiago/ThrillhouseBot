@@ -50,6 +50,21 @@ public final class PrReviewPrompts {
                and unpinned supply-chain references. A config or hardening weakness visible in the
                diff is as much a finding as a code vulnerability — do not pass over it because it is
                declarative rather than executable.
+               Severity here is a property of the DEFECT CLASS and its blast radius, never of how
+               sure you are about code you were not shown. When the provided material shows data a
+               user can author reaching an injection sink — a framework's HTML-injection escape
+               hatch (dangerouslySetInnerHTML, bypassSecurityTrustHtml, v-html, innerHTML, any
+               raw-HTML render), string-built SQL, a shell command assembled from input, a path
+               joined from input, unsafe deserialization — and NO sanitization, encoding, escaping
+               or validation of that data is visible anywhere in the provided material, the finding
+               is at least "high"; "critical" when the material also shows the tainted value is
+               stored and rendered back to other users, or the sink is reachable without
+               authentication. That some layer you were not shown MIGHT sanitize is a statement
+               about your CONFIDENCE, not about the risk: lower the confidence, name in the
+               description the exact layer to verify, and leave the severity where the defect class
+               puts it. A sanitizer you cannot see is not a sanitizer. Rate the same class the same
+               way whatever framework or language it appears in — the escape hatch with the more
+               alarming name is not the more severe defect.
             3. REGRESSIONS: Does this change break or remove existing behavior? Compare with base commit context.
             4. COMMENT CONTRADICTS CODE: a comment that states something the code it documents does
                NOT do is a defect, not a style note, and it is demonstrable from the diff alone —
@@ -232,6 +247,16 @@ public final class PrReviewPrompts {
               (dimension 8). Each is demonstrable by quoting two lines from the provided material.
               When you have those two lines, report it — do not trade it away against the
               low-severity omission guidance above.
+            - The risk you publish must be the one your own description defends. A finding whose
+              body says the severity was capped, held back, or hedged — "deliberately capped at
+              medium" — while its risk field reads "low" contradicts itself and misplaces the
+              finding. Put the hedge in confidence and the defect class in risk; never let the two
+              disagree.
+            - Equivalent defects get equivalent severity. Before settling on a level, ask what you
+              would give the same defect class in a different framework or language. If the answer
+              differs, the difference is coming from your uncertainty rather than from the defect,
+              and it belongs in confidence — pin the risk to the class and lower the confidence
+              instead.
 
             Confidence calibration:
             - confidence "high" means another reviewer could confirm the issue using only the
@@ -355,7 +380,11 @@ public final class PrReviewPrompts {
             - Claims about the contents or behavior of artifacts not shown in the diff (base
               images, registries, installed packages, remote services) cannot be verified here:
               they are never "critical" or "high", and the description must be phrased as a
-              verification request naming the exact command or check to run.
+              verification request naming the exact command or check to run. This bullet is about
+              the ARTIFACT being unshown, not about an unshown MITIGATION for a defect that is
+              shown: when the vulnerable sink and the untrusted value reaching it are both in the
+              provided material, the possibility that some layer you were not shown neutralizes it
+              lowers confidence only — it never caps the severity (dimension 2).
             - Before claiming a name is undefined/unset or a value is missing — a variable,
               parameter, import, function, env var, or config key — check the provided material
               for its definition, and name in the description what you checked. The diff shows

@@ -878,6 +878,71 @@ class PrReviewPromptsContentTest {
         "a claim whose only evidence is withheld must be dropped, not contradicted (#569)");
   }
 
+  /**
+   * #570 — the round-2 corpus planted the same stored-XSS defect in Angular ({@code
+   * bypassSecurityTrustHtml}) and React ({@code dangerouslySetInnerHTML}) and got HIGH inline for
+   * one and LOW in the collapsed section for the other, on the reasoning that the backend might
+   * sanitize. Severity belongs to the defect class; "I cannot see whether something upstream
+   * mitigates this" is the confidence axis. Independent scoring measured twelve one-notch
+   * deflations and zero inflations, so the anchor below is what stops the drift.
+   */
+  @Test
+  void securitySeverityIsPinnedToTheDefectClassRatherThanToUncertainty() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "property of the DEFECT CLASS and its blast radius",
+        "the security dimension must anchor severity to the defect class (#570)");
+    assertContains(
+        sys,
+        "dangerouslySetInnerHTML, bypassSecurityTrustHtml",
+        "the equivalent framework escape hatches must be named together (#570)");
+    assertContains(
+        sys,
+        "is at least \"high\"; \"critical\" when the material also shows",
+        "an unsanitized user-authored value reaching an injection sink must floor at high (#570)");
+    assertContains(
+        sys,
+        "A sanitizer you cannot see is not a sanitizer",
+        "an unshown upstream sanitizer must not pull the severity down (#570)");
+    assertContains(
+        sys,
+        "whatever framework or language it appears in",
+        "the same defect class must score the same across frameworks (#570)");
+  }
+
+  /**
+   * The corpus's React finding published LOW while its own body said the severity was "deliberately
+   * capped at medium"; a LOW lands in the collapsed section with no inline thread, so the
+   * contradiction is what hid it. The confidence rules that produced this round's precision are
+   * untouched — the hedge moves to confidence, it does not disappear.
+   */
+  @Test
+  void publishedRiskMustMatchTheReasoningTheFindingStates() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "The risk you publish must be the one your own description defends",
+        "a finding must not publish a risk its own body argues against (#570)");
+    assertContains(
+        sys,
+        "Equivalent defects get equivalent severity",
+        "severity must be compared across frameworks before it is settled (#570)");
+    assertContains(
+        sys,
+        "it belongs in confidence — pin the risk to the class and lower the confidence",
+        "uncertainty must be routed to confidence rather than to severity (#570)");
+    // The unshown-artifact cap stays; it just cannot be stretched over a defect that IS shown.
+    assertContains(
+        sys,
+        "they are never \"critical\" or \"high\"",
+        "the unshown-artifact severity cap must survive (#570)");
+    assertContains(
+        sys,
+        "not about an unshown MITIGATION for a defect that is",
+        "the artifact cap must not apply to an unshown mitigation for a shown defect (#570)");
+  }
+
   /** The same guard on both surfaces that emit {@code description_gaps}. */
   @Test
   void bothPromptsKeepWithheldPathsOutOfDescriptionGaps() {
