@@ -143,8 +143,15 @@ public class PrSummaryGenerator {
     var sb = new StringBuilder();
     sb.append(SUMMARY_HEADING).append("\n\n");
 
+    // One observation must be published once. The findings are the most specific surface, so a
+    // description-gap bullet — or a walkthrough clause appended after the row's file summary —
+    // that only restates one of them is collapsed away before anything is rendered (#588).
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            descriptionGaps(aiSummary), summariesByPath(aiSummary), result.findings());
+
     appendPrPurpose(sb, aiSummary);
-    appendDescriptionGaps(sb, aiSummary);
+    appendDescriptionGaps(sb, surfaces.descriptionGaps());
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
@@ -152,7 +159,7 @@ public class PrSummaryGenerator {
     sb.append("- **Lines added:** ").append(signed('+', additions)).append("\n");
     sb.append("- **Lines removed:** ").append(signed('-', deletions)).append("\n\n");
 
-    appendChangedFiles(sb, filesChanged, changedFiles, aiSummary);
+    appendChangedFiles(sb, filesChanged, changedFiles, surfaces.fileSummaries());
 
     sb.append("### Risk Assessment\n");
     sb.append("| Risk | Count |\n");
@@ -384,12 +391,16 @@ public class PrSummaryGenerator {
     sb.append(aiSummary.prPurpose().strip()).append("\n\n");
   }
 
-  private static void appendDescriptionGaps(StringBuilder sb, ReviewResponse.Summary aiSummary) {
+  /** The model's non-blank description gaps; empty when there is no summary to read them from. */
+  private static List<String> descriptionGaps(ReviewResponse.Summary aiSummary) {
     if (aiSummary == null) {
-      return;
+      return List.of();
     }
     // List.copyOf in the Summary constructor guarantees no null elements
-    List<String> gaps = aiSummary.descriptionGaps().stream().filter(g -> !g.isBlank()).toList();
+    return aiSummary.descriptionGaps().stream().filter(g -> !g.isBlank()).toList();
+  }
+
+  private static void appendDescriptionGaps(StringBuilder sb, List<String> gaps) {
     if (gaps.isEmpty()) {
       return;
     }
@@ -416,12 +427,10 @@ public class PrSummaryGenerator {
       StringBuilder sb,
       int totalFilesChanged,
       List<ChangedFile> changedFiles,
-      ReviewResponse.Summary aiSummary) {
+      Map<String, String> summaryByPath) {
     if (changedFiles == null || changedFiles.isEmpty()) {
       return;
     }
-    Map<String, String> summaryByPath = summariesByPath(aiSummary);
-
     sb.append("### Changed Files\n");
     sb.append("| File | Change | Summary |\n");
     sb.append("|------|--------|---------|\n");
