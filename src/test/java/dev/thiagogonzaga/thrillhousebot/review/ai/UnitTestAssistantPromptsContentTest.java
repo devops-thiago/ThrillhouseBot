@@ -146,6 +146,26 @@ class UnitTestAssistantPromptsContentTest {
   }
 
   @Test
+  void promptTellsTheGeneratorWhatToDoWithTheReviewsOwnFindings() {
+    assertContains(
+        UnitTestAssistantPrompts.SYSTEM,
+        "review-findings section is present",
+        "the generator must be told the findings section exists and what it holds (#606)");
+    assertContains(
+        UnitTestAssistantPrompts.SYSTEM,
+        "known-wrong behavior, never the contract",
+        "a defect the review already reported must never become the expected value (#606)");
+    assertContains(
+        UnitTestAssistantPrompts.SYSTEM,
+        "aim a test straight at it",
+        "being told the finding only pays off if the test targets that exact spot (#606)");
+    assertContains(
+        UnitTestAssistantPrompts.USER,
+        "{{#if priorFindings}}",
+        "the findings section must render when the PR has a prior review round (#606)");
+  }
+
+  @Test
   void promptKeepsTheBlanketUntrustedDataStatement() {
     // The new guidance sits above the untrusted-data rule; it must not have displaced it.
     assertContains(

@@ -182,12 +182,16 @@ class AiServicePromptRenderingTest {
                     PromptTemplateEscaper.escape("DIFF_SENTINEL"),
                     PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
                     PromptTemplateEscaper.escape("STACK_SENTINEL"),
-                    PromptTemplateEscaper.escape("INSTR_SENTINEL")));
+                    PromptTemplateEscaper.escape("INSTR_SENTINEL"),
+                    PromptTemplateEscaper.escape("FINDINGS_SENTINEL")));
 
     assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
     assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
     assertTrue(user.contains("STACK_SENTINEL"), "projectStack missing");
     assertTrue(user.contains("INSTR_SENTINEL"), "repoInstructions missing");
+    // The findings section is what #606 wired in: a @V the template never renders would leave the
+    // generator blind to the review's own findings while the planner still pays for the section.
+    assertTrue(user.contains("FINDINGS_SENTINEL"), "priorFindings missing");
     assertTrue(user.contains("## The change"), "template did not render");
   }
 

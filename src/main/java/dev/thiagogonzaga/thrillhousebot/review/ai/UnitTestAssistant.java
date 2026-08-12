@@ -26,6 +26,10 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * command. Returns the proposal as JSON (parsed by {@link UnitTestGenerationParser}) rather than
  * free Markdown, so the bot — not the model — owns how each test file is fenced and labelled in the
  * posted comment. A focused, single-shot blocking call like {@link DocGenerator}.
+ *
+ * <p>{@code priorFindings} carries the defects the bot's own review already reported on the same
+ * PR, so the generator is told about them rather than left to rediscover them — and can aim a test
+ * at the exact sink the review flagged. Empty when the PR has no prior review round.
  */
 @RegisterAiService(
     chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
@@ -39,5 +43,6 @@ public interface UnitTestAssistant {
       @V("diff") String diff,
       @V("prContext") String prContext,
       @V("projectStack") String projectStack,
-      @V("repoInstructions") String repoInstructions);
+      @V("repoInstructions") String repoInstructions,
+      @V("priorFindings") String priorFindings);
 }
