@@ -96,6 +96,23 @@ public final class PrReviewPrompts {
                    N+1) where one batched call would do.
                (d) a linear-time operation applied once per element — string concatenation building
                    a result in a loop, insertion at the head of an array, an O(n) copy per append.
+               The two levels are usually NOT one loop nested inside another in the same function,
+               and the disguised forms are the ones that go unreported:
+               (e) the inner scan lives in a HELPER the diff also shows — a function named
+                   contains…, has…, already…, exists…, find…, lookup…, indexOf… whose body walks a
+                   collection. Calling it once per element is the nested scan; the helper's own
+                   line is the inner level and its call site is the outer one.
+               (f) the outer level is not a loop statement at all but the per-item ENTRY POINT — a
+                   function invoked once per request, message, event, row or job that scans an
+                   accumulator earlier calls appended to. Handling n items costs O(n^2) even though
+                   no line in the diff shows two loops, and the accumulator that grows by one per
+                   call is the second level.
+               (g) the levels are two chained higher-order calls over the SAME collection:
+                   arr.filter((x, i) => arr.findIndex(r => r.id === x.id) === i), a .includes() or
+                   .some() inside a .filter()/.map(), a nested comprehension. The one-line
+                   deduplicate-by-id idiom is the canonical case and is quadratic in every
+                   language that spells it this way; a set or map keyed by the id makes it linear.
+                   Being the idiomatic spelling is not a bound.
                Report these at risk "medium", or "high" when the collection is request- or
                user-sized AND the path is a hot one, and name the concrete better structure in the
                description (a set for the membership test, one pass instead of two, hoisting the
@@ -273,6 +290,23 @@ public final class PrReviewPrompts {
               with "report each underlying defect exactly once" below: that rule forbids restating
               ONE defect at several lines; this one forbids burying a SECOND defect inside the
               first, even when it is what makes the first one true.
+            - Finding a defect in a function does not finish that function. An added quadratic is
+              rarely missed for want of looking: the usual way it is lost is that you read the
+              function closely, found a DIFFERENT real defect in it — a re-enqueue that fires
+              twice, a buffer nothing frees, a state update that keeps the wrong rows — filed that
+              one, and moved on without ever asking what the code costs. So for every function you
+              anchor a finding in, whatever dimension that finding is on, answer one more question
+              before you leave it: does it scan a collection once per element, once per call, or
+              once per chained callback (dimension 5, including the disguised forms (e)-(g))? A yes
+              is its own finding at its own risk, filed alongside the one you came for. Two defects
+              in one function is the ordinary case, and the bug you already found is not a reason
+              its cost is acceptable.
+            - The same applies to a structure you DESCRIBE rather than measure. When you discuss a
+              deduplicating accumulator — a seen list, a visited array, a pending queue, a cache —
+              for its scope, its lifetime, its correctness or its unbounded growth, say in the same
+              pass which lookup it uses. "Grows without bound" and "is scanned linearly per item"
+              are two different defects on two different dimensions; naming either one does not
+              report the other, and a finding about the accumulator's scope covers neither.
             - Before you finish, re-read what you have written — each finding's description, each
               file_summaries line, each description_gaps entry — for any statement that describes
               a defect no finding in your list covers, and promote each one into its own finding
@@ -393,7 +427,10 @@ public final class PrReviewPrompts {
               the diff shows either level bounded by a literal, an enum, a constant, or a small
               fixed collection, the finding is invalid. A single pass, or a lookup that is already
               hashed (a set/map membership test), is not quadratic — check which it is before
-              claiming it.
+              claiming it. The two quoted lines do NOT have to sit in the same function: the
+              scanning line inside a helper and the call site that runs it per element are the two
+              levels, and so are the scan inside a per-item entry point and the line that appends
+              to the collection it scans. Quote whichever pair the diff shows.
             - A config-key documentation-completeness claim (dimension 10) must quote the
               documented line from the diff AND the definition line — from the diff or from the
               config-key definitions section — that establishes the omitted fact, and name which

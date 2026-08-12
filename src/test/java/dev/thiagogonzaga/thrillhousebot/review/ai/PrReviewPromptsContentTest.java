@@ -726,6 +726,79 @@ class PrReviewPromptsContentTest {
         "a fixed small bound must still exclude the finding — precision is unchanged (#537)");
   }
 
+  /**
+   * #537 round 3 — the three misses (c #22, zig #20, react #26) all hid the same shape behind a
+   * spelling dimension 5 did not enumerate: {@code already_seen}/{@code containsJob} put the inner
+   * scan inside a helper, {@code rotator_write} made the outer level a per-message entry point
+   * rather than a loop, and the React hook chained {@code findIndex} inside {@code filter} over one
+   * array. A reader looking for two nested {@code for} statements finds none of them.
+   */
+  @Test
+  void dimensionFiveEnumeratesTheNonNestedSpellingsOfAQuadratic() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "The two levels are usually NOT one loop nested inside another",
+        "the disguised forms must be introduced as the ones that go unreported (#537)");
+    assertContains(
+        sys,
+        "the inner scan lives in a HELPER the diff also shows",
+        "a scan hidden behind contains…/already… must count as the inner level (#537)");
+    assertContains(
+        sys,
+        "the outer level is not a loop statement at all but the per-item ENTRY POINT",
+        "a per-call scan over a growing accumulator must count as quadratic (#537)");
+    assertContains(
+        sys,
+        "the levels are two chained higher-order calls over the SAME collection",
+        "the chained filter/findIndex dedupe idiom must be named as a shape (#537)");
+    assertContains(
+        sys,
+        "Being the idiomatic spelling is not a bound",
+        "familiarity with the one-line dedupe must not excuse it (#537)");
+    // The self-check has to accept the evidence those shapes can actually produce.
+    assertContains(
+        sys,
+        "The two quoted lines do NOT have to sit in the same function",
+        "the quote-both-levels check must admit a helper and its call site (#537)");
+  }
+
+  /**
+   * #537 round 3 — the failure shape was NOT inattention: in all three misses the review examined
+   * the exact function, reported a different real defect in it, and never mentioned complexity. A
+   * threshold nudge cannot reach that, and neither can the promotion sweep below it, which only
+   * rescues defects already written down somewhere. This is the trigger that fires while the
+   * function is still in hand.
+   */
+  @Test
+  void aFindingOnAnotherDimensionMustNotEndTheExaminationOfTheFunction() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "Finding a defect in a function does not finish that function",
+        "one filed defect must not close the function to a second one (#537)");
+    assertContains(
+        sys,
+        "rarely missed for want of looking",
+        "the miss must be framed as a wrong-dimension failure, not a did-not-look one (#537)");
+    assertContains(
+        sys,
+        "anchor a finding in, whatever dimension that finding is on, answer one more question",
+        "anchoring any finding must trigger the cost question for that function (#537)");
+    assertContains(
+        sys,
+        "the bug you already found is not a reason",
+        "a different real defect must not stand in for the complexity classification (#537)");
+    assertContains(
+        sys,
+        "deduplicating accumulator — a seen list, a visited array, a pending queue",
+        "discussing a dedupe accumulator must trigger naming its lookup cost (#537)");
+    assertContains(
+        sys,
+        "are two different defects on two different dimensions",
+        "unbounded growth and a linear per-item lookup must not collapse into one (#537)");
+  }
+
   @Test
   void mockFidelityIsReportableFromTheSignatureAndLandsAtMedium() {
     assertContains(
