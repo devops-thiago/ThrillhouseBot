@@ -84,6 +84,17 @@ public final class AiResponses {
    * verifier keeps its unverified findings. It is a real case, not a defensive one — a reasoning
    * model can spend its whole output budget on reasoning tokens and return an empty body with no
    * length stop to show for it.
+   *
+   * <p>The cut text travels on the failure as its {@linkplain
+   * AiResponseTruncatedException#partialBody() partial body} (#580). {@link Result#content()} holds
+   * what the model produced before the cap stopped it — output that was generated and billed, and
+   * that is well-formed up to the cut — so a caller that wants to keep the elements which closed
+   * can run it through {@link TruncatedResponseSalvager}, the same machinery the streaming review
+   * lane salvages with. Dropping it here made that impossible by construction of this helper rather
+   * than by any provider limitation: every blocking lane's cut body was discarded before its caller
+   * could see it. Handing it over decides nothing for the caller — the throw, the no-retry contract
+   * and each lane's existing error contract are unchanged, and a lane that ignores the body behaves
+   * exactly as it did.
    */
   public static String textOrThrowOnTruncation(Result<String> result, String what, ModelLane lane) {
     if (result == null) {
@@ -95,7 +106,7 @@ public final class AiResponses {
               + " stopped at the model's response-length cap (finish_reason=length), so the"
               + " response is incomplete. "
               + lane.remedy(),
-          null,
+          result.content(),
           lane == ModelLane.CONCISE);
     }
     return result.content();
