@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -137,19 +138,74 @@ class SummarySurfaceDeduplicatorTest {
   }
 
   @Test
+  void aNegatedParaphraseContradictsTheFindingInsteadOfRestatingIt() {
+    // Identical but for the negation: "does"/"not" used to be stop words, so both sides tokenized
+    // the same and the gap was deleted as a duplicate of the claim it contradicts.
+    var gaps = List.of("Path traversal: unvalidated client source does not reach fopen path");
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            gaps,
+            Map.of(),
+            List.of(finding("Path traversal: unvalidated client source reaches fopen path")));
+
+    assertEquals(gaps, surfaces.descriptionGaps());
+  }
+
+  @Test
+  void aWalkthroughClauseIsKeptWhenItAssertsTheOppositeOfTheFinding() {
+    // The clause names strictly less than the finding does, so containment runs the other way.
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(),
+            Map.of(
+                "src/A.java",
+                "Adds the repository; user input is sanitized before it reaches the query"),
+            List.of(finding("User input is not sanitized before it reaches the SQL query")));
+
+    assertEquals(
+        "Adds the repository; user input is sanitized before it reaches the query",
+        surfaces.fileSummaries().get("src/A.java"));
+  }
+
+  @Test
+  void oppositePolarityStillCollapsesWhenTheTwoAlsoDifferInSubstance() {
+    // A description gap normally quotes the PR's affirmative promise while the finding reports the
+    // absence, so differing polarity alone must not keep a genuine duplicate alive.
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(
+                "The PR says the worker registry is walked page by page, but the client stops"
+                    + " after the first page of workers it receives."),
+            Map.of(),
+            List.of(finding("Worker registry pagination not followed; only first page returned")));
+
+    assertEquals(List.of(), surfaces.descriptionGaps());
+  }
+
+  @Test
+  void negatorsSetPolarityInsteadOfBecomingContentWords() {
+    var negated = SummarySurfaceDeduplicator.claim("the banlist is never refreshed");
+    var plain = SummarySurfaceDeduplicator.claim("the banlist is refreshed");
+
+    assertEquals(plain.words(), negated.words());
+    assertTrue(negated.negated());
+    assertFalse(plain.negated());
+  }
+
+  @Test
   void tokenizerDropsStopWordsNumbersAndSingleCharacters() {
     // "is"/"at" are stop words, "c" is a single character and "45" a line number: none of them
     // says anything about the claim, and all three match nearly every other text.
     assertEquals(
         List.of("banlist", "rea", "src", "main"),
-        SummarySurfaceDeduplicator.contentTokens("banlist is read at src/main.c:45"));
+        SummarySurfaceDeduplicator.claim("banlist is read at src/main.c:45").words());
   }
 
   @Test
   void inflectedFormsOfOneWordCollideAndShortWordsAreLeftAlone() {
     assertEquals(
-        SummarySurfaceDeduplicator.contentTokens("hardcoded failures return"),
-        SummarySurfaceDeduplicator.contentTokens("hardcodes failure returned"));
-    assertEquals(List.of("use", "log"), SummarySurfaceDeduplicator.contentTokens("use logs"));
+        SummarySurfaceDeduplicator.claim("hardcoded failures return").words(),
+        SummarySurfaceDeduplicator.claim("hardcodes failure returned").words());
+    assertEquals(List.of("use", "log"), SummarySurfaceDeduplicator.claim("use logs").words());
   }
 }

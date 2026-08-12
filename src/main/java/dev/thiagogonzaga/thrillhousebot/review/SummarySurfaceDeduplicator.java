@@ -42,8 +42,9 @@ import java.util.Set;
  *
  * <p>Two texts state the same claim when they share a contiguous run of {@value #PHRASE_TOKENS}
  * content words, or when their content words overlap by {@value #OVERLAP_THRESHOLD} of the shorter
- * side. The overlap arm needs {@value #MIN_OVERLAP_TOKENS} content words on the shorter side: below
- * that the coefficient is noise, and keeping both copies is the safe direction.
+ * side — and only when they agree on polarity. The overlap arm needs {@value #MIN_OVERLAP_TOKENS}
+ * content words on the shorter side: below that the coefficient is noise, and keeping both copies
+ * is the safe direction.
  */
 final class SummarySurfaceDeduplicator {
 
@@ -66,9 +67,21 @@ final class SummarySurfaceDeduplicator {
       Set.of(
           "all", "also", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can",
           "do", "does", "each", "for", "from", "has", "have", "if", "in", "into", "is", "it", "its",
-          "just", "more", "no", "not", "of", "on", "only", "or", "other", "per", "so", "still",
-          "than", "that", "the", "their", "them", "then", "there", "these", "this", "to", "was",
-          "were", "when", "which", "while", "with", "would");
+          "just", "more", "of", "on", "only", "or", "other", "per", "so", "still", "than", "that",
+          "the", "their", "them", "then", "there", "these", "this", "to", "was", "were", "when",
+          "which", "while", "with", "would");
+
+  /**
+   * Syntactic negators. A negator flips what a sentence asserts while contributing a single token,
+   * so no similarity score can separate "the value is sanitized" from "the value is not sanitized"
+   * — several of these read as function words and would otherwise be dropped, leaving the two
+   * tokenized identically. They are kept out of the content words and tracked as polarity instead.
+   */
+  private static final Set<String> NEGATIONS =
+      Set.of("cannot", "neither", "never", "no", "non", "none", "nor", "not", "nothing", "without");
+
+  /** One text reduced to what it asserts: its content words in order, and whether it negates. */
+  record Claim(List<String> words, boolean negated) {}
 
   /** The description-gap bullets and per-path walkthrough notes left after collapsing. */
   record Surfaces(List<String> descriptionGaps, Map<String, String> fileSummaries) {}
@@ -79,16 +92,16 @@ final class SummarySurfaceDeduplicator {
    */
   static Surfaces collapse(
       List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> findings) {
-    var claims = new ArrayList<List<String>>(findings.size() + descriptionGaps.size());
+    var claims = new ArrayList<Claim>(findings.size() + descriptionGaps.size());
     for (Finding finding : findings) {
-      claims.add(contentTokens(finding.title()));
+      claims.add(claim(finding.title()));
     }
     var keptGaps = new ArrayList<String>(descriptionGaps.size());
     for (String gap : descriptionGaps) {
-      var tokens = contentTokens(gap);
-      if (!restates(tokens, claims)) {
+      var candidate = claim(gap);
+      if (!restates(candidate, claims)) {
         keptGaps.add(gap);
-        claims.add(tokens);
+        claims.add(candidate);
       }
     }
     var trimmed = new HashMap<String, String>(fileSummaries.size());
@@ -103,7 +116,7 @@ final class SummarySurfaceDeduplicator {
    * the row's file summary and is never touched, so a row always keeps a real description of the
    * file even when everything appended to it was already published elsewhere.
    */
-  static String trimRestatedClauses(String summary, List<List<String>> claims) {
+  static String trimRestatedClauses(String summary, List<Claim> claims) {
     int firstBreak = summary.indexOf(';');
     if (firstBreak < 0) {
       return summary;
@@ -111,7 +124,7 @@ final class SummarySurfaceDeduplicator {
     var kept = new StringBuilder(summary.substring(0, firstBreak).strip());
     var dropped = false;
     for (String clause : clauses(summary.substring(firstBreak + 1))) {
-      if (restates(contentTokens(clause), claims)) {
+      if (restates(claim(clause), claims)) {
         dropped = true;
       } else {
         kept.append("; ").append(clause);
@@ -128,15 +141,36 @@ final class SummarySurfaceDeduplicator {
    * True when {@code candidate} states a claim one of {@code claims} already states. The
    * candidate's phrase and word sets are derived once and reused across every claim.
    */
-  private static boolean restates(List<String> candidate, List<List<String>> claims) {
-    Set<String> candidatePhrases = phrases(candidate);
-    Set<String> candidateWords = new HashSet<>(candidate);
-    for (List<String> claim : claims) {
-      if (sharesPhrase(candidatePhrases, claim) || overlaps(candidateWords, claim)) {
+  private static boolean restates(Claim candidate, List<Claim> claims) {
+    Set<String> candidatePhrases = phrases(candidate.words());
+    Set<String> candidateWords = new HashSet<>(candidate.words());
+    for (Claim claim : claims) {
+      if (contradicts(candidate, candidateWords, claim)) {
+        continue;
+      }
+      if (sharesPhrase(candidatePhrases, claim.words())
+          || overlaps(candidateWords, claim.words())) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * True when the two make the same statement with opposite polarity: one negates and the other
+   * does not, and neither names anything the other leaves out. Such a pair scores as a perfect
+   * match on every similarity arm — the negator is not a content word, so it cannot move the score
+   * — while asserting the opposite of each other, which is a contradiction to surface, never a
+   * duplicate to delete. Polarity is only decisive here: two texts that also differ in substance
+   * are still judged on their content, so "the PR claims X, but the code cannot X" continues to
+   * collapse onto the finding that reports X missing.
+   */
+  private static boolean contradicts(Claim candidate, Set<String> candidateWords, Claim claim) {
+    if (candidate.negated() == claim.negated()) {
+      return false;
+    }
+    var claimWords = new HashSet<>(claim.words());
+    return candidateWords.containsAll(claimWords) || claimWords.containsAll(candidateWords);
   }
 
   /** True when the claim contains one of the candidate's {@value #PHRASE_TOKENS}-word runs. */
@@ -164,21 +198,27 @@ final class SummarySurfaceDeduplicator {
   }
 
   /**
-   * The claim-bearing words of {@code text}, in order: lowercased alphanumeric runs minus stop
-   * words, numbers and single characters (line numbers and list markers match everything), each
-   * reduced to a crude stem so "hardcodes" and "hardcoded" are one word.
+   * What {@code text} asserts. The content words are its lowercased alphanumeric runs minus stop
+   * words, negators, numbers and single characters (line numbers and list markers match
+   * everything), each reduced to a crude stem so "hardcodes" and "hardcoded" are one word; the
+   * negators it dropped set the polarity instead of vanishing.
    */
-  static List<String> contentTokens(String text) {
+  static Claim claim(String text) {
     if (text == null) {
-      return List.of();
+      return new Claim(List.of(), false);
     }
-    var tokens = new ArrayList<String>();
+    var words = new ArrayList<String>();
+    var negated = false;
     for (String word : text.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) {
-      if (word.length() > 1 && !STOPWORDS.contains(word) && !Character.isDigit(word.charAt(0))) {
-        tokens.add(stem(word));
+      if (NEGATIONS.contains(word)) {
+        negated = true;
+      } else if (word.length() > 1
+          && !STOPWORDS.contains(word)
+          && !Character.isDigit(word.charAt(0))) {
+        words.add(stem(word));
       }
     }
-    return tokens;
+    return new Claim(words, negated);
   }
 
   /**
