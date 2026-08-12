@@ -232,9 +232,7 @@ public class FindingVerificationService {
       }
       return apply(screened, parseOrSalvage(raw, screened.findings().size()));
     } catch (AiResponseTruncatedException e) {
-      // The verifier fails open by design; say why so a cap is not mistaken for a provider fault.
-      Log.warnf("Finding verification — keeping unverified findings. %s", e.getMessage());
-      return screened;
+      return salvageTruncatedVerdicts(screened, e);
     } catch (IOException | RuntimeException e) {
       Log.warnf(
           e,
@@ -266,18 +264,59 @@ public class FindingVerificationService {
       if (salvaged.isEmpty()) {
         throw e;
       }
-      var verified =
-          salvaged.stream()
-              .mapToInt(VerificationResponse.Verdict::id)
-              .filter(id -> id >= 1 && id <= candidates)
-              .distinct()
-              .count();
+      var verified = candidatesCovered(salvaged, candidates);
       Log.warnf(
           "Finding verification response was cut mid-JSON (%s); salvaged %d verdict(s) covering %d"
               + " of %d candidate finding(s) — the remaining %d stay unverified",
           e.getMessage(), salvaged.size(), verified, candidates, candidates - verified);
       return new VerificationResponse(salvaged);
     }
+  }
+
+  /**
+   * Applies the verdicts that closed before the model's response-length cap cut the body (#599).
+   * Same salvage as {@link #parseOrSalvage}, on the other lane that reaches a cut body: this one
+   * arrives as a reported {@code finish_reason=length} rather than as a parse failure, so it never
+   * passed through the parse path at all.
+   *
+   * <p>The cut text only became reachable here when {@link AiResponses#textOrThrowOnTruncation} was
+   * given {@link Result#content()} to carry on the failure (#592/#580) — before that the blocking
+   * lanes passed {@code null}, so a verification call cut mid-JSON discarded every verdict it had
+   * already paid for, including the complete ones. Nothing else about the lane changes: the
+   * truncation is still not retried, and a body with nothing recoverable in it (no partial body at
+   * all, or a cut before the first verdict closed) fails open exactly as before, keeping every
+   * unverified finding.
+   */
+  private ReviewResponse salvageTruncatedVerdicts(
+      ReviewResponse screened, AiResponseTruncatedException e) {
+    var candidates = screened.findings().size();
+    var salvaged =
+        salvager.salvageArray(e.partialBody(), VERDICTS, VerificationResponse.Verdict.class);
+    if (salvaged.isEmpty()) {
+      // The verifier fails open by design; say why so a cap is not mistaken for a provider fault.
+      Log.warnf("Finding verification — keeping unverified findings. %s", e.getMessage());
+      return screened;
+    }
+    var verified = candidatesCovered(salvaged, candidates);
+    Log.warnf(
+        "Finding verification was cut at the model's response-length cap; salvaged %d verdict(s)"
+            + " covering %d of %d candidate finding(s) — the remaining %d stay unverified. %s",
+        salvaged.size(), verified, candidates, candidates - verified, e.getMessage());
+    return apply(screened, new VerificationResponse(salvaged));
+  }
+
+  /**
+   * How many distinct candidates the salvaged verdicts actually cover. Salvage is best-effort over
+   * model output, so a verdict can carry an id outside the 1-based candidate range; counting only
+   * the ids in range keeps the log honest about what stayed unverified.
+   */
+  private static long candidatesCovered(
+      List<VerificationResponse.Verdict> salvaged, int candidates) {
+    return salvaged.stream()
+        .mapToInt(VerificationResponse.Verdict::id)
+        .filter(id -> id >= 1 && id <= candidates)
+        .distinct()
+        .count();
   }
 
   /**
