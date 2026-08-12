@@ -145,13 +145,43 @@ class RebuttalContradictionTest {
         "this construct dispatches concurrently: " + codeLine);
   }
 
-  @Test
-  void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch() {
-    var oneThread = "+    var pool = Executors.newFixedThreadPool(1);\n";
-
+  /**
+   * A one-thread pool genuinely serializes, so it refutes nothing — and this is the direction that
+   * matters most, since a match here overrules a maintainer whose decline was correct. The thread
+   * count is what decides it, not how the call is spelled around it.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var pool = Executors.newFixedThreadPool(1);",
+        // The two-argument overload is the standard way to name a single worker.
+        "+    var pool = Executors.newFixedThreadPool(1, new WorkerThreadFactory());",
+        // Spacing inside the call must not let the count slip past the guard.
+        "+    var pool = Executors.newFixedThreadPool( 1 );",
+        "+    var pool = Executors.newFixedThreadPool( 1 , factory);",
+        "+    var pool = Executors.newFixedThreadPool(\t1\t);",
+      })
+  void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(
-        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", oneThread).isEmpty(),
-        "a one-thread pool genuinely serializes, so it does not refute the decline");
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isEmpty(),
+        "a one-thread pool genuinely serializes, so it does not refute the decline: " + codeLine);
+  }
+
+  /** The counterpart: any count above one does dispatch concurrently, however it is spelled. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var pool = Executors.newFixedThreadPool(10);",
+        // 11 starts with the same digit as 1 and must not be excluded with it.
+        "+    var pool = Executors.newFixedThreadPool(11);",
+        "+    var pool = Executors.newFixedThreadPool( 10 );",
+        "+    var pool = Executors.newFixedThreadPool(8, factory);",
+        "+    var pool = Executors.newFixedThreadPool(workers);",
+      })
+  void shouldTreatAMultiThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isPresent(),
+        "a pool of more than one thread dispatches concurrently: " + codeLine);
   }
 
   /**

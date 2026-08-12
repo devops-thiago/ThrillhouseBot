@@ -108,8 +108,13 @@ final class RebuttalContradiction {
           Pattern.compile(
               "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newScheduledThreadPool"
                   + "|newWorkStealingPool"),
-          // a fixed pool of more than one thread
-          Pattern.compile("newFixedThreadPool\\s{0,16}\\(\\s{0,16}(?!1\\s{0,16}\\))"),
+          // A fixed pool of more than one thread. The count is excluded when it is 1 followed by
+          // the end of the argument — a closing paren, or the comma of the ThreadFactory overload,
+          // which is the standard way to name a single worker. Requiring the paren alone let
+          // newFixedThreadPool(1, factory) read as concurrent dispatch, which overrules a decline
+          // that was right. The leading whitespace is possessive: a greedy run would backtrack to
+          // zero width and re-match past its own lookahead, so newFixedThreadPool( 1 ) escaped too.
+          Pattern.compile("newFixedThreadPool\\s{0,16}\\(\\s{0,16}+(?!1\\s{0,16}(?:,|\\)))"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future
