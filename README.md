@@ -190,7 +190,7 @@ Edit `.env` with the credentials from step 1:
 | Variable | Value |
 |---|---|
 | `GITHUB_APP_ID` | From GitHub App settings → About |
-| `GITHUB_PRIVATE_KEY` | Downloaded when you generated a private key |
+| `GITHUB_PRIVATE_KEY` | The `.pem` downloaded when you generated a private key — on one line, newlines as `\n`, unquoted |
 | `GITHUB_WEBHOOK_SECRET` | The webhook secret you set |
 | `GITHUB_CLIENT_ID` | From app settings → Identifying and authorizing users |
 | `GITHUB_CLIENT_SECRET` | From app settings → Identifying and authorizing users |
@@ -898,6 +898,37 @@ and a [Smee.io](https://smee.io/) channel for webhook forwarding. Use `./mvnw`
 for Maven (wrapper included).
 
 ### Dev mode
+
+Dev mode reads configuration from a `.env` file in the project root, and a fresh clone has none —
+the bot refuses to boot until `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` and
+`AI_API_KEY` are all set. Create the file first:
+
+```bash
+cp .env.example .env
+```
+
+Fill it in with the credentials from your GitHub App (see [GitHub App setup](#github-app-setup)).
+`GITHUB_PRIVATE_KEY` has to be a real PEM RSA key — placeholder text is rejected at boot, not on
+first use. Use the `.pem` GitHub gives you when you generate an App private key, or generate a
+throwaway one for purely local work:
+
+```bash
+openssl genrsa -traditional 2048 | awk '{printf "%s\\n", $0}'
+```
+
+`-traditional` matters: it writes the PKCS#1 (`BEGIN RSA PRIVATE KEY`) format GitHub's own keys
+use, which is the only format the bot parses — OpenSSL 3 otherwise defaults to PKCS#8. The `awk`
+step folds the key onto one line with literal `\n` escapes, which is what `.env` needs. Paste that
+line in **unquoted**:
+
+```dotenv
+GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----
+```
+
+Surrounding quotes are read as part of the key and boot fails. `GITHUB_WEBHOOK_SECRET` and
+`AI_API_KEY` only need to be non-empty to boot, but must be the real values before webhooks
+verify and reviews run; dashboard OAuth (`GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`) is optional
+and its absence only disables dashboard login. Then:
 
 ```bash
 # Terminal 1: Smee proxy

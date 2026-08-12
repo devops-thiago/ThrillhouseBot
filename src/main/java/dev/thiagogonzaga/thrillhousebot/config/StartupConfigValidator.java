@@ -48,6 +48,17 @@ public class StartupConfigValidator {
   private static final String PRIVATE_KEY_PROPERTY = "thrillhousebot.github.private-key";
   private static final String APP_ID_PROPERTY = "thrillhousebot.github.app-id";
 
+  /**
+   * The remedy carried by every {@code GITHUB_PRIVATE_KEY} problem. A fresh clone fails here with
+   * placeholder text copied straight out of {@code .env.example} (#593), and the refusal is where
+   * the reader actually is — so it states the accepted format, the single-line spelling {@code
+   * .env} needs, and a command that produces a usable key, rather than only naming the property.
+   */
+  private static final String PRIVATE_KEY_REMEDY =
+      "Use the PKCS#1 PEM GitHub downloads when you generate an App private key, on one line with"
+          + " \\n escapes and no surrounding quotes; for a throwaway local key run: openssl genrsa"
+          + " -traditional 2048";
+
   private final ThrillhouseConfig config;
   private final String aiApiKey;
   private final ActiveModelSettings activeModel;
@@ -410,7 +421,11 @@ public class StartupConfigValidator {
 
   private static void validatePrivateKey(List<String> problems, String privateKey) {
     if (privateKey == null || privateKey.isBlank()) {
-      problems.add("GITHUB_PRIVATE_KEY is required but is not set (" + PRIVATE_KEY_PROPERTY + ")");
+      problems.add(
+          "GITHUB_PRIVATE_KEY is required but is not set ("
+              + PRIVATE_KEY_PROPERTY
+              + "). "
+              + PRIVATE_KEY_REMEDY);
       return;
     }
     try {
@@ -420,7 +435,9 @@ public class StartupConfigValidator {
           "GITHUB_PRIVATE_KEY is set but is not a valid PEM RSA private key ("
               + PRIVATE_KEY_PROPERTY
               + "): "
-              + e.getMessage());
+              + e.getMessage()
+              + ". "
+              + PRIVATE_KEY_REMEDY);
     }
   }
 
@@ -738,8 +755,9 @@ public class StartupConfigValidator {
     }
     sb.append(System.lineSeparator())
         .append(
-            "Set the values above (see .env.example) and restart. Dashboard OAuth"
-                + " (GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET) is optional.");
+            "Copy .env.example to .env in the project root (both dev mode and docker compose read"
+                + " it), set the values above, and restart. Dashboard OAuth (GITHUB_CLIENT_ID /"
+                + " GITHUB_CLIENT_SECRET) is optional.");
     return sb.toString();
   }
 

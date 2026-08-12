@@ -97,7 +97,7 @@ Edit `.env` with the credentials from step 1:
 | Variable | Value |
 |---|---|
 | `GITHUB_APP_ID` | From GitHub App settings → About |
-| `GITHUB_PRIVATE_KEY` | Downloaded when you generated a private key |
+| `GITHUB_PRIVATE_KEY` | The `.pem` downloaded when you generated a private key — on one line, newlines as `\n`, unquoted |
 | `GITHUB_WEBHOOK_SECRET` | The webhook secret you set |
 | `GITHUB_CLIENT_ID` | From app settings → Identifying and authorizing users |
 | `GITHUB_CLIENT_SECRET` | From app settings → Identifying and authorizing users |
