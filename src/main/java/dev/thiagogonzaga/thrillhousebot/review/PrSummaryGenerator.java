@@ -89,6 +89,29 @@ public class PrSummaryGenerator {
    */
   static final String NO_MODEL_SUMMARY = "Not summarized — no model summary for this file";
 
+  /** Heading of the Description vs. Implementation section when a mismatch exists. */
+  static final String GAPS_HEADING = "### ⚠️ Description vs. Implementation";
+
+  /**
+   * Heading of the same section when the check found nothing. Carries no warning emoji: a clean
+   * result is not a warning, and reusing the ⚠️ heading would make every review look flagged.
+   */
+  static final String NO_GAPS_HEADING = "### Description vs. Implementation";
+
+  /**
+   * Body for the state where the model reported gaps but #588 collapsed every one of them onto a
+   * finding that states the same thing. The claim still reaches the reader at its most specific
+   * surface, so it is not repeated here — but the check plainly ran, and saying so is what keeps a
+   * collapsed section from reading exactly like a skipped one (#637).
+   */
+  static final String GAPS_ALL_REPORTED_AS_FINDINGS =
+      "Every mismatch found between the description and the change is reported as a finding below,"
+          + " so it is not repeated here.";
+
+  /** Body for the state where the check ran over the description and found no mismatch. */
+  static final String NO_GAPS_FOUND =
+      "No mismatch found between the PR description and the change.";
+
   /**
    * One changed file in the walkthrough: its path, the diff's authoritative change type, and
    * whether it is a pure rename — renamed with no content change, hence never sent to the model and
@@ -146,12 +169,13 @@ public class PrSummaryGenerator {
     // One observation must be published once. The findings are the most specific surface, so a
     // description-gap bullet — or a walkthrough clause appended after the row's file summary —
     // that only restates one of them is collapsed away before anything is rendered (#588).
+    var reportedGaps = descriptionGaps(aiSummary);
     var surfaces =
         SummarySurfaceDeduplicator.collapse(
-            descriptionGaps(aiSummary), summariesByPath(aiSummary), result.findings());
+            reportedGaps, summariesByPath(aiSummary), result.findings());
 
     appendPrPurpose(sb, aiSummary);
-    appendDescriptionGaps(sb, surfaces.descriptionGaps());
+    appendDescriptionGaps(sb, aiSummary, reportedGaps.size(), surfaces.descriptionGaps());
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
@@ -400,16 +424,42 @@ public class PrSummaryGenerator {
     return aiSummary.descriptionGaps().stream().filter(g -> !g.isBlank()).toList();
   }
 
-  private static void appendDescriptionGaps(StringBuilder sb, List<String> gaps) {
-    if (gaps.isEmpty()) {
+  /**
+   * Renders the Description vs. Implementation section in whichever of its three states the check
+   * actually reached, so a reader can tell a matching description from a check that never ran
+   * (#637). Silence is reserved for the one case that earns it — {@code aiSummary} is {@code null},
+   * meaning no summary came back at all, which the summary-degradation banners already disclose.
+   *
+   * <p>The states are: gaps survived, so they are listed; the model reported gaps but every one of
+   * them restated a finding and #588 collapsed them all away, which used to delete the whole
+   * section along with them (the sharpest measured case — the review found the contradicted bug and
+   * still said nothing about the description); and the model reported none, which is now stated
+   * rather than implied by an absent heading.
+   *
+   * <p>A PR with an empty body reaches the last state too, since the model reports no gaps for a
+   * description it never received and the renderer cannot tell the two apart from the response
+   * alone. The line is vacuous there rather than wrong, and that is the safe direction: the failure
+   * this fixes is a reader who cannot tell "checked, matched" from "never checked".
+   */
+  private static void appendDescriptionGaps(
+      StringBuilder sb, ReviewResponse.Summary aiSummary, int reported, List<String> gaps) {
+    if (aiSummary == null) {
       return;
     }
-    sb.append("### ⚠️ Description vs. Implementation\n");
-    sb.append("The PR description does not fully match the change:\n");
-    for (String gap : gaps) {
-      sb.append("- ").append(gap.strip()).append("\n");
+    if (!gaps.isEmpty()) {
+      sb.append(GAPS_HEADING).append("\n");
+      sb.append("The PR description does not fully match the change:\n");
+      for (String gap : gaps) {
+        sb.append("- ").append(gap.strip()).append("\n");
+      }
+      sb.append("\n");
+      return;
     }
-    sb.append("\n");
+    if (reported > 0) {
+      sb.append(GAPS_HEADING).append("\n").append(GAPS_ALL_REPORTED_AS_FINDINGS).append("\n\n");
+      return;
+    }
+    sb.append(NO_GAPS_HEADING).append("\n").append(NO_GAPS_FOUND).append("\n\n");
   }
 
   /**
