@@ -288,6 +288,34 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void missingPrivateKeyNamesHowToObtainOne() {
+    // The refusal is where the reader actually is, so it has to state the remedy — which key
+    // format is accepted and the command that produces a throwaway one — not only the property.
+    var message = assertFailsValidation(new ConfigBuilder().privateKey("  ").build()).getMessage();
+    assertTrue(message.contains("openssl genrsa -traditional 2048"), message);
+    assertTrue(message.contains("no surrounding quotes"), message);
+  }
+
+  @Test
+  void malformedPrivateKeyNamesHowToObtainOne() {
+    // Placeholder text is the fresh-clone case (#593): the parser error alone does not tell the
+    // reader what a valid value looks like.
+    var message =
+        assertFailsValidation(new ConfigBuilder().privateKey("not-a-valid-key").build())
+            .getMessage();
+    assertTrue(message.contains("openssl genrsa -traditional 2048"), message);
+    assertTrue(message.contains("no surrounding quotes"), message);
+  }
+
+  @Test
+  void refusalNamesCopyingEnvExampleAsTheFirstStep() {
+    // A fresh clone has no .env at all, so the closing line has to name the copy step rather than
+    // merely point at the example file.
+    var message = assertFailsValidation(new ConfigBuilder().aiApiKey("").build()).getMessage();
+    assertTrue(message.contains("Copy .env.example to .env"), message);
+  }
+
+  @Test
   void failsFastWhenWebhookSecretMissing() {
     var ex = assertFailsValidation(new ConfigBuilder().webhookSecret(null).build());
     assertTrue(ex.getMessage().contains("GITHUB_WEBHOOK_SECRET"), ex.getMessage());
