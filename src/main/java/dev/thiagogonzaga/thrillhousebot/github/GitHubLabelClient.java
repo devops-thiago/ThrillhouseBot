@@ -19,10 +19,12 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.List;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 /** GitHub REST endpoints for reading a repository's labels and applying them to a PR. */
 @RegisterRestClient(configKey = "github-api")
+@RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubLabelClient {
 
   @GET

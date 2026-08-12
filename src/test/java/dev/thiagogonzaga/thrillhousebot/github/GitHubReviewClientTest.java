@@ -18,7 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -29,8 +31,11 @@ import static org.mockito.Mockito.when;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.CreatePullRequestCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.CreateReviewRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestCommentResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReplyToReviewCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -251,5 +256,66 @@ class GitHubReviewClientTest {
     var body = "a normal reply";
 
     assertSame(body, new ReplyToReviewCommentRequest(body).body());
+  }
+
+  /**
+   * A 403 that GitHub sends while throttling a write, carrying a {@code Retry-After} of zero so the
+   * backoff is real but instant. {@link GitHubWriteRetryTest} pins the waiting itself.
+   */
+  private static WebApplicationException throttledNow() {
+    return new WebApplicationException(
+        Response.status(403)
+            .header("Retry-After", "0")
+            .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
+            .build());
+  }
+
+  @Test
+  void createReviewRepostsAThrottledReviewRatherThanLosingTheGeneration() {
+    var client = mock(GitHubReviewClient.class);
+    when(client.createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        .thenCallRealMethod();
+    var request = new CreateReviewRequest("sha", "the generated review", "COMMENT", List.of());
+    var posted = new ReviewResponse(7, "the generated review", "COMMENTED", "sha", null);
+    when(client.createReviewOnce("auth", "json", "o", "r", 7, request))
+        .thenThrow(throttledNow())
+        .thenReturn(posted);
+
+    assertSame(posted, client.createReview("auth", "json", "o", "r", 7, request));
+    verify(client, times(2)).createReviewOnce("auth", "json", "o", "r", 7, request);
+  }
+
+  @Test
+  void createPullRequestCommentRepostsAThrottledInlineFinding() {
+    var client = mock(GitHubReviewClient.class);
+    when(client.createPullRequestComment(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        .thenCallRealMethod();
+    var request =
+        new CreatePullRequestCommentRequest(
+            "sha", "the finding", "src/Foo.java", 12, "RIGHT", null, null);
+    var posted = new PullRequestCommentResponse(3, "the finding", "src/Foo.java", 12);
+    when(client.createPullRequestCommentOnce("auth", "json", "o", "r", 7, request))
+        .thenThrow(throttledNow())
+        .thenReturn(posted);
+
+    assertSame(posted, client.createPullRequestComment("auth", "json", "o", "r", 7, request));
+    verify(client, times(2)).createPullRequestCommentOnce("auth", "json", "o", "r", 7, request);
+  }
+
+  @Test
+  void replyToReviewCommentRepostsAThrottledReply() {
+    var client = mock(GitHubReviewClient.class);
+    when(client.replyToReviewComment(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), any()))
+        .thenCallRealMethod();
+    var request = new ReplyToReviewCommentRequest("the generated reply");
+    var posted = new PullRequestCommentResponse(5, "the generated reply", "src/Foo.java", 12);
+    when(client.replyToReviewCommentOnce("auth", "json", "o", "r", 7, 3L, request))
+        .thenThrow(throttledNow())
+        .thenReturn(posted);
+
+    assertSame(posted, client.replyToReviewComment("auth", "json", "o", "r", 7, 3L, request));
+    verify(client, times(2)).replyToReviewCommentOnce("auth", "json", "o", "r", 7, 3L, request);
   }
 }

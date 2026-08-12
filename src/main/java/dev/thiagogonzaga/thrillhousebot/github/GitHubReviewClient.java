@@ -21,21 +21,42 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.ArrayList;
 import java.util.List;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 @RegisterRestClient(configKey = "github-api")
+@RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubReviewClient {
+
+  /** One HTTP attempt at posting a review. Callers want {@link #createReview} instead. */
   @POST
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  ReviewResponse createReview(
+  ReviewResponse createReviewOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("pullNumber") int pullNumber,
       CreateReviewRequest request);
+
+  /**
+   * Posts the review, backing off and reposting while GitHub is throttling (#568). The review body
+   * and every inline finding in it are the run's model output, so a throttled 403 here discards the
+   * whole generation. See {@link GitHubWriteRetry} for why the repeat cannot post it twice.
+   */
+  default ReviewResponse createReview(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      CreateReviewRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "a review on " + owner + "/" + repo + " #" + pullNumber,
+        () -> createReviewOnce(auth, accept, owner, repo, pullNumber, request));
+  }
 
   // GitHub serves 30 reviews per page by default; request the 100 max and bound the page walk.
   int REVIEWS_PER_PAGE = 100;
@@ -125,11 +146,14 @@ public interface GitHubReviewClient {
     return all;
   }
 
+  /**
+   * One HTTP attempt at an inline comment. Callers want {@link #createPullRequestComment} instead.
+   */
   @POST
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  PullRequestCommentResponse createPullRequestComment(
+  PullRequestCommentResponse createPullRequestCommentOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -137,11 +161,25 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       CreatePullRequestCommentRequest request);
 
+  /** Posts an inline comment, with the throttle backoff described on {@link GitHubWriteRetry}. */
+  default PullRequestCommentResponse createPullRequestComment(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      CreatePullRequestCommentRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "an inline comment on " + owner + "/" + repo + " #" + pullNumber,
+        () -> createPullRequestCommentOnce(auth, accept, owner, repo, pullNumber, request));
+  }
+
+  /** One HTTP attempt at a thread reply. Callers want {@link #replyToReviewComment} instead. */
   @POST
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments/{commentId}/replies")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  PullRequestCommentResponse replyToReviewComment(
+  PullRequestCommentResponse replyToReviewCommentOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -149,6 +187,22 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       @PathParam("commentId") long commentId,
       ReplyToReviewCommentRequest request);
+
+  /**
+   * Replies in a review thread, with the throttle backoff described on {@link GitHubWriteRetry}.
+   */
+  default PullRequestCommentResponse replyToReviewComment(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      long commentId,
+      ReplyToReviewCommentRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "a reply to comment " + commentId + " on " + owner + "/" + repo + " #" + pullNumber,
+        () -> replyToReviewCommentOnce(auth, accept, owner, repo, pullNumber, commentId, request));
+  }
 
   @DELETE
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews/{reviewId}")

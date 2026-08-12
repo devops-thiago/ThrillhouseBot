@@ -20,22 +20,45 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.ArrayList;
 import java.util.List;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 @RegisterRestClient(configKey = "github-api")
+@RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubCommentClient {
 
+  /** One HTTP attempt at creating a comment. Callers want {@link #createComment} instead. */
   @POST
   @Path("/repos/{owner}/{repo}/issues/{issueNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  CommentResponse createComment(
+  CommentResponse createCommentOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("issueNumber") int issueNumber,
       CreateCommentRequest request);
+
+  /**
+   * Posts a comment, backing off and reposting while GitHub is throttling (#568). This is the last
+   * step of a command that has already run its model call to completion, so a 403 from GitHub's
+   * content-creation secondary rate limit used to discard a finished, paid-for generation outright
+   * — 7 of 56 responses in the burst that motivated this. {@link GitHubWriteRetry} repeats the post
+   * only on a positively identified throttle, never on an ambiguous failure that might already have
+   * created the comment, so no reply is ever posted twice.
+   */
+  default CommentResponse createComment(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int issueNumber,
+      CreateCommentRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "a comment on " + owner + "/" + repo + " #" + issueNumber,
+        () -> createCommentOnce(auth, accept, owner, repo, issueNumber, request));
+  }
 
   // GitHub serves 30 issue comments per page by default; 100 is the maximum.
   int COMMENTS_PER_PAGE = 100;
@@ -85,17 +108,35 @@ public interface GitHubCommentClient {
       @PathParam("repo") String repo,
       @PathParam("issueNumber") int issueNumber);
 
+  /** One HTTP attempt at editing a comment. Callers want {@link #updateComment} instead. */
   @PATCH
   @Path("/repos/{owner}/{repo}/issues/comments/{commentId}")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  CommentResponse updateComment(
+  CommentResponse updateCommentOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("commentId") long commentId,
       CreateCommentRequest request);
+
+  /**
+   * Edits a comment, with the same throttle backoff {@link #createComment} gets. Editing the bot's
+   * existing summary in place carries the regenerated markdown of a superseded round, so losing it
+   * to a throttle leaves the PR showing a summary that describes code the diff no longer has.
+   */
+  default CommentResponse updateComment(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      long commentId,
+      CreateCommentRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "an edit of comment " + commentId + " on " + owner + "/" + repo,
+        () -> updateCommentOnce(auth, accept, owner, repo, commentId, request));
+  }
 
   record CreateCommentRequest(String body) {
     public CreateCommentRequest {
