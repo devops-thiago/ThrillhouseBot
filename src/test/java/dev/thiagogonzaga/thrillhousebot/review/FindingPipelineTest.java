@@ -2138,6 +2138,40 @@ class FindingPipelineTest {
         captor.getValue().changedFiles());
   }
 
+  /**
+   * A file skipped at the review's token spend ceiling is recorded as runtime-uncovered so it holds
+   * approval like any uncovered file, but its cause is a deliberate stop rather than a call that
+   * failed. The posted disclosure already names the ceiling and its knob; the summary overview must
+   * agree, or the two surfaces state different causes for the same file and the summary model is
+   * told the wrong one.
+   */
+  @Test
+  void theOverviewNamesTheSpendCeilingForAFileSkippedAtIt() {
+    var session = ReviewSession.create("owner/repo", 1, "Ceiling PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "d", "", "", "", "", "");
+    var plan = multiBatchPlan();
+    plan.recordSpendCeilingSkippedFiles(List.of("b.java"));
+    when(budgetPlanner.perCallInputBudget()).thenReturn(Integer.MAX_VALUE);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    var changedFiles = captor.getValue().changedFiles();
+    assertTrue(
+        changedFiles.contains(
+            "b.java (not reviewed — skipped at the review's token spend ceiling"
+                + " (REVIEW_MAX_TOKENS_PER_REVIEW))"),
+        changedFiles);
+    assertFalse(
+        changedFiles.contains("b.java (not reviewed — the review call for it did not complete"),
+        () -> "the ceiling skip must not be disclosed as a failed call: " + changedFiles);
+  }
+
   /** With room for the header, the tail is still rolled up — by file count, and only files. */
   @Test
   void aClampedOverviewKeepsItsScopeHeaderAndCountsOnlyTheDroppedFiles() {

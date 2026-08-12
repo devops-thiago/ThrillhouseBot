@@ -245,6 +245,23 @@ class ReviewResultTest {
         "a stored review body keeps its surrounding whitespace");
   }
 
+  /**
+   * The bodies this recognizer reads were written by whichever release was deployed when the round
+   * ran, so on a release that changes the sentence the stored bodies still carry the old wording.
+   * Failing to recognize one hands the bot its own status prose back as a previous finding — #455's
+   * failure mode — for every round until a fresh one overwrites the body.
+   */
+  @Test
+  void isUnresolvedPreviousMessageShouldMatchThePreviousReleasesWording() {
+    var legacy =
+        "No new issues in this revision, but 3 previous finding(s) remain unresolved — fix them,"
+            + " or reply on their review thread (where one exists) with why they are deferred.";
+
+    assertTrue(
+        ReviewResult.isUnresolvedPreviousMessage(legacy),
+        "a body written by the previously deployed release is still the bot's own prose");
+  }
+
   @Test
   void coverageGapClauseNamesTheSpendCeilingSeparatelyFromTheBudgetOmissions() {
     // #499: files skipped because the review's token spend ceiling was reached have a different

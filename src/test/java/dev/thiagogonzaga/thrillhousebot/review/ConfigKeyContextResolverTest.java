@@ -509,6 +509,32 @@ class ConfigKeyContextResolverTest {
     }
 
     @Test
+    void shouldRenderADefinitionStartingExactlyAtThePreviousWindowsLastLine() {
+      // The first match (line 1) renders lines 1..3; the second (line 4) is CONTEXT_LINES_AFTER + 1
+      // lines later, so only its LEADING CONTEXT line overlaps the previous window — the definition
+      // itself was never rendered. Gating on the window start instead of the match's own line
+      // dropped it from the prompt entirely.
+      var lines =
+          new String[] {
+            "a.b.dedup-ttl=${WEBHOOK_DEDUP_TTL:1h}",
+            "filler",
+            "filler",
+            "c.d=${WEBHOOK_DEDUP_TTL:2h}",
+            "filler",
+            "filler"
+          };
+
+      var snippets = ConfigKeyContextResolver.snippetsFor("app.properties", lines, TOKEN);
+
+      assertEquals(2, snippets.size(), () -> "the second definition must be rendered: " + snippets);
+      assertTrue(snippets.get(0).contains("1h"), snippets::toString);
+      assertTrue(snippets.get(1).contains("2h"), snippets::toString);
+      assertFalse(
+          snippets.get(1).contains("    3 |"),
+          () -> "a line the previous snippet already showed must not be repeated: " + snippets);
+    }
+
+    @Test
     void shouldDropBlankBoundaryLinesAndTruncateAnOversizedSnippet() {
       var huge =
           "x=${WEBHOOK_DEDUP_TTL:"

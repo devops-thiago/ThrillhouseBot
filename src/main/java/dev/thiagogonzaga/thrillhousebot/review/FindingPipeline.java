@@ -1194,10 +1194,20 @@ public class FindingPipeline {
     for (var name : plan.omittedFiles()) {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
     }
+    // A file skipped at the spend ceiling is recorded as runtime-uncovered too (it holds approval
+    // like any uncovered file), but its cause is a deliberate stop, not a call that failed. The
+    // posted disclosure already names the ceiling (ReviewResult.coverageGapClause); labelling it a
+    // transient failure here would leave the two surfaces disagreeing about the same files, and
+    // this is the one the summary model reads.
+    var ceilingSkipped = Set.copyOf(plan.spendCeilingSkippedFiles());
     for (var name : plan.runtimeUncoveredFiles()) {
       sb.append(name)
           .append(
-              " (not reviewed — the review call for it did not complete; treated as uncovered)\n");
+              ReviewDiffFormatter.namesContain(ceilingSkipped, name)
+                  ? " (not reviewed — skipped at the review's token spend ceiling"
+                      + " (REVIEW_MAX_TOKENS_PER_REVIEW))\n"
+                  : " (not reviewed — the review call for it did not complete; treated as"
+                      + " uncovered)\n");
     }
     return new ChangedFilesOverview(header.toString(), sb.toString());
   }
