@@ -234,6 +234,32 @@ class GitHubWriteRetryTest {
   }
 
   @Test
+  void everyAttemptWaitsForItsPacingSlotIncludingTheRepeats() {
+    var paced = new ArrayList<Duration>();
+    var calls = new AtomicInteger();
+    var pacedRetry =
+        new GitHubWriteRetry(
+            slept::add,
+            () -> Instant.ofEpochSecond(1_800_000_000L),
+            new GitHubWritePacer(
+                Duration.ofSeconds(1), Duration.ofSeconds(60), paced::add, () -> 0L));
+
+    var result =
+        pacedRetry.call(
+            "a comment on o/r #7",
+            () -> {
+              if (calls.incrementAndGet() < 3) {
+                throw throttled("Retry-After", "1");
+              }
+              return "posted";
+            });
+
+    // A repeat is a content-creating call too, so it queues rather than jumping the limiter.
+    assertEquals("posted", result);
+    assertEquals(List.of(Duration.ofSeconds(1), Duration.ofSeconds(2)), paced);
+  }
+
+  @Test
   void anInterruptedBackoffStopsImmediatelyAndKeepsTheInterrupt() {
     var calls = new AtomicInteger();
     var interrupting =

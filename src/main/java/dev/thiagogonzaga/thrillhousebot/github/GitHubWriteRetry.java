@@ -69,16 +69,24 @@ public final class GitHubWriteRetry {
     void sleep(Duration delay) throws InterruptedException;
   }
 
-  /** The instance production uses: real sleeping, real clock. */
+  /** The instance production uses: real sleeping, real clock, the shared write pacer. */
   static final GitHubWriteRetry DEFAULT =
-      new GitHubWriteRetry(delay -> Thread.sleep(delay.toMillis()), Instant::now);
+      new GitHubWriteRetry(
+          delay -> Thread.sleep(delay.toMillis()), Instant::now, GitHubWritePacer.DEFAULT);
 
   private final Sleeper sleeper;
   private final Supplier<Instant> clock;
+  private final GitHubWritePacer pacer;
 
+  /** A retry that only backs off, for the tests that pin the backoff rather than the pacing. */
   GitHubWriteRetry(Sleeper sleeper, Supplier<Instant> clock) {
+    this(sleeper, clock, GitHubWritePacer.NONE);
+  }
+
+  GitHubWriteRetry(Sleeper sleeper, Supplier<Instant> clock, GitHubWritePacer pacer) {
     this.sleeper = sleeper;
     this.clock = clock;
+    this.pacer = pacer;
   }
 
   /**
@@ -87,11 +95,16 @@ public final class GitHubWriteRetry {
    * retryable or the budget is spent, so every existing caller keeps the exception type and the
    * fail-soft handling it already has.
    *
+   * <p>Every attempt — the first one included — waits for its slot in the shared {@link
+   * GitHubWritePacer} first, so a burst is spaced out before GitHub has to refuse it (#579) and the
+   * budget below is left for the throttling this cannot prevent.
+   *
    * @param operation what is being posted, for the log — never credentials or comment text
    */
   public <T> T call(String operation, Supplier<T> operationCall) {
     for (int attempt = 1; ; attempt++) {
       try {
+        pacer.acquire(operation);
         return operationCall.get();
       } catch (WebApplicationException e) {
         var delay = retryDelay(operation, e, attempt);
