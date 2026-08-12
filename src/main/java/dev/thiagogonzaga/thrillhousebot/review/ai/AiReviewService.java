@@ -22,6 +22,7 @@ import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane;
 import io.quarkiverse.langchain4j.runtime.aiservice.QuarkusAiServiceTokenStream;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -74,7 +75,7 @@ public class AiReviewService {
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
-    return runWithRetries(session, () -> reviewStream(inputs), true);
+    return runWithRetries(session, () -> reviewStream(inputs), true, ModelLane.ACTIVE);
   }
 
   /**
@@ -88,7 +89,7 @@ public class AiReviewService {
       ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.batch(session, batchIndex, batchCount));
-    return runWithRetries(session, () -> reviewStream(inputs), false);
+    return runWithRetries(session, () -> reviewStream(inputs), false, ModelLane.ACTIVE);
   }
 
   /**
@@ -96,27 +97,23 @@ public class AiReviewService {
    * PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
    * response carries the summary and previous-findings status (its findings list is empty). Runs on
    * the {@code concise} named model — the response is one fixed-shape object, so it carries the
-   * concise cap rather than the batch review's response allowance.
+   * concise cap rather than the batch review's response allowance. That binding is declared here as
+   * the call's {@link ModelLane} and travels to the truncation site, so a cut summary states {@code
+   * REVIEW_CONCISE_MAX_OUTPUT_TOKENS} from the outset instead of being raised with the active
+   * model's wording and re-marked afterwards (#581).
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
-    try {
-      return runWithRetries(
-          session,
-          () ->
-              prSummarizer.summarizeStream(
-                  inputs.prContext(),
-                  inputs.findings(),
-                  inputs.changedFiles(),
-                  inputs.previousFindings(),
-                  inputs.repoInstructions()),
-          false);
-    } catch (AiResponseTruncatedException e) {
-      // This call runs on the concise named model, so the cap that cut it is
-      // REVIEW_CONCISE_MAX_OUTPUT_TOKENS — mark the failure so downstream copy names that knob
-      // instead of only the active model's max-output-tokens. Rethrown outside the retry loop,
-      // which already declined to retry, so the no-retry contract is untouched.
-      throw e.implicatingConciseModel();
-    }
+    return runWithRetries(
+        session,
+        () ->
+            prSummarizer.summarizeStream(
+                inputs.prContext(),
+                inputs.findings(),
+                inputs.changedFiles(),
+                inputs.previousFindings(),
+                inputs.repoInstructions()),
+        false,
+        ModelLane.CONCISE);
   }
 
   private TokenStream reviewStream(PromptInputs inputs) {
@@ -131,7 +128,10 @@ public class AiReviewService {
   }
 
   private ReviewResponse runWithRetries(
-      ReviewSession session, Supplier<TokenStream> streamFactory, boolean broadcastTokens) {
+      ReviewSession session,
+      Supplier<TokenStream> streamFactory,
+      boolean broadcastTokens,
+      ModelLane lane) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
@@ -150,7 +150,7 @@ public class AiReviewService {
       }
 
       try {
-        return streamOnce(session, streamFactory, attempt, broadcastTokens);
+        return streamOnce(session, streamFactory, attempt, broadcastTokens, lane);
       } catch (AiResponseTruncatedException e) {
         // Deterministic: the next attempt sends the identical prompt against the identical cap and
         // is cut at the identical point. Retrying only bills the same failure again.
@@ -201,7 +201,8 @@ public class AiReviewService {
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       int attempt,
-      boolean broadcastTokens) {
+      boolean broadcastTokens,
+      ModelLane lane) {
     var result = new CompletableFuture<ReviewResponse>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
@@ -223,7 +224,8 @@ public class AiReviewService {
           .onPartialResponse(
               token -> handlePartialToken(token, buffer, flushStream, cancelled, lastFlushNanos))
           .onCompleteResponse(
-              response -> handleCompleteResponse(response, result, buffer, flushStream, cancelled))
+              response ->
+                  handleCompleteResponse(response, result, buffer, flushStream, cancelled, lane))
           // langchain4j requires exactly one of onError/ignoreErrors; start() rejects both.
           .onError(error -> handleStreamError(error, result, flushStream, cancelled))
           .start();
@@ -276,7 +278,8 @@ public class AiReviewService {
       CompletableFuture<ReviewResponse> result,
       StreamBuffer buffer,
       Runnable flushStream,
-      AtomicBoolean cancelled) {
+      AtomicBoolean cancelled,
+      ModelLane lane) {
     if (cancelled.get()) {
       return;
     }
@@ -290,15 +293,16 @@ public class AiReviewService {
       if (response.finishReason() == FinishReason.LENGTH) {
         // The buffered partial text travels with the exception: it is well-formed up to the cut,
         // and the disclose step can salvage its complete leading elements (#500) instead of
-        // discarding output that was already paid for.
+        // discarding output that was already paid for. The remedy wording and the concise flag
+        // both come from the call's lane (#581) — this site used to state the active model's knob
+        // unconditionally and let the summary lane re-mark the flag afterwards, which left a
+        // concise-model truncation naming a cap that does not bound it.
         result.completeExceptionally(
-            new AiResponseTruncatedException(
+            lane.truncation(
                 "Model stopped at its response-length cap (finish_reason=length) after "
                     + text.length()
-                    + " characters, so the response is incomplete. Raise the active model's"
-                    + " max-output-tokens, or leave it unset to use the provider default.",
-                text,
-                false));
+                    + " characters, so the response is incomplete.",
+                text));
         return;
       }
       result.complete(parser.parse(text));

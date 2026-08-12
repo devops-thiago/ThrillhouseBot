@@ -68,6 +68,20 @@ public final class AiResponses {
     String remedy() {
       return remedy;
     }
+
+    /**
+     * The truncation to raise for a call on this lane: {@code detail} states what was cut and this
+     * lane appends the remedy and sets the {@linkplain
+     * AiResponseTruncatedException#conciseModelImplicated() concise flag}. Both come from this one
+     * source so they cannot disagree (#581) — a caller that wrote its own remedy text and then
+     * patched the flag afterwards produced an exception telling the operator to raise a knob that
+     * its own flag says does not cap the call. {@code partialBody} is the text the call had
+     * produced before the cut — {@link Result#content()} on the blocking path, the buffered stream
+     * on the streaming one (#580) — and stays {@code null} only for a caller that holds none.
+     */
+    AiResponseTruncatedException truncation(String detail, String partialBody) {
+      return new AiResponseTruncatedException(detail + " " + remedy, partialBody, this == CONCISE);
+    }
   }
 
   /**
@@ -101,13 +115,11 @@ public final class AiResponses {
       return null;
     }
     if (result.finishReason() == FinishReason.LENGTH) {
-      throw new AiResponseTruncatedException(
+      throw lane.truncation(
           what
               + " stopped at the model's response-length cap (finish_reason=length), so the"
-              + " response is incomplete. "
-              + lane.remedy(),
-          result.content(),
-          lane == ModelLane.CONCISE);
+              + " response is incomplete.",
+          result.content());
     }
     return result.content();
   }
