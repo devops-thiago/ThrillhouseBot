@@ -510,9 +510,13 @@ model's entry is read, so you can keep entries for every model you use and
 switch `AI_MODEL` freely:
 
 ```properties
-# Input hard cap (the model's context window). The effective review budget is
-# min(REVIEW_MAX_INPUT_TOKENS, cap); models without an entry get a 128000 cap.
+# Input hard cap. The effective review budget is min(REVIEW_MAX_INPUT_TOKENS,
+# cap); models without an entry get a 128000 cap.
 thrillhousebot.ai.models.deepseek-chat.max-input-tokens=64000
+# The model's total context window. On a shared window the prompt and the
+# completion are both charged to it, so boot fails when max-input-tokens +
+# max-output-tokens do not fit inside it. Omit it and the ceiling isn't checked.
+thrillhousebot.ai.models.deepseek-chat.context-tokens=128000
 # Per-model overrides of REVIEW_OUTPUT_BUFFER_TOKENS / REVIEW_TOKEN_SAFETY_MARGIN
 thrillhousebot.ai.models.deepseek-chat.output-buffer-tokens=8192
 thrillhousebot.ai.models.deepseek-chat.token-safety-margin=0.9
@@ -523,9 +527,10 @@ thrillhousebot.ai.models.deepseek-chat.max-output-tokens=8192
 thrillhousebot.ai.models.deepseek-chat.frequency-penalty=0.1
 thrillhousebot.ai.models.deepseek-chat.presence-penalty=0.1
 thrillhousebot.ai.models.deepseek-chat.seed=42
-# Set true only when the model's response allowance is separate from its input
-# window (1M in with 384K out on top, rather than 384K carved out of the 1M)
-thrillhousebot.ai.models.deepseek-v4-flash.separate-output-budget=true
+# Set true only when the provider really bills the response outside the context
+# window (1M in with 384K out on top, rather than 384K carved out of the 1M) —
+# it switches off both the reservation and the context-tokens ceiling
+thrillhousebot.ai.models.some-separate-budget-model.separate-output-budget=true
 ```
 
 Notes:
@@ -534,6 +539,15 @@ Notes:
   stays the spend knob; the per-model value keeps it from overshooting the
   model's real window. To use a large-context model beyond 128k, raise both.
   Startup logs a warning whenever the cap lowers your configured budget.
+- **`context-tokens` is the window itself**, and declaring it is what lets the
+  bot refuse an impossible request instead of paying for one. On a shared
+  window the provider charges the prompt *and* the completion to that one
+  context, so boot fails when `max-input-tokens + max-output-tokens` exceed it,
+  and again when your effective budget (`REVIEW_MAX_INPUT_TOKENS` clamped by the
+  cap) plus the largest response cap in play — `max-output-tokens` or
+  `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` — exceeds it. Without it, an over-large
+  pair is only discovered when the provider rejects every call for length.
+  It is optional: a model that doesn't declare one is simply not checked.
 - **Quote keys with `.` or `/`** (`thrillhousebot.ai.models."gpt-5.5".…`), the
   same rule as the pricing map. Override via env — hyphen-only keys use underscores
   (`THRILLHOUSEBOT_AI_MODELS_DEEPSEEK_V4_PRO_MAX_INPUT_TOKENS=1000000`); dotted keys use the
@@ -576,11 +590,15 @@ Notes:
   `output-buffer-tokens` out of the input budget, and the buffer must cover
   `max-output-tokens`. Set it `true` for a model that publishes a response
   allowance *on top of* its input window rather than inside it — then the
-  budgeter stops reserving (the response never draws on the diff budget) and the
-  buffer no longer has to cover the cap. Getting it wrong is expensive in one
-  direction and unbootable in the other, so it is explicit rather than inferred:
-  a 384000-token cap on a 1M window silently costs ~40% of every call's diff
-  budget if the model is wrongly marked shared.
+  budgeter stops reserving (the response never draws on the diff budget), the
+  buffer no longer has to cover the cap, and the completion stops counting
+  against `context-tokens`. Getting it wrong is expensive in one direction and
+  unbootable in the other, so it is explicit rather than inferred: a
+  384000-token cap on a 1M window silently costs ~40% of every call's diff
+  budget if the model is wrongly marked shared — while marking a genuinely
+  shared model separate turns off every guard and the provider rejects the
+  calls instead, which is how `deepseek-v4-flash` shipped its wrong pair.
+  Verify against the provider's own documented window before setting it.
 - **`seed`** is a best-effort determinism hint (same seed + same parameters aims
   for the same sampling) on providers that support it; unsupported providers
   ignore it. For deterministic reviews, prefer a low `temperature` first.

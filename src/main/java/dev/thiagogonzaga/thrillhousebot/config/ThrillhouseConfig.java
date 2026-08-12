@@ -666,13 +666,28 @@ public interface ThrillhouseConfig {
       int DEFAULT_MAX_INPUT_TOKENS = 128_000;
 
       /**
-       * Hard cap on the per-call input tokens for this model — its context window. The effective
-       * review budget is the smaller of {@code thrillhousebot.review.max-input-tokens} and this cap
-       * ({@link #DEFAULT_MAX_INPUT_TOKENS} when absent), so a raised global budget can never
-       * overshoot a model's real window unless the operator raises the cap too.
+       * Hard cap on the per-call input tokens for this model. The effective review budget is the
+       * smaller of {@code thrillhousebot.review.max-input-tokens} and this cap ({@link
+       * #DEFAULT_MAX_INPUT_TOKENS} when absent), so a raised global budget can never overshoot a
+       * model's real window unless the operator raises the cap too.
        */
       @WithName("max-input-tokens")
       Optional<Integer> maxInputTokens();
+
+      /**
+       * The model's total context window — the pool the provider counts a request against. On a
+       * shared window (the default contract, {@link #separateOutputBudget()} off) prompt
+       * <em>and</em> completion are both charged to it, so {@link #maxInputTokens()} plus {@link
+       * #maxOutputTokens()} must fit inside it or every call is rejected as too long no matter how
+       * well the prompt was budgeted; {@link StartupConfigValidator} refuses such a boot (#562).
+       *
+       * <p>Absent means "not declared", and the ceiling is simply not checked — a model with no
+       * entry keeps exactly the previous behaviour. Distinct from {@link #maxInputTokens()} on
+       * purpose: that is how much of the window the review may spend on input, this is how much
+       * window there is.
+       */
+      @WithName("context-tokens")
+      Optional<Integer> contextTokens();
 
       /**
        * Per-model override of {@code thrillhousebot.review.output-buffer-tokens} — tokens held back
@@ -731,7 +746,9 @@ public interface ThrillhouseConfig {
        *
        * <p>Deliberately explicit rather than inferred from a model declaring both caps: getting
        * this wrong silently picks the wrong arithmetic, and an operator should be able to read
-       * which contract a model is on straight from its config.
+       * which contract a model is on straight from its config. Claiming it for a model whose
+       * provider actually shares the window is the expensive direction — the caps stop being held
+       * to {@link #contextTokens()}, and the provider rejects every call instead (#562).
        */
       @WithName("separate-output-budget")
       Optional<Boolean> separateOutputBudget();
