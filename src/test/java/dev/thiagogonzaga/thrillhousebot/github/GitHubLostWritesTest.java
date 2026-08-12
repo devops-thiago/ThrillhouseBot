@@ -220,6 +220,55 @@ class GitHubLostWritesTest {
   }
 
   @Test
+  void aRegistryFullOfAlreadyDeliveredNoticesStillHasRoomForANewLoss() {
+    var carried = new ArrayList<String>();
+
+    // Both of the two slots this fixture allows are used and then settled: each pull request lost
+    // a post and each was told about it on its next comment.
+    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+    post(PR, carried, null);
+    assertThrows(WebApplicationException.class, () -> post(OTHER_PR, carried, throttled()));
+    post(OTHER_PR, carried, null);
+
+    var third = new GitHubLostWrites.Target("owner", "repo", 9);
+    assertThrows(WebApplicationException.class, () -> post(third, carried, throttled()));
+    post(third, carried, null);
+
+    // Nothing is owed to either of the first two any more, so holding their slots until the TTL
+    // sweeps them would spend the cap on settled bookkeeping and silence a pull request that has
+    // genuinely lost a reply — the same silence, reached from the other end.
+    assertTrue(
+        carried.getLast().contains("An earlier reply"),
+        () ->
+            "the registry was full of already-delivered notices, so the new loss was only logged;"
+                + " the next comment carried: \""
+                + carried.getLast()
+                + "\"");
+  }
+
+  @Test
+  void aCarrierLeftOverFromASettledEntryCannotRetireALaterLoss() {
+    var carried = new ArrayList<String>();
+    assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));
+
+    lost.carrying(
+        PR,
+        staleNotice -> {
+          carried.add(staleNotice);
+          // A second post delivers the same notice and settles the entry, then a later loss starts
+          // a fresh one. Both runs count one loss, so only the entry's identity separates them.
+          post(PR, carried, null);
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          return "posted";
+        });
+    post(PR, carried, null);
+
+    // The stale carrier never carried the later loss, so completing must not retire it.
+    assertTrue(carried.get(3).contains("An earlier reply"), carried.get(3));
+  }
+
+  @Test
   void aFloodOfLosingPullRequestsCannotGrowTheRegistryWithoutEnd() {
     var carried = new ArrayList<String>();
     assertThrows(WebApplicationException.class, () -> post(PR, carried, throttled()));

@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -57,7 +58,9 @@ public final class GitHubLostWrites {
   private static final Logger log = LoggerFactory.getLogger(GitHubLostWrites.class);
 
   /**
-   * How many pull requests may hold a pending notice at once, so the map cannot grow without end.
+   * How many pull requests may hold an outstanding notice at once, so the map cannot grow without
+   * end. An entry is dropped as soon as its notice has been delivered, so a slot is only held while
+   * a pull request is genuinely still owed one.
    */
   static final int DEFAULT_MAX_TARGETS = 200;
 
@@ -73,30 +76,41 @@ public final class GitHubLostWrites {
   }
 
   /**
-   * What this pull request has lost, as two running totals and the time of the last loss.
+   * What this pull request has lost, as two running totals and the time of the last loss, under an
+   * id identifying this run of losses.
    *
-   * <p>They are watermarks rather than a single "outstanding" count on purpose. Two posts on the
-   * same pull request can be in flight at once, each having read the same pending total, and a
+   * <p>The totals are watermarks rather than a single "outstanding" count on purpose. Two posts on
+   * the same pull request can be in flight at once, each having read the same pending total, and a
    * fresh loss can land between their reads and their completions. Subtracting each carrier's
    * snapshot from a shared counter double-counts that overlap and can retire a loss neither post
    * actually announced — the user then never hears about it, which is the failure #578 exists to
    * remove. Advancing {@code announced} monotonically towards {@code lost} instead can only ever
    * repeat a notice, never drop one, and repeating is the harmless direction.
+   *
+   * <p>{@code id} exists because a fully announced entry is dropped rather than kept at zero. Both
+   * totals restart from scratch when a later loss recreates the entry, so a carrier still in flight
+   * from the previous run holds a snapshot whose {@code lost} may equal the new run's — and would
+   * retire it. Comparing the id makes that stale carrier a no-op, which is what lets the entry be
+   * dropped at all.
    */
-  private record Loss(long lost, long announced, Instant at) {
+  private record Loss(long id, long lost, long announced, Instant at) {
     int pending() {
       return (int) (lost - announced);
     }
   }
 
-  /** Stands in for a pull request with nothing pending, so no code path handles a null loss. */
-  private static final Loss NOTHING = new Loss(0, 0, Instant.EPOCH);
+  /**
+   * Stands in for a pull request with nothing pending, so no code path handles a null loss. Its id
+   * matches no real entry — {@link #ids} only ever hands out positive ones.
+   */
+  private static final Loss NOTHING = new Loss(0, 0, 0, Instant.EPOCH);
 
   /** The process-wide registry: a loss recorded on one code path is announced by any other. */
   static final GitHubLostWrites SHARED =
       new GitHubLostWrites(Instant::now, DEFAULT_MAX_TARGETS, DEFAULT_TTL);
 
   private final Map<Target, Loss> pending = new ConcurrentHashMap<>();
+  private final AtomicLong ids = new AtomicLong();
   private final Supplier<Instant> clock;
   private final int maxTargets;
   private final Duration ttl;
@@ -173,9 +187,15 @@ public final class GitHubLostWrites {
   }
 
   /**
-   * Marks everything the delivered post carried as announced. The watermark only moves forward, so
-   * a second carrier that read the same snapshot cannot retire a loss recorded after it — the entry
-   * is left in place with the newer loss still pending rather than being cleared.
+   * Marks everything the delivered post carried as announced, and drops the entry once nothing is
+   * left pending on it so its slot goes back to the registry immediately rather than sitting
+   * settled until the TTL sweeps it.
+   *
+   * <p>Two guards decide whether this delivery counts. The id must still match, or this carrier is
+   * stale — the entry it read was already announced and dropped, and what sits here now is a later,
+   * unrelated run of losses it never carried. The watermark must still be behind, or a second
+   * carrier that read the same snapshot would retire a loss recorded after it. Failing either one
+   * leaves the entry exactly as found.
    */
   private void announce(Target target, Loss carried) {
     if (carried.pending() == 0) {
@@ -183,10 +203,13 @@ public final class GitHubLostWrites {
     }
     pending.computeIfPresent(
         target,
-        (key, loss) ->
-            loss.announced() >= carried.lost()
-                ? loss
-                : new Loss(loss.lost(), carried.lost(), loss.at()));
+        (key, loss) -> {
+          if (loss.id() != carried.id() || loss.announced() >= carried.lost()) {
+            return loss;
+          }
+          var settled = new Loss(loss.id(), loss.lost(), carried.lost(), loss.at());
+          return settled.pending() == 0 ? null : settled;
+        });
   }
 
   private void remember(Target target) {
@@ -204,8 +227,8 @@ public final class GitHubLostWrites {
     var total =
         pending.merge(
             target,
-            new Loss(1, 0, now),
-            (old, one) -> new Loss(old.lost() + 1, old.announced(), now));
+            new Loss(ids.incrementAndGet(), 1, 0, now),
+            (old, one) -> new Loss(old.id(), old.lost() + 1, old.announced(), now));
     log.warn(
         "Lost a throttled post on {} — the next comment the bot lands there will say so ({} now"
             + " pending)",
