@@ -44,11 +44,12 @@ import java.util.regex.Pattern;
  * <p>Two texts state the same claim when they share a contiguous run of {@value #PHRASE_TOKENS}
  * content words, or when their content words overlap by {@value #OVERLAP_THRESHOLD} of the shorter
  * side. Polarity does not gate that test in general: it holds a pair back only when the two say the
- * same things with opposite polarity — one negates and neither names anything the other leaves out
- * — because such a pair scores as a perfect match while asserting opposite things. Two texts that
- * disagree on polarity and also differ in substance are still judged on their content. The overlap
- * arm needs {@value #MIN_OVERLAP_TOKENS} content words on the shorter side: below that the
- * coefficient is noise, and keeping both copies is the safe direction.
+ * same things with opposite polarity — one negates, and every content word of one side is present
+ * in the other, containment in either direction — because such a pair scores as a perfect match
+ * while asserting opposite things. Two texts that disagree on polarity but each name something the
+ * other leaves out are still judged on their content. The overlap arm needs {@value
+ * #MIN_OVERLAP_TOKENS} content words on the shorter side: below that the coefficient is noise, and
+ * keeping both copies is the safe direction.
  */
 final class SummarySurfaceDeduplicator {
 
@@ -173,12 +174,16 @@ final class SummarySurfaceDeduplicator {
 
   /**
    * True when the two make the same statement with opposite polarity: one negates and the other
-   * does not, and neither names anything the other leaves out. Such a pair scores as a perfect
-   * match on every similarity arm — the negator is not a content word, so it cannot move the score
-   * — while asserting the opposite of each other, which is a contradiction to surface, never a
-   * duplicate to delete. Polarity is only decisive here: two texts that also differ in substance
-   * are still judged on their content, so "the PR claims X, but the code cannot X" continues to
-   * collapse onto the finding that reports X missing.
+   * does not, and every content word of one side is present in the other. Containment in either
+   * direction counts, so a short negated claim lying wholly inside a longer affirmative one — "user
+   * input is not sanitized" against "user input is sanitized before it reaches the SQL query" — is
+   * caught as well; requiring the two word sets to match exactly would let that pair through and
+   * delete the shorter copy. Such a pair scores as a perfect match on every similarity arm — the
+   * negator is not a content word, so it cannot move the score — while asserting the opposite of
+   * each other, which is a contradiction to surface, never a duplicate to delete. Polarity is only
+   * decisive here: two texts that each name something the other leaves out are still judged on
+   * their content, so "the PR claims X, but the code cannot X" continues to collapse onto the
+   * finding that reports X missing.
    */
   private static boolean contradicts(Claim candidate, Set<String> candidateWords, Claim claim) {
     if (candidate.negated() == claim.negated()) {
