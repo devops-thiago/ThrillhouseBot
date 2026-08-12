@@ -58,12 +58,12 @@ class AiResponsesTest {
   void throwsOnALengthStopRatherThanReturningTheCutBody() {
     // Returning the partial would send it to a JSON parser, which reports "not valid JSON" — the
     // exact misdiagnosis this exists to prevent.
+    var cutShort = aiTruncated("{\"docs\":[{\"file\":\"A");
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    aiTruncated("{\"docs\":[{\"file\":\"A"), "X", ModelLane.ACTIVE));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "X", ModelLane.ACTIVE));
 
     assertTrue(
         thrown.getMessage().contains("max-output-tokens"),
@@ -72,12 +72,14 @@ class AiResponsesTest {
 
   @Test
   void namesTheActiveModelsCapForACallOnTheDefaultModel() {
+    var cutShort = aiTruncated("partial");
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    aiTruncated("partial"), "/improve assistant", ModelLane.ACTIVE));
+                    cutShort, "/improve assistant", ModelLane.ACTIVE));
 
     assertTrue(
         thrown.getMessage().contains("Raise the active model's max-output-tokens"),
@@ -92,14 +94,14 @@ class AiResponsesTest {
   void namesTheConciseCapForACallOnTheConciseModel() {
     // The concise named model never receives the active model's max-output-tokens, so telling the
     // operator to raise it would send them to a setting that cannot affect this call.
+    var cutShort = aiTruncated("{\"verdicts\":[{\"id");
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    aiTruncated("{\"verdicts\":[{\"id"),
-                    "Finding verification",
-                    ModelLane.CONCISE));
+                    cutShort, "Finding verification", ModelLane.CONCISE));
 
     assertTrue(
         thrown.getMessage().contains("raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
@@ -115,13 +117,14 @@ class AiResponsesTest {
     // was generated and billed. Dropping it here left every blocking lane with nothing to salvage
     // from, however much of its response had completed before the cut.
     var cut = "{\"verdicts\":[{\"id\":1,\"verdict\":\"valid\"},{\"id\":2,\"verd";
+    var cutShort = aiTruncated(cut);
 
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    aiTruncated(cut), "Finding verification", ModelLane.CONCISE));
+                    cutShort, "Finding verification", ModelLane.CONCISE));
 
     assertEquals(cut, thrown.partialBody(), "the paid, cut body must travel with the failure");
   }
@@ -132,13 +135,14 @@ class AiResponsesTest {
     // salvage machinery recovers the elements that closed. Pinned end to end because a body no
     // consumer could use would be no better than the null it replaced.
     var cut = "{\"verdicts\":[{\"id\":1,\"verdict\":\"valid\"},{\"id\":2,\"verd";
+    var cutShort = aiTruncated(cut);
 
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    aiTruncated(cut), "Finding verification", ModelLane.CONCISE));
+                    cutShort, "Finding verification", ModelLane.CONCISE));
 
     var salvaged =
         new TruncatedResponseSalvager(new ObjectMapper())
@@ -150,12 +154,14 @@ class AiResponsesTest {
 
   @Test
   void namesTheCallSoTheOperatorKnowsWhichCommandWasCutShort() {
+    var cutShort = aiTruncated("partial");
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    aiTruncated("partial"), "/improve assistant", ModelLane.ACTIVE));
+                    cutShort, "/improve assistant", ModelLane.ACTIVE));
 
     assertTrue(thrown.getMessage().startsWith("/improve assistant"), thrown.getMessage());
   }
