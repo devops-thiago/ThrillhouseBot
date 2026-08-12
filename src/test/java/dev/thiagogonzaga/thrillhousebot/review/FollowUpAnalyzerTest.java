@@ -2961,6 +2961,21 @@ class FollowUpAnalyzerTest {
             "a tab-spaced line range must not clear it",
             "@thrillhousebot resolved `src/A.java:1\t-\t3` — SQL injection",
             false),
+        // Copy-paste and locale-aware autocorrect put these in comment text; a separator the scan
+        // will not step over stops reading as a range.
+        arguments(
+            "a no-break-space-spaced line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 - 3` — SQL injection",
+            false),
+        arguments(
+            "a narrow-no-break-space-spaced line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 - 3` — SQL injection",
+            false),
+        // A list item on the next line is prose, not a range: newlines must not space a separator.
+        arguments(
+            "a dash opening the next line is not a range and still clears",
+            "@thrillhousebot resolved src/A.java:1\n- 3 of these are SQL injection",
+            true),
         // Everything a range scan must not swallow: prose that merely continues after the locator,
         // and a separator too far away or with nothing after it to be one.
         arguments(

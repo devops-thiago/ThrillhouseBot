@@ -803,9 +803,10 @@ public class FollowUpAnalyzer {
   private static final Pattern LOCATOR_SHAPE = Pattern.compile("(?<=\\S):\\d");
 
   /**
-   * How much whitespace may sit either side of a range's separator before the text stops reading as
-   * one range. A separator is spaced off its operands by a character or two at most; a longer run
-   * is two separate thoughts, and the bound keeps the scan over untrusted comment prose linear.
+   * How much horizontal space may sit either side of a range's separator before the text stops
+   * reading as one range. A separator is spaced off its operands by a character or two at most; a
+   * longer run is two separate thoughts, and the bound keeps the scan over untrusted comment prose
+   * linear.
    */
   private static final int MAX_RANGE_SPACING = 16;
 
@@ -972,14 +973,28 @@ public class FollowUpAnalyzer {
     return at < body.length() && Character.isDigit(body.charAt(at));
   }
 
-  /** Index of the first character at or after {@code from} that is not range spacing. */
+  /**
+   * Index of the first character at or after {@code from} that is not range spacing.
+   *
+   * <p>Spacing is every horizontal space, not just the ASCII one: a no-break space or a narrow
+   * no-break space reaches comment text through copy-paste and locale-aware autocorrect, and a
+   * separator this does not step over stops reading as a range and clears a finding the comment
+   * only named the start of. Line terminators are deliberately excluded even though {@link
+   * Character#isWhitespace} counts them — a {@code - 3} on the next line is a markdown list item,
+   * and reading it as a range would under-clear on ordinary prose rather than on a range.
+   */
   private static int skipSpacing(String body, int from) {
     var at = from;
     var limit = Math.min(body.length(), from + MAX_RANGE_SPACING);
-    while (at < limit && (body.charAt(at) == ' ' || body.charAt(at) == '\t')) {
+    while (at < limit && isHorizontalSpace(body.charAt(at))) {
       at++;
     }
     return at;
+  }
+
+  /** Whether {@code c} spaces text apart on one line. {@code isSpaceChar} misses only the tab. */
+  private static boolean isHorizontalSpace(char c) {
+    return Character.isSpaceChar(c) || c == '\t';
   }
 
   /**
