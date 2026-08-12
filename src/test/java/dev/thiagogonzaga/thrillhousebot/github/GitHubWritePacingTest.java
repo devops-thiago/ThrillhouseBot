@@ -29,6 +29,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -72,13 +73,16 @@ class GitHubWritePacingTest {
   }
 
   private GitHubCommentClient clientAnsweredBy(HttpHandler handler) throws IOException {
+    return startGitHub(handler).build(GitHubCommentClient.class);
+  }
+
+  private QuarkusRestClientBuilder startGitHub(HttpHandler handler) throws IOException {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/", handler);
     server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
     server.start();
     return QuarkusRestClientBuilder.newBuilder()
-        .baseUri(URI.create("http://127.0.0.1:" + server.getAddress().getPort()))
-        .build(GitHubCommentClient.class);
+        .baseUri(URI.create("http://127.0.0.1:" + server.getAddress().getPort()));
   }
 
   private static void respond(HttpExchange exchange, int status, String body) throws IOException {
@@ -120,6 +124,82 @@ class GitHubWritePacingTest {
     }
 
     assertEquals(BURST, arrivals.size(), "every comment still posted");
+    assertSpacedOut();
+  }
+
+  @Test
+  void everyContentCreatingCallIsPacedAndNotJustTheConversationComment() throws Exception {
+    var builder =
+        startGitHub(
+            exchange -> {
+              arrivals.add(System.nanoTime());
+              respond(exchange, 201, "{\"id\":1,\"html_url\":\"https://github.test/c/1\"}");
+            });
+    var comments = builder.build(GitHubCommentClient.class);
+    var reviews = builder.build(GitHubReviewClient.class);
+
+    // All five of the calls GitHub counts as content creation, fired at once. The triggering
+    // scenarios in #579 — a review posting many inline findings, several PRs reviewed at once —
+    // run through the review client, so pacing only the conversation comment would leave the burst
+    // this PR exists to prevent fully intact.
+    List<Callable<Object>> everyWrite =
+        List.of(
+            () ->
+                comments.createComment(
+                    "Bearer token",
+                    ACCEPT,
+                    "owner",
+                    "repo",
+                    1,
+                    new GitHubCommentClient.CreateCommentRequest("a reply")),
+            () ->
+                comments.updateComment(
+                    "Bearer token",
+                    ACCEPT,
+                    "owner",
+                    "repo",
+                    99L,
+                    new GitHubCommentClient.CreateCommentRequest("an edited summary")),
+            () ->
+                reviews.createReview(
+                    "Bearer token",
+                    ACCEPT,
+                    "owner",
+                    "repo",
+                    1,
+                    new GitHubReviewClient.CreateReviewRequest("sha", "a review", "COMMENT", null)),
+            () ->
+                reviews.createPullRequestComment(
+                    "Bearer token",
+                    ACCEPT,
+                    "owner",
+                    "repo",
+                    1,
+                    new GitHubReviewClient.CreatePullRequestCommentRequest(
+                        "sha", "an inline finding", "src/Main.java", 3, "RIGHT", null, null)),
+            () ->
+                reviews.replyToReviewComment(
+                    "Bearer token",
+                    ACCEPT,
+                    "owner",
+                    "repo",
+                    1,
+                    77L,
+                    new GitHubReviewClient.ReplyToReviewCommentRequest("a thread reply")));
+
+    var posted = new ArrayList<Future<Object>>();
+    try (var burst = Executors.newVirtualThreadPerTaskExecutor()) {
+      everyWrite.forEach(write -> posted.add(burst.submit(write)));
+      for (var write : posted) {
+        write.get(2, TimeUnit.MINUTES);
+      }
+    }
+
+    assertEquals(everyWrite.size(), arrivals.size(), "every write still reached GitHub");
+    assertSpacedOut();
+  }
+
+  private void assertSpacedOut() {
     var ordered = arrivals.stream().sorted().toList();
     var gaps = new ArrayList<Long>();
     for (int i = 1; i < ordered.size(); i++) {

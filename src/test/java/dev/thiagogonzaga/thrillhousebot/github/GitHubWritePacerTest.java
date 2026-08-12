@@ -133,6 +133,25 @@ class GitHubWritePacerTest {
         ONE_SECOND, GitHubWritePacer.configured("github-write-pacer-test.unset", ONE_SECOND));
   }
 
+  @Test
+  void theDocumentedBareZeroSurvivesTheConfigConverterAndReallyDisablesPacing() {
+    System.setProperty(PROBE_KEY, "0");
+
+    // application.properties tells operators GITHUB_WRITE_MIN_INTERVAL=0 disables pacing, and that
+    // promise runs through the config converter rather than through a Duration.ZERO handed to the
+    // constructor. Worth pinning: an unconvertible value in the mapped namespace is a validation
+    // error, so a converter that rejected a bare "0" would fail startup rather than disable
+    // anything.
+    var configured = GitHubWritePacer.configured(PROBE_KEY, ONE_SECOND);
+    assertEquals(Duration.ZERO, configured);
+
+    var pacer = new GitHubWritePacer(configured, ONE_MINUTE, waited::add, nanos::get);
+    pacer.acquire("a comment on o/r #7");
+    pacer.acquire("a comment on o/r #8");
+
+    assertEquals(List.of(), waited);
+  }
+
   @AfterEach
   void clearProbe() {
     System.clearProperty(PROBE_KEY);
