@@ -800,11 +800,17 @@ class PrReviewPromptsContentTest {
   }
 
   /**
-   * #638 rounds 4/5 — the same shape as #537 above, on two more dimensions. In go #40 the review
-   * read {@code WEBHOOKRELAY_ALLOWED_TOPICS}, filed a better bug (parsed but never applied) and
-   * never returned to the documentation question; in node #41 and java #43 it filed the deliberate
-   * unpinned-base-image bait on the Dockerfile and not the planted defect on the same file. Every
-   * miss was clean, so this is displacement while the artifact is in hand, not suppression.
+   * #638 rounds 4/5 — the same shape as #537 above, on two more dimensions: config-key
+   * documentation and config/IaC correctness, numbered 10 and 7 in this prompt. Issue #638 and the
+   * corpus briefs call the same two 9 and 6, numbering the corpus's own dimensions rather than the
+   * prompt's, so the tests below name each dimension and give both numbers where it matters — a
+   * bare "dimension 9" in this file already means the producer→consumer contract dimension.
+   *
+   * <p>In go #40 the review read {@code WEBHOOKRELAY_ALLOWED_TOPICS}, filed a better bug (parsed
+   * but never applied) and never returned to the documentation question; in node #41 and java #43
+   * it filed the deliberate unpinned-base-image bait on the Dockerfile and not the planted defect
+   * on the same file. Every miss was clean, so this is displacement while the artifact is in hand,
+   * not suppression.
    */
   @Test
   void aFindingOnAConfigKeyOrDeclarativeFileMustNotEndTheExaminationOfIt() {
@@ -865,9 +871,11 @@ class PrReviewPromptsContentTest {
   }
 
   /**
-   * #638 dimension 9 — the misses on python #39, angular #49, csharp #47, rust #42 and go #40 all
-   * define their key somewhere {@code ConfigKeyContextResolver} cannot reach ({@code Program.cs} is
-   * not even a supported extension; {@code main.go}, {@code main.py}, {@code Main.java} and {@code
+   * The config-key documentation dimension — 10 in this prompt, 9 in #638 and the corpus briefs.
+   *
+   * <p>Its misses on python #39, angular #49, csharp #47, rust #42 and go #40 all define their key
+   * somewhere {@code ConfigKeyContextResolver} cannot reach ({@code Program.cs} is not even a
+   * supported extension; {@code main.go}, {@code main.py}, {@code Main.java} and {@code
    * app-config.service.ts} are not config stems), so the section never renders and the dimension's
    * old {@code AND a "Config key definitions…" section supplies} gate closed it outright. The
    * self-check below already accepted a definition quoted from the diff; the dimension did not.
@@ -898,10 +906,12 @@ class PrReviewPromptsContentTest {
   }
 
   /**
-   * #638 dimension 6 — java #43 planted a {@code COPY} of a jar Maven never produces and round 4's
-   * python PR planted {@code COPY requirement.txt} against a committed {@code requirements.txt}.
-   * Both break {@code docker build} deterministically, and neither was among the defect shapes
-   * dimension 7 enumerated, which listed only schema/parse/constraint failures.
+   * The config/IaC correctness dimension — 7 in this prompt, 6 in #638 and the corpus briefs.
+   *
+   * <p>java #43 planted a {@code COPY} of a jar Maven never produces and round 4's python PR
+   * planted {@code COPY requirement.txt} against a committed {@code requirements.txt}. Both break
+   * {@code docker build} deterministically, and neither was among the defect shapes dimension 7
+   * enumerated, which listed only schema/parse/constraint failures.
    */
   @Test
   void configIacDimensionEnumeratesTheUnproducedArtifactReferenceShape() {
