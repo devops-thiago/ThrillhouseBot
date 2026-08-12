@@ -875,6 +875,58 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorAFindingThatDeniesTheSinkItNames() {
+    // The floor's two signals were matched independently anywhere in the text, so a finding that
+    // RULED OUT the sink still satisfied both: "sql injection" inside "no SQL injection", and the
+    // no-mitigation group inside "not concatenated but parameterized" — the very mitigation the
+    // sentence asserts. Raising such a finding to high is this floor's own failure mode pointed
+    // the other way, and at high confidence it would go on to block the merge.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Tenant filter reads awkwardly",
+                "The user input is not concatenated but parameterized, so no SQL injection is"
+                    + " possible; the naming is just hard to follow.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorAFindingThatDescribesTheMitigationAsPresent() {
+    // The other half of the same defect: no negated sink here, but the finding affirmatively
+    // states the value IS escaped. An absence claim about one layer ("unvalidated" at storage)
+    // must not floor the class when the text also says another layer neutralizes it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Profile.tsx",
+                12,
+                "Profile names are unvalidated before storage",
+                "React escapes them at render, so the XSS exposure is limited to the stored value"
+                    + " itself.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void leavesCriticalInjectionFindingsAndUnrelatedRatingsAlone() {
     // The floor only lifts, so a critical keeps its level; and it never fires unless the finding
     // states both halves — a named sink AND the absence of any sanitization.

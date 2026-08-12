@@ -126,6 +126,35 @@ public class FindingVerificationService {
               + "(sanitiz|escap|validat|parameteriz|encod)\\w*)",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * A finding that RULES THE SINK OUT rather than reporting it ("so there is no SQL injection",
+   * "not vulnerable to XSS"). Both floor signals are token matches, so such a sentence satisfies
+   * them out of its own negation — the sink name sits inside the denial, and a phrase like "not
+   * concatenated but parameterized" matches the absence group on the very mitigation it asserts.
+   * The gap is one word, so an assertion of the defect that merely contains a negation ("no
+   * protection against SQL injection") is not mistaken for a denial.
+   */
+  private static final Pattern SINK_DENIED =
+      Pattern.compile(
+          "\\b(no|not|never)\\s+(\\w+[\\s-]+){0,1}"
+              + "(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
+              + "|path traversal|directory traversal|vulnerab\\w*|exploitab\\w*)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A finding that states the mitigation IS present ("it is escaped on render", "React escapes
+   * them"). An absence claim about one layer must not floor the class when the same text says
+   * another layer neutralizes the value. Negated forms are excluded, so "is not escaped" and "was
+   * never sanitized" stay absence claims instead of defeating themselves.
+   */
+  private static final Pattern MITIGATION_ASSERTED =
+      Pattern.compile(
+          "\\b(is|are|was|were|gets|been|already)\\s+(?!(no|not|never)\\b)(\\w+[\\s-]+){0,1}"
+              + "(sanitiz|escap|validat|parameteriz|encod)(ed|es|ing)\\b"
+              + "|\\b(?!(no|not|never|nothing)\\b)\\w+\\s+"
+              + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
+          Pattern.CASE_INSENSITIVE);
+
   /** The floor an unmitigated-injection-sink finding may never publish below (#570). */
   private static final RiskLevel INJECTION_SINK_FLOOR = RiskLevel.HIGH;
 
@@ -329,9 +358,13 @@ public class FindingVerificationService {
    * class stops landing in the collapsed "Things to double-check" block in one framework and on the
    * diff in another.
    *
-   * <p>The trigger needs BOTH halves stated in the finding's own words, so it never fires on a
+   * <p>The trigger needs BOTH halves stated in the finding's own words, so it does not fire on a
    * mention of a sink in passing (a sink rendering a literal template) or on an unrelated finding
-   * that happens to say "unvalidated". A critical keeps its level: the floor lifts, never lowers.
+   * that happens to say "unvalidated". Both halves are token matches, though, so a sentence that
+   * RULES THE SINK OUT can satisfy them out of its own negation ("not concatenated but
+   * parameterized, so no SQL injection is possible"); two defeaters — a denied sink, and a
+   * mitigation the finding says IS present — suppress the floor for exactly those. A critical keeps
+   * its level: the floor lifts, never lowers.
    */
   static ReviewResponse floorInjectionSinkRisk(ReviewResponse response) {
     if (response.findings().isEmpty()) {
@@ -375,7 +408,13 @@ public class FindingVerificationService {
         (finding.title() == null ? "" : finding.title())
             + "\n"
             + (finding.description() == null ? "" : finding.description());
-    return namesInjectionSink(text) && NO_MITIGATION.matcher(text).find();
+    return namesInjectionSink(text)
+        && NO_MITIGATION.matcher(text).find()
+        // Either defeater anywhere in the finding suppresses the floor. Under-firing costs a
+        // finding the lift it should have had, which is where this class already stood; over-firing
+        // escalates a non-defect and, at high confidence, blocks the merge on it.
+        && !SINK_DENIED.matcher(text).find()
+        && !MITIGATION_ASSERTED.matcher(text).find();
   }
 
   private static boolean namesInjectionSink(String text) {
