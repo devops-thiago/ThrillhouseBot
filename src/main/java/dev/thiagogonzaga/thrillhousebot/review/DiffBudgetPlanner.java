@@ -30,6 +30,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
 
 /**
  * Splits a PR's reviewable files into token-budgeted batches so every file is covered by some model
@@ -45,6 +46,21 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 @ApplicationScoped
 public class DiffBudgetPlanner {
+
+  /**
+   * Share of the per-call input budget the previous-findings block may occupy before {@link
+   * #boundPreviousFindings} condenses it. It is shared overhead — repeated in full by every batch
+   * call — so it is charged against the whole per-call budget, not against one batch's diff. A
+   * quarter is deliberately generous: condensation costs the model the prose it uses to judge a
+   * finding resolved, so the bound should bite on the accumulation this exists to stop, not on an
+   * ordinary follow-up round.
+   */
+  private static final double PREVIOUS_FINDINGS_BUDGET_SHARE = 0.25;
+
+  /**
+   * Opening shape of a numbered previous finding: {@code "12. [HIGH] path/File.java:7 — Title"}.
+   */
+  private static final Pattern NUMBERED_ENTRY = Pattern.compile("^\\d+\\. \\[");
 
   private final ReviewDiffFormatter formatter;
   private final TokenCounter tokenCounter;
@@ -255,6 +271,11 @@ public class DiffBudgetPlanner {
     if (activeModel.maxInputTokens() <= 0) {
       return plan(reviewable, 0, 1);
     }
+    // Size the overhead from the same bounded block the calls actually carry (#583): planning
+    // against the raw block and sending a bounded one — or the reverse — would make the estimate
+    // a fiction. boundPreviousFindings is idempotent, so the caller applying it first is a no-op
+    // here.
+    var bounded = boundPreviousFindings(inputs);
     // fence(" ") produces the two real fence lines (fence of empty content is a no-op by design),
     // counting the per-review scaffolding the pipeline wraps each batch in — small, but the safety
     // margin should absorb estimate error, not known constants.
@@ -262,14 +283,189 @@ public class DiffBudgetPlanner {
         PrReviewPrompts.SYSTEM
             + PrReviewPrompts.USER
             + PromptTemplateEscaper.fence(" ")
-            + inputs.prContext()
-            + inputs.baseComparison()
-            + inputs.projectStack()
-            + inputs.relatedTests()
-            + inputs.previousFindings()
-            + inputs.repoInstructions();
+            + bounded.prContext()
+            + bounded.baseComparison()
+            + bounded.projectStack()
+            + bounded.relatedTests()
+            + bounded.previousFindings()
+            + bounded.repoInstructions();
     return plan(
         reviewable, sharedOverhead, perCallInputBudget(), Math.max(1, review.maxAiCalls() - 1));
+  }
+
+  /**
+   * Bounds the previous-findings block to {@link #PREVIOUS_FINDINGS_BUDGET_SHARE} of the per-call
+   * input budget, returning the inputs the review should actually be run with (#583).
+   *
+   * <p>The block is the one section of the shared overhead that grows monotonically: every round
+   * appends the previous round's findings, their prose and their whole comment threads, and nothing
+   * ever retires them on a long-lived PR whose head keeps advancing. Because the overhead is
+   * <em>shared</em> — repeated verbatim in every batch call — adding batches multiplies it instead
+   * of dividing it, so the planner's only other lever (shrinking the diff budget) starves the
+   * review of the code it is supposed to read, and past that, the request is rejected outright. On
+   * this repository's own release PR the block reached ~437K tokens against 57–74K for a normal
+   * review.
+   *
+   * <p>The bound is deliberately <em>not</em> a blind truncation. What the follow-up pass needs
+   * from a previous finding is its identity and location — the id it must report a status for, the
+   * file and line it must look at, and the title it matches against — not the prose. So the block
+   * degrades by <em>condensation</em>: every entry keeps its own line (id, risk, {@code file:line},
+   * title) and loses only its continuation lines (description, quoted code, thread replies). No
+   * finding disappears, no id shifts, and the deterministic machinery that decides resolved /
+   * unresolved is untouched by this — it runs off the structured previous-findings list, never off
+   * this prompt text.
+   *
+   * <p>Only if the condensed block still does not fit are entries dropped, from the tail, so the
+   * numbered findings whose ids {@code previous_findings_status} is keyed to outlive the advisory
+   * "answered in earlier rounds" list that follows them. That is real forgetting, so it degrades
+   * the safe way: an unreported finding is held open by the approve backstop rather than counted
+   * resolved, and the elision is disclosed — in-band to the model, which is the consumer of the
+   * block, and at {@code WARN} to the operator, the same channel the existing overhead shortfall
+   * uses.
+   *
+   * <p>Idempotent: a block already at or under its share is returned untouched, and so is the very
+   * same {@code inputs} instance.
+   */
+  public AiReviewService.PromptInputs boundPreviousFindings(AiReviewService.PromptInputs inputs) {
+    var previousFindings = inputs.previousFindings();
+    if (previousFindings == null || previousFindings.isBlank()) {
+      return inputs;
+    }
+    if (activeModel.maxInputTokens() <= 0) {
+      // Budgeting is explicitly off: the operator asked for no cap, and this is not the place to
+      // reintroduce one.
+      return inputs;
+    }
+    var cap = Math.max(1, (int) (perCallInputBudget() * PREVIOUS_FINDINGS_BUDGET_SHARE));
+    var before = tokenCounter.estimateTokens(previousFindings);
+    if (before <= cap) {
+      return inputs;
+    }
+    var bounded = condensePreviousFindings(previousFindings, cap);
+    Log.warnf(
+        "Previous-findings context (%d tokens) exceeds its %d-token share of the input budget;"
+            + " condensed %d finding(s) to id, location and title%s",
+        before,
+        cap,
+        bounded.keptEntries(),
+        bounded.droppedEntries() == 0
+            ? ""
+            : " and omitted " + bounded.droppedEntries() + " that still did not fit");
+    return new AiReviewService.PromptInputs(
+        inputs.diff(),
+        inputs.prContext(),
+        inputs.baseComparison(),
+        inputs.projectStack(),
+        inputs.relatedTests(),
+        bounded.text(),
+        inputs.repoInstructions());
+  }
+
+  /** A bounded previous-findings block: its text and what the bounding cost. */
+  private record BoundedFindings(String text, int keptEntries, int droppedEntries) {}
+
+  /**
+   * Condenses the block to entry lines only and, if that still overruns {@code capTokens}, keeps
+   * the longest prefix of entries that fits. The fence lines are structural, not entries: they are
+   * carried across the cut so the untrusted region can never end up unterminated with the trailing
+   * notice — our own instruction — swallowed inside it.
+   */
+  private BoundedFindings condensePreviousFindings(String block, int capTokens) {
+    var all = block.split("\n", -1);
+    var fenced =
+        all.length > 2
+            && all[0].startsWith(PromptTemplateEscaper.fencePrefix())
+            && all[0].equals(all[all.length - 1]);
+    var body = fenced ? List.of(all).subList(1, all.length - 1) : List.of(all);
+
+    var condensed = new ArrayList<String>(body.size());
+    var entries = 0;
+    var inEntry = false;
+    for (var line : body) {
+      var startsEntry = startsEntry(line);
+      if (startsEntry) {
+        entries++;
+        inEntry = true;
+      }
+      if (startsEntry || !inEntry) {
+        condensed.add(line);
+      }
+    }
+
+    // The disclosure has to survive the cap that forced it, so its cost — and the fences' — comes
+    // off the top rather than being what gets dropped.
+    var reserve = tokenCounter.estimateTokens(elisionNotice(entries));
+    if (fenced) {
+      reserve += 2 * tokenCounter.estimateTokens(all[0]);
+    }
+    var kept = new ArrayList<String>(condensed.size());
+    var used = reserve;
+    var dropped = 0;
+    var cutting = false;
+    for (var line : condensed) {
+      if (!cutting) {
+        var cost = tokenCounter.estimateTokens(line);
+        if (used + cost <= capTokens) {
+          kept.add(line);
+          used += cost;
+          continue;
+        }
+        cutting = true;
+      }
+      if (startsEntry(line)) {
+        dropped++;
+      }
+    }
+
+    var text = new StringBuilder();
+    if (fenced) {
+      text.append(all[0]).append('\n');
+    }
+    text.append(String.join("\n", kept));
+    if (fenced) {
+      text.append('\n').append(all[0]);
+    }
+    text.append('\n').append(elisionNotice(dropped));
+    return new BoundedFindings(text.toString(), entries - dropped, dropped);
+  }
+
+  /**
+   * Whether the line opens a previous-findings entry: a numbered finding ({@code "3. [HIGH] …"},
+   * the id space {@code previous_findings_status} references) or an answered-earlier bullet. Detail
+   * lines — descriptions, quoted code, thread replies — are indented under their entry, so they
+   * never match; an untrusted description line that mimics the shape at most survives condensation,
+   * which is what it already did before it.
+   */
+  private static boolean startsEntry(String line) {
+    return line.startsWith("- ") || NUMBERED_ENTRY.matcher(line).find();
+  }
+
+  /**
+   * The elision disclosure, appended outside the fence so it reads as instruction rather than as
+   * more untrusted data. It tells the model what it is looking at (identity only) and forbids the
+   * one dangerous inference — that a finding it cannot see in full has been dealt with.
+   *
+   * <p>It also restates what the block's own section header used to say about the unnumbered
+   * entries. That header is a detail line under the entry above it and condenses away with the
+   * rest; saying it here instead makes the meaning survive the elision, keeps it out of the
+   * untrusted region, and does not make the bound depend on matching another class's prose.
+   */
+  private static String elisionNotice(int droppedEntries) {
+    var condensed =
+        "(The previous findings above were condensed to id, location and title to fit this"
+            + " review's token budget; their descriptions and comment threads are not shown. Judge"
+            + " each by its location and title; one you cannot see in full is still open unless"
+            + " this diff shows it fixed. An entry with no id, written \"- file:line — title\", was"
+            + " answered in an earlier round: do not raise it again and do not include it in"
+            + " previous_findings_status.)";
+    if (droppedEntries <= 0) {
+      return condensed;
+    }
+    return condensed
+        + "\n("
+        + droppedEntries
+        + " further previous finding(s) did not fit and were omitted entirely. Never report a"
+        + " finding you cannot see as resolved, and do not re-raise one as if it were new.)";
   }
 
   /**
