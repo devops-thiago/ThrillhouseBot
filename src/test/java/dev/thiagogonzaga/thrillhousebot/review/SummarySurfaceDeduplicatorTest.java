@@ -183,6 +183,57 @@ class SummarySurfaceDeduplicatorTest {
   }
 
   @Test
+  void aContractedNegationIsDetectedSoItsOppositeSurvives() {
+    // Splitting on non-alphanumeric runs tears "doesn't" into "doesn" and "t", so without the
+    // contraction rewrite both gaps read as affirmative, score 1.0 on the shorter side, and the
+    // negative conclusion is deleted as a restatement of the affirmative one.
+    var gaps =
+        List.of(
+            "The registry URL is validated before use.",
+            "The client doesn't validate the registry URL before use.");
+
+    var surfaces = SummarySurfaceDeduplicator.collapse(gaps, Map.of(), List.of());
+
+    assertEquals(gaps, surfaces.descriptionGaps());
+  }
+
+  @Test
+  void aContractedNegationInTheFindingKeepsTheOpposingWalkthroughClause() {
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(),
+            Map.of(
+                "src/A.java",
+                "Adds the repository; user input is sanitized before it reaches the SQL query"),
+            List.of(finding("User input isn't sanitized before it reaches the SQL query")));
+
+    assertEquals(
+        "Adds the repository; user input is sanitized before it reaches the SQL query",
+        surfaces.fileSummaries().get("src/A.java"));
+  }
+
+  @Test
+  void everyContractedNegatorFormSetsPolarityAndLeavesNoStrayWord() {
+    var plain = SummarySurfaceDeduplicator.claim("the value is sanitized");
+
+    for (String contracted :
+        List.of(
+            "the value isn't sanitized",
+            "the value isn’t sanitized",
+            "the value wasn't sanitized",
+            "the value won't be sanitized",
+            "the value can't be sanitized",
+            "the value couldn't be sanitized",
+            "the value shouldn't be sanitized",
+            "the value didn't sanitize")) {
+      var claim = SummarySurfaceDeduplicator.claim(contracted);
+
+      assertTrue(claim.negated(), contracted);
+      assertEquals(plain.words(), claim.words(), contracted);
+    }
+  }
+
+  @Test
   void negatorsSetPolarityInsteadOfBecomingContentWords() {
     var negated = SummarySurfaceDeduplicator.claim("the banlist is never refreshed");
     var plain = SummarySurfaceDeduplicator.claim("the banlist is refreshed");

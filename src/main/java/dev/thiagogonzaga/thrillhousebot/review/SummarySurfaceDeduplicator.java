@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Collapses one observation published on several surfaces of the same summary comment down to its
@@ -42,9 +43,12 @@ import java.util.Set;
  *
  * <p>Two texts state the same claim when they share a contiguous run of {@value #PHRASE_TOKENS}
  * content words, or when their content words overlap by {@value #OVERLAP_THRESHOLD} of the shorter
- * side — and only when they agree on polarity. The overlap arm needs {@value #MIN_OVERLAP_TOKENS}
- * content words on the shorter side: below that the coefficient is noise, and keeping both copies
- * is the safe direction.
+ * side. Polarity does not gate that test in general: it holds a pair back only when the two say the
+ * same things with opposite polarity — one negates and neither names anything the other leaves out
+ * — because such a pair scores as a perfect match while asserting opposite things. Two texts that
+ * disagree on polarity and also differ in substance are still judged on their content. The overlap
+ * arm needs {@value #MIN_OVERLAP_TOKENS} content words on the shorter side: below that the
+ * coefficient is noise, and keeping both copies is the safe direction.
  */
 final class SummarySurfaceDeduplicator {
 
@@ -66,10 +70,10 @@ final class SummarySurfaceDeduplicator {
   private static final Set<String> STOPWORDS =
       Set.of(
           "all", "also", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can",
-          "do", "does", "each", "for", "from", "has", "have", "if", "in", "into", "is", "it", "its",
-          "just", "more", "of", "on", "only", "or", "other", "per", "so", "still", "than", "that",
-          "the", "their", "them", "then", "there", "these", "this", "to", "was", "were", "when",
-          "which", "while", "with", "would");
+          "could", "did", "do", "does", "each", "for", "from", "has", "have", "if", "in", "into",
+          "is", "it", "its", "just", "more", "of", "on", "only", "or", "other", "per", "should",
+          "so", "still", "than", "that", "the", "their", "them", "then", "there", "these", "this",
+          "to", "was", "were", "when", "which", "while", "with", "would");
 
   /**
    * Syntactic negators. A negator flips what a sentence asserts while contributing a single token,
@@ -79,6 +83,17 @@ final class SummarySurfaceDeduplicator {
    */
   private static final Set<String> NEGATIONS =
       Set.of("cannot", "neither", "never", "no", "non", "none", "nor", "not", "nothing", "without");
+
+  /**
+   * A negation contracted onto its auxiliary, with the irregular stems of "can't", "won't",
+   * "shan't" and "ain't" folded in. Content words are split on non-alphanumeric runs, which would
+   * tear "isn't" into "isn" and "t" — neither a negator — leaving a negated sentence reading as
+   * affirmative and its opposite deletable as a duplicate. Rewriting the contraction to a bare
+   * "not" before the split restores the polarity, and swallowing the irregular stems keeps "wo" and
+   * "ca" from becoming content words of their own.
+   */
+  private static final Pattern CONTRACTED_NEGATION =
+      Pattern.compile("(?:ca|wo|sha|ai)?n['\u2019]t\\b");
 
   /** One text reduced to what it asserts: its content words in order, and whether it negates. */
   record Claim(List<String> words, boolean negated) {}
@@ -209,7 +224,8 @@ final class SummarySurfaceDeduplicator {
     }
     var words = new ArrayList<String>();
     var negated = false;
-    for (String word : text.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) {
+    var expanded = CONTRACTED_NEGATION.matcher(text.toLowerCase(Locale.ROOT)).replaceAll(" not ");
+    for (String word : expanded.split("[^a-z0-9]+")) {
       if (NEGATIONS.contains(word)) {
         negated = true;
       } else if (word.length() > 1
