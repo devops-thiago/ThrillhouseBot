@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane;
 import org.junit.jupiter.api.Test;
 
@@ -106,6 +107,45 @@ class AiResponsesTest {
     assertTrue(
         thrown.conciseModelImplicated(),
         "the failure must carry the concise flag so downstream copy names the same knob");
+  }
+
+  @Test
+  void carriesTheCutBodyOnTheFailureSoTheLaneCanSalvageIt() {
+    // #580: Result#content() holds what the model produced before the cap stopped it — output that
+    // was generated and billed. Dropping it here left every blocking lane with nothing to salvage
+    // from, however much of its response had completed before the cut.
+    var cut = "{\"verdicts\":[{\"id\":1,\"verdict\":\"valid\"},{\"id\":2,\"verd";
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    aiTruncated(cut), "Finding verification", ModelLane.CONCISE));
+
+    assertEquals(cut, thrown.partialBody(), "the paid, cut body must travel with the failure");
+  }
+
+  @Test
+  void theCarriedBodyIsWhatTheSalvagerRecoversTheCompletedElementsFrom() {
+    // The point of carrying it: the body is well-formed up to the cut, so the review lane's own
+    // salvage machinery recovers the elements that closed. Pinned end to end because a body no
+    // consumer could use would be no better than the null it replaced.
+    var cut = "{\"verdicts\":[{\"id\":1,\"verdict\":\"valid\"},{\"id\":2,\"verd";
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    aiTruncated(cut), "Finding verification", ModelLane.CONCISE));
+
+    var salvaged =
+        new TruncatedResponseSalvager(new ObjectMapper())
+            .salvageArray(thrown.partialBody(), "verdicts", VerificationResponse.Verdict.class);
+
+    assertEquals(1, salvaged.size(), "the verdict that closed before the cut is recoverable");
+    assertEquals(1, salvaged.get(0).id());
   }
 
   @Test
