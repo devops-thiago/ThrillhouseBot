@@ -33,10 +33,10 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -78,7 +78,15 @@ class GitHubAuthClientTest {
 
   @Mock private ThrillhouseConfig.GitHubConfig githubConfig;
 
-  @InjectMocks private GitHubAuthClient authClient;
+  private GitHubAuthClient authClient;
+
+  /** A clock the tests move by hand; retention is measured in hours and cannot be outwaited. */
+  private final AtomicReference<Instant> now =
+      new AtomicReference<>(Instant.parse("2026-08-12T13:32:03Z"));
+
+  private void advance(Duration by) {
+    now.updateAndGet(instant -> instant.plus(by));
+  }
 
   @BeforeEach
   void setUp() {
@@ -86,6 +94,7 @@ class GitHubAuthClientTest {
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.appId()).thenReturn("123456");
     when(githubConfig.privateKey()).thenReturn(TEST_PRIVATE_KEY);
+    authClient = new GitHubAuthClient(config, tokenApi, now::get);
   }
 
   @Test
@@ -345,19 +354,78 @@ class GitHubAuthClientTest {
         "and so does the generation before that, which GitHub would still have accepted");
   }
 
-  /** Past GitHub's own 60-minute expiry the entry is dead weight and is swept on the next mint. */
+  /**
+   * The bug this replaced: retention was set to GitHub's 60-minute token lifetime, which is exactly
+   * the age at which a token starts drawing 401s. The refresh's own sweep therefore deleted the
+   * entry whose 401 provoked it, and every later write in the same cascade — the second of the five
+   * in five seconds — looked up a token the first refresh had just erased and got nothing back.
+   */
   @Test
-  void aTokenGitHubHasExpiredIsForgottenSoTheIndexCannotGrowWithUptime() {
+  void aRefreshDoesNotSweepAwayTheEntryTheRestOfItsCascadeStillNeeds() {
     var installationId = 42L;
     when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
-        .thenReturn(token("first"));
-    var first = authClient.getAuthHeader(installationId);
+        .thenReturn(token("first"), token("second"));
+    var dead = authClient.getAuthHeader(installationId);
 
-    authClient.forgetTokensIssuedBefore(Instant.now().plus(Duration.ofMinutes(1)));
+    // The only reason a write holding this token draws 401 at all: GitHub has expired it.
+    advance(GitHubAuthClient.GITHUB_TOKEN_LIFETIME.plusMinutes(1));
+    assertEquals(Optional.of("Bearer second"), authClient.refreshedAuthHeader(dead));
 
-    assertEquals(Optional.empty(), authClient.refreshedAuthHeader(first));
+    // The straggler, a few seconds behind the first write of the cascade.
+    advance(Duration.ofSeconds(4));
+    assertEquals(
+        Optional.of("Bearer second"),
+        authClient.refreshedAuthHeader(dead),
+        "the refresh must not retire the entry its own cascade is still resolving against");
+  }
+
+  /** The constructor CDI uses: same behaviour, on the real clock rather than a movable one. */
+  @Test
+  void theInjectedConstructorMintsOnTheSystemClock() {
+    var installationId = 7L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("wall-clock"));
+    var client = new GitHubAuthClient(config, tokenApi);
+
+    assertEquals("Bearer wall-clock", client.getAuthHeader(installationId));
+    assertEquals(
+        "Bearer wall-clock",
+        client.getAuthHeader(installationId),
+        "and caches it, so the TTL is measured against a clock that actually advances");
     verify(tokenApi, times(1))
         .createInstallationToken(anyString(), anyString(), eq(installationId));
+  }
+
+  /**
+   * The invariant the constant has to satisfy, stated so it cannot silently drift back onto the
+   * trigger condition: an entry is only ever consulted after GitHub has stopped honouring the token
+   * it names, by a write that may have been holding it since the cache last handed it out.
+   */
+  @Test
+  void theOwnerIndexMustOutliveEveryTokenItNames() {
+    var latestPossibleLookup =
+        GitHubAuthClient.TOKEN_TTL.plus(GitHubAuthClient.LONGEST_WRITE_IN_FLIGHT);
+
+    assertTrue(
+        GitHubAuthClient.OWNER_RETENTION.compareTo(GitHubAuthClient.GITHUB_TOKEN_LIFETIME) > 0,
+        "retention that only matches the token lifetime sweeps on exactly the 401 it must survive");
+    assertTrue(
+        GitHubAuthClient.OWNER_RETENTION.compareTo(latestPossibleLookup) > 0,
+        "retention must cover a write that read the token at the end of the cache window");
+  }
+
+  /** Past retention the entry really is dead weight, and the next mint sweeps it. */
+  @Test
+  void aTokenPastRetentionIsForgottenSoTheIndexCannotGrowWithUptime() {
+    var installationId = 42L;
+    when(tokenApi.createInstallationToken(anyString(), anyString(), eq(installationId)))
+        .thenReturn(token("first"), token("second"));
+    var first = authClient.getAuthHeader(installationId);
+
+    advance(GitHubAuthClient.OWNER_RETENTION.plusMinutes(1));
+    authClient.getAuthHeader(installationId);
+
+    assertEquals(Optional.empty(), authClient.refreshedAuthHeader(first));
   }
 
   /**
@@ -407,9 +475,14 @@ class GitHubAuthClientTest {
   @Test
   void concurrentRefreshesOfOneDeadTokenLeaveALaterHolderAbleToResolveIt() throws Exception {
     var installationId = 42L;
-    var client = new GitHubAuthClient(config, new GatedTokenApi(2));
+    var client = new GitHubAuthClient(config, new GatedTokenApi(2), now::get);
     var dead = client.getAuthHeader(installationId);
     assertEquals("Bearer token-1", dead);
+
+    // Aged past GitHub's expiry first, because that is the only state a refresh ever runs in — and
+    // it is what makes each mint's retention sweep a real sweep rather than a no-op on a token
+    // minted microseconds ago.
+    advance(GitHubAuthClient.GITHUB_TOKEN_LIFETIME.plusMinutes(1));
 
     try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
       var both =

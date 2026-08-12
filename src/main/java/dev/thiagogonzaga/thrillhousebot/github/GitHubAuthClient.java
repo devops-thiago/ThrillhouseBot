@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,12 @@ public class GitHubAuthClient {
   private static final Logger log = LoggerFactory.getLogger(GitHubAuthClient.class);
 
   private static final String BEARER = "Bearer ";
+
+  /**
+   * How long GitHub itself honours an installation token. Not ours to choose — every duration below
+   * is reasoned against it, so it is written down once rather than repeated as a literal.
+   */
+  static final Duration GITHUB_TOKEN_LIFETIME = Duration.ofMinutes(60);
 
   /**
    * How long a minted installation token is reused before a new one is fetched.
@@ -67,11 +74,33 @@ public class GitHubAuthClient {
   private final Map<Long, CachedToken> tokenCache = new ConcurrentHashMap<>();
 
   /**
-   * How long a token this process minted stays traceable back to its installation. GitHub expires
-   * an installation token 60 minutes after issuing it, so past that no write can still be holding a
-   * usable one and the entry is dead weight.
+   * The longest a write can still be holding a token it read from the cache. The cache hands one
+   * out for up to {@link #TOKEN_TTL}, and the holder then runs for as long as its work takes — a
+   * review's model calls, its retries and its backoff. Two hours is far past any review this bot
+   * has run; it is the term that decides how long the index below has to remember a token, so it is
+   * stated rather than folded into a single opaque number.
    */
-  static final Duration OWNER_RETENTION = Duration.ofMinutes(60);
+  static final Duration LONGEST_WRITE_IN_FLIGHT = Duration.ofHours(2);
+
+  /**
+   * How long a token this process minted stays traceable back to its installation.
+   *
+   * <p>This has to <em>outlive</em> the token, not match it, and getting that wrong is subtle
+   * enough to be worth spelling out. An entry is consulted only when a write is holding a token
+   * GitHub has just refused, and the ordinary reason for that refusal is that the token has passed
+   * {@link #GITHUB_TOKEN_LIFETIME}. Every lookup that matters therefore happens when the entry is
+   * <em>already older than the token's whole life</em>. Retaining for exactly that life puts the
+   * sweep boundary precisely on the trigger condition: the refresh mints at {@code issued + 60min +
+   * something}, sweeps everything older than {@code now - 60min}, and deletes the entry for the
+   * very token whose 401 provoked it — so the first write of a cascade is rescued and every later
+   * holder of the same token finds nothing and is stranded, which is #624 again.
+   *
+   * <p>Retention is therefore the token's whole life plus how late the last write holding it can
+   * still fail ({@link #TOKEN_TTL} + {@link #LONGEST_WRITE_IN_FLIGHT}), with room to spare. At two
+   * mints per installation per hour the index holds a dozen entries per installation, which is
+   * nothing; the sweep is the cheaper side of this trade by a wide margin.
+   */
+  static final Duration OWNER_RETENTION = Duration.ofHours(6);
 
   /** A token this process minted: the installation it belongs to, and when it was issued. */
   private record TokenOwner(long installationId, Instant issuedAt) {}
@@ -99,10 +128,22 @@ public class GitHubAuthClient {
 
   private final AtomicReference<RSAPrivateKey> cachedPrivateKey = new AtomicReference<>();
 
+  private final Supplier<Instant> clock;
+
   @Inject
   public GitHubAuthClient(ThrillhouseConfig config, @RestClient GitHubTokenApi tokenApi) {
+    this(config, tokenApi, Instant::now);
+  }
+
+  /**
+   * Everything here turns on durations measured in hours — how long a token is cached, how long its
+   * owner stays resolvable — so the tests need a clock they can move rather than one they must
+   * outwait. Nothing else in this class reads the time directly.
+   */
+  GitHubAuthClient(ThrillhouseConfig config, GitHubTokenApi tokenApi, Supplier<Instant> clock) {
     this.config = config;
     this.tokenApi = tokenApi;
+    this.clock = clock;
     // Minting is the one thing only this bean can do, and the GitHub writes that need a dead token
     // replaced are interface default methods with nowhere to inject it. See GitHubTokenRefresh.
     GitHubTokenRefresh.SHARED.bind(this::mintedReplacementFor);
@@ -114,7 +155,7 @@ public class GitHubAuthClient {
    */
   public String generateAppJwt() {
     try {
-      Instant now = Instant.now();
+      Instant now = clock.get();
       var privateKey = privateKey();
 
       var claims =
@@ -143,7 +184,7 @@ public class GitHubAuthClient {
    */
   public String getInstallationToken(long installationId) {
     var cached = tokenCache.get(installationId);
-    if (cached != null && Instant.now().isBefore(cached.expiresAt())) {
+    if (cached != null && clock.get().isBefore(cached.expiresAt())) {
       log.debug("Using cached installation token (expires at {})", cached.expiresAt());
       return cached.token();
     }
@@ -155,23 +196,29 @@ public class GitHubAuthClient {
     var response =
         tokenApi.createInstallationToken(authHeader, "application/vnd.github+json", installationId);
 
-    var issuedAt = Instant.now();
+    // Read after the round trip, so the recorded instant is no earlier than GitHub's own issue
+    // time and the entry below is never retired sooner than the token it names.
+    var issuedAt = clock.get();
     var newToken = new CachedToken(response.token(), issuedAt.plus(TOKEN_TTL), installationId);
     tokenCache.put(installationId, newToken);
-    // Every token this process hands out stays traceable until GitHub's own expiry, so a write
+    // Every token this process hands out stays traceable well past GitHub's expiry, so a write
     // still holding an older one can always name the installation that has to replace it.
     tokenOwners.put(newToken.token(), new TokenOwner(installationId, issuedAt));
-    forgetTokensIssuedBefore(issuedAt.minus(OWNER_RETENTION));
+    forgetOwnersOlderThanRetention(issuedAt);
 
     return newToken.token();
   }
 
   /**
-   * Drops index entries for tokens issued before {@code cutoff} — GitHub has expired them, so no
-   * write can still present one and no replacement for one is worth minting. Swept on every mint,
-   * which bounds the index at the tokens issued in the last {@link #OWNER_RETENTION}.
+   * Drops index entries for tokens issued more than {@link #OWNER_RETENTION} before {@code now} —
+   * long past the point where any write could still be presenting one. Swept on every mint, which
+   * bounds the index at the tokens issued in that window.
+   *
+   * <p>The cutoff is absolute, so sweeping on behalf of one installation only ever retires entries
+   * that are genuinely that old, whichever installation they belong to.
    */
-  void forgetTokensIssuedBefore(Instant cutoff) {
+  private void forgetOwnersOlderThanRetention(Instant now) {
+    var cutoff = now.minus(OWNER_RETENTION);
     tokenOwners.values().removeIf(owner -> owner.issuedAt().isBefore(cutoff));
   }
 
