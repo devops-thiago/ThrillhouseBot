@@ -243,10 +243,17 @@ final class SummarySurfaceDeduplicator {
   }
 
   /**
-   * Strips trailing inflection letters down to a shared stem. Deliberately cruder than a real
-   * stemmer: it only has to make the plural, past and third-person forms of one word collide
-   * ("failure"/"failures", "hardcoded"/"hardcodes", "return"/"returned"/"returns"), and a stem
-   * shorter than four characters is left alone so short words are not flattened together.
+   * Strips trailing {@code s}, {@code e} and {@code d} until a three-character floor stops the
+   * erosion, so a word of three characters or fewer is never touched. Deliberately cruder than a
+   * real stemmer: it collides the {@code -s}, {@code -es} and {@code -ed} forms of one word along
+   * with the silent {@code -e} they leave behind — "failure"/"failures", "hardcoded"/"hardcodes",
+   * "return"/"returned"/"returns".
+   *
+   * <p>Inflections that rewrite the stem itself are not caught. The y→i of "verify"/"verifies"
+   * strips to "verify" and "verifi", which read as two unrelated words, and the same goes for
+   * "modifies", "identifies" and "applies". That costs a collapse those texts might otherwise have
+   * earned, which is the direction this class prefers: a surviving duplicate is the behaviour being
+   * improved on, while a wider stem would merge more words and risk deleting a claim.
    */
   private static String stem(String word) {
     int end = word.length();
