@@ -21,6 +21,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.List;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 /**
@@ -31,6 +32,7 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
  * captured.
  */
 @RegisterRestClient(configKey = "github-api")
+@RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubReactionClient {
 
   @POST

@@ -22,9 +22,11 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.ArrayList;
 import java.util.List;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 @RegisterRestClient(configKey = "github-api")
+@RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubCheckRunClient {
 
   // GitHub serves 30 rows per page by default; 100 is the maximum.

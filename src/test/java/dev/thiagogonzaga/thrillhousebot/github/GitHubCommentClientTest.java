@@ -18,7 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -26,8 +28,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.CommentResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.CreateCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -154,5 +159,47 @@ class GitHubCommentClientTest {
     var capped = new CreateCommentRequest(body).body();
 
     assertSame(body, capped, "a body within the limit is returned untouched");
+  }
+
+  /**
+   * A 403 that GitHub sends while throttling a write, carrying a {@code Retry-After} of zero so the
+   * backoff is real but instant. {@link GitHubWriteRetryTest} pins the waiting itself.
+   */
+  private static WebApplicationException throttledNow() {
+    return new WebApplicationException(
+        Response.status(403)
+            .header("Retry-After", "0")
+            .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
+            .build());
+  }
+
+  @Test
+  void createCommentRepostsAThrottledCommentRatherThanLosingIt() {
+    var client = mock(GitHubCommentClient.class);
+    when(client.createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        .thenCallRealMethod();
+    var request = new CreateCommentRequest("the generated reply");
+    var posted = new CommentResponse(42, "https://github.test/c/42");
+    when(client.createCommentOnce("auth", "json", "o", "r", 7, request))
+        .thenThrow(throttledNow())
+        .thenReturn(posted);
+
+    assertSame(posted, client.createComment("auth", "json", "o", "r", 7, request));
+    verify(client, times(2)).createCommentOnce("auth", "json", "o", "r", 7, request);
+  }
+
+  @Test
+  void updateCommentRepostsAThrottledEditRatherThanLeavingAStaleSummary() {
+    var client = mock(GitHubCommentClient.class);
+    when(client.updateComment(anyString(), anyString(), anyString(), anyString(), anyLong(), any()))
+        .thenCallRealMethod();
+    var request = new CreateCommentRequest("the regenerated summary");
+    var edited = new CommentResponse(99, "https://github.test/c/99");
+    when(client.updateCommentOnce("auth", "json", "o", "r", 99L, request))
+        .thenThrow(throttledNow())
+        .thenReturn(edited);
+
+    assertSame(edited, client.updateComment("auth", "json", "o", "r", 99L, request));
+    verify(client, times(2)).updateCommentOnce("auth", "json", "o", "r", 99L, request);
   }
 }
