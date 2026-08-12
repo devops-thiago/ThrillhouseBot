@@ -101,6 +101,7 @@ public class StartupConfigValidator {
     validateBlockingStrictness(problems, config.review());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
+    validateActiveModelWindow(problems);
     validateReasoningEffort(problems, config.ai().reasoning());
     validateConciseResponseCap(problems);
 
@@ -213,6 +214,11 @@ public class StartupConfigValidator {
               .filter(v -> v < 1)
               .ifPresent(v -> problems.add(prefix + "max-output-tokens must be >= 1: " + v));
           settings
+              .contextTokens()
+              .filter(v -> v < 1)
+              .ifPresent(v -> problems.add(prefix + "context-tokens must be >= 1: " + v));
+          validateWindowFits(problems, name, settings);
+          settings
               .frequencyPenalty()
               .filter(v -> !Double.isFinite(v) || v < -2.0 || v > 2.0)
               .ifPresent(
@@ -227,6 +233,56 @@ public class StartupConfigValidator {
                       problems.add(
                           prefix + "presence-penalty must be in [-2, 2] and finite: " + v));
         });
+  }
+
+  /**
+   * Rejects a model entry whose declared caps cannot both fit its declared context window (#562).
+   * On a shared window the provider charges the prompt and the completion to one context, so a
+   * {@code max-input-tokens} + {@code max-output-tokens} pair larger than {@code context-tokens}
+   * describes a request no prompt budget can rescue — the provider rejects it for length before any
+   * review work happens, and (as shipped for deepseek-v4-flash) retries it at full price.
+   *
+   * <p>Checked for every configured entry rather than only the active model, for the #502 reason:
+   * an unbootable pair in the shipped table is invisible until a deployment names that model. Not
+   * applied to a {@code separate-output-budget} model, whose completion is not drawn from the
+   * window at all, and skipped entirely when the model declares no window.
+   */
+  private static void validateWindowFits(
+      List<String> problems,
+      String name,
+      ThrillhouseConfig.AiPricingConfig.ModelSettings settings) {
+    if (settings.separateOutputBudget().orElse(false)) {
+      return;
+    }
+    var window = settings.contextTokens().filter(v -> v >= 1);
+    if (window.isEmpty()) {
+      return;
+    }
+    long input = settings.maxInputTokens().orElse(0);
+    long output = settings.maxOutputTokens().orElse(0);
+    if (input + output <= window.get()) {
+      return;
+    }
+    problems.add(
+        "model '"
+            + name
+            + "' cannot fit its own caps: max-input-tokens ("
+            + input
+            + ") + max-output-tokens ("
+            + output
+            + ") = "
+            + (input + output)
+            + " exceeds context-tokens ("
+            + window.get()
+            + ") (thrillhousebot.ai.models.\""
+            + name
+            + "\".*). On a shared window the provider counts the completion against the same"
+            + " context as the prompt, so a call using this budget is rejected for length however"
+            + " the prompt was packed. Lower the caps to fit the window, or set"
+            + " thrillhousebot.ai.models.\""
+            + name
+            + "\".separate-output-budget=true if this model's response allowance really is"
+            + " independent of its input window.");
   }
 
   /**
@@ -278,6 +334,55 @@ public class StartupConfigValidator {
                           + "\".separate-output-budget=true if this model's response allowance is"
                           + " independent of its input window."));
     }
+  }
+
+  /**
+   * The same window arithmetic as {@link #validateWindowFits}, applied to the values the active
+   * deployment will actually send: the effective input budget (the smaller of {@code
+   * REVIEW_MAX_INPUT_TOKENS} and the model's cap) plus the largest response cap any lane may
+   * request on this model — its own {@code max-output-tokens} or the concise lane's {@code
+   * REVIEW_CONCISE_MAX_OUTPUT_TOKENS}, whichever is bigger, since both are charged to the same
+   * window as the prompt.
+   *
+   * <p>This is the rule an environment can trip without touching the shipped table: {@code
+   * REVIEW_MAX_INPUT_TOKENS=1000000} against a 1048576-token window leaves less room for the
+   * response than the caps ask for, and the provider then refuses every call (#562). Skipped when
+   * token budgeting is off (no per-call input budget to bound), when the model's response draws on
+   * a budget of its own, and when the model declares no window.
+   */
+  private void validateActiveModelWindow(List<String> problems) {
+    if (activeModel.maxInputTokens() <= 0 || activeModel.separateOutputBudget()) {
+      return;
+    }
+    var window =
+        Optional.ofNullable(config.ai().models().get(activeModel.modelName()))
+            .flatMap(ThrillhouseConfig.AiPricingConfig.ModelSettings::contextTokens)
+            .filter(v -> v >= 1);
+    long input = activeModel.maxInputTokens();
+    long response =
+        Math.max(activeModel.maxOutputTokens().orElse(0), conciseMaxOutputTokens.orElse(0));
+    if (window.isEmpty() || input + response <= window.get()) {
+      return;
+    }
+    problems.add(
+        "the effective per-call budget for model '"
+            + activeModel.modelName()
+            + "' (max input "
+            + input
+            + " + response cap "
+            + response
+            + " = "
+            + (input + response)
+            + ") exceeds its context window (thrillhousebot.ai.models.\""
+            + activeModel.modelName()
+            + "\".context-tokens="
+            + window.get()
+            + "): the provider counts the prompt and the completion against one context, so the"
+            + " call is rejected for length before any review work happens. Lower"
+            + " REVIEW_MAX_INPUT_TOKENS, lower the response caps (thrillhousebot.ai.models.\""
+            + activeModel.modelName()
+            + "\".max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS), or raise context-tokens if"
+            + " the model's window really is larger.");
   }
 
   private static void requirePresent(
@@ -529,6 +634,7 @@ public class StartupConfigValidator {
   private static final List<String> MODEL_SETTING_SUFFIXES =
       List.of(
           "MAX_INPUT_TOKENS",
+          "CONTEXT_TOKENS",
           "OUTPUT_BUFFER_TOKENS",
           "TOKEN_SAFETY_MARGIN",
           "MAX_OUTPUT_TOKENS",

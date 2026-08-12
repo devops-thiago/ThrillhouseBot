@@ -85,18 +85,56 @@ class AiPricingConfigTest {
   }
 
   @Test
-  void shouldShipDeepSeekV4FlashContextAndOutputCaps() {
+  void shouldShipDeepSeekV4FlashCapsThatFitItsSharedContextWindow() {
     // Unlike the other entries in the models map, deepseek-v4-flash ships real values rather than
     // an empty binding stub, so the caps are a shipped default a deployment inherits silently.
+    // #562: the provider counts the completion against the same 1048576-token context as the
+    // prompt ("2062275 in the messages, 384000 in the completion" against that limit), so the
+    // entry must describe a shared window — the shipped 1000000 in + 384000 out marked
+    // separate-output-budget could not fit that context under any prompt budget.
     var settings = config.ai().models().get("deepseek-v4-flash");
     assertNotNull(settings, "deepseek-v4-flash model settings must resolve");
-    assertEquals(1_000_000, settings.maxInputTokens().orElseThrow());
-    assertEquals(384_000, settings.maxOutputTokens().orElseThrow());
     assertEquals(
-        Optional.of(true),
+        Optional.empty(),
         settings.separateOutputBudget(),
-        "the 384000 output is on top of the 1M input, not carved out of it — without this flag the"
-            + " shipped pair cannot boot and would cost ~40% of the diff budget if it could");
+        "this model's completion is spent out of its context window, so it must stay on the shared"
+            + " contract where the buffer is reserved and the caps are held to context-tokens");
+    assertEquals(1_048_576, settings.contextTokens().orElseThrow());
+    assertEquals(900_000, settings.maxInputTokens().orElseThrow());
+    assertEquals(8_192, settings.maxOutputTokens().orElseThrow());
+    assertTrue(
+        settings.maxInputTokens().orElseThrow() + settings.maxOutputTokens().orElseThrow()
+            <= settings.contextTokens().orElseThrow(),
+        "prompt + completion must fit the one context the provider charges them to");
+  }
+
+  @Test
+  void noShippedModelsCapsExceedItsDeclaredContextWindow() {
+    // Sibling of the buffer walk below: a shipped pair that cannot fit its own window refuses
+    // every deployment naming that model, and the validator's rule only fires for the ACTIVE one.
+    config
+        .ai()
+        .models()
+        .forEach(
+            (model, settings) -> {
+              if (settings.separateOutputBudget().orElse(false)) {
+                return; // its completion is not charged to the window
+              }
+              settings
+                  .contextTokens()
+                  .ifPresent(
+                      window ->
+                          assertTrue(
+                              settings.maxInputTokens().orElse(0)
+                                      + settings.maxOutputTokens().orElse(0)
+                                  <= window,
+                              "shipped max-input-tokens + max-output-tokens for '"
+                                  + model
+                                  + "' exceeds its context-tokens "
+                                  + window
+                                  + " — on a shared window the provider rejects every call at that"
+                                  + " budget, whatever the prompt budgeter does"));
+            });
   }
 
   @Test

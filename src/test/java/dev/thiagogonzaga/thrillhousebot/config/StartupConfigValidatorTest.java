@@ -232,6 +232,7 @@ class StartupConfigValidatorTest {
     lenient().when(settings.presencePenalty()).thenReturn(Optional.empty());
     lenient().when(settings.seed()).thenReturn(Optional.empty());
     lenient().when(settings.separateOutputBudget()).thenReturn(Optional.empty());
+    lenient().when(settings.contextTokens()).thenReturn(Optional.empty());
     return settings;
   }
 
@@ -541,6 +542,213 @@ class StartupConfigValidatorTest {
 
     var ex = assertFailsValidation(new ConfigBuilder().model("deepseek-chat", settings).build());
     assertTrue(ex.getMessage().contains("must be >= max-output-tokens (384000)"), ex.getMessage());
+  }
+
+  @Nested
+  class SharedContextWindow {
+
+    /**
+     * The exact shipped-default shape #562 was filed for, minus the separate-output-budget flag.
+     */
+    private ThrillhouseConfig.AiPricingConfig.ModelSettings flashCaps(int input, int output) {
+      var settings = emptyModelSettings();
+      lenient().when(settings.contextTokens()).thenReturn(Optional.of(1_048_576));
+      lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(input));
+      lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(output));
+      return settings;
+    }
+
+    @Test
+    void failsFastWhenAModelsOwnCapsCannotBothFitItsContextWindow() {
+      // #562: the provider counts the completion against the same 1048576-token context as the
+      // prompt ("2062275 in the messages, 384000 in the completion"), so 1000000 in + 384000 out
+      // is a request no prompt budget can rescue — and it was retried five times at full price.
+      // Held against an INACTIVE entry here: a shipped pair that cannot boot must be rejected
+      // before some deployment switches AI_MODEL to it.
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder()
+                  .modelName("deepseek-chat")
+                  .model("deepseek-v4-flash", flashCaps(1_000_000, 384_000))
+                  .build());
+      assertTrue(
+          ex.getMessage()
+              .contains(
+                  "model 'deepseek-v4-flash' cannot fit its own caps: max-input-tokens (1000000) +"
+                      + " max-output-tokens (384000) = 1384000 exceeds context-tokens (1048576)"),
+          ex.getMessage());
+      assertTrue(
+          ex.getMessage().contains("separate-output-budget=true"),
+          "the failure must name the other contract as the way out: " + ex.getMessage());
+    }
+
+    @Test
+    void bootsWhenTheCapsFitTheContextWindow() {
+      new ConfigBuilder()
+          .modelName("deepseek-v4-flash")
+          .model("deepseek-v4-flash", flashCaps(900_000, 8_192))
+          .build()
+          .validate();
+    }
+
+    @Test
+    void bootsWhenTheCapsExactlyFillTheContextWindow() {
+      // The boundary is inclusive: a pair that exactly fills the window is sendable.
+      new ConfigBuilder()
+          .modelName("deepseek-v4-flash")
+          .model("deepseek-v4-flash", flashCaps(1_040_384, 8_192))
+          .build()
+          .validate();
+    }
+
+    @Test
+    void skipsTheWindowRuleForASeparateOutputBudgetModel() {
+      // A model that really publishes its response allowance on top of the input window does not
+      // spend the window on completions, so the sum is not the provider's arithmetic there.
+      var settings = flashCaps(1_000_000, 384_000);
+      lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(true));
+
+      new ConfigBuilder().modelName("deepseek-chat").model("separate", settings).build().validate();
+    }
+
+    @Test
+    void skipsTheWindowRuleWhenTheModelDeclaresNoWindow() {
+      // context-tokens is optional; a model with no declared window keeps the previous behaviour
+      // rather than being assumed to have one.
+      var settings = emptyModelSettings();
+      lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(1_000_000));
+      lenient().when(settings.maxOutputTokens()).thenReturn(Optional.of(384_000));
+      lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(384_000));
+
+      new ConfigBuilder()
+          .modelName("undeclared")
+          .maxInputTokens(1_000_000)
+          .model("undeclared", settings)
+          .build()
+          .validate();
+    }
+
+    @Test
+    void failsFastWhenContextTokensIsNotPositive() {
+      var settings = emptyModelSettings();
+      lenient().when(settings.contextTokens()).thenReturn(Optional.of(0));
+
+      var ex = assertFailsValidation(new ConfigBuilder().model("zero-window", settings).build());
+      assertTrue(
+          ex.getMessage()
+              .contains("thrillhousebot.ai.models.\"zero-window\".context-tokens must be >= 1: 0"),
+          ex.getMessage());
+    }
+
+    @Test
+    void failsFastWhenTheEffectiveInputBudgetOverrunsAWindowSmallerThanTheDefaultCap() {
+      // A model that declares its window but no max-input-tokens falls back to the 128000 default
+      // cap, so the effective budget can exceed the real window with nothing in the entry looking
+      // wrong. Checked on the resolved values for that reason.
+      var settings = emptyModelSettings();
+      lenient().when(settings.contextTokens()).thenReturn(Optional.of(32_768));
+
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder().modelName("small").model("small", settings).build());
+      assertTrue(
+          ex.getMessage()
+              .contains(
+                  "the effective per-call budget for model 'small' (max input 48000 + response cap"
+                      + " 8192 = 56192) exceeds its context window"),
+          ex.getMessage());
+      assertTrue(ex.getMessage().contains("REVIEW_MAX_INPUT_TOKENS"), ex.getMessage());
+    }
+
+    @Test
+    void countsTheConciseCapAsTheResponseTermWhenItIsTheLargerOne() {
+      // The production shape #562 was filed from: the entry's own caps fit the window, but the
+      // summary/verifier/reply calls send REVIEW_CONCISE_MAX_OUTPUT_TOKENS against that same
+      // window, so the worst case per call is the largest cap any lane may request.
+      var settings = emptyModelSettings();
+      lenient().when(settings.contextTokens()).thenReturn(Optional.of(1_048_576));
+      lenient().when(settings.maxInputTokens()).thenReturn(Optional.of(1_000_000));
+      lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(65_536));
+
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder()
+                  .modelName("deepseek-v4-flash")
+                  .maxInputTokens(1_000_000)
+                  .conciseMaxOutputTokens(Optional.of(65_536))
+                  .model("deepseek-v4-flash", settings)
+                  .build());
+      assertTrue(
+          ex.getMessage().contains("(max input 1000000 + response cap 65536 = 1065536)"),
+          ex.getMessage());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+          "the remedy must name the cap that actually drove the overrun: " + ex.getMessage());
+    }
+
+    @Test
+    void bootsWithTheWorkingProductionCombinationOnTheSharedWindow() {
+      // 900000 in + 96000 out = 996000 of the 1048576 window — the values a deployment is running
+      // today. The rule must accept what demonstrably works, not just refuse what does not.
+      var settings = flashCaps(900_000, 96_000);
+      lenient().when(settings.outputBufferTokens()).thenReturn(Optional.of(96_000));
+
+      new ConfigBuilder()
+          .modelName("deepseek-v4-flash")
+          .maxInputTokens(900_000)
+          .conciseMaxOutputTokens(Optional.of(65_536))
+          .model("deepseek-v4-flash", settings)
+          .build()
+          .validate();
+    }
+
+    @Test
+    void skipsTheEffectiveWindowRuleWhenTokenBudgetingIsDisabled() {
+      // With budgeting off there is no per-call input budget to bound, exactly like the other
+      // budget rules — even against a window smaller than the concise cap.
+      var settings = emptyModelSettings();
+      lenient().when(settings.contextTokens()).thenReturn(Optional.of(4_096));
+
+      new ConfigBuilder()
+          .modelName("tiny")
+          .maxInputTokens(0)
+          .model("tiny", settings)
+          .build()
+          .validate();
+    }
+
+    @Test
+    void skipsTheEffectiveWindowRuleForASeparateOutputBudgetModel() {
+      var settings = flashCaps(1_048_576, 8_192);
+      lenient().when(settings.separateOutputBudget()).thenReturn(Optional.of(true));
+
+      new ConfigBuilder()
+          .modelName("separate")
+          .maxInputTokens(1_048_576)
+          .model("separate", settings)
+          .build()
+          .validate();
+    }
+
+    @Test
+    void reportsOnlyTheRealProblemWhenTheActiveModelsWindowIsNotPositive() {
+      // A window of 0 is rejected on its own terms; treating it as a real ceiling as well would
+      // add a second, derived complaint ("48000 + 8192 exceeds 0") that tells the operator nothing
+      // and hides which key is actually wrong.
+      var settings = emptyModelSettings();
+      lenient().when(settings.contextTokens()).thenReturn(Optional.of(0));
+
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder().modelName("zero-window").model("zero-window", settings).build());
+      assertTrue(ex.getMessage().contains("context-tokens must be >= 1: 0"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("exceeds its context window"), ex.getMessage());
+    }
+
+    @Test
+    void skipsTheEffectiveWindowRuleWhenTheActiveModelDeclaresNoWindow() {
+      new ConfigBuilder().modelName("deepseek-chat").maxInputTokens(1_048_576).build().validate();
+    }
   }
 
   @Test
@@ -884,6 +1092,9 @@ class StartupConfigValidatorTest {
         @WithName("max-input-tokens")
         Optional<Integer> maxInputTokens();
 
+        @WithName("context-tokens")
+        Optional<Integer> contextTokens();
+
         @WithName("max-output-tokens")
         Optional<Integer> maxOutputTokens();
 
@@ -941,6 +1152,7 @@ class StartupConfigValidatorTest {
           (name, probe) -> {
             var settings = emptyModelSettings();
             lenient().when(settings.maxInputTokens()).thenReturn(probe.maxInputTokens());
+            lenient().when(settings.contextTokens()).thenReturn(probe.contextTokens());
             lenient().when(settings.maxOutputTokens()).thenReturn(probe.maxOutputTokens());
             lenient().when(settings.outputBufferTokens()).thenReturn(probe.outputBufferTokens());
             lenient()
