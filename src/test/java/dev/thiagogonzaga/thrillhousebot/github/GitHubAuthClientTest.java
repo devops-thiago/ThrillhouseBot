@@ -355,10 +355,22 @@ class GitHubAuthClientTest {
   }
 
   /**
-   * The bug this replaced: retention was set to GitHub's 60-minute token lifetime, which is exactly
-   * the age at which a token starts drawing 401s. The refresh's own sweep therefore deleted the
-   * entry whose 401 provoked it, and every later write in the same cascade — the second of the five
-   * in five seconds — looked up a token the first refresh had just erased and got nothing back.
+   * A refresh must not retire the entry the rest of its own cascade is still resolving against.
+   *
+   * <p>This is the boundary {@link GitHubAuthClient#OWNER_RETENTION} has to clear, and it fails in
+   * the direction that looks safe. An entry is consulted only because a write is holding a token
+   * GitHub has just refused, and the ordinary reason for that refusal is that the token has passed
+   * {@link GitHubAuthClient#GITHUB_TOKEN_LIFETIME} — so every lookup that matters happens when the
+   * entry is <em>already older than the token's whole life</em>. Size the window at that lifetime,
+   * which reads as generous, and the refresh mints at {@code issued + 60min + ε}, sweeps everything
+   * older than {@code now - 60min}, and deletes the entry for the very token whose 401 provoked it.
+   * The first write of the cascade is rescued and every later holder of that token is stranded.
+   *
+   * <p>Hence a window of {@link GitHubAuthClient#TOKEN_TTL} plus {@link
+   * GitHubAuthClient#LONGEST_WRITE_IN_FLIGHT} rather than the token lifetime, and hence {@link
+   * #theOwnerIndexMustOutliveEveryTokenItNames} pinning the relationship. Anything that shortens
+   * the window back towards the lifetime brings this failure back, and brings it back quietly: the
+   * refresh that triggers the sweep still succeeds, so only the writes behind it are lost.
    */
   @Test
   void aRefreshDoesNotSweepAwayTheEntryTheRestOfItsCascadeStillNeeds() {
