@@ -850,4 +850,44 @@ class PrReviewPromptsContentTest {
         "neither drops nor loses confidence on this ground",
         "an uncovered-line finding must survive the self-check at its own confidence (#115)");
   }
+
+  /**
+   * #569 — the review's own material discloses what was withheld from it (a pure rename, an
+   * ignore-listed or over-budget path), and the model reported that withheld work as missing in
+   * description_gaps: one posted comment named the rename and then told the maintainer to go and do
+   * it. The rule that reads the disclosure has to survive any rewording of these prompts.
+   */
+  @Test
+  void withheldMaterialIsNeverReportedAsMissingWork() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "Material WITHHELD from your input is not material ABSENT from the pull request",
+        "the prompt must separate absence from the material from absence from the PR (#569)");
+    assertContains(
+        sys,
+        "Changed files omitted from AI review",
+        "the rule must name the disclosure block the review call is given (#569)");
+    assertContains(
+        sys,
+        "missing, unimplemented, not done, or contradicting the description",
+        "a withheld path's work must not be reportable as missing (#569)");
+    assertContains(
+        sys,
+        "the claim is unverifiable",
+        "a claim whose only evidence is withheld must be dropped, not contradicted (#569)");
+  }
+
+  /** The same guard on both surfaces that emit {@code description_gaps}. */
+  @Test
+  void bothPromptsKeepWithheldPathsOutOfDescriptionGaps() {
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "a path the material lists as omitted from AI review",
+        "the review call's description_gaps must exclude withheld paths (#569)");
+    assertContains(
+        PrReviewPrompts.SUMMARY_SYSTEM,
+        "pure rename, omitted from AI review, or not reviewed IS part of this",
+        "the summary call's description_gaps must exclude withheld paths (#569)");
+  }
 }
