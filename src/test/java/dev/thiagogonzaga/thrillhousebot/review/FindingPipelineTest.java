@@ -827,6 +827,153 @@ class FindingPipelineTest {
     verify(quoteValidator).validate(any(), eq("raw legacy diff"));
   }
 
+  /** Runs the budgeted single-batch path over {@code ctx}/{@code plan}, returning the diff sent. */
+  private String captureBudgetedReviewDiff(
+      ReviewSession session,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    return captor.getValue().diff();
+  }
+
+  private static DiffBudgetPlanner.BudgetPlan singleBatchPlan(
+      DiffBudgetPlanner.DiffBatch batch, List<String> omittedByName) {
+    return new DiffBudgetPlanner.BudgetPlan(
+        List.of(batch), omittedByName, List.of(), true, null, null, null, null);
+  }
+
+  /**
+   * #569 — the pure rename is excluded from the model's input by design (#386), and the budgeted
+   * path's batch text is file sections only, so before this the review call had no way to know the
+   * rename existed and reported the PR's own described work as missing in description_gaps.
+   */
+  @Test
+  void budgetedReviewCallIsToldWhichPureRenameWasWithheldFromIt() {
+    var session = ReviewSession.create("owner/repo", 1, "Move the README", "sha");
+    var app = new FileDiff("src/App.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n");
+    var ctx =
+        reviewContext(
+            List.of(new FileDiff("docs/JAVA.md", "renamed", 0, 0, 0, null, "README.md"), app),
+            List.of(app),
+            null);
+
+    var diff =
+        captureBudgetedReviewDiff(session, ctx, singleBatchPlan(batch("src/App.java"), List.of()));
+
+    assertTrue(diff.contains("## Changed files omitted from AI review"), diff);
+    assertTrue(diff.contains("README.md → docs/JAVA.md (pure rename — no content change)"), diff);
+    assertTrue(diff.contains("### src/App.java"), diff);
+    // The notice rides inside the diff slot's untrusted fence, and quote validation still runs
+    // against the batch's own text — the disclosure must never become quotable "diff" content.
+    verify(quoteValidator).validate(any(), eq("### src/App.java\n"));
+  }
+
+  /** The same mechanism names every class of withheld path, not only the pure renames. */
+  @Test
+  void withheldNoticeAlsoNamesIgnoreListedAndOverBudgetPaths() {
+    var session = ReviewSession.create("owner/repo", 1, "Bump a dependency", "sha");
+    var app = new FileDiff("src/App.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n");
+    var ctx =
+        reviewContext(
+            List.of(new FileDiff("pom.xml", "modified", 8, 1, 9, "@@ -1 +1 @@\n+dep\n"), app),
+            List.of(app),
+            null);
+
+    var diff =
+        captureBudgetedReviewDiff(
+            session, ctx, singleBatchPlan(batch("src/App.java"), List.of("vendor/bundle.js")));
+
+    assertTrue(diff.contains("- pom.xml (excluded from review scope by the ignore list)"), diff);
+    assertTrue(diff.contains("- vendor/bundle.js (exceeded the review call budget)"), diff);
+  }
+
+  /** A rename GitHub reported without a previous path degrades to its current path alone. */
+  @Test
+  void withheldNoticeFallsBackToTheCurrentPathWhenNoPreviousOneIsReported() {
+    var session = ReviewSession.create("owner/repo", 1, "Move files", "sha");
+    var ctx =
+        reviewContext(
+            List.of(
+                new FileDiff("docs/A.md", "renamed", 0, 0, 0, null, null),
+                new FileDiff("docs/B.md", "renamed", 0, 0, 0, null, "  ")),
+            List.of(),
+            null);
+
+    var diff = captureBudgetedReviewDiff(session, ctx, singleBatchPlan(batch("a.java"), List.of()));
+
+    assertTrue(diff.contains("- docs/A.md (pure rename — no content change)"), diff);
+    assertTrue(diff.contains("- docs/B.md (pure rename — no content change)"), diff);
+  }
+
+  /** A bulk move must not crowd the diff out of the call: the tail is rolled up by count. */
+  @Test
+  void withheldNoticeRollsUpThePathsBeyondTheCap() {
+    var session = ReviewSession.create("owner/repo", 1, "Move a package", "sha");
+    var files = new ArrayList<FileDiff>();
+    for (var i = 0; i < 23; i++) {
+      files.add(
+          new FileDiff(
+              "pkg/new/File" + i + ".java",
+              "renamed",
+              0,
+              0,
+              0,
+              null,
+              "pkg/old/File" + i + ".java"));
+    }
+    var ctx = reviewContext(files, List.of(), null);
+
+    var diff = captureBudgetedReviewDiff(session, ctx, singleBatchPlan(batch("a.java"), List.of()));
+
+    assertTrue(diff.contains("pkg/old/File0.java → pkg/new/File0.java"), diff);
+    assertFalse(diff.contains("pkg/old/File22.java"), diff);
+    assertTrue(diff.contains("- (+3 more changed files omitted from AI review)"), diff);
+  }
+
+  /** Nothing withheld: the prompt the model receives is exactly the planned batch text. */
+  @Test
+  void nothingWithheldLeavesTheBudgetedPromptUnchanged() {
+    var session = ReviewSession.create("owner/repo", 1, "Ordinary PR", "sha");
+    var app = new FileDiff("src/App.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n");
+    var ctx = reviewContext(List.of(app), List.of(app), null);
+
+    var diff =
+        captureBudgetedReviewDiff(session, ctx, singleBatchPlan(batch("src/App.java"), List.of()));
+
+    assertFalse(diff.contains("omitted from AI review"), diff);
+  }
+
+  /** Every batch of a multi-call review carries the same PR-level disclosure. */
+  @Test
+  void everyBatchOfAMultiCallReviewIsToldWhatWasWithheld() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR with a move", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var ctx =
+        reviewContext(
+            List.of(new FileDiff("docs/JAVA.md", "renamed", 0, 0, 0, null, "README.md")),
+            List.of(),
+            null);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.reviewBatch(eq(session), captor.capture(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    assertEquals(2, captor.getAllValues().size());
+    for (var inputs : captor.getAllValues()) {
+      assertTrue(inputs.diff().contains("README.md → docs/JAVA.md"), inputs.diff());
+    }
+  }
+
   @Test
   void singleCallCeilingRefusalPropagatesForTheOrchestratorToFailSoft() {
     // Characterization of the single-call contract: a mid-retry ceiling refusal has no paid batch

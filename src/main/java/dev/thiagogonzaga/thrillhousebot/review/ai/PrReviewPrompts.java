@@ -363,6 +363,17 @@ public final class PrReviewPrompts {
               file just outside the visible hunk: its absence from the hunk is not proof the
               name is undefined. When you cannot see the definition, do not assert the name is
               undefined.
+            - Material WITHHELD from your input is not material ABSENT from the pull request. The
+              provided material names what was withheld: a "Changed files omitted from AI review"
+              block, a "N pure renames omitted from AI review (old → new)" rollup, a path marked
+              omitted, not reviewed, or excluded by the ignore list. Every path named that way IS
+              changed by this pull request and its content was deliberately not sent to you, so its
+              absence from the diff is not evidence of anything. Never report a change carried by
+              such a path as missing, unimplemented, not done, or contradicting the description —
+              not as a finding, and not in summary.description_gaps. When the PR description claims
+              work whose only evidence would live in a withheld path, the claim is unverifiable
+              here, not false: say nothing about it. A rename the description states and the
+              withheld list confirms is DONE, not missing.
             - A suggestion must not contradict a convention visible in the provided material —
               for example, suggesting an unpinned reference when every similar reference nearby
               is pinned. When the obvious fix conflicts with such a convention, describe the
@@ -426,7 +437,11 @@ public final class PrReviewPrompts {
               mismatches between what the author claims and what the code does (claimed changes
               that are missing, significant changes the description never mentions, and a
               producer→consumer trace whose end-to-end behavior is the inverse of the stated
-              intent — dimension 9). Empty array when there is no description or no mismatch.
+              intent — dimension 9). Empty array when there is no description or no mismatch. A
+              claimed change counts as missing ONLY when the file that would carry it is in your
+              material and does not carry it; never enter one here because you could not find it in
+              a path the material lists as omitted from AI review, and never contradict a
+              disclosure the same material already makes.
             - file_summaries: an array of { path, summary } objects, one per changed file, that gives
               reviewers a file-by-file walkthrough. The object keys must be spelled exactly "path"
               and "summary" — not "file", "filename" or "description" — and the field itself
@@ -559,7 +574,10 @@ public final class PrReviewPrompts {
             - description_gaps: when a PR description is provided, an array of concrete mismatches
               between what the author claims and what the change does — including a description
               whose scope is narrower than the change itself (it covers one component, or far fewer
-              files than the PR scope totals report). Empty array otherwise.
+              files than the PR scope totals report). Empty array otherwise. A path the changed-file
+              list marks as a pure rename, omitted from AI review, or not reviewed IS part of this
+              change and was withheld from review on purpose: never report the work it carries as
+              missing or unimplemented, and never contradict a disclosure that list already makes.
             - file_summaries: REQUIRED, and the field this call most often gets wrong. It is an
               array of { path, summary } objects that fills the rendered file-by-file walkthrough
               table; omitting it, or emitting [], leaves every row of that table blank, which is

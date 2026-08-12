@@ -60,10 +60,29 @@ public class FindingPipeline {
   /** Directory rows listed in the scope header before the remainder is rolled up by count. */
   private static final int MAX_SCOPE_DIRECTORIES = 10;
 
+  /** Withheld paths named in the review call's notice before the rest is rolled up by count. */
+  private static final int MAX_WITHHELD_PATHS = 20;
+
   private record BatchOutcome(
       int index,
       List<ReviewResponse.Finding> findings,
       List<ReviewResponse.PreviousFindingStatus> statuses) {}
+
+  /**
+   * The shared prompt template for a review call plus the PR-level {@linkplain
+   * #withheldMaterialNotice withheld-material notice}, so every call this class assembles material
+   * for carries the same disclosure and the prefixing lives in one place. The notice rides inside
+   * the diff slot's untrusted fence — the paths in it come from the pull request — while the rule
+   * that acts on it is in the trusted system prompt.
+   */
+  private record BatchPrompts(AiReviewService.PromptInputs template, String withheldNotice) {
+
+    AiReviewService.PromptInputs forBatch(
+        DiffBudgetPlanner.DiffBatch batch, String baseComparison) {
+      return withDiff(
+          template, PromptTemplateEscaper.fence(withheldNotice + batch.text()), baseComparison);
+    }
+  }
 
   private final AiReviewService aiReviewService;
   private final FindingQuoteValidator quoteValidator;
@@ -150,10 +169,8 @@ public class FindingPipeline {
       budgetedBatch = plan.batches().get(0);
       // The base comparison stays: the planner counted it in the shared overhead.
       singleInputs =
-          withDiff(
-              promptInputs,
-              PromptTemplateEscaper.fence(budgetedBatch.text()),
-              promptInputs.baseComparison());
+          new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan))
+              .forBatch(budgetedBatch, promptInputs.baseComparison());
       quoteSource = budgetedBatch.text();
     }
     var aiResponse = aiReviewService.review(session, singleInputs);
@@ -205,6 +222,7 @@ public class FindingPipeline {
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
     var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList());
 
+    var batchPrompts = new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan));
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -215,13 +233,13 @@ public class FindingPipeline {
                       CompletableFuture.supplyAsync(
                           () ->
                               processBatch(
-                                  i, batches, session, promptInputs, plan, previousFilesById),
+                                  i, batches, session, batchPrompts, plan, previousFilesById),
                           executor))
               .toList();
       joinBatchOutcomes(
           futures,
           batches,
-          promptInputs,
+          batchPrompts,
           plan,
           session,
           previousFilesById,
@@ -243,7 +261,7 @@ public class FindingPipeline {
         plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
         continue;
       }
-      retryBatch(index, batches, session, promptInputs, plan, previousFilesById, outcomesByIndex);
+      retryBatch(index, batches, session, batchPrompts, plan, previousFilesById, outcomesByIndex);
     }
 
     var outcomes =
@@ -388,13 +406,13 @@ public class FindingPipeline {
       int index,
       List<DiffBudgetPlanner.DiffBatch> batches,
       ReviewSession session,
-      AiReviewService.PromptInputs promptInputs,
+      BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById,
       BatchOutcome[] outcomesByIndex) {
     try {
       outcomesByIndex[index] =
-          processBatch(index, batches, session, promptInputs, plan, previousFilesById);
+          processBatch(index, batches, session, prompts, plan, previousFilesById);
       Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
     } catch (TokenSpendCeilingExceededException e) {
       // The gate above passed but a concurrent late callback (e.g. a timed-out attempt's usage)
@@ -411,7 +429,7 @@ public class FindingPipeline {
         // salvage-or-disclose step as a parallel-pass truncation, and no further retry (#495).
         outcomesByIndex[index] =
             salvageTruncatedBatch(
-                session, index, batches, promptInputs, plan, previousFilesById, truncation.get());
+                session, index, batches, prompts, plan, previousFilesById, truncation.get());
         return;
       }
       // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
@@ -440,7 +458,7 @@ public class FindingPipeline {
   private void joinBatchOutcomes(
       List<CompletableFuture<BatchOutcome>> futures,
       List<DiffBudgetPlanner.DiffBatch> batches,
-      AiReviewService.PromptInputs promptInputs,
+      BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       ReviewSession session,
       Map<Integer, String> previousFilesById,
@@ -457,7 +475,7 @@ public class FindingPipeline {
           // the complete leading findings out of the buffered partial body first (#500).
           outcomesByIndex[i] =
               salvageTruncatedBatch(
-                  session, i, batches, promptInputs, plan, previousFilesById, truncation.get());
+                  session, i, batches, prompts, plan, previousFilesById, truncation.get());
         } else if (isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
@@ -486,11 +504,11 @@ public class FindingPipeline {
       int index,
       List<DiffBudgetPlanner.DiffBatch> batches,
       ReviewSession session,
-      AiReviewService.PromptInputs promptInputs,
+      BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById) {
     var batch = batches.get(index);
-    var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
+    var batchInputs = prompts.forBatch(batch, "");
     var batchResponse =
         aiReviewService.reviewBatch(session, batchInputs, index + 1, batches.size());
     return refineBatchOutcome(
@@ -543,7 +561,7 @@ public class FindingPipeline {
       ReviewSession session,
       int index,
       List<DiffBudgetPlanner.DiffBatch> batches,
-      AiReviewService.PromptInputs promptInputs,
+      BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById,
       AiResponseTruncatedException truncation) {
@@ -566,7 +584,7 @@ public class FindingPipeline {
         salvaged.findings().size(),
         salvaged.previousFindingsStatus().size());
     plan.recordResponseCutFiles(filenamesOf(batch.files()));
-    var batchInputs = withDiff(promptInputs, PromptTemplateEscaper.fence(batch.text()), "");
+    var batchInputs = prompts.forBatch(batch, "");
     var partialResponse =
         new ReviewResponse(salvaged.findings(), salvaged.previousFindingsStatus(), null);
     return refineBatchOutcome(
@@ -853,6 +871,72 @@ public class FindingPipeline {
       case "justified" -> 1;
       default -> 0;
     };
+  }
+
+  /**
+   * The review call's disclosure of what this pull request changes that its diff deliberately does
+   * NOT show: pure renames (excluded by #386), paths the ignore list took out of review scope, and
+   * files the token budget could not fit. Without it the model reads absence from its material as
+   * absence from the pull request and reports finished work as missing — the walkthrough lists the
+   * renamed file while {@code description_gaps} claims the rename the PR body describes is not in
+   * the diff (#569).
+   *
+   * <p>The budgeted path is where this bites, and it is why the disclosure has to be rebuilt here:
+   * a batch's text is file sections only, so the rollup {@link
+   * ReviewDiffFormatter#buildDiffStringWithStats} puts in the legacy raw diff's header never
+   * reaches the call — and budgeting is on by default, so in practice no review call ever saw it.
+   * The wording deliberately matches that rollup's ("omitted from AI review"), so the system
+   * prompt's rule recognizes either form.
+   *
+   * <p>Returns empty when nothing was withheld, leaving an ordinary PR's prompt byte-identical.
+   * Uses {@code ctx.files()} minus {@code ctx.reviewableFiles()}, which is exactly the material the
+   * review call cannot see, so a path withheld for any reason is named rather than only the classes
+   * enumerated here.
+   */
+  private static String withheldMaterialNotice(
+      ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
+    var reviewable = ReviewDiffFormatter.namesOf(ctx.reviewableFiles());
+    var rows = new ArrayList<String>();
+    for (var file : ctx.files()) {
+      if (reviewable.contains(file.filename())) {
+        continue;
+      }
+      rows.add(
+          ReviewDiffFormatter.isPureRename(file)
+              ? renamePath(file) + " (pure rename — no content change)"
+              : file.filename() + " (excluded from review scope by the ignore list)");
+    }
+    // Planned omissions are reviewable files that did not fit any batch: withheld for a third
+    // reason, and just as invisible to this call as the two above.
+    for (var name : plan.omittedFiles()) {
+      rows.add(name + " (exceeded the review call budget)");
+    }
+    if (rows.isEmpty()) {
+      return "";
+    }
+    var sb =
+        new StringBuilder(
+            "## Changed files omitted from AI review\n"
+                + "Each path below IS changed by this pull request. Its content was withheld from"
+                + " the diff below, so nothing about it can appear in the material you were"
+                + " given.\n");
+    for (var row : rows.subList(0, Math.min(rows.size(), MAX_WITHHELD_PATHS))) {
+      sb.append("- ").append(row).append('\n');
+    }
+    if (rows.size() > MAX_WITHHELD_PATHS) {
+      sb.append("- (+")
+          .append(rows.size() - MAX_WITHHELD_PATHS)
+          .append(" more changed files omitted from AI review)\n");
+    }
+    return sb.append('\n').toString();
+  }
+
+  /** "old → new" for a rename that carries its previous path, else the current path alone. */
+  private static String renamePath(GitHubPullRequestClient.FileDiff file) {
+    var previous = file.previousFilename();
+    return previous == null || previous.isBlank()
+        ? file.filename()
+        : previous + " → " + file.filename();
   }
 
   /** Copies the shared prompt context, swapping the diff and base-comparison slots. */
