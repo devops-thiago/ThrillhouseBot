@@ -27,7 +27,9 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * concise} named model: a reply is short prose, so it carries the concise response cap ({@code
  * REVIEW_CONCISE_MAX_OUTPUT_TOKENS}) instead of the batch review's allowance.
  */
-@RegisterAiService(modelName = "concise")
+@RegisterAiService(
+    modelName = "concise",
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface ReplyAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

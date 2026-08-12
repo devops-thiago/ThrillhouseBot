@@ -26,12 +26,20 @@ import jakarta.enterprise.context.ApplicationScoped;
  * Stateless streaming AI service for the PR review call, whose response scales with finding count
  * and therefore carries the default model's response cap. The final summary call lives on {@link
  * PrSummarizer}, bound to the {@code concise} named model, so its fixed-shape response gets a
- * tighter cap. Application-scoped because there is no chat memory / {@code @MemoryId} — request
- * scope would break parallel map-reduce batches that run on virtual threads without an inherited
- * CDI request context.
+ * tighter cap. Application-scoped because request scope would break parallel map-reduce batches
+ * that run on virtual threads without an inherited CDI request context.
+ *
+ * <p>Chat memory is disabled explicitly. Omitting {@code chatMemoryProviderSupplier} does not make
+ * a service stateless: the annotation defaults to {@code BeanChatMemoryProviderSupplier}, so the
+ * extension's default {@code MessageWindowChatMemory} applies, and with no {@code @MemoryId}
+ * parameter every call shares one default memory id — which made each review resend the previous
+ * reviews' prompts and answers (#584). State for a review is carried by the previous-findings
+ * context, the code check for whether a finding was fixed, and user comments, never by conversation
+ * history.
  */
 @ApplicationScoped
-@RegisterAiService
+@RegisterAiService(
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface PrReviewer {
 
   // {{repoInstructions}} carries the pre-rendered trailing guidance: available repository labels

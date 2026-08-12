@@ -27,7 +27,8 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * returns JSON (parsed by {@link ImprovementParser}) so each improvement can be posted as a
  * committable suggestion anchored to the diff.
  */
-@RegisterAiService
+@RegisterAiService(
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface PrImproveAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

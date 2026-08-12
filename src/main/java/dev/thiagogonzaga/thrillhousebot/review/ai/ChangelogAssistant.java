@@ -26,7 +26,8 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * (Added/Changed/Fixed/Security…). Returns the entry as plain Markdown — like the describe and
  * reply assistants, there is no JSON schema to parse.
  */
-@RegisterAiService
+@RegisterAiService(
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface ChangelogAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

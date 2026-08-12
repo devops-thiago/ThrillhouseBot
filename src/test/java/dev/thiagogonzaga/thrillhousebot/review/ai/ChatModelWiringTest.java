@@ -16,17 +16,34 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 import io.quarkiverse.langchain4j.ModelName;
+import io.quarkus.test.junit.QuarkusMock;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -62,6 +79,8 @@ class ChatModelWiringTest {
   @Inject
   @ModelName("concise")
   StreamingChatModel conciseStreamingChatModel;
+
+  @Inject PrReviewer prReviewer;
 
   @Test
   void blockingModelCarriesConfiguredTuning() {
@@ -118,6 +137,93 @@ class ChatModelWiringTest {
         "the concise lane sends its own effort, not the active model's 'Medium'");
     assertEquals(0.3, params.temperature());
     assertEquals(0.95, params.topP());
+  }
+
+  /**
+   * Review calls are stateless by design — state is carried by the previous-findings context, the
+   * code check for whether a finding was fixed, and user comments, never by conversation history.
+   * Without an explicit opt-out every {@code @RegisterAiService} interface gets the extension's
+   * default {@code MessageWindowChatMemory}, and because none of them declare {@code @MemoryId}
+   * every call shares one memory id: the second review would resend the first review's prompt and
+   * answer (#584).
+   *
+   * <p>The two reviews run on a plain virtual-thread executor, the shape {@code
+   * ReviewExecutorProducer} gives the real review path, so no CDI request context is active — the
+   * only default memory-id provider the extension ships resolves the request-context state and
+   * returns {@code null} there, leaving the constant fallback id shared by every PR the process
+   * ever reviews. Distinct diffs make that concrete: neither request may carry the other's.
+   */
+  @Test
+  void reviewRequestsCarryOnlyTheCurrentUserMessage() throws Exception {
+    var requests = new CopyOnWriteArrayList<List<ChatMessage>>();
+    QuarkusMock.installMockForType(
+        new CapturingStreamingChatModel(requests), StreamingChatModel.class);
+
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      executor.submit(() -> streamOneReview("diff-of-the-first-pr")).get(30, TimeUnit.SECONDS);
+      executor.submit(() -> streamOneReview("diff-of-the-second-pr")).get(30, TimeUnit.SECONDS);
+    }
+
+    assertEquals(2, requests.size(), "both review calls must reach the model");
+    var second = requests.get(1);
+    assertEquals(
+        0,
+        second.stream().filter(AiMessage.class::isInstance).count(),
+        "a review request must carry no assistant messages — chat memory is replaying prior"
+            + " answers: "
+            + describe(second));
+    assertEquals(
+        1,
+        second.stream().filter(dev.langchain4j.data.message.UserMessage.class::isInstance).count(),
+        "a review request must carry exactly one user message — chat memory is replaying prior"
+            + " prompts: "
+            + describe(second));
+    assertFalse(
+        second.stream().anyMatch(message -> message.toString().contains("diff-of-the-first-pr")),
+        "a review request must not carry another review's diff");
+  }
+
+  private Void streamOneReview(String diff) {
+    var done = new CompletableFuture<Void>();
+    prReviewer
+        .reviewStream(diff, "prContext", "baseComparison", "stack", "tests", "previous", "instr")
+        .onPartialResponse(token -> {})
+        .onCompleteResponse(response -> done.complete(null))
+        .onError(done::completeExceptionally)
+        .start();
+    try {
+      done.get(30, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    } catch (ExecutionException | TimeoutException e) {
+      throw new IllegalStateException(e);
+    }
+    return null;
+  }
+
+  private static String describe(List<ChatMessage> messages) {
+    return messages.stream().map(m -> m.type().toString()).toList().toString();
+  }
+
+  /** Records the messages of every request instead of calling a provider. */
+  private record CapturingStreamingChatModel(List<List<ChatMessage>> requests)
+      implements StreamingChatModel {
+
+    @Override
+    public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+      requests.add(List.copyOf(request.messages()));
+      handler.onPartialResponse("{}");
+      handler.onCompleteResponse(
+          ChatResponse.builder()
+              .aiMessage(AiMessage.from("{}"))
+              .metadata(
+                  ChatResponseMetadata.builder()
+                      .finishReason(FinishReason.STOP)
+                      .tokenUsage(new TokenUsage(1, 1))
+                      .build())
+              .build());
+    }
   }
 
   public static class TuningEnabled implements QuarkusTestProfile {

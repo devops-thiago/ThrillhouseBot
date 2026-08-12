@@ -25,7 +25,8 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * Suggests an improved PR title and description generated from the diff. Returns the suggestion as
  * plain Markdown — like the reply assistant, there is no JSON schema to parse.
  */
-@RegisterAiService
+@RegisterAiService(
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
 public interface PrDescribeAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
