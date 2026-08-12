@@ -588,13 +588,33 @@ public class ReviewDiffFormatter {
       return section;
     }
     if (maxLines == 1) {
-      return "(patch truncated)\n";
+      return clippedHeader(lines[0]);
     }
 
     int fenceStart = diffFenceStart(lines);
     return fenceStart < 0
         ? truncatePlain(section, lines, maxLines)
         : truncateFenced(lines, fenceStart, maxLines);
+  }
+
+  /**
+   * The one-line degradation of a section (#603). The {@code ### <path>} header is structural, not
+   * clippable content: dropping it leaves the prompt holding a file's slot with no file name, so
+   * the model is asked to review a change it cannot identify and any path-keyed instruction has
+   * nothing to bind to. The worst case must be a named file with no visible patch.
+   *
+   * <p>The truncation notice folds into the header's own parenthetical instead of trailing it, so
+   * the line still reads as {@code ### <path> (…)} for consumers that scope by file (see {@code
+   * FindingQuoteValidator.indexDiff}, which cuts the path at the last {@code " ("}). A first line
+   * that is not a section header is left as the bare notice.
+   */
+  private static String clippedHeader(String firstLine) {
+    if (!firstLine.startsWith("### ")) {
+      return "(patch truncated)\n";
+    }
+    return firstLine.endsWith(")")
+        ? firstLine.substring(0, firstLine.length() - 1) + ", patch truncated)\n"
+        : firstLine + " (patch truncated)\n";
   }
 
   /** Index of the opening ```` ```diff ```` fence, or -1 when the section has no fenced patch. */
