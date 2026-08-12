@@ -1180,6 +1180,60 @@ class AiReviewServiceTest {
     assertEquals(partial, thrown.partialBody(), "the marked copy must keep the salvage input");
   }
 
+  @Test
+  void aTruncatedSummarysMessageNamesTheSameCapItsConciseFlagDoes() {
+    // #581: the message and the concise flag are two halves of one statement about which cap cut
+    // the call. Built apart — active-model wording at the stream site, the flag patched on after
+    // the throw — they drifted: a summary truncation carried conciseModelImplicated=true next to
+    // a message telling the operator to raise a knob that, per that very flag, does not cap it.
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            invocation -> new TruncatedTokenStream("{\"summary\":{\"total_findings\":2", starts));
+
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
+    var thrown =
+        assertThrows(AiResponseTruncatedException.class, () -> service.summarize(session, inputs));
+
+    assertTrue(thrown.conciseModelImplicated(), "the summary call runs on the concise named model");
+    assertTrue(
+        thrown.getMessage().contains("raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+        "the message must name the cap its own flag points at: " + thrown.getMessage());
+    assertFalse(
+        thrown.getMessage().contains("Raise the active model's max-output-tokens"),
+        "the active model's cap does not bound the concise binding: " + thrown.getMessage());
+  }
+
+  @Test
+  void aTruncatedReviewKeepsTheActiveModelsRemedy() {
+    // The other half of the same guarantee: the review lane is bound to the active model, so its
+    // truncation must keep naming max-output-tokens — the lane decides the wording, not a default.
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(invocation -> new TruncatedTokenStream("{\"findings\":[", starts));
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertFalse(thrown.conciseModelImplicated());
+    assertTrue(
+        thrown.getMessage().contains("Raise the active model's max-output-tokens"),
+        thrown.getMessage());
+    assertFalse(
+        thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"), thrown.getMessage());
+  }
+
   private static ReviewSession reviewSession() {
     var session = new ReviewSession();
     session.id = 42L;
