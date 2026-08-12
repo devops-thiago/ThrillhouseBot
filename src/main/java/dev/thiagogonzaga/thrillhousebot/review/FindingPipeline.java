@@ -68,6 +68,21 @@ public class FindingPipeline {
       List<ReviewResponse.Finding> findings,
       List<ReviewResponse.PreviousFindingStatus> statuses) {}
 
+  /**
+   * Everything one multi-call review's batch lane needs beyond the index of the batch being worked
+   * on: the planned batches, the session the calls are billed to, the shared prompt template, the
+   * plan the coverage disclosures are recorded on, and the previous-finding file index the statuses
+   * are scoped against. One value because these five are fixed for the whole lane and travel
+   * together through every step of it — the parallel pass, the join, the sequential retry and the
+   * truncation salvage — so the step a batch is in is the only thing its signature has to say.
+   */
+  private record BatchRun(
+      List<DiffBudgetPlanner.DiffBatch> batches,
+      ReviewSession session,
+      BatchPrompts prompts,
+      DiffBudgetPlanner.BudgetPlan plan,
+      Map<Integer, String> previousFilesById) {}
+
   /** The rendered file-section header {@link ReviewDiffFormatter#formatFileSection} emits. */
   private static final String SECTION_HEADER_PREFIX = "### ";
 
@@ -92,6 +107,25 @@ public class FindingPipeline {
           baseComparison,
           ReviewPromptAssembler.combineSections(
               template.repoInstructions(), heuristicFailureModesFor(batch)));
+    }
+
+    /**
+     * Copies the shared prompt context, swapping the diff, base-comparison and trailing-guidance
+     * slots.
+     */
+    private static AiReviewService.PromptInputs withDiff(
+        AiReviewService.PromptInputs base,
+        String diff,
+        String baseComparison,
+        String repoInstructions) {
+      return new AiReviewService.PromptInputs(
+          diff,
+          base.prContext(),
+          baseComparison,
+          base.projectStack(),
+          base.relatedTests(),
+          base.previousFindings(),
+          repoInstructions);
     }
   }
 
@@ -321,29 +355,21 @@ public class FindingPipeline {
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
     var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList());
 
-    var batchPrompts = new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan));
+    var run =
+        new BatchRun(
+            batches,
+            session,
+            new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan)),
+            plan,
+            previousFilesById);
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
       var futures =
           IntStream.range(0, batches.size())
-              .mapToObj(
-                  i ->
-                      CompletableFuture.supplyAsync(
-                          () ->
-                              processBatch(
-                                  i, batches, session, batchPrompts, plan, previousFilesById),
-                          executor))
+              .mapToObj(i -> CompletableFuture.supplyAsync(() -> processBatch(i, run), executor))
               .toList();
-      joinBatchOutcomes(
-          futures,
-          batches,
-          batchPrompts,
-          plan,
-          session,
-          previousFilesById,
-          outcomesByIndex,
-          failedIndices);
+      joinBatchOutcomes(futures, run, outcomesByIndex, failedIndices);
     }
 
     for (int index : failedIndices) {
@@ -360,7 +386,7 @@ public class FindingPipeline {
         plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
         continue;
       }
-      retryBatch(index, batches, session, batchPrompts, plan, previousFilesById, outcomesByIndex);
+      retryBatch(index, run, outcomesByIndex);
     }
 
     var outcomes =
@@ -501,17 +527,11 @@ public class FindingPipeline {
    * parallel pass — a mid-retry ceiling refusal or a truncation goes to disclosure (the truncation
    * salvaging first), anything else soft-fails the batch as not reviewed.
    */
-  private void retryBatch(
-      int index,
-      List<DiffBudgetPlanner.DiffBatch> batches,
-      ReviewSession session,
-      BatchPrompts prompts,
-      DiffBudgetPlanner.BudgetPlan plan,
-      Map<Integer, String> previousFilesById,
-      BatchOutcome[] outcomesByIndex) {
+  private void retryBatch(int index, BatchRun run, BatchOutcome[] outcomesByIndex) {
+    var batches = run.batches();
+    var plan = run.plan();
     try {
-      outcomesByIndex[index] =
-          processBatch(index, batches, session, prompts, plan, previousFilesById);
+      outcomesByIndex[index] = processBatch(index, run);
       Log.infof("Batch %d/%d succeeded on retry", index + 1, batches.size());
     } catch (TokenSpendCeilingExceededException e) {
       // The gate above passed but a concurrent late callback (e.g. a timed-out attempt's usage)
@@ -526,9 +546,7 @@ public class FindingPipeline {
       if (truncation.isPresent()) {
         // The parallel attempt failed transiently and the retry hit the length cap: same
         // salvage-or-disclose step as a parallel-pass truncation, and no further retry (#495).
-        outcomesByIndex[index] =
-            salvageTruncatedBatch(
-                session, index, batches, prompts, plan, previousFilesById, truncation.get());
+        outcomesByIndex[index] = salvageTruncatedBatch(index, run, truncation.get());
         return;
       }
       // Soft-fail like the on-request generators (DocGenerationService / PrImprovementService):
@@ -556,13 +574,12 @@ public class FindingPipeline {
    */
   private void joinBatchOutcomes(
       List<CompletableFuture<BatchOutcome>> futures,
-      List<DiffBudgetPlanner.DiffBatch> batches,
-      BatchPrompts prompts,
-      DiffBudgetPlanner.BudgetPlan plan,
-      ReviewSession session,
-      Map<Integer, String> previousFilesById,
+      BatchRun run,
       BatchOutcome[] outcomesByIndex,
       List<Integer> failedIndices) {
+    var batches = run.batches();
+    var plan = run.plan();
+    var session = run.session();
     for (int i = 0; i < futures.size(); i++) {
       try {
         outcomesByIndex[i] = futures.get(i).join();
@@ -572,9 +589,7 @@ public class FindingPipeline {
           // The batch's own retry below would re-send the identical prompt against the identical
           // cap (#495), so the failure goes straight to the disclose step — which now salvages
           // the complete leading findings out of the buffered partial body first (#500).
-          outcomesByIndex[i] =
-              salvageTruncatedBatch(
-                  session, i, batches, prompts, plan, previousFilesById, truncation.get());
+          outcomesByIndex[i] = salvageTruncatedBatch(i, run, truncation.get());
         } else if (isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
@@ -599,19 +614,13 @@ public class FindingPipeline {
     }
   }
 
-  private BatchOutcome processBatch(
-      int index,
-      List<DiffBudgetPlanner.DiffBatch> batches,
-      ReviewSession session,
-      BatchPrompts prompts,
-      DiffBudgetPlanner.BudgetPlan plan,
-      Map<Integer, String> previousFilesById) {
+  private BatchOutcome processBatch(int index, BatchRun run) {
+    var batches = run.batches();
     var batch = batches.get(index);
-    var batchInputs = prompts.forBatch(batch, "");
+    var batchInputs = run.prompts().forBatch(batch, "");
     var batchResponse =
-        aiReviewService.reviewBatch(session, batchInputs, index + 1, batches.size());
-    return refineBatchOutcome(
-        session, index, batch, batchInputs, batchResponse, plan, previousFilesById);
+        aiReviewService.reviewBatch(run.session(), batchInputs, index + 1, batches.size());
+    return refineBatchOutcome(index, batch, batchInputs, batchResponse, run);
   }
 
   /**
@@ -622,18 +631,16 @@ public class FindingPipeline {
    * is metered and ceiling-gated inside {@link FindingVerificationService}.
    */
   private BatchOutcome refineBatchOutcome(
-      ReviewSession session,
       int index,
       DiffBudgetPlanner.DiffBatch batch,
       AiReviewService.PromptInputs batchInputs,
       ReviewResponse batchResponse,
-      DiffBudgetPlanner.BudgetPlan plan,
-      Map<Integer, String> previousFilesById) {
+      BatchRun run) {
     var validated = quoteValidator.validate(batchResponse, batch.text());
     validated = frameworkFilter.filter(validated, batch.text());
     var verified =
         findingVerificationService.verify(
-            ledgerSessionId(session),
+            ledgerSessionId(run.session()),
             validated,
             batchInputs.diff(),
             batchInputs.projectStack(),
@@ -642,7 +649,7 @@ public class FindingPipeline {
         index,
         verified.findings(),
         scopeStatusesToBatch(
-            batchResponse.previousFindingsStatus(), batch, plan, previousFilesById));
+            batchResponse.previousFindingsStatus(), batch, run.plan(), run.previousFilesById()));
   }
 
   /**
@@ -657,13 +664,9 @@ public class FindingPipeline {
    * ceiling-gated like any other, so #509's ceiling accounting is untouched.
    */
   private BatchOutcome salvageTruncatedBatch(
-      ReviewSession session,
-      int index,
-      List<DiffBudgetPlanner.DiffBatch> batches,
-      BatchPrompts prompts,
-      DiffBudgetPlanner.BudgetPlan plan,
-      Map<Integer, String> previousFilesById,
-      AiResponseTruncatedException truncation) {
+      int index, BatchRun run, AiResponseTruncatedException truncation) {
+    var batches = run.batches();
+    var plan = run.plan();
     var batch = batches.get(index);
     var salvaged = salvager.salvage(truncation.partialBody());
     if (!salvaged.hasFindingsOrStatuses()) {
@@ -683,11 +686,10 @@ public class FindingPipeline {
         salvaged.findings().size(),
         salvaged.previousFindingsStatus().size());
     plan.recordResponseCutFiles(filenamesOf(batch.files()));
-    var batchInputs = prompts.forBatch(batch, "");
+    var batchInputs = run.prompts().forBatch(batch, "");
     var partialResponse =
         new ReviewResponse(salvaged.findings(), salvaged.previousFindingsStatus(), null);
-    return refineBatchOutcome(
-        session, index, batch, batchInputs, partialResponse, plan, previousFilesById);
+    return refineBatchOutcome(index, batch, batchInputs, partialResponse, run);
   }
 
   private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
@@ -1013,10 +1015,11 @@ public class FindingPipeline {
     }
     var sb =
         new StringBuilder(
-            "## Changed files omitted from AI review\n"
-                + "Each path below IS changed by this pull request. Its content was withheld from"
-                + " the diff below, so nothing about it can appear in the material you were"
-                + " given.\n");
+            """
+            ## Changed files omitted from AI review
+            Each path below IS changed by this pull request. Its content was withheld from \
+            the diff below, so nothing about it can appear in the material you were given.
+            """);
     for (var row : rows.subList(0, Math.min(rows.size(), MAX_WITHHELD_PATHS))) {
       sb.append("- ").append(row).append('\n');
     }
@@ -1054,6 +1057,11 @@ public class FindingPipeline {
    * before it existed. That mirrors the {@linkplain #withheldMaterialNotice withheld-material
    * notice} this class already adds after planning, and it is what the token safety margin (10% of
    * the input cap by default, ~4800 tokens against this section's ~700) is held back for.
+   *
+   * <p>Deliberately <em>not</em> moved into {@link BatchPrompts}, its only caller: {@code Log}
+   * binds its category to the enclosing class at build time, so relocating the warning below would
+   * relabel an operator-facing WARN from this class to {@code FindingPipeline$BatchPrompts} and
+   * silently break any log filter keyed on the category.
    */
   private static String heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch batch) {
     var scanned = heuristicScanSource(batch.text());
@@ -1103,25 +1111,6 @@ public class FindingPipeline {
     var name = headerLine.substring(SECTION_HEADER_PREFIX.length());
     var suffix = name.lastIndexOf(" (");
     return (suffix > 0 ? name.substring(0, suffix) : name).strip();
-  }
-
-  /**
-   * Copies the shared prompt context, swapping the diff, base-comparison and trailing-guidance
-   * slots.
-   */
-  private static AiReviewService.PromptInputs withDiff(
-      AiReviewService.PromptInputs base,
-      String diff,
-      String baseComparison,
-      String repoInstructions) {
-    return new AiReviewService.PromptInputs(
-        diff,
-        base.prContext(),
-        baseComparison,
-        base.projectStack(),
-        base.relatedTests(),
-        base.previousFindings(),
-        repoInstructions);
   }
 
   private String findingsJson(List<ReviewResponse.Finding> findings) {

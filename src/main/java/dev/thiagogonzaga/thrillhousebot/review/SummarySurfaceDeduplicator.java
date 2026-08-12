@@ -120,7 +120,7 @@ final class SummarySurfaceDeduplicator {
         claims.add(candidate);
       }
     }
-    var trimmed = new HashMap<String, String>(fileSummaries.size());
+    var trimmed = HashMap.<String, String>newHashMap(fileSummaries.size());
     for (var entry : fileSummaries.entrySet()) {
       trimmed.put(entry.getKey(), trimRestatedClauses(entry.getValue(), claims));
     }

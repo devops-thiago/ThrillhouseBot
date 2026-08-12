@@ -379,12 +379,50 @@ public class DiffBudgetPlanner {
    */
   private BoundedFindings condensePreviousFindings(String block, int capTokens) {
     var all = block.split("\n", -1);
-    var fenced =
-        all.length > 2
-            && all[0].startsWith(PromptTemplateEscaper.fencePrefix())
-            && all[0].equals(all[all.length - 1]);
+    var fenced = isFenced(all);
     var body = fenced ? List.of(all).subList(1, all.length - 1) : List.of(all);
 
+    var condensed = entryLinesOnly(body);
+
+    // The disclosure has to survive the cap that forced it, so its cost — and the fences' — comes
+    // off the top rather than being what gets dropped.
+    var reserve = tokenCounter.estimateTokens(elisionNotice(condensed.entries()));
+    if (fenced) {
+      reserve += 2 * tokenCounter.estimateTokens(all[0]);
+    }
+    var capped = longestPrefixWithin(condensed.lines(), capTokens, reserve);
+
+    var text = new StringBuilder();
+    if (fenced) {
+      text.append(all[0]).append('\n');
+    }
+    text.append(String.join("\n", capped.lines()));
+    if (fenced) {
+      text.append('\n').append(all[0]);
+    }
+    text.append('\n').append(elisionNotice(capped.dropped()));
+    return new BoundedFindings(
+        text.toString(), condensed.entries() - capped.dropped(), capped.dropped());
+  }
+
+  /**
+   * Whether the block is wrapped in the untrusted-data fence, which is only true when the first and
+   * last lines are the same fence line and there is a body between them.
+   */
+  private static boolean isFenced(String[] lines) {
+    return lines.length > 2
+        && lines[0].startsWith(PromptTemplateEscaper.fencePrefix())
+        && lines[0].equals(lines[lines.length - 1]);
+  }
+
+  /** The condensation pass's output: the surviving lines and how many entries they open. */
+  private record CondensedBody(List<String> lines, int entries) {}
+
+  /**
+   * Drops every line that continues an entry — description, quoted code, thread reply — keeping the
+   * entry lines themselves and any preamble that precedes the first entry.
+   */
+  private static CondensedBody entryLinesOnly(List<String> body) {
     var condensed = new ArrayList<String>(body.size());
     var entries = 0;
     var inEntry = false;
@@ -398,18 +436,23 @@ public class DiffBudgetPlanner {
         condensed.add(line);
       }
     }
+    return new CondensedBody(condensed, entries);
+  }
 
-    // The disclosure has to survive the cap that forced it, so its cost — and the fences' — comes
-    // off the top rather than being what gets dropped.
-    var reserve = tokenCounter.estimateTokens(elisionNotice(entries));
-    if (fenced) {
-      reserve += 2 * tokenCounter.estimateTokens(all[0]);
-    }
-    var kept = new ArrayList<String>(condensed.size());
+  /** The capping pass's output: the lines that fit and how many entries the cut dropped. */
+  private record CappedBody(List<String> lines, int dropped) {}
+
+  /**
+   * The longest leading run of {@code lines} whose estimated cost, on top of {@code reserve}, stays
+   * within {@code capTokens}. Cutting is one-way: once a line does not fit, nothing after it is
+   * reconsidered, so the kept entries are a prefix and their ids never shift.
+   */
+  private CappedBody longestPrefixWithin(List<String> lines, int capTokens, int reserve) {
+    var kept = new ArrayList<String>(lines.size());
     var used = reserve;
     var dropped = 0;
     var cutting = false;
-    for (var line : condensed) {
+    for (var line : lines) {
       if (!cutting) {
         var cost = tokenCounter.estimateTokens(line);
         if (used + cost <= capTokens) {
@@ -423,17 +466,7 @@ public class DiffBudgetPlanner {
         dropped++;
       }
     }
-
-    var text = new StringBuilder();
-    if (fenced) {
-      text.append(all[0]).append('\n');
-    }
-    text.append(String.join("\n", kept));
-    if (fenced) {
-      text.append('\n').append(all[0]);
-    }
-    text.append('\n').append(elisionNotice(dropped));
-    return new BoundedFindings(text.toString(), entries - dropped, dropped);
+    return new CappedBody(kept, dropped);
   }
 
   /**
