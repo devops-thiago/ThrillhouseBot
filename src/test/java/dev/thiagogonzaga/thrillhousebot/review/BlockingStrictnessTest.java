@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,7 +62,7 @@ class BlockingStrictnessTest {
   void withheldByConfidenceIsolatesTheHedgeAsTheReason(
       BlockingStrictness mode, RiskLevel risk, Confidence confidence, boolean withheld) {
     var f = finding(risk, confidence);
-    assertTrue(withheld == mode.withheldByConfidence(f), mode + " " + risk + "/" + confidence);
+    assertEquals(withheld, mode.withheldByConfidence(f), mode + " " + risk + "/" + confidence);
     // Withheld and blocking are mutually exclusive by construction: a withheld finding is one the
     // gate rejected, so a mode can never claim both about the same finding.
     assertFalse(mode.withheldByConfidence(f) && mode.isBlocking(f));
@@ -86,7 +87,7 @@ class BlockingStrictnessTest {
   })
   void isBlockingKeepsItsPreSplitOutcomes(
       BlockingStrictness mode, RiskLevel risk, Confidence confidence, boolean blocks) {
-    assertTrue(blocks == mode.isBlocking(finding(risk, confidence)));
+    assertEquals(blocks, mode.isBlocking(finding(risk, confidence)));
   }
 
   @ParameterizedTest

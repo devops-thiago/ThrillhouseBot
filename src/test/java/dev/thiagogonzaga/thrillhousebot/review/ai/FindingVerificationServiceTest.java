@@ -1185,7 +1185,7 @@ class FindingVerificationServiceTest {
   @Test
   void floorsAnInjectionSinkFindingWhoseOnlySanitizerMentionIsAConditionalItRejects() {
     // #608: the finding argues its own severity is critical and publishes MEDIUM, because
-    // MITIGATION_ASSERTED read "API sanitizes" out of the conditional "If the feedback API
+    // MITIGATION_ASSERTED_SUBJECT read "API sanitizes" out of the conditional "If the feedback API
     // sanitizes body on write" — a hypothesis the very next clause rejects. #575's prompt REQUIRES
     // that clause on this class, so the defeater fired on wording the prompt guarantees is there.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
@@ -1317,9 +1317,34 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void floorsAPronounAbsenceEvenWhenAnEarlierParticipleHasNoSubjectAtAll() {
+    // "HTML-escaped" is a neutralizing-verb token with no pronoun subject before it and no copula
+    // either — not an absence claim and not an asserted mitigation. The pronoun-subject scan must
+    // step over it and still read the "nothing sanitizes" that follows.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "User text, HTML-escaped only in unit fixtures, reaches innerHTML; nothing"
+                    + " sanitizes it in production.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void floorsAFindingWhoseAbsenceClaimIsWordedAsNothingIsSanitized() {
-    // The auxiliary-order twin of the pronoun-subject absence: MITIGATION_ASSERTED's first
-    // alternative starts at "is" and never sees the negating subject, so "Nothing is sanitized"
+    // The auxiliary-order twin of the pronoun-subject absence: MITIGATION_ASSERTED_BE starts at
+    // "is" and never sees the negating subject, so "Nothing is sanitized"
     // read as a mitigation and defeated the very floor the pronoun negators enable.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original =
@@ -1342,8 +1367,9 @@ class FindingVerificationServiceTest {
 
   @Test
   void doesNotFloorWhenADoSupportedMitigationFollowsThePronounAbsence() {
-    // "does escape" is emphatic but still a statement of fact, invisible to MITIGATION_ASSERTED's
-    // copula and subject-slot shapes. With the pronoun absence match dropped by NEGATING_SUBJECT,
+    // "does escape" is emphatic but still a statement of fact, invisible to the
+    // MITIGATION_ASSERTED_* copula and subject-slot shapes. With the pronoun absence match dropped
+    // by NEGATING_SUBJECT,
     // this text would otherwise floor although it says another layer neutralizes the value —
     // the over-fire direction (#594).
     when(reviewConfig.verifierEnabled()).thenReturn(false);
@@ -1357,6 +1383,55 @@ class FindingVerificationServiceTest {
                 "User comment written to innerHTML",
                 "Nothing is sanitized before innerHTML receives it, but the framework does escape"
                     + " the value at compile time.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenANegatedAbsenceIsFollowedByASubjectSlotMitigation() {
+    // The mitigation-asserted union walked leftmost-first: the negated "Nothing is sanitized"
+    // match is stepped over and the later "React escapes" subject-slot assertion still defeats
+    // the floor — the same reading the single-alternation pattern gave this text.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized on write, yet React escapes the value at render, so the"
+                    + " sink never sees live markup.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheSubjectSlotMitigationPrecedesTheCopulaOne() {
+    // Same union, opposite order: the subject-slot match sits before the copula match, so the
+    // leftmost pick has to displace the copula candidate rather than keep it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "React escapes the value at render because it is sanitized by the framework, so"
+                    + " unsanitized markup never reaches the sink.",
                 null,
                 null));
 

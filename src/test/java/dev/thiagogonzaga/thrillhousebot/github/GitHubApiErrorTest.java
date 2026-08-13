@@ -299,6 +299,32 @@ class GitHubApiErrorTest {
       assertEquals(4, body.split("\\*\\*\\*", -1).length - 1, body);
     }
 
+    /**
+     * The overlap the credential javadoc pins: a token prefix whose word-character run swallows a
+     * following "Bearer" is masked as ONE leftmost match, so the bearer wording never survives as
+     * an unmasked shape of its own.
+     */
+    @Test
+    void masksAnOverlappingTokenAndBearerAsTheLeftmostMatch() {
+      var body = loggedBody(outbound(401, "ghp_abcdefgBearer abcdefghij0123456789"));
+
+      assertEquals("*** abcdefghij0123456789", body);
+    }
+
+    /** The other direction: a bearer value that is itself a token keeps nothing past the mask. */
+    @Test
+    void masksABearerCarryingATokenValueAsOneLeftmostMatch() {
+      var body = loggedBody(outbound(401, "Bearer ghp_abcdefghij.tail and more"));
+
+      assertEquals("*** and more", body);
+    }
+
+    /** A body that is nothing but a token prefix shape, masked to its very last character. */
+    @Test
+    void masksATokenStandingAlone() {
+      assertEquals("only ***", loggedBody(outbound(401, "only ghp_0123456789abcd")));
+    }
+
     @Test
     void capsAnOverLongBodySoOneFailureCannotFloodTheLog() {
       var body = loggedBody(outbound(500, "x".repeat(4_000)));

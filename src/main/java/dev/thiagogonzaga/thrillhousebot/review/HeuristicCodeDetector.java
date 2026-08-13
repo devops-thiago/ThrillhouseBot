@@ -164,12 +164,6 @@ final class HeuristicCodeDetector {
 
   private HeuristicCodeDetector() {}
 
-  private static boolean isTestPath(String path) {
-    return TEST_DIRECTORY_SEGMENT.matcher(path).find()
-        || TEST_FILENAME_MARKER.matcher(path).find()
-        || JAVA_TEST_SUFFIX.matcher(path).find();
-  }
-
   /** Per-file scanning state derived from a {@code +++ } diff header line. */
   private record FileScope(boolean testFile, boolean javaScript) {
     private static final FileScope NONE = new FileScope(false, false);
@@ -181,6 +175,12 @@ final class HeuristicCodeDetector {
       }
       var path = header.group(1);
       return new FileScope(isTestPath(path), JS_REGEX_PATH.matcher(path).find());
+    }
+
+    private static boolean isTestPath(String path) {
+      return TEST_DIRECTORY_SEGMENT.matcher(path).find()
+          || TEST_FILENAME_MARKER.matcher(path).find()
+          || JAVA_TEST_SUFFIX.matcher(path).find();
     }
   }
 

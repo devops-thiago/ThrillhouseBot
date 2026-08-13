@@ -20,6 +20,7 @@ import jakarta.ws.rs.core.Response;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -50,19 +51,26 @@ public final class GitHubApiError {
    * an error body, but a body is untrusted text on its way to a log file, so a token-shaped run of
    * characters is masked rather than trusted to be harmless.
    *
-   * <p>Deliberately ONE alternation rather than one pattern per shape: the shapes overlap, and a
+   * <p>Deliberately ONE alternation, read as a union across this pattern and {@link
+   * #CREDENTIAL_SHAPED_VALUE}, rather than one masking pass per shape: the shapes overlap, and a
    * single pass masks each overlap as the leftmost match, whereas masking in passes decides the
    * overlap by pass order and leaves material the one-pass form masks. Whichever order is chosen,
    * {@code "…ghp_<7 chars>Bearer <20 chars>"} keeps its token prefix unmasked if the bearer pass
    * runs first, and {@code "Bearer ghp_<10 chars>.<tail>"} keeps the tail of the bearer value if
-   * the token pass does. So this stays one pattern even though it reads as four.
+   * the token pass does. So {@link #redactCredentials} still scans once, taking the leftmost match
+   * across both patterns — split in two, prefixes here and value shapes there, only because one
+   * alternation of all four shapes is more than the regex complexity budget allows.
    */
-  private static final Pattern CREDENTIAL_SHAPED =
+  private static final Pattern CREDENTIAL_SHAPED_PREFIX =
+      Pattern.compile("(?i)(gh[pousr]_\\w{10,})|(github_pat_\\w{10,})");
+
+  /**
+   * The bearer and JWT shapes — the value half of {@link #CREDENTIAL_SHAPED_PREFIX}'s union, tried
+   * second on a position tie exactly as the one-alternation form tried its alternatives in order.
+   */
+  private static final Pattern CREDENTIAL_SHAPED_VALUE =
       Pattern.compile(
-          "(?i)(gh[pousr]_\\w{10,})"
-              + "|(github_pat_\\w{10,})"
-              + "|(bearer\\s+[\\w.~+/=-]{10,})"
-              + "|(eyJ[\\w-]{8,}\\.[\\w-]{8,}\\.[\\w-]{8,})");
+          "(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}\\.[\\w-]{8,}\\.[\\w-]{8,})");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -217,6 +225,64 @@ public final class GitHubApiError {
   }
 
   /**
+   * One left-to-right masking pass over both credential patterns: at each step the leftmost match
+   * wins, a position tie goes to the prefix shapes, and scanning resumes after the mask — the
+   * verbatim {@code replaceAll} semantics of the four shapes as one alternation, kept even though
+   * the alternation itself had to be split to fit the regex complexity budget. No shape matches an
+   * empty string, so every step advances.
+   */
+  private static String redactCredentials(String text) {
+    Matcher[] shapes = {
+      CREDENTIAL_SHAPED_PREFIX.matcher(text), CREDENTIAL_SHAPED_VALUE.matcher(text)
+    };
+    var starts = new int[] {-1, -1};
+    var ends = new int[shapes.length];
+    var out = new StringBuilder(text.length());
+    var from = 0;
+    while (true) {
+      var leftmost = leftmostShape(shapes, starts, ends, from);
+      if (leftmost == -1) {
+        break;
+      }
+      out.append(text, from, starts[leftmost]).append(REDACTED);
+      from = ends[leftmost];
+      starts[leftmost] = -1;
+    }
+    return out.append(text, from, text.length()).toString();
+  }
+
+  /** A shape with no further matches; loses every comparison for the leftmost slot. */
+  private static final int NO_MORE_MATCHES = Integer.MAX_VALUE;
+
+  /**
+   * The index of the shape holding the leftmost live candidate at or past {@code from}, or -1 when
+   * both shapes are out of matches; a position tie keeps the lowest index, the one-alternation
+   * form's alternative order. Only a consumed or overtaken candidate is re-found — one at or past
+   * {@code from} is still that shape's next match, since the find that produced it proved nothing
+   * of that shape starts before it — so each shape is scanned once end to end rather than from
+   * every resume point.
+   */
+  private static int leftmostShape(Matcher[] shapes, int[] starts, int[] ends, int from) {
+    var leftmost = -1;
+    var best = NO_MORE_MATCHES;
+    for (var i = 0; i < shapes.length; i++) {
+      if (starts[i] < from) {
+        if (shapes[i].find(from)) {
+          starts[i] = shapes[i].start();
+          ends[i] = shapes[i].end();
+        } else {
+          starts[i] = NO_MORE_MATCHES;
+        }
+      }
+      if (starts[i] < best) {
+        best = starts[i];
+        leftmost = i;
+      }
+    }
+    return leftmost;
+  }
+
+  /**
    * The response body as loggable text. An inbound response is buffered first so reading it here
    * does not consume it for the caller that later inspects the same exception; a response built
    * in-process holds its entity as an object instead, and one that is closed or has no readable
@@ -239,7 +305,7 @@ public final class GitHubApiError {
       return "";
     }
     var collapsed = WHITESPACE.matcher(raw.strip()).replaceAll(" ");
-    var redacted = CREDENTIAL_SHAPED.matcher(collapsed).replaceAll(REDACTED);
+    var redacted = redactCredentials(collapsed);
     if (redacted.length() <= MAX_BODY_CHARS) {
       return redacted;
     }

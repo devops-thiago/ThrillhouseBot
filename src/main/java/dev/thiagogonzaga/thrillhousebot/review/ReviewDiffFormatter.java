@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
+import org.jboss.logging.Logger;
 
 /**
  * Applies review-scoping rules from config: skip ignored file patterns, and optionally cap total
@@ -41,6 +42,14 @@ import java.util.stream.Collectors;
  */
 @ApplicationScoped
 public class ReviewDiffFormatter {
+
+  /**
+   * Logger pinned to this class so the glob warning emitted from {@link IgnoreGlobs} keeps the
+   * category operators already filter on: the build-time {@code Log} facade binds its category to
+   * the class holding the call, which for a nested type would silently relabel the WARN to {@code
+   * ReviewDiffFormatter$IgnoreGlobs}.
+   */
+  private static final Logger LOG = Logger.getLogger(ReviewDiffFormatter.class);
 
   record GlobMatcher(PathMatcher primary, PathMatcher suffix) {}
 
@@ -65,6 +74,35 @@ public class ReviewDiffFormatter {
     static IgnoreGlobs compile(List<String> patterns) {
       var compiled = compileGlobMatchers(patterns);
       return compiled.isEmpty() ? NONE : new IgnoreGlobs(compiled);
+    }
+
+    /**
+     * Compiles the usable patterns, dropping blank and invalid ones. Warns through {@link #LOG},
+     * pinned to the enclosing class, so the operator-facing category is unchanged by this method
+     * living here.
+     */
+    private static List<GlobMatcher> compileGlobMatchers(List<String> patterns) {
+      if (patterns == null || patterns.isEmpty()) {
+        return List.of();
+      }
+      var matchers = new ArrayList<GlobMatcher>();
+      for (String raw : patterns) {
+        if (raw == null || raw.isBlank()) {
+          continue;
+        }
+        var pattern = raw.trim();
+        try {
+          var primary = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+          PathMatcher suffix =
+              pattern.startsWith("**/")
+                  ? FileSystems.getDefault().getPathMatcher("glob:" + pattern.substring(3))
+                  : null;
+          matchers.add(new GlobMatcher(primary, suffix));
+        } catch (InvalidPathException | PatternSyntaxException e) {
+          LOG.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
+        }
+      }
+      return List.copyOf(matchers);
     }
 
     /**
@@ -143,43 +181,13 @@ public class ReviewDiffFormatter {
    *
    * <p>An unparseable or empty per-repo list degrades to the global set — a repository can never
    * shrink or replace the deployment default, and a bad pattern in its list is dropped by {@link
-   * #compileGlobMatchers} rather than failing the review.
+   * IgnoreGlobs#compileGlobMatchers} rather than failing the review.
    */
   IgnoreGlobs ignoreGlobs(List<String> perRepoPatterns) {
     if (perRepoPatterns == null || perRepoPatterns.isEmpty()) {
       return globalGlobs;
     }
     return globalGlobs.union(IgnoreGlobs.compile(perRepoPatterns));
-  }
-
-  /**
-   * Deliberately <em>not</em> moved into {@link IgnoreGlobs}, its only caller: {@code Log} binds
-   * its category to the enclosing class at build time, so relocating the warning below would
-   * relabel an operator-facing WARN from this class to {@code ReviewDiffFormatter$IgnoreGlobs} and
-   * silently break any log filter keyed on the category.
-   */
-  private static List<GlobMatcher> compileGlobMatchers(List<String> patterns) {
-    if (patterns == null || patterns.isEmpty()) {
-      return List.of();
-    }
-    var matchers = new ArrayList<GlobMatcher>();
-    for (String raw : patterns) {
-      if (raw == null || raw.isBlank()) {
-        continue;
-      }
-      var pattern = raw.trim();
-      try {
-        var primary = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
-        PathMatcher suffix =
-            pattern.startsWith("**/")
-                ? FileSystems.getDefault().getPathMatcher("glob:" + pattern.substring(3))
-                : null;
-        matchers.add(new GlobMatcher(primary, suffix));
-      } catch (InvalidPathException | PatternSyntaxException e) {
-        Log.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
-      }
-    }
-    return List.copyOf(matchers);
   }
 
   boolean isIgnored(String filename) {

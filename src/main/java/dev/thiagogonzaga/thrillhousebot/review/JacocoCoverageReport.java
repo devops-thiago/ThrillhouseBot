@@ -64,6 +64,15 @@ final class JacocoCoverageReport {
   /** Ceiling on uncovered lines recorded per source file. */
   static final int MAX_LINES_PER_FILE = 5_000;
 
+  /**
+   * Separator between a JaCoCo {@code <package name>} and a source file name. Not a filesystem
+   * separator and never platform-dependent: the package name is the JVM internal binary name, which
+   * the class-file format defines as '/'-separated on every platform, and the repository paths it
+   * is matched against are git paths, also always '/'. A {@code File.separator} here would break
+   * every report produced on Windows.
+   */
+  private static final String BINARY_PACKAGE_SEPARATOR = "/";
+
   /** No coverage data — the value every failure path degrades to. */
   static final JacocoCoverageReport EMPTY = new JacocoCoverageReport(Map.of());
 
@@ -194,12 +203,7 @@ final class JacocoCoverageReport {
           var name = attribute(reader, "name", "");
           current = null;
           if (!name.isBlank() && result.size() < MAX_SOURCE_FILES) {
-            // '/' is not a filesystem separator here and must not be made platform-dependent:
-            // a JaCoCo <package name> is the JVM internal binary name, which the class-file
-            // format defines as '/'-separated on every platform, and the repository paths it is
-            // matched against are git paths, also always '/'. A File.separator here would break
-            // every report produced on Windows.
-            var path = packageName.isBlank() ? name : packageName + "/" + name;
+            var path = packageName.isBlank() ? name : packageName + BINARY_PACKAGE_SEPARATOR + name;
             current = result.computeIfAbsent(path, unused -> new TreeSet<>());
           }
         }
