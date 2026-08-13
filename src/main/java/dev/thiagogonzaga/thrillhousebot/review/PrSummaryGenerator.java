@@ -439,7 +439,7 @@ public class PrSummaryGenerator {
       return;
     }
     sb.append("### What this PR does\n");
-    sb.append(aiSummary.prPurpose().strip()).append("\n\n");
+    sb.append(MarkdownSafe.inline(aiSummary.prPurpose())).append("\n\n");
   }
 
   /** The model's non-blank description gaps; empty when there is no summary to read them from. */

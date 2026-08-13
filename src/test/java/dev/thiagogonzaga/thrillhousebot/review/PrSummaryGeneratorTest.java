@@ -363,6 +363,24 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void shouldNeutralizeHostilePrPurpose() {
+    var hostilePurpose = "Legit purpose.\n### Injected heading\n</details>\n```\n| pipe";
+    var aiSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", hostilePurpose, List.of());
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    // The purpose paragraph routes through the same helper as every other model field: it is
+    // flattened and neutralized, so no heading, </details>, fence, or pipe escapes the section.
+    assertTrue(summary.contains(MarkdownSafe.inline(hostilePurpose)), summary);
+    assertFalse(summary.contains("\n### Injected"), summary);
+    assertFalse(summary.contains("</details>"), summary);
+    assertFalse(summary.contains("```"), summary);
+  }
+
+  @Test
   void shouldOmitPurposeSectionWhenAbsentAndStillDiscloseTheGapCheck() {
     var blankSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", " ", List.of());
     var nullPurposeSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, null);
