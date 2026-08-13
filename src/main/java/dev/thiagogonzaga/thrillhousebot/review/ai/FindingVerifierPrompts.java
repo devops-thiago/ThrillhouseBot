@@ -57,7 +57,19 @@ public final class FindingVerifierPrompts {
               triggering case (the empty collection, the out-of-range index) can reach the call.
               Requiring the diff to prove the standard library makes whole classes of real defect
               unreportable — a correct "crashes with UnsupportedOperationException on an empty
-              list" finding was deleted on exactly that ground. Keep this rejection ground for repo
+              list" finding was deleted on exactly that ground. This ground likewise does NOT cover
+              documented conventions of a build tool or framework that the provided material itself
+              configures — that a Gradle Shadow build emits <base>-all.jar and Maven emits
+              <artifactId>-<version>.jar unless a finalName or archive-name override says
+              otherwise, that a lockfile-based install step requires the lockfile to be committed,
+              that a Docker COPY of a path no earlier stage or build context produces fails the
+              build at that instruction, that a framework CLI runs only the targets its project
+              file declares. A reviewer is expected to know those exactly as it is expected to know
+              List.max throws on an empty list, and the build file that settles the produced name
+              usually sits in the same diff as the instruction naming it. Judge such a finding
+              against the build file, manifest and committed filenames the material DOES show —
+              not on whether the diff restates the tool's documentation.
+              Keep this rejection ground for repo
               state not shown (files, solution or project files, manifests), for unshown callers,
               and for unshown configuration; those genuinely are outside the material.
             - suggestion_new is functionally equivalent to suggestion_old (an alias,
@@ -226,6 +238,29 @@ public final class FindingVerifierPrompts {
             validating allow-list), when the value reaching the sink is a literal or is otherwise
             not attacker-influenced, or when the sink it names is not in the diff at all.
 
+            An artifact-reference finding — one naming a build or run instruction (a Dockerfile
+            COPY or ENTRYPOINT, a workflow step, a script line) whose path, filename or artifact
+            nothing in the provided material produces — asserts a NON-EXISTENCE, so no quoted line
+            can ever show the missing thing. Requiring one rejects the entire class, which is why
+            this carve-out exists: do NOT reject such a finding on the ground that the diff does
+            not establish what the build emits. Judge it against the producing side the material
+            DOES show — the build file in the same diff (build.gradle.kts, pom.xml, package.json, a
+            Makefile) that determines the artifact name, the earlier stages and steps, and the
+            filenames the PR actually commits. When those disagree with the name the instruction
+            uses, the mismatch is demonstrated here and keeps the risk its deterministic failure
+            carries. The possibility that some pre-existing file you were not shown supplies the
+            missing path lowers CONFIDENCE only and is never a rejection: the unshown-material
+            grounds exist to stop a FINDING from resting on material nobody can see, not to let you
+            invent unshown material that rescues the code. "Not in the diff" describes the window
+            you were given, not the world. Reject it only when the provided material shows the
+            producing step or the committed file that satisfies the reference, when the finding
+            names neither a build file nor a committed filename that the material shows and so
+            rests on nothing, or when the instruction it quotes is not in the diff at all. When you
+            genuinely cannot settle it, downgrade to confidence "low" or "medium" phrased as a
+            verification request naming the build command to run — do not delete it. Deleting this
+            class is not free: both times it happened, the deliberate near-miss beside it (an
+            unpinned base image) was left standing alone as the only issue reported on that file.
+
             A producer→consumer contract finding (dimension 9) — one tracing a value from where it
             is produced to where it is consumed — spans two locations that are in different
             enclosing units by construction: the producer and the consumer are necessarily
@@ -242,7 +277,8 @@ public final class FindingVerifierPrompts {
             rule, a privileged container, a change that weakens the safety property the PR claims
             to add — IS demonstrable here and may be "high"; do not auto-downgrade it as remembered
             framework behavior. Unverifiable framework-behavior claims are at most "medium" risk
-            with "low" confidence — but a claim resting on documented language or standard-library
+            with "low" confidence — but a claim resting on documented language, standard-library,
+            or build-tool and framework-convention
             semantics is not one of those, so that cap does not apply to it either; rate it by what
             the failure costs. An injection-sink finding whose sink and tainted value are both
             visible in the provided material is likewise demonstrable here and is not capped: keep
@@ -250,7 +286,13 @@ public final class FindingVerifierPrompts {
             sanitizing layer on confidence, never on risk. Claims about the contents or behavior of
             artifacts not shown in the diff (base images, registries, installed packages,
             remote services) are not demonstrable here: downgrade any such finding above
-            "medium". A config-key documentation-completeness claim backed by the key's quoted
+            "medium". That cap is about an artifact whose CONTENTS or BEHAVIOR you cannot see, not
+            about an artifact NAME the material's own build file determines: an artifact-reference
+            finding whose instruction and producing build file are both in the provided material is
+            demonstrable here and is not capped — a COPY, ENTRYPOINT or workflow step naming
+            something the build never produces fails deterministically, for everyone, the first
+            time it is exercised.
+            A config-key documentation-completeness claim backed by the key's quoted
             definition is demonstrable from that definition rather than remembered framework
             behavior, so that cap does not apply to it; leave it at the risk the omission carries
             — normally "low", "medium" when a plausible reading of the documentation as written

@@ -114,4 +114,75 @@ class FindingVerifierPromptsContentTest {
         "visible in the provided material is likewise demonstrable here and is not capped",
         "the medium/low cap must not apply to a demonstrated injection sink (#605)");
   }
+
+  @Test
+  void verifierDoesNotTreatBuildToolConventionsAsUnestablished() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "This ground likewise does NOT cover",
+        "the verifier must not reject a finding for resting on build-tool conventions (#646)");
+    assertContains(
+        sys,
+        "documented conventions of a build tool or framework that the provided material itself",
+        "the carve-out must name the class it covers: conventions the material itself configures");
+    assertContains(
+        sys,
+        "<base>-all.jar",
+        "the kotlin #56 regression rested on Shadow's default naming, so it must be named");
+    assertContains(
+        sys,
+        "a lockfile-based install step requires the lockfile to be committed",
+        "the python #51 regression rested on lockfile requirements, so it must be named");
+    assertContains(
+        sys,
+        "a framework CLI runs only the targets its project",
+        "the angular #61 regression rested on CLI architect targets, so it must be named");
+    assertContains(
+        sys,
+        "not on whether the diff restates the tool's documentation",
+        "such a finding is judged on the build file shown, not on the diff proving the tool");
+  }
+
+  @Test
+  void verifierJudgesAnArtifactReferenceFindingOnTheProducingSideItIsShown() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "An artifact-reference finding",
+        "the verifier must judge a build/run instruction naming an unproduced path (#646)");
+    assertContains(
+        sys,
+        "asserts a NON-EXISTENCE, so no quoted line",
+        "the carve-out must name why the class cannot satisfy the quote/establish grounds");
+    assertContains(
+        sys,
+        "lowers CONFIDENCE only and is never a rejection",
+        "an unshown pre-existing file must move confidence, not delete the finding (#646)");
+    assertContains(
+        sys,
+        "invent unshown material that rescues the code",
+        "the unshown-material grounds must not be run in reverse to rescue the code (#646)");
+    assertContains(
+        sys,
+        "\"Not in the diff\" describes the window",
+        "the material window is not the world — the framing recorded on #636");
+  }
+
+  @Test
+  void artifactReferenceCarveOutKeepsItsRejectionPathsAndTheUnshownArtifactCap() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "producing step or the committed file that satisfies the reference,",
+        "a reference the material shows satisfied must stay rejectable (#646)");
+    assertContains(
+        sys,
+        "rests on nothing",
+        "a finding naming neither a build file nor a committed filename must stay rejectable");
+    assertContains(
+        sys,
+        "That cap is about an artifact whose CONTENTS or BEHAVIOR you cannot see, not",
+        "the unshown-artifact severity cap must not swallow an artifact-reference finding (#646)");
+  }
 }
