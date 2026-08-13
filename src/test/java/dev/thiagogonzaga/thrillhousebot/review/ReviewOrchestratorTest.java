@@ -3003,6 +3003,78 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void aContextWindowRejectionPostsTheWindowNamingNoticeInsteadOfTheBareRetryAdvice() {
+      // #622: a context-length rejection is deterministic — advising a bare `/review` retry
+      // repeats a request that is rejected identically every time. Both surfaces must name the
+      // window and the REVIEW_MAX_INPUT_TOKENS knob instead.
+      var session = failureSession();
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          session,
+          99L,
+          new dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException(
+              "Provider rejected the request for exceeding the model's context window", null));
+
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      var body = commentCaptor.getValue().body();
+      assertTrue(body.contains("context window"), body);
+      assertTrue(body.contains("REVIEW_MAX_INPUT_TOKENS"), body);
+      assertFalse(body.contains("reply with `/review`"), body);
+
+      var checkCaptor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+      verify(checkRunClient)
+          .updateCheckRun(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(99L),
+              checkCaptor.capture());
+      var output = checkCaptor.getValue().output();
+      assertNotNull(output, "the FAILED check run must carry a context-window title/summary");
+      assertTrue(output.title().contains("context window"), output.title());
+      assertTrue(output.summary().contains("REVIEW_MAX_INPUT_TOKENS"), output.summary());
+    }
+
+    @Test
+    void aContextWindowRejectionBuriedInTheCauseChainStillGetsTheWindowNamingNotice() {
+      var session = failureSession();
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          session,
+          0L,
+          new IllegalStateException(
+              "wrapped",
+              new dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException(
+                  "Provider rejected the request for exceeding the model's context window", null)));
+
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      assertTrue(
+          commentCaptor.getValue().body().contains("REVIEW_MAX_INPUT_TOKENS"),
+          commentCaptor.getValue().body());
+    }
+
+    @Test
     void aTruncationFailurePostsTheCapNamingNoticeInsteadOfTheBareRetryAdvice() {
       // #500 scope B: a truncation is deterministic — advising a bare `/review` retry is exactly
       // the knowably-futile call #495 exists to prevent. The notice must name the cap and the

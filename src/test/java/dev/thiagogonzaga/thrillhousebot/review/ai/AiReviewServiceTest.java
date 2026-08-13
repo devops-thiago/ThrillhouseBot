@@ -1108,6 +1108,69 @@ class AiReviewServiceTest {
   }
 
   @Test
+  void shouldNotRetryAProviderContextWindowRejection() {
+    // #622: a context-length rejection is deterministic — the identical request against the
+    // identical window is rejected identically — so exactly one full-price call must be made.
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(
+            new ErrorTokenStream(
+                new RuntimeException(
+                    "This model's maximum context length is 128000 tokens, however you requested"
+                        + " 190000 tokens")));
+
+    var thrown =
+        assertThrows(
+            AiContextWindowExceededException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertTrue(
+        thrown.getMessage().contains("context window"),
+        "the message must name the deterministic cause: " + thrown.getMessage());
+    verify(prReviewer, times(1))
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
+  }
+
+  @Test
+  void shouldNotBroadcastRetryEventsForAContextWindowRejection() {
+    // The dashboard must not show a retry that never happens.
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new ErrorTokenStream(new RuntimeException("prompt is too long: 250000")));
+
+    assertThrows(
+        AiContextWindowExceededException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    verify(broadcaster, never())
+        .broadcast(
+            argThat(
+                event ->
+                    SessionEventBroadcaster.SessionEvent.TYPE_RETRY.equals(event.type())
+                        || SessionEventBroadcaster.SessionEvent.TYPE_STREAM_FAILED.equals(
+                            event.type())));
+  }
+
+  @Test
   void shouldNotBroadcastRetryEventsForATruncatedResponse() {
     // The dashboard must not show a retry that never happens.
     var starts = new java.util.concurrent.atomic.AtomicInteger();
