@@ -1756,6 +1756,79 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenTheCommaCoordinatedFollowUpAssertsTheDefenseRuns() {
+    // The comma keeps the absence claim registered (it must, for the denial cases), so the
+    // follow-up clause "the sanitizer runs on render" — no auxiliary, verb not in the
+    // subject-slot list — needs its own mitigation reading, or the floor over-fires on a
+    // sentence that asserts the defense operates.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the sanitizer runs on render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenNoSanitizerRuns() {
+    // The defense-action reading must not swallow its own denial: "no sanitizer runs" states the
+    // defense does NOT operate, and the negating determiner before the match keeps it an absence
+    // statement.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "The value reaches innerHTML and no sanitizer runs before it, nothing escapes it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheSanitizerNeverRuns() {
+    // The defense-action verb must follow its subject directly: "the sanitizer never runs" is an
+    // absence statement, and the adverb gap that would read it as a mitigation is deliberately
+    // absent.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes the value, and the sanitizer never runs on this path.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void floorsWhenTheDefenseNounSitsInTheNextSentence() {
     // Sentence-ending punctuation is excluded from the lookahead's separator on purpose: a
     // defense noun in the NEXT sentence is a different claim and must not defuse this sentence's
