@@ -171,9 +171,9 @@ public class FindingVerificationService {
    * (#696). Under-fire is the safe direction, but not a reason to keep a hole this common. {@link
    * #claimsAbsenceAsSubject} holds it to the same subject prefix and the same defense-noun-object
    * rejection, for the same reason: "nothing can escape validation" says every value IS validated.
-   * One non-negator gap word is admitted between the modal and the verb, so an adverb ("Nothing
-   * can ever sanitize") does not hide the claim — mirroring {@link #MITIGATION_DO_SUPPORTED}'s
-   * adverb gap.
+   * One non-negator gap word is admitted between the modal and the verb, so an adverb ("Nothing can
+   * ever sanitize") does not hide the claim — mirroring {@link #MITIGATION_DO_SUPPORTED}'s adverb
+   * gap.
    */
   private static final Pattern ABSENCE_MODAL_VERB =
       Pattern.compile(
@@ -333,9 +333,9 @@ public class FindingVerificationService {
    * #MITIGATION_ASSERTED_SUBJECT} match: in "Nothing escapes, sanitizes, <i>or validates</i> the
    * value", the "or validates" pair continues the ONE absence claim the chain opened, so it must
    * not read as a mitigation — while "the framework renders the output <i>and escapes</i> it" has
-   * no such chain before its coordinator and stays the asserted mitigation it is. End-anchored
-   * like {@link #NEGATING_SUBJECT}, and consulted only for a match whose subject slot holds a
-   * {@link #COORDINATOR_SUBJECT}, so a real subject earlier in the sentence is never chained away.
+   * no such chain before its coordinator and stays the asserted mitigation it is. End-anchored like
+   * {@link #NEGATING_SUBJECT}, and consulted only for a match whose subject slot holds a {@link
+   * #COORDINATOR_SUBJECT}, so a real subject earlier in the sentence is never chained away.
    */
   private static final Pattern ABSENCE_VERB_CHAIN =
       Pattern.compile(
@@ -400,8 +400,8 @@ public class FindingVerificationService {
    * A negating determiner or preposition closing the text before a {@link
    * #MITIGATION_DEFENSE_ACTION} match ("<i>no</i> sanitizer runs", "<i>without</i> escaping
    * applied"), with room for two modifiers ("no working sanitizer runs", "not a single sanitizer
-   * runs"): the clause then states the defense does NOT operate and must not read as a
-   * mitigation. Anchored to the end of the text before the match, like {@link #NEGATING_SUBJECT}.
+   * runs"): the clause then states the defense does NOT operate and must not read as a mitigation.
+   * Anchored to the end of the text before the match, like {@link #NEGATING_SUBJECT}.
    */
   private static final Pattern NEGATING_DETERMINER =
       Pattern.compile(
@@ -816,10 +816,10 @@ public class FindingVerificationService {
   }
 
   /**
-   * A {@link #MITIGATION_DEFENSE_ACTION} hit, unless a {@link #NEGATING_DETERMINER} closes the
-   * text before it: "the sanitizer runs on render" asserts the defense operates, while "no
-   * sanitizer runs" states it does not. A region instead of a substring, like every other
-   * before-the-match check here.
+   * A {@link #MITIGATION_DEFENSE_ACTION} hit, unless a {@link #NEGATING_DETERMINER} closes the text
+   * before it: "the sanitizer runs on render" asserts the defense operates, while "no sanitizer
+   * runs" states it does not. A region instead of a substring, like every other before-the-match
+   * check here.
    */
   private static boolean hasUndeniedDefenseAction(String asserted) {
     Matcher action = MITIGATION_DEFENSE_ACTION.matcher(asserted);
@@ -869,8 +869,8 @@ public class FindingVerificationService {
 
   /**
    * Whether a mitigation-asserted match is really the tail of a coordinated absence claim: its
-   * subject slot holds a {@link #COORDINATOR_SUBJECT} and an {@link #ABSENCE_VERB_CHAIN} closes
-   * the text before it, as in "Nothing escapes, sanitizes, <i>or validates</i> the value".
+   * subject slot holds a {@link #COORDINATOR_SUBJECT} and an {@link #ABSENCE_VERB_CHAIN} closes the
+   * text before it, as in "Nothing escapes, sanitizes, <i>or validates</i> the value".
    */
   private static boolean continuesAbsenceChain(String asserted, int start, int end) {
     return COORDINATOR_SUBJECT.matcher(asserted).region(start, end).lookingAt()

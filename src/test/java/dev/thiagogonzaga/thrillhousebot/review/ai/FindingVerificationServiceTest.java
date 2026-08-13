@@ -1830,29 +1830,27 @@ class FindingVerificationServiceTest {
   }
 
   @Test
-  void doesNotFloorWhenTheMitigationFollowsAnUnbrokenTokenLongerThanTheNegationWindow() {
-    // The negation window opens on a whitespace character; when the whole window is one unbroken
-    // token (a long URL), there is none to open on, the region is empty, and the match counts as
-    // unnegated — the same reading the full-prefix scan gave it.
+  void floorsWhenNotASingleSanitizerRuns() {
+    // The negating determiner admits two modifier words: "Not a single sanitizer runs" is the
+    // same denial as "no sanitizer runs", and the defense-action reading must not swallow it.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original =
         response(
             new ReviewResponse.Finding(
+                "medium",
                 "low",
-                "high",
                 "src/components/Comment.tsx",
                 14,
                 "User comment written to innerHTML",
-                "Nothing is sanitized before innerHTML receives it, see docs#"
-                    + "a".repeat(120)
-                    + ";renderer escapes the value at render.",
+                "Not a single sanitizer runs before innerHTML receives the value, nothing escapes"
+                    + " it.",
                 null,
                 null));
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
-    assertEquals("low", result.findings().get(0).risk());
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
   }
 
   @Test
