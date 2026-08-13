@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -135,19 +136,28 @@ public class FindingVerificationService {
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * The same absence claim worded as a missing step ("no sanitization", "never escaped", "nothing
-   * sanitizes it"), with room for a few words between the negator and the neutralizing verb. The
-   * negators include the pronoun forms ("nothing", "nobody") so a subject-worded absence ("Nothing
-   * sanitizes the value") registers just like the step-worded one; {@link #MITIGATION_ASSERTED}
-   * excludes the same pronouns from its subject slot so the two never read one sentence both ways.
-   * Read as a union with {@link #UNMITIGATED_ADJECTIVE}; the two are one claim split across two
-   * patterns only because one alternation of both wordings is more than the regex complexity budget
-   * allows.
+   * The same absence claim worded as a missing step ("no sanitization", "never escaped"), with room
+   * for a few words between the negator and the neutralizing verb. Read as a union with {@link
+   * #UNMITIGATED_ADJECTIVE} and {@link #MITIGATION_ABSENT_SUBJECT}; the three are one claim split
+   * across three patterns only because one alternation of every wording is more than the regex
+   * complexity budget allows.
    */
   private static final Pattern MITIGATION_ABSENT =
       Pattern.compile(
-          "\\b(no|not|nothing|nobody|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
+          "\\b(no|not|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
               + "(sanitiz|escap|validat|parameteriz|encod)\\w*",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The absence claim worded with a pronoun subject ("Nothing sanitizes the value", "nobody escapes
+   * it before render"), so a subject-worded absence registers just like the step-worded one; {@link
+   * #MITIGATION_ASSERTED} excludes the same pronouns from its subject slot so the two never read
+   * one sentence both ways. Kept a separate pattern only because folding the pronouns into {@link
+   * #MITIGATION_ABSENT}'s negator alternation puts that pattern over the regex complexity budget.
+   */
+  private static final Pattern MITIGATION_ABSENT_SUBJECT =
+      Pattern.compile(
+          "\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}(sanitiz|escap|validat|parameteriz|encod)\\w*",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -158,15 +168,26 @@ public class FindingVerificationService {
    * The gap is one word, so an assertion of the defect that merely contains a negation ("no
    * protection against SQL injection") is not mistaken for a denial — and the one word it does
    * admit must not be a bridge verb ("does not prevent SQL injection", "never blocks XSS"), which
-   * asserts the defect rather than denying the sink; the lookahead excludes
-   * prevent/stop/block/guard/protect forms while leaving "no SQL injection here" a denial.
+   * asserts the defect rather than denying the sink. That exclusion lives in {@link
+   * #deniesTheSink}, which drops a match whose gap word is a {@link #BRIDGE_VERB_GAP} — folding it
+   * into this pattern as a lookahead puts it over the regex complexity budget — while "no SQL
+   * injection here" stays a denial.
    */
   private static final Pattern SINK_DENIED =
       Pattern.compile(
-          "\\b(no|not|never)\\s+(?!(prevent|stop|block|guard|protect))(\\w+[\\s-]+)?"
+          "\\b(no|not|never)\\s+(\\w+[\\s-]+)?"
               + "(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
               + "|path traversal|directory traversal)\\b",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A bridge verb filling {@link #SINK_DENIED}'s one-word gap ("does not <i>prevent</i> SQL
+   * injection"): the negation then targets the missing defense, not the sink, so the sentence
+   * asserts the defect and must not read as a denial. Matched against the gap group whole, so a
+   * bridge verb elsewhere in the finding changes nothing.
+   */
+  private static final Pattern BRIDGE_VERB_GAP =
+      Pattern.compile("(prevent|stop|block|guard|protect)\\w*[\\s-]+", Pattern.CASE_INSENSITIVE);
 
   /**
    * The same denial worded about the exposure rather than the class ("not exploitable", "no
@@ -559,14 +580,27 @@ public class FindingVerificationService {
         || (SQL.matcher(text).find() && STRING_BUILT.matcher(text).find());
   }
 
-  /** The absence claim in either of its two wordings; one claim, two patterns. */
+  /** The absence claim in any of its three wordings; one claim, three patterns. */
   private static boolean claimsNothingNeutralizesIt(String text) {
-    return UNMITIGATED_ADJECTIVE.matcher(text).find() || MITIGATION_ABSENT.matcher(text).find();
+    return UNMITIGATED_ADJECTIVE.matcher(text).find()
+        || MITIGATION_ABSENT.matcher(text).find()
+        || MITIGATION_ABSENT_SUBJECT.matcher(text).find();
   }
 
-  /** The sink denied by class ("no SQL injection") or by exposure ("not exploitable"). */
+  /**
+   * The sink denied by class ("no SQL injection") or by exposure ("not exploitable"). A class match
+   * whose one-word gap is a bridge verb ("does not prevent SQL injection") asserts the defect
+   * rather than denying the sink, so it does not count as a denial.
+   */
   private static boolean deniesTheSink(String asserted) {
-    return SINK_DENIED.matcher(asserted).find() || EXPLOITABILITY_DENIED.matcher(asserted).find();
+    Matcher denial = SINK_DENIED.matcher(asserted);
+    while (denial.find()) {
+      String gap = denial.group(2);
+      if (gap == null || !BRIDGE_VERB_GAP.matcher(gap).matches()) {
+        return true;
+      }
+    }
+    return EXPLOITABILITY_DENIED.matcher(asserted).find();
   }
 
   private static boolean isBlockingEligible(ReviewResponse.Finding finding) {
