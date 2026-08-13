@@ -332,11 +332,172 @@ class ReviewResultTest {
   }
 
   @Test
+  void coverageGapClauseNamesTheCallFailureSeparatelyFromTheBudgetOmissions() {
+    // #655: files whose review call failed all its retries fit the diff budget fine, so the
+    // budget wording — and its implied remedy, raising the input budget — is wrong for them. The
+    // clause must say the call did not complete, matching the summary overview's per-file note.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of("failed.java"),
+            SummaryDegradation.NONE);
+
+    var clause = ReviewResult.coverageGapClause(2, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "1 file(s) were not reviewed because the review call for them did not complete"
+                + " (failed.java)"),
+        clause);
+  }
+
+  @Test
+  void coverageGapClauseWithOnlyCallFailuresDropsTheBudgetWording() {
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of("failed.java"),
+            SummaryDegradation.NONE);
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertFalse(clause.contains("review budget"), clause);
+    assertTrue(clause.contains("the review call for them did not complete"), clause);
+  }
+
+  @Test
+  void coverageGapBriefCountsCallFailuresAsTheirOwnClass() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of("failed.java"),
+                SummaryDegradation.NONE));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("1 file(s) not reviewed (review call did not complete)"), brief);
+  }
+
+  @Test
+  void truncationDetailWithOnlyCallFailuresIsNotEmpty() {
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of("failed.java"),
+            SummaryDegradation.NONE);
+    assertFalse(detail.isEmpty());
+    assertTrue(detail.hasFileGaps());
+    // The pre-#655 convenience constructor carries no call failures.
+    assertEquals(
+        List.of(),
+        new ReviewResult.TruncationDetail(
+                List.of("a.java"), List.of(), List.of(), List.of(), SummaryDegradation.NONE)
+            .callFailedFileNames());
+  }
+
+  @Test
+  void coverageGapClauseKeepsTheLegacyCountAlongsideASummaryCut() {
+    // #659 probe B: on the legacy path (count known, no names) a detail carrying only a summary
+    // degradation skipped the numeric fallback, and nothing below it read the int — the reader
+    // was told the summary was shortened and never that files went unreviewed.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
+
+    var clause = ReviewResult.coverageGapClause(3, detail);
+
+    assertTrue(
+        clause.contains("3 file(s) were omitted because the diff exceeded the size budget"),
+        clause);
+    assertTrue(clause.contains("the summary was shortened"), clause);
+  }
+
+  @Test
+  void coverageGapClauseKeepsTheLegacyCountAlongsideACeilingSkippedSummary() {
+    // #659 probe C: same drop with the ceiling flavor of the summary degradation.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.SKIPPED_AT_CEILING);
+
+    var clause = ReviewResult.coverageGapClause(3, detail);
+
+    assertTrue(
+        clause.contains("3 file(s) were omitted because the diff exceeded the size budget"),
+        clause);
+    assertTrue(clause.contains("the summary was skipped"), clause);
+  }
+
+  @Test
+  void coverageGapClauseWithAZeroCountAndOnlyASummaryCutSkipsTheLegacyClause() {
+    // Summary-only degradation with nothing omitted: no count to disclose, so the clause is the
+    // degradation alone.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
+
+    var clause = ReviewResult.coverageGapClause(0, detail);
+
+    assertFalse(clause.contains("size budget"), clause);
+    assertTrue(clause.contains("the summary was shortened"), clause);
+  }
+
+  @Test
+  void coverageGapClauseWithAnEmptyDetailStillRendersTheLegacyCount() {
+    // #659 probe A: the empty-detail fallback is unchanged.
+    var clause = ReviewResult.coverageGapClause(3, ReviewResult.TruncationDetail.EMPTY);
+
+    assertEquals("3 file(s) were omitted because the diff exceeded the size budget", clause);
+  }
+
+  @Test
+  void coverageGapClauseDoesNotAddTheLegacyCountWhenFileGapsAreNamed() {
+    // With names known the count is already accounted for per class — adding the numeric clause
+    // would double-report the same files.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"), List.of(), List.of(), List.of(), SummaryDegradation.RESPONSE_CUT);
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertTrue(clause.contains("omitted entirely (a.java)"), clause);
+    assertFalse(clause.contains("size budget"), clause);
+  }
+
+  @Test
   void truncationDetailNormalizesNullListsToEmpty() {
-    var detail = new ReviewResult.TruncationDetail(null, null, null, null, null);
+    var detail = new ReviewResult.TruncationDetail(null, null, null, null, null, null);
     assertTrue(detail.isEmpty());
     assertEquals(List.of(), detail.spendCeilingSkippedFileNames());
     assertEquals(List.of(), detail.responseCutFileNames());
+    assertEquals(List.of(), detail.callFailedFileNames());
     assertEquals(
         SummaryDegradation.NONE,
         detail.summaryDegradation(),

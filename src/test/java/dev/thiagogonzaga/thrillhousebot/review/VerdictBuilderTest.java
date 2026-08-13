@@ -166,10 +166,11 @@ class VerdictBuilderTest {
   }
 
   @Test
-  void aFailedBatchsRuntimeUncoveredFilesHoldApprovalAndAreDisclosedAsOmitted() {
-    // Lead#3: a batch that failed all its retries records its files on the shared plan. The verdict
-    // reads that same instance and must fold them into the omitted set — holding APPROVE and naming
-    // them — exactly like a planned omission, so a partial review never claims full coverage.
+  void aFailedBatchsRuntimeUncoveredFilesHoldApprovalAndAreDisclosedAsCallFailures() {
+    // Lead#3 + #655: a batch that failed all its retries records its files on the shared plan. The
+    // verdict reads that same instance and must gate approval on them exactly like a planned
+    // omission — but the disclosure must say the review call did not complete, not blame the diff
+    // budget, so the banner agrees with the summary overview's per-file note.
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
@@ -181,15 +182,26 @@ class VerdictBuilderTest {
     assertEquals(1, result.omittedFiles());
     assertTrue(result.truncated());
     assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(List.of(), result.truncation().omittedFileNames());
+    assertEquals(List.of("failed.java"), result.truncation().callFailedFileNames());
     assertTrue(
-        result.summaryMarkdown().contains("omitted entirely (failed.java)"),
+        result
+            .summaryMarkdown()
+            .contains(
+                "1 file(s) were not reviewed because the review call for them did not complete"
+                    + " (failed.java)"),
         result.summaryMarkdown());
+    assertFalse(result.summaryMarkdown().contains("review budget"), result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("1 file(s) not reviewed (review call did not complete)"),
+        checkSummary);
   }
 
   @Test
-  void aRuntimeUncoveredFileThatWasAlsoClippedIsCountedOnceAsOmitted() {
-    // No double-count: a clipped file whose batch then failed is reported as omitted, not also as
-    // partially analyzed.
+  void aRuntimeUncoveredFileThatWasAlsoClippedIsCountedOnceAsACallFailure() {
+    // No double-count: a clipped file whose batch then failed is reported as not reviewed, not
+    // also as partially analyzed.
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
@@ -200,8 +212,52 @@ class VerdictBuilderTest {
 
     assertEquals(1, result.omittedFiles());
     assertTrue(
-        result.summaryMarkdown().contains("omitted entirely (f.java)"), result.summaryMarkdown());
+        result
+            .summaryMarkdown()
+            .contains("not reviewed because the review call for them did not complete (f.java)"),
+        result.summaryMarkdown());
     assertFalse(result.summaryMarkdown().contains("partially analyzed"), result.summaryMarkdown());
+  }
+
+  @Test
+  void aPlannedOmissionAndACallFailureAreDisclosedUnderTheirOwnReasons() {
+    // #655: the two classes coexist in one review — the planned omission keeps the budget wording,
+    // the failed call gets its own clause, and neither file is listed twice.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordUncoveredFiles(List.of("failed.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(2, result.omittedFiles());
+    assertEquals(List.of("big.java"), result.truncation().omittedFileNames());
+    assertEquals(List.of("failed.java"), result.truncation().callFailedFileNames());
+    var summary = result.summaryMarkdown();
+    assertTrue(summary.contains("omitted entirely (big.java)"), summary);
+    assertTrue(
+        summary.contains(
+            "1 file(s) were not reviewed because the review call for them did not complete"
+                + " (failed.java)"),
+        summary);
+  }
+
+  @Test
+  void aSpendCeilingSkipIsNotAlsoDisclosedAsACallFailure() {
+    // Ceiling skips flow through recordUncoveredFiles too, but their cause is a deliberate stop —
+    // the call-failed clause must not claim them.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSpendCeilingSkippedFiles(List.of("skipped.java"));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(List.of("skipped.java"), result.truncation().spendCeilingSkippedFileNames());
+    assertEquals(List.of(), result.truncation().callFailedFileNames());
+    assertFalse(result.summaryMarkdown().contains("did not complete"), result.summaryMarkdown());
   }
 
   @Test
