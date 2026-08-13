@@ -785,9 +785,14 @@ public class FindingVerificationService {
    */
   private static boolean claimsAbsenceAsSubject(String text) {
     Matcher verb = ABSENCE_SUBJECT_VERB.matcher(text);
+    // Regions instead of substrings, so stepping through the verb tokens never copies the text;
+    // with the matchers' default opaque and anchoring bounds a region IS the whole input to the
+    // pattern, so {@code \z} stops at the region end and the semantics stay those of a substring.
+    Matcher subject = NEGATING_SUBJECT_BEFORE_VERB.matcher(text);
+    Matcher object = DEFENSE_OBJECT_AFTER_VERB.matcher(text);
     while (verb.find()) {
-      if (NEGATING_SUBJECT_BEFORE_VERB.matcher(text.substring(0, verb.start())).find()
-          && !DEFENSE_OBJECT_AFTER_VERB.matcher(text.substring(verb.end())).lookingAt()) {
+      if (subject.region(0, verb.start()).find()
+          && !object.region(verb.end(), text.length()).lookingAt()) {
         return true;
       }
     }
