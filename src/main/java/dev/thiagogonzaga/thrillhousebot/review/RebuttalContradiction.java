@@ -156,8 +156,8 @@ final class RebuttalContradiction {
    * Upper bound on how far {@link #stripInlineSpans} scans past an opening backtick run for its
    * closer. An opener whose closer sits beyond the bound is treated as unclosed — literal text — so
    * untrusted prose with a stray backtick cannot swallow the rest of the reply into one "span".
-   * Under-fire is the safe direction: text left in place can only keep matches, and stripping only
-   * removes them.
+   * Text the bound leaves in place behaves exactly as it did before this scanner existed, so the
+   * bound can narrow the fix, never widen the exposure; stripping only ever removes matches.
    */
   private static final int SPAN_BODY_BOUND = 1000;
 
@@ -381,9 +381,12 @@ final class RebuttalContradiction {
    * <p>Spans are stripped only after the blockquote filter: a span's newline replacement splits its
    * line, and splitting a {@code >} line before the filter would hand the fragment after the span
    * to the filter without its {@code >} prefix — quoted material surviving as an assertion, the
-   * over-fire this method exists to prevent. The order can only leave a span unstripped in the
-   * other direction — an opener whose closer lived on a dropped blockquote line no longer closes
-   * and stays literal — which is the under-fire, keep-the-decline direction.
+   * over-fire this method exists to prevent. In the other direction the order can change what the
+   * span scan sees both ways, and neither outcome is new exposure: an opener whose closer lived on
+   * a dropped blockquote line no longer closes and its run stays literal (text the reply carried as
+   * visible prose all along, exactly what the scan yields for any unclosed run), and a drop that
+   * pulls an opener and closer within the newline bound strips more, which only removes claim
+   * matches — the keep-the-decline direction.
    */
   private static String assertedText(String rebuttal) {
     var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
@@ -413,7 +416,9 @@ final class RebuttalContradiction {
    * swallows the reply: the closer must sit within {@link #SPAN_BODY_BOUND} characters of the
    * opener, and the body may contain at most one line ending (CommonMark allows a span to cross a
    * line break; a multi-paragraph "span" here is far more likely an unclosed backtick). Anything
-   * the scan cannot classify stays in place — under-fire, the keep-the-decline direction.
+   * the scan cannot classify stays in place, which is not new exposure: unstripped text behaves
+   * exactly as every reply did before span stripping existed, while stripping only ever removes
+   * claim matches.
    *
    * <p>Each span is replaced with a newline, not a space: a space would bridge the words abutting
    * the backticks into a phrase that was never contiguous in the original reply ({@code one at
@@ -458,7 +463,9 @@ final class RebuttalContradiction {
   private static int closingRunStart(String text, int from, int delimiter) {
     var newlines = 0;
     var i = from;
-    var bound = Math.min(text.length(), from + SPAN_BODY_BOUND);
+    // +1 so a body of exactly SPAN_BODY_BOUND characters still closes, matching the {0,1000}
+    // bound of the regex passes this scanner replaced.
+    var bound = Math.min(text.length(), from + SPAN_BODY_BOUND + 1);
     while (i < bound) {
       var c = text.charAt(i);
       if (c == '`') {

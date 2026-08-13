@@ -519,6 +519,20 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldStripASpanWhoseBodyIsExactlyTheLengthBound() {
+    // 984 filler characters plus " single-threaded" make the body exactly 1000 characters, the
+    // same maximum the regex passes this scanner replaced would strip.
+    var rebuttal =
+        "Declining — the doc quotes `"
+            + "x".repeat(984)
+            + " single-threaded` and the finding is accepted risk for this release.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a span whose body sits exactly at the length bound must still be stripped whole");
+  }
+
+  @Test
   void shouldNotLetADistantCloserBeyondTheBoundSwallowTheReply() {
     var rebuttal =
         "Opening quote `starts here. "
