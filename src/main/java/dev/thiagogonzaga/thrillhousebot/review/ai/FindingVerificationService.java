@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -137,8 +138,9 @@ public class FindingVerificationService {
   /**
    * The same absence claim worded as a missing step ("no sanitization", "never escaped"), with room
    * for a few words between the negator and the neutralizing verb. Read as a union with {@link
-   * #UNMITIGATED_ADJECTIVE}; the two are one claim split across two patterns only because one
-   * alternation of both wordings is more than the regex complexity budget allows.
+   * #UNMITIGATED_ADJECTIVE} and {@link #MITIGATION_ABSENT_SUBJECT}; the three are one claim split
+   * across three patterns only because one alternation of every wording is more than the regex
+   * complexity budget allows.
    */
   private static final Pattern MITIGATION_ABSENT =
       Pattern.compile(
@@ -147,18 +149,72 @@ public class FindingVerificationService {
           Pattern.CASE_INSENSITIVE);
 
   /**
+   * The absence claim worded with a pronoun subject ("Nothing sanitizes the value", "nobody escapes
+   * it before render"), so a subject-worded absence registers just like the step-worded one; {@link
+   * #MITIGATION_ASSERTED} excludes the same pronouns from its subject slot, and {@link
+   * #assertsMitigation} drops an auxiliary-order match they precede ("Nothing is sanitized"), so
+   * the two never read one sentence both ways. A defense noun as the verb's direct object flips the
+   * sentence's meaning — "Nothing escapes validation" says every value IS validated — so the verb
+   * is held to its finite and participle forms (the noun could otherwise re-match as the verb
+   * through the word gap) and the trailing lookahead rejects a defense-stemmed word within two
+   * words of the verb, so a modified or tool-named object ("nothing escapes heavy validation",
+   * "nothing escapes the sanitizer") is rejected too, keeping the over-fire direction closed (#594)
+   * while "nothing escapes the value" stays an absence claim — a defense noun further than two
+   * words out ("nothing escapes the value before validation") no longer flips the reading. Kept a
+   * separate pattern only because folding the pronouns into {@link #MITIGATION_ABSENT}'s negator
+   * alternation puts that pattern over the regex complexity budget.
+   */
+  private static final Pattern MITIGATION_ABSENT_SUBJECT =
+      Pattern.compile(
+          "\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}(sanitiz|escap|validat|parameteriz|encod)"
+              + "(es|ed|ing)\\b(?!\\s+(\\w+\\s+){0,2}(sanitiz|escap|validat|encod|filter))",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
    * A finding that RULES THE SINK OUT rather than reporting it ("so there is no SQL injection",
    * "not vulnerable to XSS"). Both floor signals are token matches, so such a sentence satisfies
    * them out of its own negation — the sink name sits inside the denial, and a phrase like "not
    * concatenated but parameterized" matches the absence group on the very mitigation it asserts.
    * The gap is one word, so an assertion of the defect that merely contains a negation ("no
-   * protection against SQL injection") is not mistaken for a denial.
+   * protection against SQL injection") is not mistaken for a denial — and the one word it does
+   * admit must not be a bridge verb ("does not prevent SQL injection", "never blocks XSS"), which
+   * asserts the defect rather than denying the sink. That exclusion lives in {@link
+   * #deniesTheSink}, which drops a match whose gap word is a {@link #BRIDGE_VERB_GAP} — folding it
+   * into this pattern as a lookahead puts it over the regex complexity budget — while "no SQL
+   * injection here" stays a denial.
    */
   private static final Pattern SINK_DENIED =
       Pattern.compile(
           "\\b(no|not|never)\\s+(\\w+[\\s-]+)?"
               + "(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
               + "|path traversal|directory traversal)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A bridge verb filling {@link #SINK_DENIED}'s one-word gap ("does not <i>prevent</i> SQL
+   * injection"): the negation then targets the missing defense, not the sink, so the sentence
+   * asserts the defect and must not read as a denial. The stems are the warding-off family
+   * (prevent, stop, block, guard, protect, defend, prohibit, forbid, disallow, preclude, thwart,
+   * hinder, impede); an adjective or quantifier gap ("no possible SQL injection") stays a denial.
+   * Matched against the gap group whole, so a bridge verb elsewhere in the finding changes nothing.
+   * Read as a union with {@link #NEUTRALIZING_VERB_GAP}; one family per pattern only because one
+   * alternation of both is more than the regex complexity budget allows.
+   */
+  private static final Pattern BRIDGE_VERB_GAP =
+      Pattern.compile(
+          "(prevent|stop|block|guard|protect|defend|prohibit|forbid|disallow|preclude|thwart"
+              + "|hinder|impede)\\w*[\\s-]+",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The bridge verbs that remove the defect (mitigate, eliminate, avoid, fix, address, handle) or
+   * neutralize the value (sanitize, escape, validate, filter, neutralize); the second half of
+   * {@link #BRIDGE_VERB_GAP}'s union.
+   */
+  private static final Pattern NEUTRALIZING_VERB_GAP =
+      Pattern.compile(
+          "(mitigat|eliminat|avoid|fix|address|handle|sanitiz|escap|validat|filter|neutraliz)"
+              + "\\w*[\\s-]+",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -175,7 +231,11 @@ public class FindingVerificationService {
    * A finding that states the mitigation IS present ("it is escaped on render", "React escapes
    * them"). An absence claim about one layer must not floor the class when the same text says
    * another layer neutralizes the value. Negated forms are excluded, so "is not escaped" and "was
-   * never sanitized" stay absence claims instead of defeating themselves.
+   * never sanitized" stay absence claims instead of defeating themselves. The auxiliary-order
+   * alternative cannot see its own subject, so a pronoun-negated subject ("Nothing is sanitized")
+   * is excluded in {@link #assertsMitigation}, which drops a match directly preceded by a {@link
+   * #NEGATING_SUBJECT} — folding that into this pattern as lookbehinds would push it further over
+   * the regex complexity budget.
    *
    * <p>Left exactly as it stands, {@code {0,1}} and all: its complexity is over the analyzer's
    * budget and cannot come under it without dropping a copula, a verb form or the one-word gap,
@@ -186,8 +246,30 @@ public class FindingVerificationService {
       Pattern.compile(
           "\\b(is|are|was|were|gets|been|already)\\s+(?!(no|not|never)\\b)(\\w+[\\s-]+){0,1}"
               + "(sanitiz|escap|validat|parameteriz|encod)(ed|es|ing)\\b"
-              + "|\\b(?!(no|not|never|nothing)\\b)\\w+\\s+"
+              + "|\\b(?!(no|not|never|nothing|nobody)\\b)\\w+\\s+"
               + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A pronoun subject that negates the clause it opens: a {@link #MITIGATION_ASSERTED} match
+   * starting right after one ("Nothing <i>is sanitized</i> before render") is the absence claim in
+   * auxiliary order, not a mitigation. Anchored to the end of the text before the match, so a
+   * pronoun elsewhere in the finding changes nothing.
+   */
+  private static final Pattern NEGATING_SUBJECT =
+      Pattern.compile("\\b(nothing|nobody)\\s*$", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The mitigation asserted with do-support ("the framework does escape the value", "React did
+   * sanitize it"): emphatic, but still a statement of fact, and invisible to {@link
+   * #MITIGATION_ASSERTED}'s copula and subject-slot alternatives. The verb must follow the
+   * auxiliary directly, so the negated "does not escape" stays an absence claim; modals are
+   * deliberately absent — "should escape" is a recommendation, not an assertion. Kept a separate
+   * pattern because {@link #MITIGATION_ASSERTED} is already over the regex complexity budget.
+   */
+  private static final Pattern MITIGATION_DO_SUPPORTED =
+      Pattern.compile(
+          "\\b(do|does|did)\\s+(sanitiz|escap|validat|parameteriz|encod)es?\\b",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -205,20 +287,30 @@ public class FindingVerificationService {
    * needed for the same reason.
    *
    * <p>The clause ends at a real clause boundary — strong punctuation, or a coordinator that opens
-   * the consequent ("but", "so", "then"...) — and deliberately NOT at a comma. A protasis carries
-   * its own commas ("If the feedback API, per its own contract, always sanitizes the body on write,
-   * ..."), and stopping at the first one left the mitigation verb sitting in text read as asserted,
-   * which is the very under-firing this pattern exists to remove. The coordinator boundary is what
-   * keeps the consequent: "If it were stored as plain text this would be moot, but React escapes it
-   * at render" still asserts its mitigation, and that assertion must still defeat the floor, since
-   * over-firing the floor is the dangerous direction (#594).
+   * the consequent ("but", "so", "then"...) — and deliberately NOT at a comma. A coordinator
+   * immediately followed by a comma is a parenthetical still inside the protasis ("If, however, the
+   * API always sanitizes the body on write, ...") and does not end the span; stopping there left
+   * the mitigation verb in text read as asserted, the under-firing this pattern exists to remove. A
+   * protasis carries its own commas ("If the feedback API, per its own contract, always sanitizes
+   * the body on write, ..."), and stopping at the first one left the mitigation verb sitting in
+   * text read as asserted, which is the very under-firing this pattern exists to remove. The
+   * coordinator boundary is what keeps the consequent: "If it were stored as plain text this would
+   * be moot, but React escapes it at render" still asserts its mitigation, and that assertion must
+   * still defeat the floor, since over-firing the floor is the dangerous direction (#594).
    *
    * <p>Residual trade-off, chosen deliberately: a consequent separated by a bare comma and nothing
    * else ("If you follow the render path, React escapes the value") is swallowed with the protasis,
-   * so its mitigation no longer defeats the floor. Commas cannot serve both roles, and this is the
-   * safer half — the finding must ALSO name a sink and ALSO claim nothing sanitizes it before the
-   * floor can fire at all, and the floor only lifts risk, leaving confidence and every other signal
-   * where the model put them.
+   * so its mitigation no longer defeats the floor — and so is a comma-spliced consequent whose
+   * coordinator itself trails a comma ("this would be moot, however, React escapes it"), since a
+   * regex cannot tell that parenthetical from the one inside the protasis. In the other direction,
+   * a coordinator word used adverbially without a following comma ("If, however unlikely, ..." or
+   * "If, but only if, ...") still ends the span early and can leave a protasis verb read as
+   * asserted: recognizing comma-delimited parentheticals in general needs pairing the delimiters,
+   * which a bounded regex cannot do, and that phrasing is rare in review findings — accepted as
+   * residual under-fire, the safe direction. Commas cannot serve both roles, and this is the safer
+   * half — the finding must ALSO name a sink and ALSO claim nothing sanitizes it before the floor
+   * can fire at all, and the floor only lifts risk, leaving confidence and every other signal where
+   * the model put them.
    *
    * <p>Plain "should" is NOT a marker. Only inverted "Should the API sanitize ..." is a hypothesis,
    * and its bare infinitive matches none of {@link #MITIGATION_ASSERTED}'s verb forms, so listing
@@ -228,7 +320,7 @@ public class FindingVerificationService {
   private static final Pattern CONDITIONAL_CLAUSE =
       Pattern.compile(
           "\\b(if|unless|whether|in case|assuming|provided that)\\b"
-              + "(?:(?!\\b(but|so|then|however|therefore|otherwise)\\b)"
+              + "(?:(?!\\b(but|so|then|however|therefore|otherwise)\\b(?!,))"
               + "[^;:.!?\\n\\r\\u2013\\u2014])*",
           Pattern.CASE_INSENSITIVE);
 
@@ -538,7 +630,28 @@ public class FindingVerificationService {
         // stood), while over-firing escalates a non-defect and, at high confidence, blocks the
         // merge on it.
         && !deniesTheSink(asserted)
-        && !MITIGATION_ASSERTED.matcher(asserted).find();
+        && !assertsMitigation(asserted);
+  }
+
+  /**
+   * A {@link #MITIGATION_ASSERTED} or {@link #MITIGATION_DO_SUPPORTED} hit, unless the match opens
+   * with a negating pronoun subject: "Nothing is sanitized" is the absence claim in auxiliary
+   * order, and {@link #MITIGATION_ASSERTED}'s first alternative starts at the auxiliary so it never
+   * sees the subject.
+   */
+  private static boolean assertsMitigation(String asserted) {
+    return hasUnnegatedMatch(MITIGATION_ASSERTED, asserted)
+        || hasUnnegatedMatch(MITIGATION_DO_SUPPORTED, asserted);
+  }
+
+  private static boolean hasUnnegatedMatch(Pattern mitigation, String asserted) {
+    Matcher asserts = mitigation.matcher(asserted);
+    while (asserts.find()) {
+      if (!NEGATING_SUBJECT.matcher(asserted.substring(0, asserts.start())).find()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean namesInjectionSink(String text) {
@@ -547,14 +660,29 @@ public class FindingVerificationService {
         || (SQL.matcher(text).find() && STRING_BUILT.matcher(text).find());
   }
 
-  /** The absence claim in either of its two wordings; one claim, two patterns. */
+  /** The absence claim in any of its three wordings; one claim, three patterns. */
   private static boolean claimsNothingNeutralizesIt(String text) {
-    return UNMITIGATED_ADJECTIVE.matcher(text).find() || MITIGATION_ABSENT.matcher(text).find();
+    return UNMITIGATED_ADJECTIVE.matcher(text).find()
+        || MITIGATION_ABSENT.matcher(text).find()
+        || MITIGATION_ABSENT_SUBJECT.matcher(text).find();
   }
 
-  /** The sink denied by class ("no SQL injection") or by exposure ("not exploitable"). */
+  /**
+   * The sink denied by class ("no SQL injection") or by exposure ("not exploitable"). A class match
+   * whose one-word gap is a bridge verb ("does not prevent SQL injection") asserts the defect
+   * rather than denying the sink, so it does not count as a denial.
+   */
   private static boolean deniesTheSink(String asserted) {
-    return SINK_DENIED.matcher(asserted).find() || EXPLOITABILITY_DENIED.matcher(asserted).find();
+    Matcher denial = SINK_DENIED.matcher(asserted);
+    while (denial.find()) {
+      String gap = denial.group(2);
+      if (gap == null
+          || !(BRIDGE_VERB_GAP.matcher(gap).matches()
+              || NEUTRALIZING_VERB_GAP.matcher(gap).matches())) {
+        return true;
+      }
+    }
+    return EXPLOITABILITY_DENIED.matcher(asserted).find();
   }
 
   private static boolean isBlockingEligible(ReviewResponse.Finding finding) {
