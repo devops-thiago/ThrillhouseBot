@@ -4,43 +4,60 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-13
+
+On-demand commands for improving a PR and generating tests, per-repository review
+configuration, and cost controls that bound what one review may spend. Review
+accuracy work concentrates on the verifier and on saying plainly when a file was
+not read.
+
 ### Added
 
-- **Per-repo ignore patterns** (#51): a repository can now declare ignore globs of its own in an optional `.github/thrillhousebot.yml`, under `review.ignored-files`. They are **additive** — the effective set is the union of the deployment-wide `thrillhousebot.review.ignored-files` list and whatever the repository declared, so a repo can take more files out of review scope (generated dirs, vendored code, fixtures) but can never put back a file the deployment excludes. One install can therefore serve repositories with different layouts without everyone sharing a single global list. The file is read from the default branch and cached per repository for five minutes, alongside the existing instructions lookup, and fails soft in every direction: a missing file, invalid YAML, an unexpected shape, or an uncompilable glob is logged and skipped, leaving the global list in force. Operators who do not want repositories adjusting their own review scope can disable the mechanism with `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`
-- **`/improve` — whole-PR improvement pass** (#452): a new on-demand command that reads the whole change set under the token budget and posts committable suggestions for the improvements a review would otherwise only describe. Enabled by default; disable with `REVIEW_IMPROVE_ENABLED=false`
-- **`/generate-tests` — unit tests for changed code** (#461): a new on-demand command that proposes tests for the code the PR changes. The generator is handed the review's own findings (#616) so it tests intended behavior instead of canonizing the defects the review just reported, and the emitted code is held to compiling, runnable shape (#590). Enabled by default; disable with `REVIEW_GENERATE_TESTS_ENABLED=false`
-- **Per-review token spend ceiling** (#509): `REVIEW_MAX_TOKENS_PER_REVIEW` bounds the tokens one review may consume across every AI call it makes — actual input+output as the provider reports them, counting retries, the finding verifier (#521) and the final summary call. Once reached, remaining batches are disclosed as not reviewed and the summary degrades to counts rather than making further calls (#524, #530). `0` (the default) keeps the previous unbounded behavior
-- **A `concise` named model for the fixed-shape calls** (#507): the final summary, the finding verifier and maintainer replies now run on their own model binding with its own response cap, `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` (default `8192`), so they never share a cap sized for batch review output. Its reasoning effort is its own too — `AI_REASONING_EFFORT_CONCISE` (#574) — because reasoning tokens count against that cap
-- **Models may declare an output budget separate from their input window** (#496): the new `separate-output-budget` per-model flag says whether the provider bills completion against the same window as the prompt, which is what the input-budget arithmetic needs to be right on shared-window providers. Ships with `xhigh`/`max` reasoning tiers and corrected `deepseek-v4-flash` defaults (#490, #619)
-- **Patch coverage in the review context** (#467): when the PR's CI publishes a coverage report, the changed lines it does not cover are fed to the review so untested new code can be named as such. Enabled with `REVIEW_PATCH_COVERAGE_ENABLED`
-- **Path-scoped review instructions** (#460): `.github/thrillhousebot.yml` can attach extra review guidance to path globs, so a repository can hold its API surface, its migrations and its test tree to different rules without one global instruction blob
-- **Follow-up delta comment** (#459): a follow-up review can post a short "what changed since the last review" comment — new, resolved, and still-open findings — instead of leaving a maintainer to diff two summaries by eye. Enabled with `REVIEW_FOLLOW_UP_SUMMARY_ENABLED`
-- **Large-PR nudge** (#466): a large PR whose review produced no inline finding now says so explicitly, rather than reading as a silent clean bill of health for a change nobody could have read in one sitting
-- **Config-key documentation checks** (#109, #450, #465): the review pulls a documented config key's real definition out of the repository and reports documentation that is correct but incomplete — a missing default, an unstated unit, an undocumented sibling key
-- **Data-structure tracing from producer to consumer** (#117): a change to a shared record or payload shape is followed to the code that reads it, so a field renamed or narrowed at the source is reported against the consumer that still expects the old shape
-- **Decline re-check** (#453): when a maintainer declines a finding, the stated reason is re-checked against the reviewed code before the finding is recorded "justified" — it stays open one more round only when the code plainly contradicts the reason. `REVIEW_DECLINE_RECHECK_ENABLED=false` restores the unconditional close
-- **Clearing a thread-less finding from the PR conversation** (#553, #563): a finding raised below the inline-posting bar has no review thread to reply on, so commenting `@thrillhousebot resolved path/to/File.java:42 — <title>` on the PR now closes it. An interrogative (`resolved?`) is deliberately not a directive, and a directive naming no locator is answered as such
-- **Pacing for content-creating GitHub calls** (#597): `GITHUB_WRITE_MIN_INTERVAL` (default `1s`) spaces comments, review comments, thread replies and reviews process-wide so a burst never reaches GitHub's secondary rate limit in the first place, with `GITHUB_WRITE_MAX_WAIT` (default `60s`) capping any one caller's wait. A write GitHub does throttle anyway is backed off and logged with what it returned (#577), and a command dropped after that budget is spent now says so on the PR instead of vanishing (#541, #598)
+- **`/improve`** (#452): reads the whole change set under the token budget and posts committable suggestions for improvements a review would otherwise only describe. On by default; disable with `REVIEW_IMPROVE_ENABLED=false`
+- **`/generate-tests`** (#461): proposes tests for the code a PR changes. On by default; disable with `REVIEW_GENERATE_TESTS_ENABLED=false`
+- **Per-repository ignore patterns** (#51): a repository can declare its own ignore globs in `.github/thrillhousebot.yml` under `review.ignored-files`. The effective set is the union of the deployment list and the repository's, so a repository can remove files from review scope but cannot restore one the deployment excludes. The file is read from the default branch and cached for five minutes. A missing file, invalid YAML, an unexpected shape or an uncompilable glob is logged and skipped, leaving the deployment list in force. Set `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false` to disable
+- **Path-scoped review instructions** (#460): `.github/thrillhousebot.yml` can attach review guidance to path globs, so an API surface, a migration directory and a test tree can be held to different rules
+- **Per-review token spend ceiling** (#509): `REVIEW_MAX_TOKENS_PER_REVIEW` bounds the tokens one review may consume across every AI call it makes, counting retries, the finding verifier and the summary call. Once reached, remaining batches are disclosed as not reviewed and the summary degrades to counts. `0`, the default, keeps the previous unbounded behaviour
+- **A `concise` model binding for fixed-shape calls** (#507): the summary, the finding verifier and maintainer replies run on their own model with their own response cap, `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` (default `8192`), so they no longer share a cap sized for batch review output
+- **`separate-output-budget` per-model flag** (#496): declares whether a provider bills completion against the same window as the prompt, which the input-budget arithmetic needs on shared-window providers
+- **Patch coverage in the review context** (#467): when a PR's CI publishes a coverage report, the changed lines it does not cover are given to the review, so untested new code can be named as such. Off by default; enable with `REVIEW_PATCH_COVERAGE_ENABLED=true`
+- **Config-key documentation checks** (#109, #450, #465): the review reads a documented config key's real definition out of the repository and reports documentation that is incomplete, such as a missing default, an unstated unit, or an undocumented sibling key
+- **Producer-to-consumer tracing** (#117): a change to a shared record or payload shape is followed to the code that reads it, so a field renamed or narrowed at the source is reported against the consumer that still expects the old shape
+- **Decline re-check** (#453): when a maintainer declines a finding, the stated reason is checked against the reviewed code before the finding is recorded as justified. It stays open one more round only when the code contradicts the reason. `REVIEW_DECLINE_RECHECK_ENABLED=false` restores the unconditional close
+- **Clearing a finding that has no review thread** (#553): a finding raised below the inline-posting bar has no thread to reply on, so commenting `@thrillhousebot resolved path/to/File.java:42 — <title>` on the PR closes it. A question (`resolved?`) is not treated as a directive, and a directive naming no location is answered as such
+- **Follow-up delta comment** (#459): a follow-up review can post a short summary of what changed since the last one, listing new, resolved and still-open findings. Off by default; enable with `REVIEW_FOLLOW_UP_SUMMARY_ENABLED=true`
+- **Salvage of a length-capped response** (#511): findings completed before a response hit the model's length cap are kept. Previously the whole response was discarded
+- **Large-PR notice** (#466): a large PR whose review produced no inline finding now says so explicitly. Off by default; enable with `REVIEW_LARGE_PR_NUDGE_ENABLED=true`, with `REVIEW_LARGE_PR_NUDGE_MIN_FILES` and `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` setting what counts as large
+- **Write pacing for GitHub calls** (#597): `GITHUB_WRITE_MIN_INTERVAL` (default `1s`) spaces comments, review comments, thread replies and reviews across the process so a burst does not reach GitHub's secondary rate limit. `GITHUB_WRITE_MAX_WAIT` (default `60s`) caps how long one caller waits
 
 ### Changed
 
-- **`/describe`, `/changelog`, `/add-docs` and `/generate-tests` are planned as token-budgeted batches** (#463, #469): the on-demand generators no longer render one call capped by `REVIEW_MAX_DIFF_LINES`, so a large PR is covered whole instead of being reduced to its first N diff lines. `REVIEW_MAX_DIFF_LINES` now applies only to the remaining single-call renders (replies, base comparison, budgeting-disabled review)
-- **The PR summary is grounded in the whole change set** (#335): the summary call gets the authoritative file and line totals and a directory breakdown, so a change spread across several packages can no longer be described as a single-file edit when the input budget clamps the file list
-- **Security severity follows the defect class, not the reviewer's certainty** (#575, #594): an unmitigated injection sink is floored at high risk instead of drifting down when the surrounding context is only partly visible, and the floor's defeaters are scoped to clauses the material actually asserts (#610)
-- **Chat memory is disabled on every AI service** (#585): each call is stateless by construction, so no round can inherit context from an unrelated one
+- **`/describe`, `/changelog` and `/add-docs` are planned as token-budgeted batches** (#463, #469): these commands no longer render one call capped by `REVIEW_MAX_DIFF_LINES`, so a large PR is covered whole. `REVIEW_MAX_DIFF_LINES` now applies only to the remaining single-call renders, which are replies, base comparison, and review with budgeting disabled. The commands added in this release, `/improve` and `/generate-tests`, are planned the same way from the start
+- **The summary is grounded in the whole change set** (#335): the summary call is given the authoritative file and line totals and a directory breakdown, so a change spread across several packages is no longer described as a single-file edit when the input budget clamps the file list
+- **Security severity follows the defect class** (#575): an unmitigated injection sink is held at high risk even when the surrounding context is only partly visible
+- **Chat memory is disabled on every AI service** (#585): each call is stateless, so no round inherits context from an unrelated one
 
 ### Fixed
 
-- **A response cut at the model's length cap no longer discards the work already paid for** (#495, #504, #511, #582, #592, #617): findings complete before the cut are salvaged on both the multi-call and single-call lanes, the verifier keeps the verdicts its cut body already carried, a length stop is no longer retried at full price, and the truncation's remedy names the cap that actually applies to the call it came from (#595, #542)
-- **Coverage gaps hold approval instead of passing silently** (#489): a file GitHub reported with changes but no patch text, and a file whose batch call failed, are disclosed by name and withhold APPROVE rather than counting as reviewed. An unnamed file keeps its slot in that accounting instead of crashing the plan or disappearing from it (#472, #551, #621)
-- **Outgoing content stays inside GitHub's limits** (#487, #503): comment bodies are capped at 65,536 characters and check-run output fields at their own limits, so an oversized review is trimmed rather than rejected
-- **The heuristic failure-mode review dimension runs again under token budgeting** (#618): it was gated on a diff string that budgeting leaves empty, so the whole dimension was silently inert in the default configuration
-- **The previous-findings context is bounded to a share of the input budget** (#615): it grew without limit across rounds and could eventually crowd out the diff
-- **Verifier precision** (#611, #612, #613, #614): a demonstrated sink and standard-library semantics are carved out of the downgrade pressure, an unmatched-quote finding is kept rather than deleted, a second defect in the same hunk is filed as its own finding, and every claim a withheld path licenses is refused, not just the first
-- **The walkthrough and summary surfaces stop contradicting each other** (#522, #523, #544, #549, #596): file summaries are filled on large PRs, a row with no summary says why, ceiling-skipped files are dropped from the walkthrough rows, a summary-only cut no longer claims partial file coverage, and one observation is published on one surface instead of up to three
-- **`quarkus:dev` boots usable on a fresh clone** (#591, #620): the dev-mode schema is created at startup and the README states the `.env` and PEM steps a fresh clone needs
-- **An empty SSE frame is skipped rather than failing the stream on the event loop** (#555)
-- **Build and image fixes**: the native binary is no longer stored twice and the website is out of the build context (#561), and the H2 driver is kept out of the runtime image (#564)
+- **Oversized comments were rejected by GitHub** (#487, #503): comment bodies are capped at 65,536 characters and check-run output fields at their own limits, so an oversized review is trimmed and still posts
+- **A file GitHub reported without patch text could crash a review** (#472, #551): null filenames reached null-hostile immutable collections. Such files are now counted and disclosed by name, and they withhold approval rather than passing as reviewed (#489)
+- **A response cut at the length cap was retried at full price** (#495, #504): a length stop is detected on the blocking command paths and not retried
+- **The finding verifier deleted correct findings** (#611, #612, #613, #614): all claims a withheld path licenses are refused, where previously only the first was, a second defect in the same hunk is filed as its own finding, an unmatched-quote finding is kept, and demonstrated sinks and standard-library semantics are carved out of the downgrade pressure
+- **The previous-findings context grew without bound across rounds** (#615) and could crowd out the diff. It is now bounded to a share of the input budget
+- **Walkthrough rows were missing their file summaries on large PRs** (#544), and a row without a summary now says why (#549)
+- **One observation could be published on up to three surfaces of the same comment** (#596)
+- **The heuristic failure-mode review dimension was inert** (#618): it was gated on a diff string that token budgeting leaves empty
+- **`quarkus:dev` did not boot usable on a fresh clone** (#591, #620): the dev-mode schema is created at startup, and the README states the `.env` and PEM steps a fresh clone needs
+- **An empty SSE frame failed the stream on the event loop** (#555). It is now skipped
+- **Runtime image size and contents** (#561, #564): the native binary is no longer stored twice, the website is out of the build context, and the H2 driver is kept out of the runtime image
+
+### Dependencies
+
+- Bumped the Quarkus platform from 3.37.4 to 3.38.0 and `quarkus-langchain4j` from 1.12.0 to 1.12.2
+- Declared `jackson-dataformat-yaml` explicitly. It was already on the classpath transitively and is version-managed by the Jackson BOM; reading a repository's own `.github/thrillhousebot.yml` uses it directly
+- Bumped the frontend `next` to 16.2.12 and the dev-only `jsdom` to 30.0.1, with `@types/node` on a patch release
+- Bumped GitHub Actions `github/codeql-action` to v4.37.6, `actions/setup-java` to v5.7.0 and `docker/login-action` to v4.6.0
+- Bumped the Spotless Maven plugin to 3.9.0
 
 ## [0.5.0] — 2026-07-26
 
