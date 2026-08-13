@@ -156,19 +156,28 @@ public class FindingVerificationService {
    * the two never read one sentence both ways. A defense noun as the verb's direct object flips the
    * sentence's meaning — "Nothing escapes validation" says every value IS validated — so the verb
    * is held to its finite and participle forms (the noun could otherwise re-match as the verb
-   * through the word gap) and the trailing lookahead rejects a defense-stemmed word within two
-   * words of the verb, so a modified or tool-named object ("nothing escapes heavy validation",
-   * "nothing escapes the sanitizer") is rejected too, keeping the over-fire direction closed (#594)
-   * while "nothing escapes the value" stays an absence claim — a defense noun further than two
-   * words out ("nothing escapes the value before validation") no longer flips the reading. Kept a
-   * separate pattern only because folding the pronouns into {@link #MITIGATION_ABSENT}'s negator
-   * alternation puts that pattern over the regex complexity budget.
+   * through the word gap) and {@link #claimsNothingNeutralizesIt} drops a match whose object is a
+   * {@link #DEFENSE_OBJECT} — folding that rejection into this pattern as a lookahead puts it over
+   * the regex complexity budget. Kept a separate pattern only because folding the pronouns into
+   * {@link #MITIGATION_ABSENT}'s negator alternation does the same.
    */
   private static final Pattern MITIGATION_ABSENT_SUBJECT =
       Pattern.compile(
           "\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}(sanitiz|escap|validat|parameteriz|encod)"
-              + "(es|ed|ing)\\b(?!\\s+(\\w+\\s+){0,2}(sanitiz|escap|validat|encod|filter))",
+              + "(es|ed|ing)\\b",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A defense-stemmed word within two words of a {@link #MITIGATION_ABSENT_SUBJECT} verb, matched
+   * against the text right after the verb: a modified or tool-named defense object ("nothing
+   * escapes heavy validation", "nothing escapes the sanitizer") flips the sentence into a
+   * mitigation, and flooring on it is the over-fire direction (#594). "Nothing escapes the value"
+   * stays an absence claim, and a defense noun further than two words out ("nothing escapes the
+   * value before validation") no longer flips the reading.
+   */
+  private static final Pattern DEFENSE_OBJECT =
+      Pattern.compile(
+          "\\s+(\\w+\\s+){0,2}(sanitiz|escap|validat|encod|filter)", Pattern.CASE_INSENSITIVE);
 
   /**
    * A finding that RULES THE SINK OUT rather than reporting it ("so there is no SQL injection",
@@ -660,11 +669,22 @@ public class FindingVerificationService {
         || (SQL.matcher(text).find() && STRING_BUILT.matcher(text).find());
   }
 
-  /** The absence claim in any of its three wordings; one claim, three patterns. */
+  /**
+   * The absence claim in any of its three wordings; one claim, three patterns. A pronoun-subject
+   * match whose object is a {@link #DEFENSE_OBJECT} is dropped: "Nothing escapes validation" says
+   * every value IS validated, and flooring on it is the over-fire direction (#594).
+   */
   private static boolean claimsNothingNeutralizesIt(String text) {
-    return UNMITIGATED_ADJECTIVE.matcher(text).find()
-        || MITIGATION_ABSENT.matcher(text).find()
-        || MITIGATION_ABSENT_SUBJECT.matcher(text).find();
+    if (UNMITIGATED_ADJECTIVE.matcher(text).find() || MITIGATION_ABSENT.matcher(text).find()) {
+      return true;
+    }
+    Matcher subject = MITIGATION_ABSENT_SUBJECT.matcher(text);
+    while (subject.find()) {
+      if (!DEFENSE_OBJECT.matcher(text.substring(subject.end())).lookingAt()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
