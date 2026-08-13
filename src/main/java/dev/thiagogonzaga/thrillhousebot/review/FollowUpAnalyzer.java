@@ -1036,9 +1036,20 @@ public class FollowUpAnalyzer {
    * sign. Missing one of those clears a finding the comment only named the start of, which is the
    * over-clear direction this guard exists to stop; treating a dash that turns out not to be a
    * range as a continuation only under-clears, and the maintainer can say so again.
+   *
+   * <p>Format characters ({@code Cf}: a zero-width space or joiner, a soft hyphen, a BOM) count as
+   * continuations too. They are neither letters nor dashes nor {@code Zs} space, so without this a
+   * U+200B between the line number and the range dash left {@code :1} reading as a whole locator,
+   * over-clearing the finding at line 1 even though the comment names a range. A soft hyphen is
+   * what some editors insert at a hyphenation point, and the zero-width characters arrive by
+   * copy-paste from rendered pages; reading them as continuations errs safe — the locator stops
+   * being whole and the finding is held.
    */
   private static boolean continuesLocator(char c) {
-    return Character.isLetterOrDigit(c) || c == '_' || isDash(c);
+    return Character.isLetterOrDigit(c)
+        || c == '_'
+        || isDash(c)
+        || Character.getType(c) == Character.FORMAT;
   }
 
   /**

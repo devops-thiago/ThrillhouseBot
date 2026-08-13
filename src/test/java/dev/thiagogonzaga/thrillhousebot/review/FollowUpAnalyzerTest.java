@@ -2955,6 +2955,25 @@ class FollowUpAnalyzerTest {
             "a spaced wave-dash line range must not clear it",
             "@thrillhousebot resolved `src/A.java:1 〜 3` — SQL injection",
             false),
+        // Format characters (Cf) are neither token continuation nor Zs space, so before they
+        // counted as continuations each of these read :1 as a whole locator and over-cleared the
+        // finding at line 1 even though the comment names a range.
+        arguments(
+            "a zero-width space inside the range spelling must not clear it",
+            "@thrillhousebot resolved src/A.java:1\u200B-3 — SQL injection",
+            false),
+        arguments(
+            "a zero-width joiner inside the range spelling must not clear it",
+            "@thrillhousebot resolved src/A.java:1\u200D-3 — SQL injection",
+            false),
+        arguments(
+            "a soft hyphen after the line number must not clear it",
+            "@thrillhousebot resolved src/A.java:1\u00AD3 — SQL injection",
+            false),
+        arguments(
+            "a zero-width no-break space inside the range spelling must not clear it",
+            "@thrillhousebot resolved src/A.java:1\uFEFF-3 — SQL injection",
+            false),
         // The accepted cost of requiring a digit: a title opening with one reads as a range and
         // under-clears, which holds the finding a round rather than dropping it.
         arguments(
@@ -3271,5 +3290,8 @@ class FollowUpAnalyzerTest {
     assertFalse(
         FollowUpAnalyzer.namesALocator("@thrillhousebot resolved src/A.java:1２"),
         "a full-width digit continues the token on the clearing side, so it must here too");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved src/A.java:1\u200B-3"),
+        "a format character continues the token on the clearing side, so it must here too");
   }
 }
