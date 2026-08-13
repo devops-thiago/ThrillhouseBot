@@ -2897,6 +2897,114 @@ class FollowUpAnalyzerTest {
         arguments(
             "a match ending the comment counts",
             "@thrillhousebot resolved SQL injection at src/A.java:1",
+            true),
+        // A following digit used to be the only continuation the guard rejected, so every other
+        // way of continuing the line-number token still read as a whole locator and over-cleared.
+        arguments(
+            "a line range starting at the finding's line must not clear it",
+            "@thrillhousebot resolved `src/A.java:1-3` — SQL injection",
+            false),
+        arguments(
+            "a letter continuing the line number must not clear it",
+            "@thrillhousebot resolved `src/A.java:1x` — SQL injection",
+            false),
+        arguments(
+            "an underscore continuing the line number must not clear it",
+            "@thrillhousebot resolved `src/A.java:1_2` — SQL injection",
+            false),
+        // Typographic ranges reach the guard as often as the ASCII hyphen does: smart-punctuation
+        // autocorrect rewrites a typed 1-3 to an en dash, and a range copied out of prose can carry
+        // an em dash or a minus sign. Each one adjacent to the line number is still a range.
+        arguments(
+            "an en-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1–3` — SQL injection",
+            false),
+        arguments(
+            "an em-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1—3` — SQL injection",
+            false),
+        arguments(
+            "a minus-sign line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1−3` — SQL injection",
+            false),
+        // A range is written with the separator spaced off the line number about as often as
+        // adjacent to it, and the adjacent-character guard cannot see those spellings at all.
+        arguments(
+            "a spaced hyphen line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 - 3` — SQL injection",
+            false),
+        arguments(
+            "a spaced en-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 – 3` — SQL injection",
+            false),
+        arguments(
+            "a dotted line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1..3` — SQL injection",
+            false),
+        arguments(
+            "a triple-dot line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1...3` — SQL injection",
+            false),
+        // Both guards ask isDash, so a dash either rejects in both spellings or neither. A
+        // fullwidth hyphen-minus and a wave dash are Pd but appear in nobody's enumeration.
+        arguments(
+            "a spaced fullwidth-hyphen line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 － 3` — SQL injection",
+            false),
+        arguments(
+            "a spaced wave-dash line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 〜 3` — SQL injection",
+            false),
+        // The accepted cost of requiring a digit: a title opening with one reads as a range and
+        // under-clears, which holds the finding a round rather than dropping it.
+        arguments(
+            "a title opening with a digit under-clears rather than risking the separator",
+            "@thrillhousebot resolved src/A.java:1 — 2 call sites of this SQL injection",
+            false),
+        arguments(
+            "a tab-spaced line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1\t-\t3` — SQL injection",
+            false),
+        // Copy-paste and locale-aware autocorrect put these in comment text; a separator the scan
+        // will not step over stops reading as a range.
+        arguments(
+            "a no-break-space-spaced line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 - 3` — SQL injection",
+            false),
+        arguments(
+            "a narrow-no-break-space-spaced line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1 - 3` — SQL injection",
+            false),
+        // A list item on the next line is prose, not a range: newlines must not space a separator.
+        arguments(
+            "a dash opening the next line is not a range and still clears",
+            "@thrillhousebot resolved src/A.java:1\n- 3 of these are SQL injection",
+            true),
+        // Everything a range scan must not swallow: prose that merely continues after the locator,
+        // and a separator too far away or with nothing after it to be one.
+        arguments(
+            "a sentence-ending period is not a range and still clears",
+            "@thrillhousebot resolved src/A.java:1. SQL injection is gone",
+            true),
+        arguments(
+            "a locator trailed by spaces to the end still clears",
+            "@thrillhousebot resolved SQL injection at src/A.java:1   ",
+            true),
+        arguments(
+            "a dash ending the comment is not a range and still clears",
+            "@thrillhousebot resolved SQL injection at src/A.java:1 -",
+            true),
+        arguments(
+            "dots running to the end of the comment are not a range and still clear",
+            "@thrillhousebot resolved SQL injection at src/A.java:1..",
+            true),
+        arguments(
+            "a separator spaced further than a range is written still clears",
+            "@thrillhousebot resolved src/A.java:1                    - 3 SQL injection",
+            true),
+        arguments(
+            "the documented em-dash form still clears",
+            "@thrillhousebot resolved src/A.java:1 — SQL injection",
             true));
   }
 
@@ -3136,5 +3244,32 @@ class FollowUpAnalyzerTest {
     assertFalse(
         FollowUpAnalyzer.namesALocator("a:".repeat(2000)),
         "colon-heavy text with no line number still resolves to no locator");
+  }
+
+  /**
+   * The ack this feeds must not promise a closure the clearing path refuses, so the forms the
+   * whole-locator guard rejects have to read as naming nothing here too.
+   */
+  @Test
+  void namesALocatorShouldRejectTheFormsTheClearingPathRefuses() {
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:1-3` — title"),
+        "a range names no single finding, and the clearing path will not clear it");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:1 - 3` — title"),
+        "the spaced range is the same naming act as the adjacent one");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:1x` — title"),
+        "a continued line number is not a locator the clear will match");
+    assertTrue(
+        FollowUpAnalyzer.namesALocator(
+            "@thrillhousebot resolved `src/A.java:1-3` and `src/B.java:7`"),
+        "one whole locator among rejected forms is still a naming");
+    assertTrue(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved SQL injection at src/A.java:10"),
+        "a locator ending the comment names it");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved src/A.java:1２"),
+        "a full-width digit continues the token on the clearing side, so it must here too");
   }
 }

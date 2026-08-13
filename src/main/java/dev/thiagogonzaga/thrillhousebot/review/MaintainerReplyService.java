@@ -217,20 +217,42 @@ public class MaintainerReplyService {
           + " and title exactly as the summary prints it — for example `@thrillhousebot resolved"
           + " src/main/java/com/example/Widget.java:42 — Missing null check`.";
 
+  /**
+   * Acknowledgement for a directive whose author the clearing path will not honour. Reaching this
+   * method already means the commenter is authorized to address the bot, but {@link
+   * ManualReviewAuthorizer} admits a login on the manual-trigger allowlist whatever its {@code
+   * author_association}, while the clear itself requires a write-capable one ({@link
+   * FollowUpAnalyzer#mayHoldWriteAccess}) — the README says the allowlist "does not extend" to the
+   * directive. Without this branch such a commenter was told the next review would close what they
+   * named, and then nothing was cleared. Like the no-locator case the outcome is knowable from the
+   * comment alone, so the reply states it rather than leaving it to be discovered.
+   */
+  static final String CLEAR_DIRECTIVE_UNAUTHORIZED_ACK =
+      "Clearing a finding takes write access on this repository, so nothing will be cleared by that"
+          + " comment. Ask someone with write access to post the same `@thrillhousebot resolved"
+          + " path/to/File.java:42 — <title>` directive.";
+
   private void handleMention(String auth, ReplyTask task) {
     if (FollowUpAnalyzer.isClearDirective(task.question())) {
+      boolean mayClear = FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation());
       boolean named = FollowUpAnalyzer.namesALocator(task.question());
+      String ack;
+      if (!mayClear) {
+        ack = CLEAR_DIRECTIVE_UNAUTHORIZED_ACK;
+      } else {
+        ack = named ? CLEAR_DIRECTIVE_ACK : CLEAR_DIRECTIVE_NO_LOCATOR_ACK;
+      }
       commentClient.createComment(
           auth,
           ACCEPT,
           task.owner(),
           task.repo(),
           task.prNumber(),
-          new GitHubCommentClient.CreateCommentRequest(
-              named ? CLEAR_DIRECTIVE_ACK : CLEAR_DIRECTIVE_NO_LOCATOR_ACK));
+          new GitHubCommentClient.CreateCommentRequest(ack));
       Log.infof(
-          "Acknowledged a maintainer clear directive on %s/%s #%d (names a locator: %b)",
-          task.owner(), task.repo(), task.prNumber(), named);
+          "Acknowledged a maintainer clear directive on %s/%s #%d (names a locator: %b, may clear:"
+              + " %b)",
+          task.owner(), task.repo(), task.prNumber(), named, mayClear);
       return;
     }
     var diff = fetchDiff(auth, task);

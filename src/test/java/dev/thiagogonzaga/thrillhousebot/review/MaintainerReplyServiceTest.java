@@ -622,13 +622,17 @@ class MaintainerReplyServiceTest {
   }
 
   private MaintainerReplyService.ReplyTask mentionTask(String question) {
+    return mentionTask(question, "OWNER");
+  }
+
+  private MaintainerReplyService.ReplyTask mentionTask(String question, String authorAssociation) {
     return new MaintainerReplyService.ReplyTask(
         "owner",
         "repo",
         42,
         12345L,
         "octocat",
-        "OWNER",
+        authorAssociation,
         question,
         "PR Title",
         "PR body",
@@ -675,6 +679,28 @@ class MaintainerReplyServiceTest {
     verifyNoInteractions(replyAssistant, prClient);
   }
 
+  /**
+   * The manual-trigger allowlist admits a commenter to the mention path whatever their {@code
+   * author_association}, but the clearing path requires a write-capable one. The ack must not
+   * promise a closure that gate will refuse.
+   */
+  @Test
+  void clearDirectiveFromACommenterWhoCannotClearSaysNothingWillBeCleared() {
+    authorize();
+
+    service.handle(
+        mentionTask("@thrillhousebot resolved `src/A.java:10` — SQL injection", "CONTRIBUTOR"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_UNAUTHORIZED_ACK, body.getValue().body());
+    assertTrue(
+        body.getValue().body().contains("nothing will be cleared"),
+        "the commenter must not read this as a promise the finding closes");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
   @Test
   void clearDirectiveAckNeverClaimsAClearingAlreadyHappened() {
     // The ack states what the next review will evaluate; it must not report an outcome it cannot
@@ -682,7 +708,8 @@ class MaintainerReplyServiceTest {
     for (var ack :
         List.of(
             MaintainerReplyService.CLEAR_DIRECTIVE_ACK,
-            MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK)) {
+            MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK,
+            MaintainerReplyService.CLEAR_DIRECTIVE_UNAUTHORIZED_ACK)) {
       assertFalse(ack.startsWith("Noted"), ack);
       assertFalse(ack.contains("has been cleared"), ack);
       assertFalse(ack.contains("is cleared"), ack);

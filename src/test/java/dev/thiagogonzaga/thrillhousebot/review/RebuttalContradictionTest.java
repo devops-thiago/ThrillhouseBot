@@ -16,10 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class RebuttalContradictionTest {
@@ -141,13 +145,175 @@ class RebuttalContradictionTest {
         "this construct dispatches concurrently: " + codeLine);
   }
 
+  /**
+   * A one-thread pool genuinely serializes, so it refutes nothing — and this is the direction that
+   * matters most, since a match here overrules a maintainer whose decline was correct. The thread
+   * count is what decides it, not how the call is spelled around it.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var pool = Executors.newFixedThreadPool(1);",
+        // The two-argument overload is the standard way to name a single worker.
+        "+    var pool = Executors.newFixedThreadPool(1, new WorkerThreadFactory());",
+        // Spacing inside the call must not let the count slip past the guard.
+        "+    var pool = Executors.newFixedThreadPool( 1 );",
+        "+    var pool = Executors.newFixedThreadPool( 1 , factory);",
+        "+    var pool = Executors.newFixedThreadPool(\t1\t);",
+        // A block comment naming the count is the natural place to explain a pool of one.
+        "+    var pool = Executors.newFixedThreadPool(1 /* one worker */);",
+        "+    var pool = Executors.newFixedThreadPool(/* only one */ 1);",
+        "+    var pool = Executors.newFixedThreadPool(1 /* worker */, factory);",
+        // The evidence text is rejoined lines, so an explanation long enough to wrap is one the
+        // scan really sees across the break.
+        "+    var pool = Executors.newFixedThreadPool(1 /* one worker: the downstream\n"
+            + "+        store is not safe for parallel writes */);",
+        "+    var pool = Executors.newFixedThreadPool(1 /* exactly one worker, because the queue"
+            + " must stay ordered for the replay to be deterministic */);",
+        // A justification that cites its source: one URL is enough to run a comment past 256
+        // characters, which is where the previous bound sat.
+        "+    var pool = Executors.newFixedThreadPool(1 /* one worker per"
+            + " https://github.com/org/repo/issues/12345#issuecomment-1234567890 and the four"
+            + " incidents linked from it, all of which came from parallel writes to the same"
+            + " ledger row while the nightly replay was running; the ordering guarantee the"
+            + " downstream reconciler depends on is only worth having if exactly one thread"
+            + " appends here, so please do not widen this pool without reading that thread"
+            + " first */);",
+      })
+  void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isEmpty(),
+        "a one-thread pool genuinely serializes, so it does not refute the decline: " + codeLine);
+  }
+
+  /** The counterpart: any count above one does dispatch concurrently, however it is spelled. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var pool = Executors.newFixedThreadPool(10);",
+        // 11 starts with the same digit as 1 and must not be excluded with it.
+        "+    var pool = Executors.newFixedThreadPool(11);",
+        "+    var pool = Executors.newFixedThreadPool( 10 );",
+        "+    var pool = Executors.newFixedThreadPool(8, factory);",
+        "+    var pool = Executors.newFixedThreadPool(workers);",
+        // A comment does not make a count knowable, and the class cannot evaluate an expression.
+        "+    var pool = Executors.newFixedThreadPool(2 /* two */);",
+        "+    var pool = Executors.newFixedThreadPool(1 + 0);",
+        "+    var pool = Executors.newFixedThreadPool(2 /* two\n+        threads */);",
+      })
+  void shouldTreatAMultiThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isPresent(),
+        "a pool of more than one thread dispatches concurrently: " + codeLine);
+  }
+
+  /**
+   * A {@code //} inside a string literal is not a comment start. Cutting the line there threw away
+   * the dispatch that followed it, so the decline stood over code that does dispatch concurrently.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A protocol-relative URL in a Java/JS string literal.
+        "+    var base = \"//cdn.example.com\"; executor.submit(() -> run(ctx));",
+        // A Go raw string literal.
+        "+    raw := `a//b`; executor.submit(func() { run(ctx) })",
+        // A C++ raw string literal, whose R\"( opener the scan must not read as a comment either.
+        "+    auto path = R\"(prefix//rest)\"; executor.submit([]{ run(ctx); });",
+        // A single-quoted literal.
+        "+    var sep = '//'; executor.submit(() -> run(ctx));",
+        // An escaped backslash closes its literal, so the escape still applies where it exists.
+        "+    var dir = \"C:\\\\\"; executor.submit(() -> run(ctx));",
+      })
+  void shouldKeepDispatchEvidenceThatFollowsAQuotedDoubleSlash(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the // sits inside a string literal, so the dispatch after it is live code: " + codeLine);
+  }
+
+  /**
+   * The mirror of the case above: a real trailing comment must stay stripped. Honouring a backslash
+   * escape inside a Go raw string — where a backslash is literal — stepped over the closing
+   * backtick, left the quote state open, and let the comment's own text pose as live code.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A Windows path in a Go raw string, then a real comment naming a dispatch.
+        "+    path := `C:\\`; // executor.submit(() -> run(ctx));",
+        // The same shape with no literal involved at all.
+        "+    var n = count; // executor.submit(() -> run(ctx));",
+        // An opener with no closer is not a literal: a Rust lifetime, and an apostrophe in prose.
+        "+    let f = handler(&'a ctx); // executor.submit(() -> run(ctx));",
+        "+    var n = count; // don't let this executor.submit(task) come back",
+        // A closed literal earlier on the line must not consume the fallback.
+        "+    var a = \"//x\"; let f = &'a ctx; // executor.submit(() -> run(ctx));",
+        // A file URL keeps its three slashes rather than reading as a comment.
+        "+    var u = \"file:///etc/hosts\"; // executor.submit(() -> run(ctx));",
+        // The scheme carve-out still applies inside the unclosed literal, so the fallback lands on
+        // the real comment rather than on the URL's slashes.
+        "+    let u = &'a; see http://example.com // executor.submit(() -> run(ctx));",
+        // A second // inside the same unclosed literal must not move the fallback past the first.
+        "+    let f = &'a ctx; // note // executor.submit(() -> run(ctx));",
+      })
+  void shouldNotReadACommentAsDispatchEvidenceAfterABackslash(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isEmpty(),
+        "a dispatch named only in a comment is not live code, so the decline stands: " + codeLine);
+  }
+
+  /** The fallback for an unclosed literal must cut at the comment, not before the code. */
   @Test
-  void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch() {
-    var oneThread = "+    var pool = Executors.newFixedThreadPool(1);\n";
+  void shouldKeepDispatchBeforeACommentOnALineWithAnUnclosedQuote() {
+    var codeLine = "+    let f = &'a ctx; executor.submit(() -> run(ctx)); // one per request\n";
 
     assertTrue(
-        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", oneThread).isEmpty(),
-        "a one-thread pool genuinely serializes, so it does not refute the decline");
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the dispatch is live code before the comment, so it still refutes the decline");
+
+    var loneSlash = "+    let f = &'a ctx; executor.submit(() -> run(ctx)); /\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", loneSlash).isPresent(),
+        "a single trailing slash opens no comment, so there is nothing to fall back to");
+  }
+
+  static Stream<Arguments> commentScanEdgeCases() {
+    return Stream.of(
+        arguments(
+            "an escaped quote does not close the literal, so the // after it is still quoted",
+            "+    var s = \"a\\\"//b\"; executor.submit(() -> run(ctx));",
+            true),
+        arguments(
+            "a URL scheme's :// is not a comment start",
+            "+    var u = http://example.com; executor.submit(() -> run(ctx));",
+            true),
+        arguments(
+            "a line opening with // is comment from its very first character",
+            "// executor.submit(() -> run(ctx));",
+            false),
+        arguments(
+            "a lone / is division, and a trailing / ends the line without opening a comment",
+            "+    var half = total / 2; executor.submit(() -> run(ctx)); /",
+            true));
+  }
+
+  /** Edge shapes of the comment scan, each turning on one decision the scan makes alone. */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("commentScanEdgeCases")
+  void shouldFindTheCommentStartOutsideStringLiterals(String name, String code, boolean refuted) {
+    assertEquals(
+        refuted,
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isPresent(),
+        name);
+  }
+
+  @Test
+  void shouldStillStripARealTrailingLineCommentAfterAStringLiteral() {
+    var commented = "+    var base = \"//cdn.example.com\"; // executor.submit(() -> run(ctx));\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", commented).isEmpty(),
+        "a dispatch that only appears in a line comment is not live code");
   }
 
   @Test

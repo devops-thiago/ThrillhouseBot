@@ -108,8 +108,34 @@ final class RebuttalContradiction {
           Pattern.compile(
               "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newScheduledThreadPool"
                   + "|newWorkStealingPool"),
-          // a fixed pool of more than one thread
-          Pattern.compile("newFixedThreadPool\\s{0,16}\\(\\s{0,16}(?!1\\s{0,16}\\))"),
+          // A fixed pool of more than one thread. A literal count of 1 is excluded, along with the
+          // whitespace and block comments around it, up to the end of the argument — a closing
+          // paren, or the comma of the ThreadFactory overload, which is the standard way to name a
+          // single worker. Every spelling this misses reports a serial pool as concurrent dispatch
+          // and overrules a decline that was right, so the exclusion is written to be hard to spell
+          // around: the paren alone let newFixedThreadPool(1, factory) through, tolerating only
+          // whitespace let a /* one worker */ next to the count through, and a dot that stops at a
+          // line break let that same comment through again once it wrapped. The evidence text is
+          // one string of rejoined lines, so a comment does span line breaks here.
+          //
+          // The skip before the count is possessive because a greedy run backtracks to zero width
+          // and re-matches past its own lookahead, which let newFixedThreadPool( 1 ) escape.
+          //
+          // Both bounds are real: a comment longer than 1024 characters, or a seventeenth run of
+          // them, reads as concurrent — a false positive, since the pool is serial. They exist to
+          // keep the scan over untrusted diff text linear, and nothing more should be read into
+          // them. Successive rounds found a justification comment that wrapped, then one that ran
+          // past 64 characters, then one carrying a long URL past 256, each time because the bound
+          // was asserted to sit above "any real" annotation. It does not: a comment is prose and
+          // prose has no bound. Raising this constant again is not the fix — parsing the argument
+          // list instead of pattern-matching it is (#651).
+          //
+          // A count that is not a literal 1 — a variable, or an expression like 1 + 0 — reads as
+          // concurrent. That is deliberate and matches newFixedThreadPool(workers): the class may
+          // only overrule a decline on what the code plainly shows, and it cannot evaluate.
+          Pattern.compile(
+              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}+"
+                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}[,)])"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future
@@ -194,14 +220,119 @@ final class RebuttalContradiction {
 
   /**
    * Drops a trailing {@code //} line comment, leaving any code before it intact. A {@code ://}
-   * sequence (a URL scheme) is not treated as a comment start.
+   * sequence (a URL scheme) is not treated as a comment start, and neither is a {@code //} that
+   * sits inside a string literal.
+   *
+   * <p>The string-literal carve-out matters because cutting at the wrong {@code //} silently throws
+   * away the rest of the line — including any dispatch construct on it. A line such as {@code
+   * String base = "//cdn.example.com"; executor.submit(task);}, a Go or C++ raw string ({@code
+   * `a//b`}, {@code R"(a//b)"}), or any quoted path holding a doubled slash used to be truncated at
+   * the quoted slashes, so the {@code executor.submit(} after them never reached {@link
+   * #CONCURRENT_DISPATCHES}. A maintainer's "it runs serially" decline then stood unchallenged over
+   * code that does dispatch concurrently — the false-negative direction this class exists to close.
+   *
+   * <p>Quote tracking is deliberately shallow: it toggles on an unescaped {@code "}, {@code '} or
+   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to.
+   *
+   * <p>An opener with no closer on the line is therefore assumed to have been something else — a
+   * Rust lifetime ({@code &'a ctx}), an apostrophe in prose — and the scan falls back to the first
+   * {@code //} that literal swallowed. Without that fallback a single stray apostrophe kept the
+   * whole trailing comment as scan text, and a dispatch named only inside a comment could overrule
+   * a decline. Comment text is precisely what this method exists to remove, so keeping it is not a
+   * mild degradation: it is the false-positive direction, and the plain first-{@code //} cut this
+   * carve-out replaced did not have it.
+   *
+   * <p>The one escaping rule it does keep is where the escape applies: inside a {@code "} or {@code
+   * '} literal, never inside a backtick one and never outside a literal at all. A Go raw string is
+   * backtick-delimited and holds a backslash literally, so honouring the escape there stepped over
+   * the closing backtick of a Windows path ({@code `C:\`}), left the state open for the rest of the
+   * line, and kept a real trailing comment as live code. That is the false positive — a decline
+   * overruled by text the code does not run — which is the worse direction, and the plain
+   * first-{@code //} cut this carve-out replaced did not have it.
+   *
+   * <p>A <em>multi-character</em> delimiter is the case this shallowness does not cover, and it
+   * fails the other way. A Java text block or a C++ raw string whose content holds an interior
+   * quote ({@code """<a href="//host">x</a>"""}, {@code R"(a"b//c)"}) closes the scanner's
+   * single-quote state early, so a {@code //} still inside the literal truncates the line and drops
+   * any dispatch after it — the same false negative the carve-out above exists to close, one legal
+   * interior quote away from the shapes that are covered. Closing it needs delimiter-aware openers
+   * rather than a toggle; tracked in #651.
    */
   private static String stripLineComment(String line) {
-    var idx = line.indexOf("//");
-    while (idx > 0 && line.charAt(idx - 1) == ':') {
-      idx = line.indexOf("//", idx + 2);
+    var at = commentStart(line);
+    return at < 0 ? line : line.substring(0, at);
+  }
+
+  /**
+   * Index where a real {@code //} comment opens on {@code line}, or {@code -1} when none does.
+   * Literals are stepped over whole, so a {@code //} they hold is not a comment start.
+   */
+  private static int commentStart(String line) {
+    var i = 0;
+    while (i < line.length()) {
+      var c = line.charAt(i);
+      if (c == '"' || c == '\'' || c == '`') {
+        var close = endOfLiteral(line, i);
+        if (close < 0) {
+          // Never closed, so the opener was not one — fall back to what it swallowed.
+          return firstDoubleSlash(line, i + 1);
+        }
+        i = close + 1;
+      } else if (isDoubleSlash(line, i)) {
+        if (i > 0 && line.charAt(i - 1) == ':') {
+          i += 2;
+        } else {
+          return i;
+        }
+      } else {
+        i++;
+      }
     }
-    return idx < 0 ? line : line.substring(0, idx);
+    return -1;
+  }
+
+  /**
+   * Index of the quote closing the literal opened at {@code open}, or {@code -1} when the line ends
+   * first. A backslash escapes the next character in a {@code "} or {@code '} literal and not in a
+   * backtick one, which is a Go raw string and holds the backslash literally.
+   */
+  private static int endOfLiteral(String line, int open) {
+    var quote = line.charAt(open);
+    var i = open + 1;
+    while (i < line.length()) {
+      var c = line.charAt(i);
+      if (c == '\\' && quote != '`') {
+        i += 2;
+      } else if (c == quote) {
+        return i;
+      } else {
+        i++;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * First {@code //} at or after {@code from} that is not a URL scheme's, or {@code -1}. Only ever
+   * called with {@code from} inside a literal, so the character before {@code i} always exists.
+   */
+  private static int firstDoubleSlash(String line, int from) {
+    var i = from;
+    while (i < line.length()) {
+      if (!isDoubleSlash(line, i)) {
+        i++;
+      } else if (line.charAt(i - 1) == ':') {
+        i += 2;
+      } else {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** Whether a doubled slash sits at {@code at}. */
+  private static boolean isDoubleSlash(String line, int at) {
+    return line.charAt(at) == '/' && at + 1 < line.length() && line.charAt(at + 1) == '/';
   }
 
   /**

@@ -725,7 +725,15 @@ public class FollowUpAnalyzer {
   private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
       Set.of("OWNER", "MEMBER", "COLLABORATOR");
 
-  private static boolean mayHoldWriteAccess(String authorAssociation) {
+  /**
+   * Package-private rather than private so {@link MaintainerReplyService} can acknowledge a clear
+   * directive against the very gate that will decide it. The acknowledgment is written before any
+   * review runs, and the two used to disagree: the mention path admits a login on the
+   * manual-trigger allowlist whatever its association, while {@link #clearedInConversation}
+   * requires a write-capable one, so an allowlist-only commenter was promised a closure that never
+   * came.
+   */
+  static boolean mayHoldWriteAccess(String authorAssociation) {
     return authorAssociation != null
         && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
@@ -795,6 +803,14 @@ public class FollowUpAnalyzer {
   private static final Pattern LOCATOR_SHAPE = Pattern.compile("(?<=\\S):\\d");
 
   /**
+   * How much horizontal space may sit either side of a range's separator before the text stops
+   * reading as one range. A separator is spaced off its operands by a character or two at most; a
+   * longer run is two separate thoughts, and the bound keeps the scan over untrusted comment prose
+   * linear.
+   */
+  private static final int MAX_RANGE_SPACING = 16;
+
+  /**
    * Whether {@code body} names anything locator-shaped at all. This is a <em>necessary</em>
    * condition of {@link #clearedInConversation}, never a sufficient one: clearing a finding
    * requires its exact {@code path:line}, so a comment carrying no {@code path:line} token
@@ -807,9 +823,35 @@ public class FollowUpAnalyzer {
    * state the one thing derivable from the comment alone: that a directive naming no locator will
    * clear nothing, so a maintainer who wrote the directive but forgot (or mistyped away) the
    * locator is told immediately rather than after the next review quietly changes nothing.
+   *
+   * <p>"Locator-shaped" has to mean the same thing here as it does at clearing time. Shape alone —
+   * any {@code :<digit>} anywhere — counts {@code src/A.java:1-3} as a naming, and {@link
+   * #namesLocator} then refuses to clear it, so the maintainer is promised a closure that never
+   * comes. That is the promise-without-delivery this service exists to avoid, arrived at from the
+   * other side, so the guards {@link #continuesLocator} and {@link #startsSpacedRange} apply here
+   * too: a body names a locator when at least one locator-shaped token in it is whole.
    */
   static boolean namesALocator(String body) {
-    return body != null && LOCATOR_SHAPE.matcher(namingText(body)).find();
+    if (body == null) {
+      return false;
+    }
+    var text = namingText(body);
+    var shapes = LOCATOR_SHAPE.matcher(text);
+    while (shapes.find()) {
+      // The match starts at the ':'; the line number is the digit run after it. ASCII only, to
+      // match the shape pattern's own \d and the clearing side: Character.isDigit accepts the
+      // full-width digits, which continuesLocator reads as continuing the token rather than as the
+      // line number, and a locator the two sides parse differently is one they disagree about.
+      var after = shapes.start() + 1;
+      while (after < text.length() && text.charAt(after) >= '0' && text.charAt(after) <= '9') {
+        after++;
+      }
+      if (after >= text.length()
+          || (!continuesLocator(text.charAt(after)) && !startsSpacedRange(text, after))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -902,16 +944,115 @@ public class FollowUpAnalyzer {
    * Whether {@code body} names {@code path:line} as a whole locator. A bare {@code contains} would
    * let a comment about {@code src/A.java:10} clear the distinct finding at {@code src/A.java:1},
    * whose locator is a prefix of it — an over-clear, and the direction that must never happen — so
-   * a match followed by another digit is skipped and the scan continues.
+   * a match the following character continues is skipped and the scan continues.
+   *
+   * <p>Rejecting only a following <em>digit</em> was too narrow: it left every other continuation
+   * of the line-number token reading as a whole match. {@code src/A.java:10-12} (a maintainer
+   * naming a range) and {@code src/A.java:10x} both cleared the finding at line 10, and a locator
+   * whose printed form the summary never emits is not a naming this hatch may act on. The summary
+   * prints {@code path:line} followed by a space, a backtick or an em dash, and the documented
+   * directive form ({@code @thrillhousebot resolved path/to/File.java:42 — <title>}) is spelled the
+   * same way, so no legitimate naming ends in one of these characters — under-clearing here only
+   * leaves the finding held for one more round, which is the safe direction.
    */
   private static boolean namesLocator(String body, String locator) {
     for (var at = body.indexOf(locator); at >= 0; at = body.indexOf(locator, at + 1)) {
       var after = at + locator.length();
-      if (after >= body.length() || !Character.isDigit(body.charAt(after))) {
+      if (after >= body.length()) {
+        return true;
+      }
+      if (!continuesLocator(body.charAt(after)) && !startsSpacedRange(body, after)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * A line range whose separator is not adjacent to the line number: {@code :1 - 3}, {@code :1 –
+   * 3}, {@code :1..3}. {@link #continuesLocator} catches only the adjacent spellings, and a range
+   * is written both ways about equally often.
+   *
+   * <p>The trailing digit is what tells a range apart from the documented {@code path:line —
+   * <title>} separator, which is spelled identically up to that point, so it is required rather
+   * than optional: {@code :1 — SQL injection} still clears the finding. The cost is a title that
+   * opens with a digit ({@code :1 — 2 call sites}) reading as a range, which under-clears — the
+   * finding is held one more round and the maintainer can name it again, whereas an over-clear
+   * drops it silently.
+   *
+   * <p>Written as a scan rather than a pattern so the separator test is literally {@link #isDash},
+   * the one {@link #continuesLocator} applies to the adjacent spelling. An enumerated character
+   * class drifts from the category test the moment either is edited, and the two guards disagreeing
+   * about the same character means a dash rejected adjacent is accepted spaced — the over-clear
+   * this exists to stop, arrived at through the fix for it.
+   */
+  private static boolean startsSpacedRange(String body, int after) {
+    var at = skipSpacing(body, after);
+    if (at < body.length() && isDash(body.charAt(at))) {
+      at++;
+    } else if (at + 1 < body.length() && body.charAt(at) == '.' && body.charAt(at + 1) == '.') {
+      // The whole run, not two: 1...3 is git's own triple-dot range, and stopping at two would
+      // leave the third dot where the end line is expected and read the range as a whole locator.
+      while (at < body.length() && body.charAt(at) == '.') {
+        at++;
+      }
+    } else {
+      return false;
+    }
+    at = skipSpacing(body, at);
+    return at < body.length() && Character.isDigit(body.charAt(at));
+  }
+
+  /**
+   * Index of the first character at or after {@code from} that is not range spacing.
+   *
+   * <p>Spacing is every horizontal space, not just the ASCII one: a no-break space or a narrow
+   * no-break space reaches comment text through copy-paste and locale-aware autocorrect, and a
+   * separator this does not step over stops reading as a range and clears a finding the comment
+   * only named the start of. Line terminators are deliberately excluded even though {@link
+   * Character#isWhitespace} counts them — a {@code - 3} on the next line is a markdown list item,
+   * and reading it as a range would under-clear on ordinary prose rather than on a range.
+   */
+  private static int skipSpacing(String body, int from) {
+    var at = from;
+    var limit = Math.min(body.length(), from + MAX_RANGE_SPACING);
+    while (at < limit && isHorizontalSpace(body.charAt(at))) {
+      at++;
+    }
+    return at;
+  }
+
+  /** Whether {@code c} spaces text apart on one line. {@code isSpaceChar} misses only the tab. */
+  private static boolean isHorizontalSpace(char c) {
+    return Character.isSpaceChar(c) || c == '\t';
+  }
+
+  /**
+   * Whether {@code c} extends the locator's line-number token rather than ending it: any letter or
+   * digit, the {@code _} an identifier continues with, or any dash a line range continues with.
+   *
+   * <p>Every dash counts, not just the ASCII hyphen: smart-punctuation autocorrect rewrites a typed
+   * {@code 1-3} to an en dash, and a range copied out of prose can carry an em dash or a minus
+   * sign. Missing one of those clears a finding the comment only named the start of, which is the
+   * over-clear direction this guard exists to stop; treating a dash that turns out not to be a
+   * range as a continuation only under-clears, and the maintainer can say so again.
+   */
+  private static boolean continuesLocator(char c) {
+    return Character.isLetterOrDigit(c) || c == '_' || isDash(c);
+  }
+
+  /**
+   * Whether {@code c} is a dash a line range may be written with — the whole {@code Pd} category
+   * plus the minus sign, which Unicode files under {@code Sm} but readers and autocorrect treat as
+   * a hyphen.
+   *
+   * <p>The category test rather than an enumeration: {@code Pd} holds a fullwidth hyphen-minus and
+   * a wave dash as well as the four dashes anyone lists from memory, and a range typed on a CJK
+   * keyboard is not a rarer input than one carrying an en dash from smart punctuation. Both places
+   * that ask this question call here, so neither can drift into accepting a dash the other rejects.
+   */
+  private static boolean isDash(char c) {
+    return Character.getType(c) == Character.DASH_PUNCTUATION || c == '−';
   }
 
   /** A non-bot conversation comment with a body and a write-capable author association. */

@@ -182,11 +182,35 @@ public class DiffBudgetPlanner {
 
     /** Records files a batch left unreviewed at runtime, ignoring nulls and duplicates. */
     void recordUncoveredFiles(List<String> filenames) {
+      recordDistinct(runtimeUncoveredFiles, filenames);
+    }
+
+    /**
+     * Appends every non-null name of {@code filenames} that {@code into} does not already hold,
+     * preserving first-seen order.
+     *
+     * <p>Both accumulators are {@link CopyOnWriteArrayList copy-on-write} lists, whose {@code
+     * contains} <em>and</em> {@code add} are linear, so a scan-then-append-per-name pass was
+     * quadratic twice over in the batch's file count — a count nothing bounds, since a
+     * token-budgeted batch can hold hundreds of small files, and every failed or refused batch runs
+     * another pass. Both halves are removed here: membership is tested against a {@link HashSet}
+     * snapshot taken once per call, and the new names are appended in one {@code addAll}, which
+     * copies the backing array once rather than once per appended name.
+     *
+     * <p>Neither change weakens the existing concurrency contract: {@code contains}-then-{@code
+     * add} was never atomic either, so two threads recording the same name concurrently could
+     * already both append it. The snapshot only widens that same window within a single call, and
+     * the batched append narrows it back; the next call re-reads the live list regardless.
+     */
+    private static void recordDistinct(List<String> into, List<String> filenames) {
+      var known = new HashSet<>(into);
+      var added = new ArrayList<String>();
       for (var name : filenames) {
-        if (name != null && !runtimeUncoveredFiles.contains(name)) {
-          runtimeUncoveredFiles.add(name);
+        if (name != null && known.add(name)) {
+          added.add(name);
         }
       }
+      into.addAll(added);
     }
 
     /**
@@ -198,11 +222,7 @@ public class DiffBudgetPlanner {
      */
     void recordSpendCeilingSkippedFiles(List<String> filenames) {
       recordUncoveredFiles(filenames);
-      for (var name : filenames) {
-        if (name != null && !spendCeilingSkippedFiles.contains(name)) {
-          spendCeilingSkippedFiles.add(name);
-        }
-      }
+      recordDistinct(spendCeilingSkippedFiles, filenames);
     }
 
     /**
@@ -214,11 +234,7 @@ public class DiffBudgetPlanner {
      * findings; only approval is withheld ({@link #truncated()}).
      */
     void recordResponseCutFiles(List<String> filenames) {
-      for (var name : filenames) {
-        if (name != null && !responseCutFiles.contains(name)) {
-          responseCutFiles.add(name);
-        }
-      }
+      recordDistinct(responseCutFiles, filenames);
     }
 
     public boolean truncated() {
