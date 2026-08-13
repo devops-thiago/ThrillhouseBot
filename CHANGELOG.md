@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dashboard token test no longer assumes an en-US locale** (#661): the test now asserts the same `toLocaleString()` output the component renders, so it passes on machines with any runtime locale
+
 ## [0.6.0] — 2026-08-13
 
 On-demand commands for improving a PR and generating tests, per-repository review

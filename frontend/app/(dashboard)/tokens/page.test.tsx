@@ -29,7 +29,7 @@ describe('TokensPage', () => {
       expect(screen.getByRole('heading', { name: 'Token Analytics' })).toBeInTheDocument();
     });
 
-    expect(screen.getByText('184,320')).toBeInTheDocument();
+    expect(screen.getByText(mockTokenData.totalTokens.toLocaleString())).toBeInTheDocument();
     expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
     expect(screen.getByTestId('bar-chart')).toBeInTheDocument();
   });
