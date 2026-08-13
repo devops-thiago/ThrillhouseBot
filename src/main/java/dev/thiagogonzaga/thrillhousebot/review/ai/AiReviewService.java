@@ -160,6 +160,17 @@ public class AiReviewService {
             attempt, maxAttempts, session.id);
         throw e;
       } catch (RuntimeException e) {
+        var rejection = AiContextWindowExceededException.classify(e);
+        if (rejection.isPresent()) {
+          // Deterministic like a truncation: the identical request against the identical window
+          // is rejected identically, and every attempt here is a fresh full-price call (#622).
+          Log.warnf(
+              "AI review attempt %d/%d for session %d was rejected for exceeding the model's"
+                  + " context window; not retrying (an identical request would be rejected"
+                  + " identically)",
+              attempt, maxAttempts, session.id);
+          throw rejection.get();
+        }
         lastFailure = e;
         Log.warnf(
             e, "AI review attempt %d/%d failed for session %d", attempt, maxAttempts, session.id);

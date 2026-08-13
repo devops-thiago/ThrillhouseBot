@@ -6,6 +6,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A provider context-length rejection is no longer retried at full price** (#622): a rejection for exceeding the model's context window is deterministic, so the review call now fails fast on the first attempt instead of re-billing up to `max-ai-retries` identical requests. In a multi-call review the rejected batch's files are disclosed as not reviewed while the other batches keep their findings; a single-call review fails with a notice and check run that name the cause and the `REVIEW_MAX_INPUT_TOKENS` knob to lower, instead of generic retry advice
 - **Dashboard token test no longer assumes an en-US locale** (#661): the test now asserts the same `toLocaleString()` output the component renders, so it passes on machines with any runtime locale
 
 ## [0.6.0] — 2026-08-13

@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -590,6 +591,16 @@ public class FindingPipeline {
           // cap (#495), so the failure goes straight to the disclose step — which now salvages
           // the complete leading findings out of the buffered partial body first (#500).
           outcomesByIndex[i] = salvageTruncatedBatch(i, run, truncation.get());
+        } else if (AiContextWindowExceededException.findIn(e).isPresent()) {
+          // Deterministic like a truncation: the provider rejected the batch's request for
+          // exceeding the model's context window, and the sequential retry below would re-send
+          // the identical prompt against the identical window (#622). Straight to disclosure.
+          Log.warnf(
+              "Batch %d/%d was rejected for exceeding the model's context window; not retrying"
+                  + " (an identical request would be rejected identically) and disclosing its"
+                  + " files as not reviewed",
+              i + 1, batches.size());
+          plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
         } else if (isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling

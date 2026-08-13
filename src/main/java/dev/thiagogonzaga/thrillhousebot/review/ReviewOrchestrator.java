@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -55,6 +56,23 @@ public class ReviewOrchestrator {
                 + " model)"
             : "")
         + ", then run /review again.";
+  }
+
+  /** FAILED check-run title when the provider rejected the request as over the window (#622). */
+  static final String CONTEXT_WINDOW_CHECK_TITLE =
+      "Review failed: the request exceeded the model's context window";
+
+  /**
+   * FAILED check-run summary for a context-window rejection: names the deterministic cause and the
+   * knob that shrinks the request, matching the PR notice, instead of the bare conclusion-only
+   * update a generic failure gets.
+   */
+  static String contextWindowCheckSummary() {
+    return "The provider rejected the review request because it exceeds the model's context"
+        + " window — the diff and its context are too large for the model. Retrying the identical"
+        + " request would be rejected identically — lower REVIEW_MAX_INPUT_TOKENS so the planned"
+        + " material fits the window (token budgeting then batches or clips the diff), then run"
+        + " /review again.";
   }
 
   private final ThrillhouseConfig config;
@@ -470,6 +488,17 @@ public class ReviewOrchestrator {
       String auth, ReviewRequest req, ReviewSession session, long checkRunId, RuntimeException e) {
     Log.errorf(e, "Review failed for %s/%s #%d", req.owner(), req.repo(), req.prNumber());
     var truncation = AiResponseTruncatedException.findIn(e);
+    var contextWindow = AiContextWindowExceededException.findIn(e);
+
+    String checkTitle = null;
+    String checkSummary = null;
+    if (truncation.isPresent()) {
+      checkTitle = TRUNCATION_CHECK_TITLE;
+      checkSummary = truncationCheckSummary(truncation.get().conciseModelImplicated());
+    } else if (contextWindow.isPresent()) {
+      checkTitle = CONTEXT_WINDOW_CHECK_TITLE;
+      checkSummary = contextWindowCheckSummary();
+    }
 
     if (checkRunId > 0) {
       try {
@@ -481,10 +510,8 @@ public class ReviewOrchestrator {
                 checkRunId,
                 CHECK_STATUS_COMPLETED,
                 CONCLUSION_FAILURE,
-                truncation.isPresent() ? TRUNCATION_CHECK_TITLE : null,
-                truncation
-                    .map(t -> truncationCheckSummary(t.conciseModelImplicated()))
-                    .orElse(null),
+                checkTitle,
+                checkSummary,
                 sessionUrl(session)));
       } catch (RuntimeException checkRunError) {
         Log.warnf(checkRunError, "Failed to mark check run %d as failed", checkRunId);
@@ -494,6 +521,8 @@ public class ReviewOrchestrator {
     if (truncation.isPresent()) {
       reviewPublisher.postTruncationFailureNotice(
           auth, req.owner(), req.repo(), req.prNumber(), truncation.get().conciseModelImplicated());
+    } else if (contextWindow.isPresent()) {
+      reviewPublisher.postContextWindowFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
     } else {
       reviewPublisher.postFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
     }
