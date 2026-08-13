@@ -423,11 +423,14 @@ public class FindingVerificationService {
         return screened;
       }
       var verification = parseOrSalvage(raw, screened.findings().size());
+      var applied = apply(screened, verification);
+      // Accepted only after apply() succeeded: the fail-open catch below records (N, 0) for any
+      // failure, so recording before it could double this attempt's candidates if apply threw.
       coverageSink.accept(
           new VerificationCoverage(
               screened.findings().size(),
               (int) candidatesCovered(verification.verdicts(), screened.findings().size())));
-      return apply(screened, verification);
+      return applied;
     } catch (AiResponseTruncatedException e) {
       return salvageTruncatedVerdicts(screened, e, coverageSink);
     } catch (IOException | RuntimeException e) {
@@ -503,8 +506,9 @@ public class FindingVerificationService {
         "Finding verification was cut at the model's response-length cap; salvaged %d verdict(s)"
             + " covering %d of %d candidate finding(s) — the remaining %d stay unverified. %s",
         salvaged.size(), verified, candidates, candidates - verified, e.getMessage());
+    var applied = apply(screened, new VerificationResponse(salvaged));
     coverageSink.accept(new VerificationCoverage(candidates, (int) verified));
-    return apply(screened, new VerificationResponse(salvaged));
+    return applied;
   }
 
   /**

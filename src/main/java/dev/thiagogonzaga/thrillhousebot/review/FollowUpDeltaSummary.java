@@ -71,6 +71,8 @@ final class FollowUpDeltaSummary {
     if (newFindings == 0 && resolved == 0) {
       return Optional.empty();
     }
+    var coverageDisclosure =
+        ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
     var body =
         DELTA_HEADING
             + "\n\n"
@@ -87,10 +89,12 @@ final class FollowUpDeltaSummary {
             // reviewed portion of a truncated diff, so the comment has to say so. Pass the
             // truncation detail, not just the count — on the budgeted path the count folds in
             // clipped files, which are partially analyzed, not omitted (F8).
-            + ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
+            + coverageDisclosure;
     // The delta's counts must not read as fully screened when verification did not cover them
     // (#623) — same disclosure the posted review and check run carry, in its one-sentence form.
-    if (result.truncation().verification().disclosed()) {
+    // Only when no coverage disclosure rendered above: that one folds the verification clause in
+    // alongside the file gaps, and the same fact must not stack twice on one comment.
+    if (result.truncation().verification().disclosed() && coverageDisclosure.isEmpty()) {
       body += "\n\n> ⚠️ " + ReviewResult.verificationBrief(result.truncation().verification());
     }
     return Optional.of(body);
