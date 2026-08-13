@@ -253,6 +253,8 @@ class RebuttalContradictionTest {
         // The scheme carve-out still applies inside the unclosed literal, so the fallback lands on
         // the real comment rather than on the URL's slashes.
         "+    let u = &'a; see http://example.com // executor.submit(() -> run(ctx));",
+        // A second // inside the same unclosed literal must not move the fallback past the first.
+        "+    let f = &'a ctx; // note // executor.submit(() -> run(ctx));",
       })
   void shouldNotReadACommentAsDispatchEvidenceAfterABackslash(String codeLine) {
     assertTrue(
