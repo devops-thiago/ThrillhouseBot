@@ -14,6 +14,7 @@ All notable changes to ThrillhouseBot.
 - **Dashboard token test no longer assumes an en-US locale** (#661): the test now asserts the same `toLocaleString()` output the component renders, so it passes on machines with any runtime locale
 - **Dimension 7's mismatch rule now carries its own external-producer boundary** (#680): the "nothing in the provided material produces it" definition states that an artifact whose producer is legitimately outside the diff (a base image, a release binary) is not a mismatch but the unshown-state case, phrased as a verification request; the closing escape cross-references the same boundary, so the two sentences read as one rule
 - **PR summary hardening** (#636): the model's `pr_purpose` paragraph is now routed through `MarkdownSafe.inline` like every other model-supplied string in the summary, so a crafted purpose can no longer inject headings, HTML, fences, or table pipes into the posted comment
+- **A backticked quotation in a decline no longer reopens it** (#652): inline code spans are stripped from a maintainer's reply before the decline re-check, so quoting a construct such as `` `executor.submit` `` is not matched as an assertion about the reviewed code
 
 ## [0.6.0] — 2026-08-13
 

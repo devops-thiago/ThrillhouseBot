@@ -395,6 +395,43 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldIgnoreClaimsThatAppearOnlyInsideASingleBacktickSpan() {
+    var rebuttal =
+        "Declining — the bot's own text says `it never runs concurrently`, but that quote is not"
+            + " our position and the finding is accepted risk for this release.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a claim quoted inside a single-backtick span is not the maintainer's own assertion");
+  }
+
+  @Test
+  void shouldIgnoreClaimsThatAppearOnlyInsideATripleBacktickSpanOnOneLine() {
+    var rebuttal =
+        "Declining — the docstring literally reads ```runs serially per key``` and we are keeping"
+            + " that wording; no code change in this PR.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a claim quoted inside an inline triple-backtick span is not the maintainer's assertion");
+  }
+
+  @Test
+  void shouldStillContradictWhenTheAssertionSitsOutsideTheBacktickedQuotation() {
+    var rebuttal =
+        "Declining, `executor.submit` here is on the single-threaded pool, so there is no race.";
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the single-threaded assertion outside the code span must still be re-checked");
+    assertTrue(
+        contradiction.get().claim().contains("single-threaded pool"),
+        "the note must quote the assertion, was: " + contradiction.get().claim());
+  }
+
+  @Test
   void shouldRespectDeclineWhenThereIsNoCodeToCheckAgainst() {
     var rebuttal = "It is single-threaded, so there is no race.";
 

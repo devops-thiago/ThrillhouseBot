@@ -153,6 +153,16 @@ final class RebuttalContradiction {
       Pattern.compile("```.{0,10000}?```", Pattern.DOTALL | Pattern.MULTILINE);
 
   /**
+   * Inline code spans in a markdown reply — {@code `…`} through {@code ```…```} on one line —
+   * quoted constructs, never the maintainer's assertion. A backticked quotation in a decline
+   * ("declining, {@code `executor.submit`} here is on the single-threaded pool") must not be
+   * matched as an assertion about the code. The span body is bounded and confined to one line so an
+   * unclosed backtick in untrusted prose cannot swallow the rest of the reply; a span this misses
+   * only under-fires, which keeps the decline — the safe direction.
+   */
+  private static final Pattern INLINE_CODE_SPAN = Pattern.compile("(`{1,3})[^`\n]{0,1000}?\\1");
+
+  /**
    * Replies longer than this are not analyzed at all. It keeps the markdown-stripping scan over
    * untrusted prose bounded, and skipping is the conservative outcome: an unread reply keeps its
    * decline.
@@ -382,11 +392,12 @@ final class RebuttalContradiction {
   }
 
   /**
-   * The reply with fenced code blocks and blockquoted lines removed, lower-cased boundaries intact
-   * — what the maintainer actually asserts, as opposed to what they quote.
+   * The reply with fenced code blocks, inline code spans and blockquoted lines removed, lower-cased
+   * boundaries intact — what the maintainer actually asserts, as opposed to what they quote.
    */
   private static String assertedText(String rebuttal) {
-    var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
+    var withoutFences =
+        INLINE_CODE_SPAN.matcher(FENCED_BLOCK.matcher(rebuttal).replaceAll(" ")).replaceAll(" ");
     var kept = new ArrayList<String>();
     for (var line : withoutFences.split("\n", -1)) {
       if (!line.stripLeading().startsWith(">")) {
