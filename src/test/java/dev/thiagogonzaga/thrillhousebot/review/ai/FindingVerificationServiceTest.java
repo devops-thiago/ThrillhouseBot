@@ -1180,6 +1180,56 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenADoSupportedMitigationFollowsThePronounAbsence() {
+    // "does escape" is emphatic but still a statement of fact, invisible to MITIGATION_ASSERTED's
+    // copula and subject-slot shapes. With the pronoun absence match dropped by NEGATING_SUBJECT,
+    // this text would otherwise floor although it says another layer neutralizes the value —
+    // the over-fire direction (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized before innerHTML receives it, but the framework does escape"
+                    + " the value at compile time.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotReadDoesNotProhibitSqlInjectionAsASinkDenial() {
+    // "prohibit" belongs to the same warding-off family as "prevent": the negation targets the
+    // missing defense, so the sentence asserts the defect and must not defuse the floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Unsanitized channel value concatenated into the query text",
+                "The helper does not prohibit SQL injection; the value goes straight into the"
+                    + " command string.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void doesNotFloorWhenTheDefenseNounIsTheObjectOfNothingEscapes() {
     // "Nothing escapes validation" says every value IS validated — a mitigation, not an absence.
     // The defense-noun object must not read as a pronoun-subject absence claim, and the noun must
@@ -1300,6 +1350,29 @@ class FindingVerificationServiceTest {
 
     assertEquals("high", result.findings().get(0).risk());
     assertEquals("medium", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void stillHonoursADenialWhoseGapWordIsNotABridgeVerb() {
+    // The bridge exclusion is verb-shaped only: an adjective or quantifier in the one-word gap
+    // ("no possible SQL injection") is still a denial and must keep suppressing the floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Tenant filter naming is unvalidated by convention checks",
+                "The query is built by the ORM, so there is no possible SQL injection here.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
   }
 
   @Test

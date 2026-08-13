@@ -190,17 +190,28 @@ public class FindingVerificationService {
   /**
    * A bridge verb filling {@link #SINK_DENIED}'s one-word gap ("does not <i>prevent</i> SQL
    * injection"): the negation then targets the missing defense, not the sink, so the sentence
-   * asserts the defect and must not read as a denial. The stems are the defense verbs a finding
-   * puts between a negation and a sink name — warding it off (prevent, stop, block, guard, protect,
-   * defend), removing it (mitigate, eliminate, avoid, fix, address, handle) or neutralizing the
-   * value (sanitize, escape, validate, filter, neutralize); an adjective or quantifier gap ("no
-   * possible SQL injection") stays a denial. Matched against the gap group whole, so a bridge verb
-   * elsewhere in the finding changes nothing.
+   * asserts the defect and must not read as a denial. The stems are the warding-off family
+   * (prevent, stop, block, guard, protect, defend, prohibit, forbid, disallow, preclude, thwart,
+   * hinder, impede); an adjective or quantifier gap ("no possible SQL injection") stays a denial.
+   * Matched against the gap group whole, so a bridge verb elsewhere in the finding changes nothing.
+   * Read as a union with {@link #NEUTRALIZING_VERB_GAP}; one family per pattern only because one
+   * alternation of both is more than the regex complexity budget allows.
    */
   private static final Pattern BRIDGE_VERB_GAP =
       Pattern.compile(
-          "(prevent|stop|block|guard|protect|defend|mitigat|eliminat|avoid|fix|address|handle"
-              + "|sanitiz|escap|validat|filter|neutraliz)\\w*[\\s-]+",
+          "(prevent|stop|block|guard|protect|defend|prohibit|forbid|disallow|preclude|thwart"
+              + "|hinder|impede)\\w*[\\s-]+",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The bridge verbs that remove the defect (mitigate, eliminate, avoid, fix, address, handle) or
+   * neutralize the value (sanitize, escape, validate, filter, neutralize); the second half of
+   * {@link #BRIDGE_VERB_GAP}'s union.
+   */
+  private static final Pattern NEUTRALIZING_VERB_GAP =
+      Pattern.compile(
+          "(mitigat|eliminat|avoid|fix|address|handle|sanitiz|escap|validat|filter|neutraliz)"
+              + "\\w*[\\s-]+",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -244,6 +255,19 @@ public class FindingVerificationService {
    */
   private static final Pattern NEGATING_SUBJECT =
       Pattern.compile("\\b(nothing|nobody)\\s*$", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The mitigation asserted with do-support ("the framework does escape the value", "React did
+   * sanitize it"): emphatic, but still a statement of fact, and invisible to {@link
+   * #MITIGATION_ASSERTED}'s copula and subject-slot alternatives. The verb must follow the
+   * auxiliary directly, so the negated "does not escape" stays an absence claim; modals are
+   * deliberately absent — "should escape" is a recommendation, not an assertion. Kept a separate
+   * pattern because {@link #MITIGATION_ASSERTED} is already over the regex complexity budget.
+   */
+  private static final Pattern MITIGATION_DO_SUPPORTED =
+      Pattern.compile(
+          "\\b(do|does|did)\\s+(sanitiz|escap|validat|parameteriz|encod)es?\\b",
+          Pattern.CASE_INSENSITIVE);
 
   /**
    * A conditional clause — a hypothesis the finding raises, not a fact it states. Matches from the
@@ -602,12 +626,18 @@ public class FindingVerificationService {
   }
 
   /**
-   * A {@link #MITIGATION_ASSERTED} hit, unless the match opens with a negating pronoun subject:
-   * "Nothing is sanitized" is the absence claim in auxiliary order, and the pattern's first
-   * alternative starts at the auxiliary so it never sees the subject.
+   * A {@link #MITIGATION_ASSERTED} or {@link #MITIGATION_DO_SUPPORTED} hit, unless the match opens
+   * with a negating pronoun subject: "Nothing is sanitized" is the absence claim in auxiliary
+   * order, and {@link #MITIGATION_ASSERTED}'s first alternative starts at the auxiliary so it never
+   * sees the subject.
    */
   private static boolean assertsMitigation(String asserted) {
-    Matcher asserts = MITIGATION_ASSERTED.matcher(asserted);
+    return hasUnnegatedMatch(MITIGATION_ASSERTED, asserted)
+        || hasUnnegatedMatch(MITIGATION_DO_SUPPORTED, asserted);
+  }
+
+  private static boolean hasUnnegatedMatch(Pattern mitigation, String asserted) {
+    Matcher asserts = mitigation.matcher(asserted);
     while (asserts.find()) {
       if (!NEGATING_SUBJECT.matcher(asserted.substring(0, asserts.start())).find()) {
         return true;
@@ -638,7 +668,9 @@ public class FindingVerificationService {
     Matcher denial = SINK_DENIED.matcher(asserted);
     while (denial.find()) {
       String gap = denial.group(2);
-      if (gap == null || !BRIDGE_VERB_GAP.matcher(gap).matches()) {
+      if (gap == null
+          || !(BRIDGE_VERB_GAP.matcher(gap).matches()
+              || NEUTRALIZING_VERB_GAP.matcher(gap).matches())) {
         return true;
       }
     }
