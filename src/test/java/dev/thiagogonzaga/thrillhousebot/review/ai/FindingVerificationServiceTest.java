@@ -1195,7 +1195,7 @@ class FindingVerificationServiceTest {
                 "src/components/FeedbackItem.tsx",
                 37,
                 "Stored XSS: feedback body rendered via dangerouslySetInnerHTML",
-                "Nothing sanitizes or escapes the body in the provided material. If, however, the"
+                "Nothing sanitizes the body in the provided material. If, however, the"
                     + " API always sanitizes the body on write, this is moot — but nothing"
                     + " shown does.",
                 null,
