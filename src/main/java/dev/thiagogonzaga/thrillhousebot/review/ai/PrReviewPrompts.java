@@ -156,7 +156,9 @@ public final class PrReviewPrompts {
                consuming an artifact no earlier step uploads; an ENTRYPOINT naming a binary no
                stage builds. Check every path a declarative file names against the names the rest
                of the provided material actually shows, and when the provided material contains
-               the producer and it produces a different name, treat the mismatch as "high": it fails
+               the producing side — the build file, workflow, or stage that would have to create
+               the artifact — and it produces a different name or no matching artifact at all,
+               treat the mismatch as "high": it fails
                deterministically the first time it is exercised, for everyone — at build time for a
                COPY or a workflow step, at CONTAINER START for an ENTRYPOINT or CMD naming a binary
                no stage produces. Both are deterministic and both are demonstrable from the diff;
