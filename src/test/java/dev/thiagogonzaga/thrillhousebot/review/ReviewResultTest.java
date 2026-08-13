@@ -442,8 +442,8 @@ class ReviewResultTest {
     assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
     assertTrue(
         clause.contains(
-            "the 7 finding(s) were NOT verified by the second-pass audit because its call did"
-                + " not complete — they post as the reviewer raised them"),
+            "the 7 finding(s) were NOT verified by the second-pass audit — no verdicts were"
+                + " returned, so they post as the reviewer raised them"),
         clause);
   }
 
@@ -531,8 +531,7 @@ class ReviewResultTest {
 
     var brief = result.coverageGapBrief();
 
-    assertTrue(
-        brief.contains("4 finding(s) unverified (verification call did not complete)"), brief);
+    assertTrue(brief.contains("4 finding(s) unverified (no verdicts returned)"), brief);
   }
 
   @Test
@@ -592,7 +591,7 @@ class ReviewResultTest {
     assertTrue(partialNotice.contains("only covered 4 of the 9 finding(s)"), partialNotice);
 
     assertEquals(
-        "The 9 finding(s) were not verified (the verification call did not complete).",
+        "The 9 finding(s) were not verified (no verdicts were returned).",
         ReviewResult.verificationBrief(none));
     assertEquals(
         "Verification covered 4 of 9 finding(s); the rest posted unverified.",

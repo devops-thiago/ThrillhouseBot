@@ -251,9 +251,7 @@ class FollowUpDeltaSummaryTest {
     var body = FollowUpDeltaSummary.render(result).orElseThrow();
 
     assertTrue(
-        body.contains(
-            "The 2 finding(s) were not verified (the verification call did not" + " complete)."),
-        body);
+        body.contains("The 2 finding(s) were not verified (no verdicts were returned)."), body);
     assertFalse(body.contains("Large PR — partial coverage"), body);
   }
 

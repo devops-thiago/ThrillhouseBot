@@ -426,8 +426,7 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(
-        checkSummary.contains(
-            "The 3 finding(s) were not verified (the verification call did not complete)."),
+        checkSummary.contains("The 3 finding(s) were not verified (no verdicts were returned)."),
         checkSummary);
   }
 
@@ -498,8 +497,7 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(
-        checkSummary.contains("2 finding(s) unverified (verification call did not complete)"),
-        checkSummary);
+        checkSummary.contains("2 finding(s) unverified (no verdicts returned)"), checkSummary);
   }
 
   @Test

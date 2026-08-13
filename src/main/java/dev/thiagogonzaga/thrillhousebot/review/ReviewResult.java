@@ -639,11 +639,12 @@ public record ReviewResult(
    * The shared "verification covered X of Y finding(s)" clause behind every verification-coverage
    * surface (#623), so the review banner, the check-run summary and the delta comment never drift
    * on the counts or on what an unverified finding means. Only rendered for a {@linkplain
-   * VerificationCoverage#disclosed() disclosed} coverage. The NONE branch may state its cause —
-   * zero verdicts always means the call never produced a usable response — but the PARTIAL branch
-   * deliberately states none: a cut response and a complete response that simply omitted a verdict
-   * both land here, and only the counts are true for every path; the logs carry the specific
-   * reason.
+   * VerificationCoverage#disclosed() disclosed} coverage. Neither branch states a cause beyond what
+   * is true for every path that reaches it: NONE covers an empty body, a spend-ceiling skip where
+   * the call was never made, a cut before the first verdict closed and a generic failure — "no
+   * verdicts were returned" is the whole truth they share — while PARTIAL covers a cut response and
+   * a complete response that simply omitted a verdict, where only the counts hold. The logs carry
+   * the specific reason.
    */
   private static String verificationClause(VerificationCoverage verification) {
     if (verification.outcome() == VerificationCoverage.Outcome.PARTIAL) {
@@ -653,8 +654,8 @@ public record ReviewResult(
           verification.verified(), verification.candidates(), verification.unverified());
     }
     return String.format(
-        "the %d finding(s) were NOT verified by the second-pass audit because its call did not"
-            + " complete — they post as the reviewer raised them",
+        "the %d finding(s) were NOT verified by the second-pass audit — no verdicts were"
+            + " returned, so they post as the reviewer raised them",
         verification.candidates());
   }
 
@@ -678,7 +679,7 @@ public record ReviewResult(
           verification.verified(), verification.candidates());
     }
     return String.format(
-        "The %d finding(s) were not verified (the verification call did not complete).",
+        "The %d finding(s) were not verified (no verdicts were returned).",
         verification.candidates());
   }
 
@@ -738,7 +739,7 @@ public record ReviewResult(
       case NONE ->
           parts.add(
               String.format(
-                  "%d finding(s) unverified (verification call did not complete)",
+                  "%d finding(s) unverified (no verdicts returned)",
                   truncation.verification().candidates()));
       case PARTIAL ->
           parts.add(
