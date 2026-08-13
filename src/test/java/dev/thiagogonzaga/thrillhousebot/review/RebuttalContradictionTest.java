@@ -441,6 +441,18 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldStripADoubleBacktickSpanThatQuotesALoneBacktick() {
+    var rebuttal =
+        "Declining — the config literally reads ``x`single-threaded pool`` and we accept the risk"
+            + " for this release.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a double-backtick span quoting a lone backtick must be stripped whole, not half-stripped"
+            + " at the first inner backtick pair");
+  }
+
+  @Test
   void shouldNotBridgeAClaimPhraseAcrossAStrippedSpan() {
     var rebuttal =
         "Accepted risk — per the runbook the deliveries drain one at a`beat`time only in the"
@@ -449,6 +461,18 @@ class RebuttalContradictionTest {
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
         "stripping a span must not join its neighbours into a claim phrase the reply never made");
+  }
+
+  @Test
+  void shouldMatchTheSameSentenceWhenTheClaimPhraseIsRealRatherThanBridged() {
+    var rebuttal =
+        "Accepted risk — per the runbook the deliveries drain one at a time only in the"
+            + " diagram, and we are not changing the code in this PR.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isPresent(),
+        "the bridging probe is only meaningful if the unspanned phrase in the same sentence"
+            + " does match");
   }
 
   @Test

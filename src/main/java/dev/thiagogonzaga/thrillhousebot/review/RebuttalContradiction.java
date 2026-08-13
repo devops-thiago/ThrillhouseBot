@@ -161,13 +161,24 @@ final class RebuttalContradiction {
    * one line so an unclosed backtick in untrusted prose cannot swallow the rest of the reply; a
    * span the bound misses is left in place and behaves as before.
    *
+   * <p>The double-backtick branch comes first and its body admits a lone backtick, because {@code
+   * ``…``} exists in markdown precisely to quote text containing one ({@code ``x`y``}). Without
+   * that, the first closable single-backtick pair inside the span was stripped instead and the rest
+   * of the quotation survived as prose. Both branches are guarded with lookarounds so a delimiter
+   * is a maximal backtick run: a single-backtick opener cannot start inside a {@code ``} delimiter,
+   * and {@code ``} cannot half-match as an empty single-backtick span.
+   *
    * <p>Each span is replaced with a newline, not a space: a space would bridge the words abutting
    * the backticks into a phrase that was never contiguous in the original reply ({@code one at
    * a`beat`time} must not become "one at a time"), turning stripping into a way to <em>add</em> a
-   * claim match. A newline appears inside no claim pattern and is a sentence boundary for the
-   * quoted note, so stripping can only remove matches — the keep-the-decline direction.
+   * claim match. The stripped text is matched with the newlines still in it — {@link #assertedText}
+   * joins lines with {@code \n}, never a space — and a newline appears inside no claim pattern
+   * while being a sentence boundary for the quoted note, so stripping can only remove matches — the
+   * keep-the-decline direction.
    */
-  private static final Pattern INLINE_CODE_SPAN = Pattern.compile("(`{1,2})[^`\n]{0,1000}?\\1");
+  private static final Pattern INLINE_CODE_SPAN =
+      Pattern.compile(
+          "(?<!`)(?:``(?!`)(?:[^`\n]|`(?!`)){0,1000}?``(?!`)|`(?!`)[^`\n]{0,1000}?`(?!`))");
 
   /**
    * Replies longer than this are not analyzed at all. It keeps the markdown-stripping scan over
