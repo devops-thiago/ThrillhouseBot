@@ -47,7 +47,10 @@ public class TriggerDetector {
    * comment. Built from {@link BotIdentity#mentionNames()} (each name {@link Pattern#quote}d, a
    * login is data, never regex) rather than a hardcoded slug, so a custom-login install's
    * maintainers can address their bot — including the {@code resolved} clear directive, whose
-   * acknowledgement path this gate fronts (#679). Compiled once per detector, not per comment.
+   * acknowledgement path this gate fronts (#679). Compiled once per detector, not per comment. The
+   * leading anchor requires the {@code @} to open the comment or follow a non-word character, the
+   * way a GitHub mention is written — an email address's local part ("foo@my-review-bot.example")
+   * never mentions the bot.
    */
   private final Pattern mentionPattern;
 
@@ -66,7 +69,8 @@ public class TriggerDetector {
     String mentions =
         botIdentity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
     this.mentionPattern =
-        Pattern.compile(".*@(?:" + mentions + ")\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+        Pattern.compile(
+            ".*(?:^|[^\\w@])@(?:" + mentions + ")\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
   }
 
   private static Map<CommentCommand, List<Pattern>> buildPatterns() {

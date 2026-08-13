@@ -3244,6 +3244,35 @@ class FollowUpAnalyzerTest {
   }
 
   /**
+   * A GitHub mention's {@code @} opens the comment or follows a non-word character; an email
+   * address's local part never mentions the bot and must not clear anything. Whitespace between the
+   * mention and the word admits Unicode space separators (pasted text carries non-breaking spaces),
+   * while the interrogative guard also skips format characters, so no invisible character turns a
+   * question into a clearing order.
+   */
+  @Test
+  void isClearDirectiveShouldAnchorTheMentionAndReadUnicodeWhitespace() {
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective(
+            "root@thrillhousebot resolved src/A.java:10 — title", BOT_ID),
+        "an email local part is not a mention");
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective(
+            "(@thrillhousebot resolved src/A.java:10 — title)", BOT_ID),
+        "punctuation before the @ is how a parenthesized mention is written");
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective(
+            "@thrillhousebot\u00A0resolved src/A.java:10 — title", BOT_ID),
+        "a pasted non-breaking space still separates the mention from the word");
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved\u00A0? src/A.java:10", BOT_ID),
+        "a non-breaking space must not smuggle a question past the interrogative guard");
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved\u200B? src/A.java:10", BOT_ID),
+        "a zero-width character must not smuggle a question past the interrogative guard");
+  }
+
+  /**
    * The directive is built from the configured bot logins, not a hardcoded slug, so an install
    * whose GitHub App answers to another name still has a working clear directive (#679). The
    * interrogative guard and the case-insensitivity travel with the configured name, and the default

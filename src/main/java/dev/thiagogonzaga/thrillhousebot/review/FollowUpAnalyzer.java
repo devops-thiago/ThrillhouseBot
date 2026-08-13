@@ -759,7 +759,17 @@ public class FollowUpAnalyzer {
    * <p>The mention names come from the configured bot logins ({@link BotIdentity#mentionNames}),
    * not a hardcoded slug, so an install whose GitHub App runs under a different login still
    * recognizes its maintainers' directives (#679). Each name is {@link Pattern#quote}d — a login is
-   * data, never regex.
+   * data, never regex. The leading anchor requires the {@code @} to open the comment or follow a
+   * non-word character, the way a GitHub mention is written — an email address's local part
+   * ("root@thrillhousebot resolved …") never mentions the bot and must not clear anything.
+   *
+   * <p>The separator admits Unicode space separators ({@code \p{Zs}}) alongside {@code \s}: pasted
+   * text carries non-breaking spaces, and a directive is a directive whichever space the maintainer
+   * pasted. The interrogative guard additionally skips format characters ({@code \p{Cf}}): a
+   * zero-width character smuggled before the {@code ?} must not turn a question into a clearing
+   * order — the same over-clear direction the locator guards already refuse (#654). The asymmetry
+   * is deliberate: a format character <em>inside the separator</em> still fails the match, which
+   * merely holds the finding — the safe direction.
    *
    * <p>The trailing lookahead rejects the interrogative: a word boundary holds before {@code ?}, so
    * "@thrillhousebot resolved? `src/A.java:10` — SQL injection" — a maintainer <em>asking</em>
@@ -776,7 +786,10 @@ public class FollowUpAnalyzer {
           String mentions =
               identity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
           return Pattern.compile(
-              "@(?:" + mentions + ")\\s+resolved\\b(?!\\s*\\?)", Pattern.CASE_INSENSITIVE);
+              "(?:^|[^\\w@])@(?:"
+                  + mentions
+                  + ")[\\s\\p{Zs}]+resolved\\b(?![\\s\\p{Zs}\\p{Cf}]*\\?)",
+              Pattern.CASE_INSENSITIVE);
         });
   }
 

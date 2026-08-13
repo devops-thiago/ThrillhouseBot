@@ -133,6 +133,16 @@ class TriggerDetectorTest {
         "the shipped alternate slug is a first-class mention under the default identity");
   }
 
+  /** An email address's local part never mentions the bot; a real mention's {@code @} does. */
+  @Test
+  void shouldNotDetectMentionInsideAnEmailAddress() {
+    var custom = new TriggerDetector(List.of("my-review-bot[bot]"));
+
+    assertFalse(custom.containsBotMention("email foo@my-review-bot.example"));
+    assertFalse(detector.containsBotMention("mail root@thrillhousebot please"));
+    assertTrue(detector.containsBotMention("(@thrillhousebot wdyt?)"));
+  }
+
   @Test
   void shouldNotDetectMentionWithoutBot() {
     assertFalse(detector.containsBotMention("looks good"));
