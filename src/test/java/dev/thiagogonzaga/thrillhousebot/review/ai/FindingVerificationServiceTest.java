@@ -1132,6 +1132,319 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void floorsAFindingWhoseAbsenceClaimIsWordedAsNothingSanitizes() {
+    // #676 gap 1: MITIGATION_ABSENT's negators stopped at "no|not|never|...", so the
+    // subject-worded absence "Nothing sanitizes ..." never registered as an absence claim and the
+    // floor stayed silent on a named sink.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing sanitizes the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsAFindingWhoseAbsenceClaimIsWordedAsNothingIsSanitized() {
+    // The auxiliary-order twin of the pronoun-subject absence: MITIGATION_ASSERTED's first
+    // alternative starts at "is" and never sees the negating subject, so "Nothing is sanitized"
+    // read as a mitigation and defeated the very floor the pronoun negators enable.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenADoSupportedMitigationFollowsThePronounAbsence() {
+    // "does escape" is emphatic but still a statement of fact, invisible to MITIGATION_ASSERTED's
+    // copula and subject-slot shapes. With the pronoun absence match dropped by NEGATING_SUBJECT,
+    // this text would otherwise floor although it says another layer neutralizes the value —
+    // the over-fire direction (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized before innerHTML receives it, but the framework does escape"
+                    + " the value at compile time.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotReadDoesNotProhibitSqlInjectionAsASinkDenial() {
+    // "prohibit" belongs to the same warding-off family as "prevent": the negation targets the
+    // missing defense, so the sentence asserts the defect and must not defuse the floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Unsanitized channel value concatenated into the query text",
+                "The helper does not prohibit SQL injection; the value goes straight into the"
+                    + " command string.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenTheDefenseNounIsTheObjectOfNothingEscapes() {
+    // "Nothing escapes validation" says every value IS validated — a mitigation, not an absence.
+    // The defense-noun object must not read as a pronoun-subject absence claim, and the noun must
+    // not re-match as the verb through the word gap; over-firing is the dangerous direction
+    // (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes validation before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheDefenseNounObjectCarriesAModifier() {
+    // The defense-noun rejection must see through a modifier: "Nothing escapes heavy validation"
+    // still says every value IS validated.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes heavy validation before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheObjectNamesTheDefenseTool() {
+    // Tool-named objects belong to the same mitigated reading: "Nothing escapes the sanitizer"
+    // says the sanitizer catches everything.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes the sanitizer before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenNothingEscapesTheValueItself() {
+    // The other reading of the same shape: "nothing escapes the value" is the absence claim, and
+    // the defense-noun rejection must not swallow it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes the value before it reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotReadDoesNotPreventSqlInjectionAsASinkDenial() {
+    // #676 gap 2: SINK_DENIED's one-word gap admitted bridge verbs, so "does not prevent SQL
+    // injection" — an assertion of the defect — read as a denial of the sink and suppressed the
+    // floor on a demonstrated string-built query.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Unsanitized channel value concatenated into the query text",
+                "The helper does not prevent SQL injection; the value goes straight into the"
+                    + " command string.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotReadDoesNotMitigateSqlInjectionAsASinkDenial() {
+    // The bridge-verb set is the defense-verb family, not just "prevent": "does not mitigate SQL
+    // injection" targets the missing defense the same way and must not read as a denial.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Unsanitized channel value concatenated into the query text",
+                "The library does not mitigate SQL injection on this path.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsAConditionalWhoseCoordinatorSitsInsideTheProtasis() {
+    // #676 gap 3: the conditional span ended at ANY coordinator, so the parenthetical "however"
+    // inside "If, however, the API always sanitizes ..." truncated the protasis and left
+    // "sanitizes" in text read as asserted, defeating the floor on a hypothesis the finding
+    // rejects in the same sentence.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "medium",
+                "src/components/FeedbackItem.tsx",
+                37,
+                "Stored XSS: feedback body rendered via dangerouslySetInnerHTML",
+                "Nothing sanitizes the body in the provided material. If, however, the"
+                    + " API always sanitizes the body on write, this is moot — but nothing"
+                    + " shown does.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("medium", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void stillHonoursADenialWhoseGapWordIsNotABridgeVerb() {
+    // The bridge exclusion is verb-shaped only: an adjective or quantifier in the one-word gap
+    // ("no possible SQL injection") is still a denial and must keep suppressing the floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Tenant filter naming is unvalidated by convention checks",
+                "The query is built by the ORM, so there is no possible SQL injection here.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void stillHonoursADenialWithNoWordBetweenTheNegatorAndTheSink() {
+    // The bridge-verb exclusion must not narrow the plain denial: "no XSS here" keeps
+    // suppressing the floor, since over-firing is the dangerous direction (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Banner.tsx",
+                9,
+                "innerHTML assignment on a constant unvalidated at build time",
+                "The string is a compile-time literal, so there is no XSS here.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void leavesCriticalInjectionFindingsAndUnrelatedRatingsAlone() {
     // The floor only lifts, so a critical keeps its level; and it never fires unless the finding
     // states both halves — a named sink AND the absence of any sanitization.
