@@ -143,13 +143,20 @@ public final class PrReviewPrompts {
                output, a workflow that will not parse, or a value that contradicts a constraint
                stated elsewhere in the same file. One shape belongs on this list and is the one
                most often passed over: a BUILD OR RUN INSTRUCTION NAMING A PATH, FILENAME OR
-               ARTIFACT THAT NOTHING IN THE PROVIDED MATERIAL PRODUCES. A Dockerfile COPY of
+               ARTIFACT THAT NOTHING IN THE PROVIDED MATERIAL PRODUCES — where the provided
+               material is where the producer would have to be. When the artifact's producer is
+               legitimately outside the diff (an external base image, a release binary another
+               workflow builds, a file a registry or provider supplies), the reference does not
+               satisfy this definition: that is the unshown-state case covered by this
+               dimension's closing escape, and it is phrased as a verification request, never
+               floored as a mismatch. A Dockerfile COPY of
                target/<name>.jar when the build file's artifactId and version — with no finalName
                or output-name override — make the produced artifact a different filename; a COPY of
                requirement.txt when the file the PR commits is requirements.txt; a workflow step
                consuming an artifact no earlier step uploads; an ENTRYPOINT naming a binary no
                stage builds. Check every path a declarative file names against the names the rest
-               of the provided material actually shows, and treat a mismatch as "high": it fails
+               of the provided material actually shows, and when the provided material contains
+               the producer and it produces a different name, treat the mismatch as "high": it fails
                deterministically the first time it is exercised, for everyone — at build time for a
                COPY or a workflow step, at CONTAINER START for an ENTRYPOINT or CMD naming a binary
                no stage produces. Both are deterministic and both are demonstrable from the diff;
@@ -160,7 +167,9 @@ public final class PrReviewPrompts {
                schema/lint/CI validation, or that breaks the safety property the PR itself claims to
                add, is high; a cosmetic or stylistic config nitpick is low. Not a finding when a
                comment or adjacent value justifies the choice, or when correctness depends on
-               cluster/provider state not shown in the diff — phrase that as a verification request.
+               cluster/provider state or an artifact producer not shown in the diff — the
+               external-producer boundary drawn in the mismatch definition above — phrase that
+               as a verification request.
             8. MOCK FIDELITY: When a test in the provided material stubs or mocks a collaborator
                (`when(x.m(...)).thenReturn(...)`, `doThrow(...).when(x).m(...)`, `doReturn(...)`,
                equivalent fakes), compare the stubbed behavior against the real method's contract
