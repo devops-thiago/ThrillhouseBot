@@ -121,16 +121,21 @@ final class RebuttalContradiction {
           // The skip before the count is possessive because a greedy run backtracks to zero width
           // and re-matches past its own lookahead, which let newFixedThreadPool( 1 ) escape.
           //
-          // Both bounds are real: a comment longer than 256 characters, or a seventeenth run of
-          // them, reads as concurrent. They keep the scan over untrusted diff text linear, and they
-          // sit far above any real annotation of a thread count.
+          // Both bounds are real: a comment longer than 1024 characters, or a seventeenth run of
+          // them, reads as concurrent — a false positive, since the pool is serial. They exist to
+          // keep the scan over untrusted diff text linear, and nothing more should be read into
+          // them. Successive rounds found a justification comment that wrapped, then one that ran
+          // past 64 characters, then one carrying a long URL past 256, each time because the bound
+          // was asserted to sit above "any real" annotation. It does not: a comment is prose and
+          // prose has no bound. Raising this constant again is not the fix — parsing the argument
+          // list instead of pattern-matching it is (#651).
           //
           // A count that is not a literal 1 — a variable, or an expression like 1 + 0 — reads as
           // concurrent. That is deliberate and matches newFixedThreadPool(workers): the class may
           // only overrule a decline on what the code plainly shows, and it cannot evaluate.
           Pattern.compile(
-              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*[\\s\\S]{0,256}?\\*/){0,16}+"
-                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,256}?\\*/){0,16}(?:,|\\)))"),
+              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}+"
+                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}(?:,|\\)))"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future

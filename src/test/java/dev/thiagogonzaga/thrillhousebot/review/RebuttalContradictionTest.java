@@ -170,6 +170,15 @@ class RebuttalContradictionTest {
             + "+        store is not safe for parallel writes */);",
         "+    var pool = Executors.newFixedThreadPool(1 /* exactly one worker, because the queue"
             + " must stay ordered for the replay to be deterministic */);",
+        // A justification that cites its source: one URL is enough to run a comment past 256
+        // characters, which is where the previous bound sat.
+        "+    var pool = Executors.newFixedThreadPool(1 /* one worker per"
+            + " https://github.com/org/repo/issues/12345#issuecomment-1234567890 and the four"
+            + " incidents linked from it, all of which came from parallel writes to the same"
+            + " ledger row while the nightly replay was running; the ordering guarantee the"
+            + " downstream reconciler depends on is only worth having if exactly one thread"
+            + " appends here, so please do not widen this pool without reading that thread"
+            + " first */);",
       })
   void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(
