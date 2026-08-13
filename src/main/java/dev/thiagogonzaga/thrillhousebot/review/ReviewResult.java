@@ -181,9 +181,11 @@ public record ReviewResult(
    * #518). {@code verification} marks how much of the finding set the second-pass verification
    * audit covered (#623): like the summary degradation it is not a file-coverage gap — the verifier
    * fails open by design, so every finding posts either way — but a finding set the audit never (or
-   * only partially) screened must say so instead of reading exactly like a verified one. All empty
-   * on the legacy line-cap path, where only a count is known — the rendered copy then falls back to
-   * the numeric clause.
+   * only partially) screened must say so instead of reading exactly like a verified one. The file
+   * classes and the summary degradation are all empty on the legacy line-cap path, where only a
+   * count is known — the rendered copy then falls back to the numeric clause — but {@code
+   * verification} is carried on that lane too: the legacy uncapped single call verifies its
+   * findings like any other, so its disclosure does not depend on the plan being budgeted.
    */
   @RegisterForReflection
   public record TruncationDetail(
@@ -637,16 +639,17 @@ public record ReviewResult(
    * The shared "verification covered X of Y finding(s)" clause behind every verification-coverage
    * surface (#623), so the review banner, the check-run summary and the delta comment never drift
    * on the counts or on what an unverified finding means. Only rendered for a {@linkplain
-   * VerificationCoverage#disclosed() disclosed} coverage; the cause is stated generically — an
-   * empty verifier response, a response cut mid-JSON and a call skipped at the token spend ceiling
-   * all leave the same unverified state, and the logs carry the specific reason.
+   * VerificationCoverage#disclosed() disclosed} coverage. The NONE branch may state its cause —
+   * zero verdicts always means the call never produced a usable response — but the PARTIAL branch
+   * deliberately states none: a cut response and a complete response that simply omitted a verdict
+   * both land here, and only the counts are true for every path; the logs carry the specific
+   * reason.
    */
   private static String verificationClause(VerificationCoverage verification) {
     if (verification.outcome() == VerificationCoverage.Outcome.PARTIAL) {
       return String.format(
-          "the second-pass finding verification only covered %d of the %d finding(s) because its"
-              + " response did not complete — the remaining %d post unverified, as the reviewer"
-              + " raised them",
+          "the second-pass finding verification only covered %d of the %d finding(s) — the"
+              + " remaining %d post unverified, as the reviewer raised them",
           verification.verified(), verification.candidates(), verification.unverified());
     }
     return String.format(

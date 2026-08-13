@@ -566,6 +566,26 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void reportsPartialCoverageWhenACompleteResponseOmitsAVerdict() {
+    // A complete, parseable body that simply skips a candidate is PARTIAL by count alone — the
+    // rendered clause states the X-of-Y and no cause, because "response did not complete" would
+    // be false here.
+    ReviewResponse original =
+        response(finding("critical", "high", "Ruled on"), finding("high", "high", "Skipped"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"verdict\": \"confirmed\", \"reason\": \"real\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(2, result.findings().size());
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+    assertEquals(VerificationCoverage.Outcome.PARTIAL, reported.get(0).outcome());
+  }
+
+  @Test
   void reportsZeroCoverageWhenTheModelReturnsNoBody() {
     // #623: the empty-body soft failure keeps the findings (fail open, unchanged) but must no
     // longer be indistinguishable from a verified set — the coverage says none were verified.
