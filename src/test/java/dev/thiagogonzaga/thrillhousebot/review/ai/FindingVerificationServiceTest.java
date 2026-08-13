@@ -1180,6 +1180,54 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenTheDefenseNounIsTheObjectOfNothingEscapes() {
+    // "Nothing escapes validation" says every value IS validated — a mitigation, not an absence.
+    // The defense-noun object must not read as a pronoun-subject absence claim, and the noun must
+    // not re-match as the verb through the word gap; over-firing is the dangerous direction
+    // (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes validation before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenNothingEscapesTheValueItself() {
+    // The other reading of the same shape: "nothing escapes the value" is the absence claim, and
+    // the defense-noun rejection must not swallow it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes the value before it reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void doesNotReadDoesNotPreventSqlInjectionAsASinkDenial() {
     // #676 gap 2: SINK_DENIED's one-word gap admitted bridge verbs, so "does not prevent SQL
     // injection" — an assertion of the defect — read as a denial of the sink and suppressed the

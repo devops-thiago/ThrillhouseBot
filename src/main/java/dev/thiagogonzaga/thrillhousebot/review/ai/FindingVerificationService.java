@@ -153,13 +153,18 @@ public class FindingVerificationService {
    * it before render"), so a subject-worded absence registers just like the step-worded one; {@link
    * #MITIGATION_ASSERTED} excludes the same pronouns from its subject slot, and {@link
    * #assertsMitigation} drops an auxiliary-order match they precede ("Nothing is sanitized"), so
-   * the two never read one sentence both ways. Kept a separate pattern only because folding the
-   * pronouns into {@link #MITIGATION_ABSENT}'s negator alternation puts that pattern over the regex
-   * complexity budget.
+   * the two never read one sentence both ways. A defense noun as the verb's direct object flips the
+   * sentence's meaning — "Nothing escapes validation" says every value IS validated — so the verb
+   * is held to its finite and participle forms (the noun could otherwise re-match as the verb
+   * through the word gap) and the trailing lookahead rejects a defense-noun object, keeping the
+   * over-fire direction closed (#594) while "nothing escapes the value" stays an absence claim.
+   * Kept a separate pattern only because folding the pronouns into {@link #MITIGATION_ABSENT}'s
+   * negator alternation puts that pattern over the regex complexity budget.
    */
   private static final Pattern MITIGATION_ABSENT_SUBJECT =
       Pattern.compile(
-          "\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}(sanitiz|escap|validat|parameteriz|encod)\\w*",
+          "\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}(sanitiz|escap|validat|parameteriz|encod)"
+              + "(es|ed|ing)\\b(?!\\s+(validation|sanitization|escaping|encoding|filtering)\\b)",
           Pattern.CASE_INSENSITIVE);
 
   /**
