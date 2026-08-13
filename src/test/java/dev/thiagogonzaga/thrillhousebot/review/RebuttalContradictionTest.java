@@ -406,6 +406,17 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldIgnoreClaimsThatAppearOnlyInsideADoubleBacktickSpan() {
+    var rebuttal =
+        "Declining — the constant is named ``RUNS_SERIALLY`` for historical reasons only, and the"
+            + " finding is accepted risk for this release.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a claim quoted inside a double-backtick span is not the maintainer's own assertion");
+  }
+
+  @Test
   void shouldIgnoreClaimsThatAppearOnlyInsideATripleBacktickSpanOnOneLine() {
     var rebuttal =
         "Declining — the docstring literally reads ```runs serially per key``` and we are keeping"
@@ -413,7 +424,18 @@ class RebuttalContradictionTest {
 
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
-        "a claim quoted inside an inline triple-backtick span is not the maintainer's assertion");
+        "an inline triple-backtick pair is consumed as a fenced block, never as an assertion");
+  }
+
+  @Test
+  void shouldNotBridgeAClaimPhraseAcrossAStrippedSpan() {
+    var rebuttal =
+        "Accepted risk — per the runbook the deliveries drain one at a`beat`time only in the"
+            + " diagram, and we are not changing the code in this PR.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "stripping a span must not join its neighbours into a claim phrase the reply never made");
   }
 
   @Test

@@ -153,15 +153,21 @@ final class RebuttalContradiction {
       Pattern.compile("```.{0,10000}?```", Pattern.DOTALL | Pattern.MULTILINE);
 
   /**
-   * Inline code spans in a markdown reply — {@code `…`} through {@code ```…```} on one line —
-   * quoted constructs, never the maintainer's assertion. A backticked quotation in a decline ("the
-   * bot's text says {@code `it never runs concurrently`}") must not be matched as the maintainer's
-   * own assertion about the code. The span body is bounded and confined to one line so an unclosed
-   * backtick in untrusted prose cannot swallow the rest of the reply. Stripping can only remove
-   * claim matches, never add one, so this moves outcomes solely toward keeping the decline — the
-   * safe direction; a span the bound misses is left in place and behaves as before.
+   * Inline code spans in a markdown reply — {@code `…`} or {@code ``…``} — quoted constructs, never
+   * the maintainer's assertion. A backticked quotation in a decline ("the bot's text says {@code
+   * `it never runs concurrently`}") must not be matched as the maintainer's own assertion about the
+   * code. Triple-backtick pairs are not handled here because {@link #FENCED_BLOCK} has already
+   * consumed every one this pattern's bounds could reach. The span body is bounded and confined to
+   * one line so an unclosed backtick in untrusted prose cannot swallow the rest of the reply; a
+   * span the bound misses is left in place and behaves as before.
+   *
+   * <p>Each span is replaced with a newline, not a space: a space would bridge the words abutting
+   * the backticks into a phrase that was never contiguous in the original reply ({@code one at
+   * a`beat`time} must not become "one at a time"), turning stripping into a way to <em>add</em> a
+   * claim match. A newline appears inside no claim pattern and is a sentence boundary for the
+   * quoted note, so stripping can only remove matches — the keep-the-decline direction.
    */
-  private static final Pattern INLINE_CODE_SPAN = Pattern.compile("(`{1,3})[^`\n]{0,1000}?\\1");
+  private static final Pattern INLINE_CODE_SPAN = Pattern.compile("(`{1,2})[^`\n]{0,1000}?\\1");
 
   /**
    * Replies longer than this are not analyzed at all. It keeps the markdown-stripping scan over
@@ -398,7 +404,7 @@ final class RebuttalContradiction {
    */
   private static String assertedText(String rebuttal) {
     var withoutFences =
-        INLINE_CODE_SPAN.matcher(FENCED_BLOCK.matcher(rebuttal).replaceAll(" ")).replaceAll(" ");
+        INLINE_CODE_SPAN.matcher(FENCED_BLOCK.matcher(rebuttal).replaceAll(" ")).replaceAll("\n");
     var kept = new ArrayList<String>();
     for (var line : withoutFences.split("\n", -1)) {
       if (!line.stripLeading().startsWith(">")) {
