@@ -15,6 +15,11 @@ All notable changes to ThrillhouseBot.
 - **Dimension 7's mismatch rule now carries its own external-producer boundary** (#680): the "nothing in the provided material produces it" definition states that an artifact whose producer is legitimately outside the diff (a base image, a release binary) is not a mismatch but the unshown-state case, phrased as a verification request; the closing escape cross-references the same boundary, so the two sentences read as one rule
 - **PR summary hardening** (#636): the model's `pr_purpose` paragraph is now routed through `MarkdownSafe.inline` like every other model-supplied string in the summary, so a crafted purpose can no longer inject headings, HTML, fences, or table pipes into the posted comment
 
+### Dependencies
+
+- Bumped the website docs-minor-patch group — `astro` 7.1.4 → 7.2.0 and `@astrojs/starlight` 0.41.4 → 0.41.7 — adding `@astrojs/markdown-remark` as a devDependency because Astro 7.2 no longer ships it with the new default Sätteri Markdown processor and the site's `remarkInclude` plugin still runs on the unified pipeline (#658, #689)
+- Bumped the frontend npm-minor-patch group — `next` 16.2.12 → 16.3.0 (fixes CVE-2025-13465 in its vendored lodash), `@testing-library/jest-dom` 7.0.1, `@testing-library/user-event` 14.6.3, and `@types/node`, `@types/react`, `@types/react-dom` patches — recasting the partial API mocks in the costs and tokens page tests through `unknown`, which the Next 16.3 production type check now requires (#662, #689)
+
 ## [0.6.0] — 2026-08-13
 
 On-demand commands for improving a PR and generating tests, per-repository review
