@@ -1132,6 +1132,105 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void floorsAFindingWhoseAbsenceClaimIsWordedAsNothingSanitizes() {
+    // #676 gap 1: MITIGATION_ABSENT's negators stopped at "no|not|never|...", so the
+    // subject-worded absence "Nothing sanitizes ..." never registered as an absence claim and the
+    // floor stayed silent on a named sink.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing sanitizes the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotReadDoesNotPreventSqlInjectionAsASinkDenial() {
+    // #676 gap 2: SINK_DENIED's one-word gap admitted bridge verbs, so "does not prevent SQL
+    // injection" — an assertion of the defect — read as a denial of the sink and suppressed the
+    // floor on a demonstrated string-built query.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Unsanitized channel value concatenated into the query text",
+                "The helper does not prevent SQL injection; the value goes straight into the"
+                    + " command string.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsAConditionalWhoseCoordinatorSitsInsideTheProtasis() {
+    // #676 gap 3: the conditional span ended at ANY coordinator, so the parenthetical "however"
+    // inside "If, however, the API always sanitizes ..." truncated the protasis and left
+    // "sanitizes" in text read as asserted, defeating the floor on a hypothesis the finding
+    // rejects in the same sentence.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "medium",
+                "src/components/FeedbackItem.tsx",
+                37,
+                "Stored XSS: feedback body rendered via dangerouslySetInnerHTML",
+                "Nothing sanitizes or escapes the body in the provided material. If, however, the"
+                    + " API always sanitizes the body on write, this is moot — but nothing"
+                    + " shown does.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("medium", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void stillHonoursADenialWithNoWordBetweenTheNegatorAndTheSink() {
+    // The bridge-verb exclusion must not narrow the plain denial: "no XSS here" keeps
+    // suppressing the floor, since over-firing is the dangerous direction (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Banner.tsx",
+                9,
+                "innerHTML assignment on a constant unvalidated at build time",
+                "The string is a compile-time literal, so there is no XSS here.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void leavesCriticalInjectionFindingsAndUnrelatedRatingsAlone() {
     // The floor only lifts, so a critical keeps its level; and it never fires unless the finding
     // states both halves — a named sink AND the absence of any sanitization.

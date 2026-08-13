@@ -7,6 +7,7 @@ All notable changes to ThrillhouseBot.
 ### Fixed
 
 - **Dashboard token test no longer assumes an en-US locale** (#661): the test now asserts the same `toLocaleString()` output the component renders, so it passes on machines with any runtime locale
+- **Injection-sink floor no longer under-fires on three defeater-pattern gaps** (#676): "Nothing sanitizes ..." now registers as an absence claim, "does not prevent SQL injection" is no longer read as a denial of the sink, and a parenthetical coordinator inside a conditional ("If, however, ...") no longer truncates the hypothetical span and leaves its mitigation verb read as asserted
 
 ## [0.6.0] — 2026-08-13
 

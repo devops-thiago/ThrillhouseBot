@@ -135,14 +135,18 @@ public class FindingVerificationService {
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * The same absence claim worded as a missing step ("no sanitization", "never escaped"), with room
-   * for a few words between the negator and the neutralizing verb. Read as a union with {@link
-   * #UNMITIGATED_ADJECTIVE}; the two are one claim split across two patterns only because one
-   * alternation of both wordings is more than the regex complexity budget allows.
+   * The same absence claim worded as a missing step ("no sanitization", "never escaped", "nothing
+   * sanitizes it"), with room for a few words between the negator and the neutralizing verb. The
+   * negators include the pronoun forms ("nothing", "nobody") so a subject-worded absence ("Nothing
+   * sanitizes the value") registers just like the step-worded one; {@link #MITIGATION_ASSERTED}
+   * excludes the same pronouns from its subject slot so the two never read one sentence both ways.
+   * Read as a union with {@link #UNMITIGATED_ADJECTIVE}; the two are one claim split across two
+   * patterns only because one alternation of both wordings is more than the regex complexity budget
+   * allows.
    */
   private static final Pattern MITIGATION_ABSENT =
       Pattern.compile(
-          "\\b(no|not|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
+          "\\b(no|not|nothing|nobody|without|missing|never|lacks?|absent)\\s+(\\w+[\\s-]+){0,3}"
               + "(sanitiz|escap|validat|parameteriz|encod)\\w*",
           Pattern.CASE_INSENSITIVE);
 
@@ -152,11 +156,14 @@ public class FindingVerificationService {
    * them out of its own negation — the sink name sits inside the denial, and a phrase like "not
    * concatenated but parameterized" matches the absence group on the very mitigation it asserts.
    * The gap is one word, so an assertion of the defect that merely contains a negation ("no
-   * protection against SQL injection") is not mistaken for a denial.
+   * protection against SQL injection") is not mistaken for a denial — and the one word it does
+   * admit must not be a bridge verb ("does not prevent SQL injection", "never blocks XSS"), which
+   * asserts the defect rather than denying the sink; the lookahead excludes
+   * prevent/stop/block/guard/protect forms while leaving "no SQL injection here" a denial.
    */
   private static final Pattern SINK_DENIED =
       Pattern.compile(
-          "\\b(no|not|never)\\s+(\\w+[\\s-]+)?"
+          "\\b(no|not|never)\\s+(?!(prevent|stop|block|guard|protect))(\\w+[\\s-]+)?"
               + "(xss|cross[- ]site scripting|sql injection|command injection|shell injection"
               + "|path traversal|directory traversal)\\b",
           Pattern.CASE_INSENSITIVE);
@@ -186,7 +193,7 @@ public class FindingVerificationService {
       Pattern.compile(
           "\\b(is|are|was|were|gets|been|already)\\s+(?!(no|not|never)\\b)(\\w+[\\s-]+){0,1}"
               + "(sanitiz|escap|validat|parameteriz|encod)(ed|es|ing)\\b"
-              + "|\\b(?!(no|not|never|nothing)\\b)\\w+\\s+"
+              + "|\\b(?!(no|not|never|nothing|nobody)\\b)\\w+\\s+"
               + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
           Pattern.CASE_INSENSITIVE);
 
@@ -205,20 +212,25 @@ public class FindingVerificationService {
    * needed for the same reason.
    *
    * <p>The clause ends at a real clause boundary — strong punctuation, or a coordinator that opens
-   * the consequent ("but", "so", "then"...) — and deliberately NOT at a comma. A protasis carries
-   * its own commas ("If the feedback API, per its own contract, always sanitizes the body on write,
-   * ..."), and stopping at the first one left the mitigation verb sitting in text read as asserted,
-   * which is the very under-firing this pattern exists to remove. The coordinator boundary is what
-   * keeps the consequent: "If it were stored as plain text this would be moot, but React escapes it
-   * at render" still asserts its mitigation, and that assertion must still defeat the floor, since
-   * over-firing the floor is the dangerous direction (#594).
+   * the consequent ("but", "so", "then"...) — and deliberately NOT at a comma. A coordinator
+   * immediately followed by a comma is a parenthetical still inside the protasis ("If, however, the
+   * API always sanitizes the body on write, ...") and does not end the span; stopping there left
+   * the mitigation verb in text read as asserted, the under-firing this pattern exists to remove. A
+   * protasis carries its own commas ("If the feedback API, per its own contract, always sanitizes
+   * the body on write, ..."), and stopping at the first one left the mitigation verb sitting in
+   * text read as asserted, which is the very under-firing this pattern exists to remove. The
+   * coordinator boundary is what keeps the consequent: "If it were stored as plain text this would
+   * be moot, but React escapes it at render" still asserts its mitigation, and that assertion must
+   * still defeat the floor, since over-firing the floor is the dangerous direction (#594).
    *
    * <p>Residual trade-off, chosen deliberately: a consequent separated by a bare comma and nothing
    * else ("If you follow the render path, React escapes the value") is swallowed with the protasis,
-   * so its mitigation no longer defeats the floor. Commas cannot serve both roles, and this is the
-   * safer half — the finding must ALSO name a sink and ALSO claim nothing sanitizes it before the
-   * floor can fire at all, and the floor only lifts risk, leaving confidence and every other signal
-   * where the model put them.
+   * so its mitigation no longer defeats the floor — and so is a comma-spliced consequent whose
+   * coordinator itself trails a comma ("this would be moot, however, React escapes it"), since a
+   * regex cannot tell that parenthetical from the one inside the protasis. Commas cannot serve both
+   * roles, and this is the safer half — the finding must ALSO name a sink and ALSO claim nothing
+   * sanitizes it before the floor can fire at all, and the floor only lifts risk, leaving
+   * confidence and every other signal where the model put them.
    *
    * <p>Plain "should" is NOT a marker. Only inverted "Should the API sanitize ..." is a hypothesis,
    * and its bare infinitive matches none of {@link #MITIGATION_ASSERTED}'s verb forms, so listing
@@ -228,7 +240,7 @@ public class FindingVerificationService {
   private static final Pattern CONDITIONAL_CLAUSE =
       Pattern.compile(
           "\\b(if|unless|whether|in case|assuming|provided that)\\b"
-              + "(?:(?!\\b(but|so|then|however|therefore|otherwise)\\b)"
+              + "(?:(?!\\b(but|so|then|however|therefore|otherwise)\\b(?!,))"
               + "[^;:.!?\\n\\r\\u2013\\u2014])*",
           Pattern.CASE_INSENSITIVE);
 
