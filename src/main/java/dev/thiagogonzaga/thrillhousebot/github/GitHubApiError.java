@@ -232,22 +232,54 @@ public final class GitHubApiError {
    * empty string, so every step advances.
    */
   private static String redactCredentials(String text) {
-    Matcher prefix = CREDENTIAL_SHAPED_PREFIX.matcher(text);
-    Matcher value = CREDENTIAL_SHAPED_VALUE.matcher(text);
+    Matcher[] shapes = {
+      CREDENTIAL_SHAPED_PREFIX.matcher(text), CREDENTIAL_SHAPED_VALUE.matcher(text)
+    };
+    var starts = new int[] {-1, -1};
+    var ends = new int[shapes.length];
     var out = new StringBuilder(text.length());
     var from = 0;
-    while (from < text.length()) {
-      boolean prefixFound = prefix.find(from);
-      boolean valueFound = value.find(from);
-      if (!prefixFound && !valueFound) {
+    while (true) {
+      var leftmost = leftmostShape(shapes, starts, ends, from);
+      if (leftmost == -1) {
         break;
       }
-      Matcher leftmost =
-          prefixFound && (!valueFound || prefix.start() <= value.start()) ? prefix : value;
-      out.append(text, from, leftmost.start()).append(REDACTED);
-      from = leftmost.end();
+      out.append(text, from, starts[leftmost]).append(REDACTED);
+      from = ends[leftmost];
+      starts[leftmost] = -1;
     }
     return out.append(text, from, text.length()).toString();
+  }
+
+  /** A shape with no further matches; loses every comparison for the leftmost slot. */
+  private static final int NO_MORE_MATCHES = Integer.MAX_VALUE;
+
+  /**
+   * The index of the shape holding the leftmost live candidate at or past {@code from}, or -1 when
+   * both shapes are out of matches; a position tie keeps the lowest index, the one-alternation
+   * form's alternative order. Only a consumed or overtaken candidate is re-found — one at or past
+   * {@code from} is still that shape's next match, since the find that produced it proved nothing
+   * of that shape starts before it — so each shape is scanned once end to end rather than from
+   * every resume point.
+   */
+  private static int leftmostShape(Matcher[] shapes, int[] starts, int[] ends, int from) {
+    var leftmost = -1;
+    var best = NO_MORE_MATCHES;
+    for (var i = 0; i < shapes.length; i++) {
+      if (starts[i] < from) {
+        if (shapes[i].find(from)) {
+          starts[i] = shapes[i].start();
+          ends[i] = shapes[i].end();
+        } else {
+          starts[i] = NO_MORE_MATCHES;
+        }
+      }
+      if (starts[i] < best) {
+        best = starts[i];
+        leftmost = i;
+      }
+    }
+    return leftmost;
   }
 
   /**
