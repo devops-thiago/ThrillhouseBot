@@ -135,7 +135,7 @@ final class RebuttalContradiction {
           // only overrule a decline on what the code plainly shows, and it cannot evaluate.
           Pattern.compile(
               "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}+"
-                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}(?:,|\\)))"),
+                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}[,)])"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future
@@ -259,40 +259,77 @@ final class RebuttalContradiction {
    * rather than a toggle; tracked in #651.
    */
   private static String stripLineComment(String line) {
-    var quote = '\0';
-    var slashInQuote = -1;
-    for (var i = 0; i < line.length(); i++) {
+    var at = commentStart(line);
+    return at < 0 ? line : line.substring(0, at);
+  }
+
+  /**
+   * Index where a real {@code //} comment opens on {@code line}, or {@code -1} when none does.
+   * Literals are stepped over whole, so a {@code //} they hold is not a comment start.
+   */
+  private static int commentStart(String line) {
+    var i = 0;
+    while (i < line.length()) {
       var c = line.charAt(i);
-      if (quote != '\0') {
-        if (c == '\\' && quote != '`') {
-          i++;
-        } else if (c == quote) {
-          quote = '\0';
-          // The literal closed, so anything it held was quoted text after all.
-          slashInQuote = -1;
-        } else if (c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/') {
-          // No i > 0 guard: reaching here means an opener was seen at some earlier index.
-          if (line.charAt(i - 1) == ':') {
-            i++;
-            continue;
-          }
-          if (slashInQuote < 0) {
-            slashInQuote = i;
-          }
+      if (c == '"' || c == '\'' || c == '`') {
+        var close = endOfLiteral(line, i);
+        if (close < 0) {
+          // Never closed, so the opener was not one — fall back to what it swallowed.
+          return firstDoubleSlash(line, i + 1);
         }
-      } else if (c == '"' || c == '\'' || c == '`') {
-        quote = c;
-      } else if (c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/') {
-        // A URL scheme's "://" is not a comment start; step past it and keep scanning.
+        i = close + 1;
+      } else if (isDoubleSlash(line, i)) {
         if (i > 0 && line.charAt(i - 1) == ':') {
-          i++;
-          continue;
+          i += 2;
+        } else {
+          return i;
         }
-        return line.substring(0, i);
+      } else {
+        i++;
       }
     }
-    // An unclosed literal means the opener was not one — fall back to the first // it swallowed.
-    return quote == '\0' || slashInQuote < 0 ? line : line.substring(0, slashInQuote);
+    return -1;
+  }
+
+  /**
+   * Index of the quote closing the literal opened at {@code open}, or {@code -1} when the line ends
+   * first. A backslash escapes the next character in a {@code "} or {@code '} literal and not in a
+   * backtick one, which is a Go raw string and holds the backslash literally.
+   */
+  private static int endOfLiteral(String line, int open) {
+    var quote = line.charAt(open);
+    var i = open + 1;
+    while (i < line.length()) {
+      var c = line.charAt(i);
+      if (c == '\\' && quote != '`') {
+        i += 2;
+      } else if (c == quote) {
+        return i;
+      } else {
+        i++;
+      }
+    }
+    return -1;
+  }
+
+  /** First {@code //} at or after {@code from} that is not a URL scheme's, or {@code -1}. */
+  private static int firstDoubleSlash(String line, int from) {
+    var i = from;
+    while (i < line.length()) {
+      if (!isDoubleSlash(line, i)) {
+        i++;
+      } else if (i > 0 && line.charAt(i - 1) == ':') {
+        i += 2;
+      } else {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** Whether a doubled slash sits at {@code at}. */
+  private static boolean isDoubleSlash(String line, int at) {
+    return line.charAt(at) == '/' && at + 1 < line.length() && line.charAt(at + 1) == '/';
   }
 
   /**
