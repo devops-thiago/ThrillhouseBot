@@ -53,6 +53,7 @@ not read.
 
 ### Dependencies
 
+- Overrode `nanoid` to `^3.3.17` in the `website/` and `frontend/` npm trees to clear GHSA-2v37-7h3g-55p8, in which a custom generator loops indefinitely when it is called with a size of zero. Every Astro and Starlight package reached the vulnerable 3.3.16 through `postcss`, which asks for `^3.3.16`, so the fixed 3.3.18 satisfies the range already declared and no direct dependency moves (#660)
 - Bumped the Quarkus platform from 3.37.4 to 3.38.0 and `quarkus-langchain4j` from 1.12.0 to 1.12.2
 - Declared `jackson-dataformat-yaml` explicitly. It was already on the classpath transitively and is version-managed by the Jackson BOM; reading a repository's own `.github/thrillhousebot.yml` uses it directly
 - Bumped the frontend `next` to 16.2.12 and the dev-only `jsdom` to 30.0.1, with `@types/node` on a patch release
