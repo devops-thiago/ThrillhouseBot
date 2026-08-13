@@ -838,9 +838,12 @@ public class FollowUpAnalyzer {
     var text = namingText(body);
     var shapes = LOCATOR_SHAPE.matcher(text);
     while (shapes.find()) {
-      // The match starts at the ':'; the line number is the digit run after it.
+      // The match starts at the ':'; the line number is the digit run after it. ASCII only, to
+      // match the shape pattern's own \d and the clearing side: Character.isDigit accepts the
+      // full-width digits, which continuesLocator reads as continuing the token rather than as the
+      // line number, and a locator the two sides parse differently is one they disagree about.
       var after = shapes.start() + 1;
-      while (after < text.length() && Character.isDigit(text.charAt(after))) {
+      while (after < text.length() && text.charAt(after) >= '0' && text.charAt(after) <= '9') {
         after++;
       }
       if (after >= text.length()

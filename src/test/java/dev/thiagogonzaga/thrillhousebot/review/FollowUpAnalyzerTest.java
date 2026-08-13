@@ -3268,5 +3268,8 @@ class FollowUpAnalyzerTest {
     assertTrue(
         FollowUpAnalyzer.namesALocator("@thrillhousebot resolved SQL injection at src/A.java:10"),
         "a locator ending the comment names it");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved src/A.java:1２"),
+        "a full-width digit continues the token on the clearing side, so it must here too");
   }
 }
