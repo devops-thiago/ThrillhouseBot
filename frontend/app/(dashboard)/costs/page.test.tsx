@@ -20,7 +20,7 @@ describe('CostsPage', () => {
   beforeEach(() => {
     vi.mocked(api).mockReturnValue({
       costs: vi.fn().mockResolvedValue(mockCostData),
-    } as ReturnType<typeof api>);
+    } as unknown as ReturnType<typeof api>);
   });
 
   it('renders cost analytics from mocked API data', async () => {
@@ -46,7 +46,7 @@ describe('CostsPage', () => {
       }
       return Promise.resolve(mockCostData);
     });
-    vi.mocked(api).mockReturnValue({ costs } as ReturnType<typeof api>);
+    vi.mocked(api).mockReturnValue({ costs } as unknown as ReturnType<typeof api>);
 
     render(<CostsPage />);
 

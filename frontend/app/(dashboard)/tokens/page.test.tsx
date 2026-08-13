@@ -19,7 +19,7 @@ describe('TokensPage', () => {
   beforeEach(() => {
     vi.mocked(api).mockReturnValue({
       tokens: vi.fn().mockResolvedValue(mockTokenData),
-    } as ReturnType<typeof api>);
+    } as unknown as ReturnType<typeof api>);
   });
 
   it('renders token analytics from mocked API data', async () => {
@@ -43,7 +43,7 @@ describe('TokensPage', () => {
       }
       return Promise.resolve(mockTokenData);
     });
-    vi.mocked(api).mockReturnValue({ tokens } as ReturnType<typeof api>);
+    vi.mocked(api).mockReturnValue({ tokens } as unknown as ReturnType<typeof api>);
 
     render(<TokensPage />);
 
