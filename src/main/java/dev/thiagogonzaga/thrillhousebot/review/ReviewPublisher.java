@@ -249,6 +249,29 @@ public class ReviewPublisher {
             + conciseClause);
   }
 
+  /**
+   * The failure notice for a review request the provider rejected for exceeding the model's context
+   * window (#622). Deterministic like a truncation — the generic notice's bare {@code /review}
+   * advice would repeat a request that is rejected identically every time — so this variant names
+   * the cause and the knob that shrinks the request: {@code REVIEW_MAX_INPUT_TOKENS}, whose token
+   * budgeting batches or clips the diff to fit.
+   */
+  void postContextWindowFailureNotice(String auth, String owner, String repo, int prNumber) {
+    postFailureNoticeComment(
+        auth,
+        owner,
+        repo,
+        prNumber,
+        """
+            ⚠️ **ThrillhouseBot review could not be completed.**
+
+            The provider rejected the review request because it exceeds the model's context \
+            window — the diff and its context are too large for the model. This failure is \
+            deterministic: retrying the identical request would be rejected identically. Lower \
+            `REVIEW_MAX_INPUT_TOKENS` so the planned material fits the window (token budgeting \
+            then batches or clips the diff), then run `/review` again.""");
+  }
+
   private void postFailureNoticeComment(
       String auth, String owner, String repo, int prNumber, String body) {
     try {

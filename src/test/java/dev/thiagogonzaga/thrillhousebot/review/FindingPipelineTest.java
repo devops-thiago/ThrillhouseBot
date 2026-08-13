@@ -248,6 +248,37 @@ class FindingPipelineTest {
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
   }
 
+  @Test
+  void multiCallDoesNotRetryABatchRejectedForExceedingTheContextWindow() {
+    // #622: a context-length rejection is deterministic — the sequential retry would re-send the
+    // identical prompt against the identical window. It must go straight to disclosure instead,
+    // exactly once, keeping the batches that succeeded.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(
+            new dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException(
+                "Provider rejected the request for exceeding the model's context window", null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1))
+        .reviewBatch(eq(session), any(), eq(1), anyInt()); // no second, futile call
+
+    assertEquals(1, result.findings().size());
+    assertEquals("B", result.findings().get(0).title());
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
   /** One complete finding element for a stubbed partial body, anchored in batch 1's file. */
   private static String bodyFinding(String title) {
     return "{\"risk\":\"medium\",\"confidence\":\"high\",\"file\":\"a.java\",\"line\":1,"
