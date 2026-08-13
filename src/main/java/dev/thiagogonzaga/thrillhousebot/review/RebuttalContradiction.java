@@ -231,6 +231,14 @@ final class RebuttalContradiction {
    * quote that never closes costs only a kept trailing comment, which feeds the scan text of the
    * kind it already sees on every line carrying no {@code //} at all.
    *
+   * <p>The one escaping rule it does keep is where the escape applies: inside a {@code "} or {@code
+   * '} literal, never inside a backtick one and never outside a literal at all. A Go raw string is
+   * backtick-delimited and holds a backslash literally, so honouring the escape there stepped over
+   * the closing backtick of a Windows path ({@code `C:\`}), left the state open for the rest of the
+   * line, and kept a real trailing comment as live code. That is the false positive — a decline
+   * overruled by text the code does not run — which is the worse direction, and the plain
+   * first-{@code //} cut this carve-out replaced did not have it.
+   *
    * <p>A <em>multi-character</em> delimiter is the case this shallowness does not cover, and it
    * fails the other way. A Java text block or a C++ raw string whose content holds an interior
    * quote ({@code """<a href="//host">x</a>"""}, {@code R"(a"b//c)"}) closes the scanner's
@@ -243,10 +251,10 @@ final class RebuttalContradiction {
     var quote = '\0';
     for (var i = 0; i < line.length(); i++) {
       var c = line.charAt(i);
-      if (c == '\\') {
-        i++;
-      } else if (quote != '\0') {
-        if (c == quote) {
+      if (quote != '\0') {
+        if (c == '\\' && quote != '`') {
+          i++;
+        } else if (c == quote) {
           quote = '\0';
         }
       } else if (c == '"' || c == '\'' || c == '`') {

@@ -213,11 +213,32 @@ class RebuttalContradictionTest {
         "+    auto path = R\"(prefix//rest)\"; executor.submit([]{ run(ctx); });",
         // A single-quoted literal.
         "+    var sep = '//'; executor.submit(() -> run(ctx));",
+        // An escaped backslash closes its literal, so the escape still applies where it exists.
+        "+    var dir = \"C:\\\\\"; executor.submit(() -> run(ctx));",
       })
   void shouldKeepDispatchEvidenceThatFollowsAQuotedDoubleSlash(String codeLine) {
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
         "the // sits inside a string literal, so the dispatch after it is live code: " + codeLine);
+  }
+
+  /**
+   * The mirror of the case above: a real trailing comment must stay stripped. Honouring a backslash
+   * escape inside a Go raw string — where a backslash is literal — stepped over the closing
+   * backtick, left the quote state open, and let the comment's own text pose as live code.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A Windows path in a Go raw string, then a real comment naming a dispatch.
+        "+    path := `C:\\`; // executor.submit(() -> run(ctx));",
+        // The same shape with no literal involved at all.
+        "+    var n = count; // executor.submit(() -> run(ctx));",
+      })
+  void shouldNotReadACommentAsDispatchEvidenceAfterABackslash(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isEmpty(),
+        "a dispatch named only in a comment is not live code, so the decline stands: " + codeLine);
   }
 
   static Stream<Arguments> commentScanEdgeCases() {
