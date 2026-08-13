@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class TriggerDetector {
@@ -35,15 +36,20 @@ public class TriggerDetector {
    */
   private static final Map<CommentCommand, List<Pattern>> COMMAND_PATTERNS = buildPatterns();
 
-  /** Matches an {@code @thrillhousebot} mention with a word boundary, anywhere in the comment. */
-  private static final Pattern MENTION_PATTERN =
-      Pattern.compile(".*@thrillhousebot\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-
   private static final Pattern FENCED_CODE = Pattern.compile("(?s)```.*?```|~~~.*?~~~");
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]*>.*$");
   private static final Pattern INLINE_CODE = Pattern.compile("`[^`\\n]*`");
 
   private final BotIdentity botIdentity;
+
+  /**
+   * Matches an {@code @}-mention of any configured bot login with a word boundary, anywhere in the
+   * comment. Built from {@link BotIdentity#mentionNames()} (each name {@link Pattern#quote}d, a
+   * login is data, never regex) rather than a hardcoded slug, so a custom-login install's
+   * maintainers can address their bot — including the {@code resolved} clear directive, whose
+   * acknowledgement path this gate fronts (#679). Compiled once per detector, not per comment.
+   */
+  private final Pattern mentionPattern;
 
   @Inject
   public TriggerDetector(ThrillhouseConfig config) {
@@ -57,6 +63,10 @@ public class TriggerDetector {
 
   TriggerDetector(List<String> configuredBotLogins) {
     this.botIdentity = BotIdentity.from(configuredBotLogins);
+    String mentions =
+        botIdentity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
+    this.mentionPattern =
+        Pattern.compile(".*@(?:" + mentions + ")\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
   }
 
   private static Map<CommentCommand, List<Pattern>> buildPatterns() {
@@ -129,7 +139,7 @@ public class TriggerDetector {
     if (commentBody == null || commentBody.isBlank()) {
       return false;
     }
-    return MENTION_PATTERN.matcher(stripQuotedContext(commentBody)).matches();
+    return mentionPattern.matcher(stripQuotedContext(commentBody)).matches();
   }
 
   /** Checks whether the comment author is the bot itself. Prevents infinite review loops. */
