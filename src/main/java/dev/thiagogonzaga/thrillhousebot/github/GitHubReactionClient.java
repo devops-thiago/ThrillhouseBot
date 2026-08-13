@@ -76,7 +76,12 @@ public interface GitHubReactionClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
-  /** One page of an inline comment's reactions, healing a rejected credential per page (#626). */
+  /**
+   * One page of an inline comment's reactions, healing a rejected credential per page (#626).
+   * Mirrors the annotated method's parameter list one-to-one — GitHub's endpoint takes exactly
+   * these arguments, so bundling them would only add a shape the wire does not have (java:S107).
+   */
+  @SuppressWarnings("java:S107")
   default List<Reaction> listReviewCommentReactions(
       String auth,
       String accept,
@@ -107,7 +112,12 @@ public interface GitHubReactionClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
-  /** One page of an issue comment's reactions, healing a rejected credential per page (#626). */
+  /**
+   * One page of an issue comment's reactions, healing a rejected credential per page (#626).
+   * Mirrors the annotated method's parameter list one-to-one — GitHub's endpoint takes exactly
+   * these arguments, so bundling them would only add a shape the wire does not have (java:S107).
+   */
+  @SuppressWarnings("java:S107")
   default List<Reaction> listIssueCommentReactions(
       String auth,
       String accept,
