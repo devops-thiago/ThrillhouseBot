@@ -28,14 +28,6 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class TriggerDetector {
 
-  /**
-   * Command word → its matching patterns, in detection precedence order. A comment carrying more
-   * than one command resolves to the first entry that matches, so {@code review} stays first to
-   * preserve the original trigger behavior. Each command accepts both the {@code /word} slash form
-   * and the {@code @Thrillhousebot word} mention form.
-   */
-  private static final Map<CommentCommand, List<Pattern>> COMMAND_PATTERNS = buildPatterns();
-
   private static final Pattern FENCED_CODE = Pattern.compile("(?s)```.*?```|~~~.*?~~~");
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]*>.*$");
   private static final Pattern INLINE_CODE = Pattern.compile("`[^`\\n]*`");
@@ -54,6 +46,17 @@ public class TriggerDetector {
    */
   private final Pattern mentionPattern;
 
+  /**
+   * Command word → its matching patterns, in detection precedence order. A comment carrying more
+   * than one command resolves to the first entry that matches, so {@code review} stays first to
+   * preserve the original trigger behavior. Each command accepts both the {@code /word} slash form
+   * and the {@code @<bot> word} mention form, where the mention alternative is built from {@link
+   * BotIdentity#mentionNames()} — not a hardcoded slug — so mention-form commands work on
+   * custom-login installs exactly like the conversational-mention gate (#679, #698). Compiled once
+   * per identity, not per comment.
+   */
+  private final Map<CommentCommand, List<Pattern>> commandPatterns;
+
   @Inject
   public TriggerDetector(ThrillhouseConfig config) {
     this(config.github().botLogins());
@@ -71,30 +74,38 @@ public class TriggerDetector {
     this.mentionPattern =
         Pattern.compile(
             ".*(?:^|[^\\w@])@(?:" + mentions + ")\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    this.commandPatterns = buildPatterns(mentions);
   }
 
-  private static Map<CommentCommand, List<Pattern>> buildPatterns() {
+  private static Map<CommentCommand, List<Pattern>> buildPatterns(String mentionAlternation) {
     var patterns = new LinkedHashMap<CommentCommand, List<Pattern>>();
-    patterns.put(CommentCommand.REVIEW, patternsFor("review"));
-    patterns.put(CommentCommand.HELP, patternsFor("help"));
-    patterns.put(CommentCommand.SUMMARY, patternsFor("summary"));
-    patterns.put(CommentCommand.DESCRIBE, patternsFor("describe"));
-    patterns.put(CommentCommand.CHANGELOG, patternsFor("changelog"));
-    patterns.put(CommentCommand.ADD_DOCS, patternsFor("add-docs"));
-    patterns.put(CommentCommand.IMPROVE, patternsFor("improve"));
-    patterns.put(CommentCommand.GENERATE_TESTS, patternsFor("generate-tests"));
-    patterns.put(CommentCommand.RESOLVE, patternsFor("resolve"));
-    patterns.put(CommentCommand.PAUSE, patternsFor("pause"));
-    patterns.put(CommentCommand.RESUME, patternsFor("resume"));
+    patterns.put(CommentCommand.REVIEW, patternsFor("review", mentionAlternation));
+    patterns.put(CommentCommand.HELP, patternsFor("help", mentionAlternation));
+    patterns.put(CommentCommand.SUMMARY, patternsFor("summary", mentionAlternation));
+    patterns.put(CommentCommand.DESCRIBE, patternsFor("describe", mentionAlternation));
+    patterns.put(CommentCommand.CHANGELOG, patternsFor("changelog", mentionAlternation));
+    patterns.put(CommentCommand.ADD_DOCS, patternsFor("add-docs", mentionAlternation));
+    patterns.put(CommentCommand.IMPROVE, patternsFor("improve", mentionAlternation));
+    patterns.put(CommentCommand.GENERATE_TESTS, patternsFor("generate-tests", mentionAlternation));
+    patterns.put(CommentCommand.RESOLVE, patternsFor("resolve", mentionAlternation));
+    patterns.put(CommentCommand.PAUSE, patternsFor("pause", mentionAlternation));
+    patterns.put(CommentCommand.RESUME, patternsFor("resume", mentionAlternation));
     return patterns;
   }
 
-  private static List<Pattern> patternsFor(String word) {
+  /**
+   * Patterns for one command word: the {@code /word} slash form (unchanged) and the {@code @<bot>
+   * word} mention form. The mention alternative anchors the {@code @} at the start of the comment
+   * or after a non-word, non-{@code @} character, the way a GitHub mention is written — an email
+   * address's local part ("foo@thrillhousebot.example") never triggers a command (#698).
+   */
+  private static List<Pattern> patternsFor(String word, String mentionAlternation) {
     return List.of(
         Pattern.compile(
             ".*(?:^|\\s)/" + word + "(?:\\s|$).*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL),
         Pattern.compile(
-            ".*@thrillhousebot\\s+" + word + "\\b.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL));
+            ".*(?:^|[^\\w@])@(?:" + mentionAlternation + ")\\s+" + word + "\\b.*",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL));
   }
 
   /**
@@ -118,7 +129,7 @@ public class TriggerDetector {
       return CommentCommand.NONE;
     }
     var body = stripQuotedContext(commentBody);
-    for (var entry : COMMAND_PATTERNS.entrySet()) {
+    for (var entry : commandPatterns.entrySet()) {
       if (entry.getValue().stream().anyMatch(p -> p.matcher(body).matches())) {
         return entry.getKey();
       }
