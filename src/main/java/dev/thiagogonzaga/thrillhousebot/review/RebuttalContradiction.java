@@ -153,38 +153,13 @@ final class RebuttalContradiction {
       Pattern.compile("```.{0,10000}?```", Pattern.DOTALL | Pattern.MULTILINE);
 
   /**
-   * Inline code spans in a markdown reply — {@code `…`} or {@code ``…``} — quoted constructs, never
-   * the maintainer's assertion. A backticked quotation in a decline ("the bot's text says {@code
-   * `it never runs concurrently`}") must not be matched as the maintainer's own assertion about the
-   * code. Triple-backtick pairs are not handled here because {@link #FENCED_BLOCK} has already
-   * consumed every one this pattern's bounds could reach. The span body is bounded and confined to
-   * one line so an unclosed backtick in untrusted prose cannot swallow the rest of the reply; a
-   * span the bound misses is left in place and behaves as before.
-   *
-   * <p>Two patterns applied in order rather than one alternation, so each stays simple enough to
-   * read on its own. The double-backtick pass runs first and its body admits a lone backtick,
-   * because {@code ``…``} exists in markdown precisely to quote text containing one ({@code
-   * ``x`y``}). Without that, the first closable single-backtick pair inside the span was stripped
-   * instead and the rest of the quotation survived as prose. Both delimiters are guarded with
-   * lookarounds so a delimiter is a maximal backtick run: a single-backtick opener cannot start
-   * inside a {@code ``} delimiter, and {@code ``} cannot half-match as an empty single-backtick
-   * span. Splitting loses nothing against the alternation: the single pass cannot reach into what
-   * the double pass removed, because a span body never crosses the newline left behind.
-   *
-   * <p>Each span is replaced with a newline, not a space: a space would bridge the words abutting
-   * the backticks into a phrase that was never contiguous in the original reply ({@code one at
-   * a`beat`time} must not become "one at a time"), turning stripping into a way to <em>add</em> a
-   * claim match. The stripped text is matched with the newlines still in it — {@link #assertedText}
-   * joins lines with {@code \n}, never a space — and a newline appears inside no claim pattern
-   * while being a sentence boundary for the quoted note, so stripping can only remove matches — the
-   * keep-the-decline direction.
+   * Upper bound on how far {@link #stripInlineSpans} scans past an opening backtick run for its
+   * closer. An opener whose closer sits beyond the bound is treated as unclosed — literal text — so
+   * untrusted prose with a stray backtick cannot swallow the rest of the reply into one "span".
+   * Text the bound leaves in place behaves exactly as it did before this scanner existed, so the
+   * bound can narrow the fix, never widen the exposure; stripping only ever removes matches.
    */
-  private static final Pattern DOUBLE_BACKTICK_SPAN =
-      Pattern.compile("(?<!`)``(?!`)(?:[^`\n]|`(?!`)){0,1000}?``(?!`)");
-
-  /** The single-backtick companion of {@link #DOUBLE_BACKTICK_SPAN}, applied after it. */
-  private static final Pattern SINGLE_BACKTICK_SPAN =
-      Pattern.compile("(?<!`)`(?!`)[^`\n]{0,1000}?`(?!`)");
+  private static final int SPAN_BODY_BOUND = 1000;
 
   /**
    * Replies longer than this are not analyzed at all. It keeps the markdown-stripping scan over
@@ -406,8 +381,12 @@ final class RebuttalContradiction {
    * <p>Spans are stripped only after the blockquote filter: a span's newline replacement splits its
    * line, and splitting a {@code >} line before the filter would hand the fragment after the span
    * to the filter without its {@code >} prefix — quoted material surviving as an assertion, the
-   * over-fire this method exists to prevent. The order loses nothing in the other direction,
-   * because a span pattern never crosses a line boundary.
+   * over-fire this method exists to prevent. In the other direction the order can change what the
+   * span scan sees both ways, and neither outcome is new exposure: an opener whose closer lived on
+   * a dropped blockquote line no longer closes and its run stays literal (text the reply carried as
+   * visible prose all along, exactly what the scan yields for any unclosed run), and a drop that
+   * pulls an opener and closer within the newline bound strips more, which only removes claim
+   * matches — the keep-the-decline direction.
    */
   private static String assertedText(String rebuttal) {
     var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
@@ -419,8 +398,101 @@ final class RebuttalContradiction {
     }
     // Joined, not terminated: a reply that ends mid-sentence must stay unterminated, so
     // sentenceAround's end-of-text bound is a live case rather than an unreachable guard.
-    var withoutDoubleSpans = DOUBLE_BACKTICK_SPAN.matcher(String.join("\n", kept)).replaceAll("\n");
-    return SINGLE_BACKTICK_SPAN.matcher(withoutDoubleSpans).replaceAll("\n");
+    return stripInlineSpans(String.join("\n", kept));
+  }
+
+  /**
+   * Removes inline code spans — quoted constructs, never the maintainer's assertion — with a
+   * delimiter-aware scan instead of a regex. A backticked quotation in a decline ("the bot's text
+   * says {@code `it never runs concurrently`}") must not be matched as the maintainer's own
+   * assertion about the code.
+   *
+   * <p>Per CommonMark, an opening run of N backticks closes at the next run of <em>exactly</em> N
+   * backticks, so a body may carry any backtick run of a different length ({@code `a``b`} is one
+   * single-backtick span, {@code ``x`y``} one double-backtick span). A run that never closes is
+   * literal text, scanned past rather than matched — the delimiter-aware replacement for the regex
+   * passes this scanner supersedes, which stopped at any interior backtick and left such spans in
+   * place (#697). Two bounds keep untrusted prose from turning one stray backtick into a span that
+   * swallows the reply: the closer must sit within {@link #SPAN_BODY_BOUND} characters of the
+   * opener, and the body may contain at most one line ending (CommonMark allows a span to cross a
+   * line break; a multi-paragraph "span" here is far more likely an unclosed backtick). Anything
+   * the scan cannot classify stays in place, which is not new exposure: unstripped text behaves
+   * exactly as every reply did before span stripping existed, while stripping only ever removes
+   * claim matches.
+   *
+   * <p>Each span is replaced with a newline, not a space: a space would bridge the words abutting
+   * the backticks into a phrase that was never contiguous in the original reply ({@code one at
+   * a`beat`time} must not become "one at a time"), turning stripping into a way to <em>add</em> a
+   * claim match. The stripped text is matched with the newlines still in it — {@link #assertedText}
+   * joins lines with {@code \n}, never a space — and a newline appears inside no claim pattern
+   * while being a sentence boundary for the quoted note, so stripping can only remove matches.
+   *
+   * <p>Runs of three or more backticks are handled like any other length. {@link #FENCED_BLOCK}
+   * pairs triple-backtick runs only within its 10000-character bound, and the blockquote filter can
+   * re-join runs that were farther apart in the raw reply, so a paired triple run can reach this
+   * scan and be closed here even though CommonMark would read the region as a fenced block — an
+   * over-strip that only removes claim matches.
+   */
+  private static String stripInlineSpans(String text) {
+    var out = new StringBuilder(text.length());
+    var i = 0;
+    while (i < text.length()) {
+      var c = text.charAt(i);
+      if (c != '`') {
+        out.append(c);
+        i++;
+        continue;
+      }
+      var openerEnd = endOfBacktickRun(text, i);
+      var closer = closingRunStart(text, openerEnd, openerEnd - i);
+      if (closer < 0) {
+        // Unclosed within the bounds: the run is literal text, kept in place.
+        out.append(text, i, openerEnd);
+        i = openerEnd;
+      } else {
+        out.append('\n');
+        i = closer + (openerEnd - i);
+      }
+    }
+    return out.toString();
+  }
+
+  /**
+   * Start index of the run of exactly {@code delimiter} backticks closing a span whose body begins
+   * at {@code from}, or {@code -1} when no such run sits within {@link #SPAN_BODY_BOUND} characters
+   * or the body would contain more than one line ending.
+   */
+  private static int closingRunStart(String text, int from, int delimiter) {
+    var newlines = 0;
+    var i = from;
+    // +1 so a body of exactly SPAN_BODY_BOUND characters still closes, matching the {0,1000}
+    // bound of the regex passes this scanner replaced.
+    var bound = Math.min(text.length(), from + SPAN_BODY_BOUND + 1);
+    while (i < bound) {
+      var c = text.charAt(i);
+      if (c == '`') {
+        var runEnd = endOfBacktickRun(text, i);
+        if (runEnd - i == delimiter) {
+          return i;
+        }
+        i = runEnd;
+      } else {
+        if (c == '\n' && ++newlines > 1) {
+          return -1;
+        }
+        i++;
+      }
+    }
+    return -1;
+  }
+
+  /** Index just past the maximal run of backticks starting at {@code at}. */
+  private static int endOfBacktickRun(String text, int at) {
+    var i = at;
+    while (i < text.length() && text.charAt(i) == '`') {
+      i++;
+    }
+    return i;
   }
 
   /** The sentence containing {@code index}, collapsed to one line and clipped for a note. */
