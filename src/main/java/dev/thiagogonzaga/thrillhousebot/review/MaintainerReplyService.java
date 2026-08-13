@@ -218,6 +218,24 @@ public class MaintainerReplyService {
           + " src/main/java/com/example/Widget.java:42 — Missing null check`.";
 
   /**
+   * Acknowledgement for a directive whose only locator-shaped naming reads as a spaced line range —
+   * the shape a digit-leading title produces, since {@code path:line — <title>} is spelled
+   * identically to a range up to the character after the separator. Whether it is a range or a
+   * title is not knowable here (no round is loaded, so there is no title to match), but the
+   * clearing path can tell: it clears only the summary's own printed row — the em dash followed by
+   * the finding's full title. So this reply names the ambiguity and states both outcomes rather
+   * than claiming no finding was named — the previous reply for this shape, which was wrong about
+   * the reason and left the maintainer re-sending a directive that failed the same way (#653).
+   */
+  static final String CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK =
+      "A line number followed by a spaced separator and another number reads as a line range, and"
+          + " a range names no single finding. The one exception is the summary's own row: when an"
+          + " em dash (—) after the line number is followed by the finding's full title exactly as"
+          + " the summary prints it, the next review will still close that finding. Anything else"
+          + " — a real range, a shortened title, or a dotted spelling — clears nothing; name each"
+          + " finding by its `path:line` and full title as printed.";
+
+  /**
    * Acknowledgement for a directive whose author the clearing path will not honour. Reaching this
    * method already means the commenter is authorized to address the bot, but {@link
    * ManualReviewAuthorizer} admits a login on the manual-trigger allowlist whatever its {@code
@@ -239,8 +257,12 @@ public class MaintainerReplyService {
       String ack;
       if (!mayClear) {
         ack = CLEAR_DIRECTIVE_UNAUTHORIZED_ACK;
+      } else if (named) {
+        ack = CLEAR_DIRECTIVE_ACK;
+      } else if (FollowUpAnalyzer.namesOnlyAmbiguousRanges(task.question())) {
+        ack = CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK;
       } else {
-        ack = named ? CLEAR_DIRECTIVE_ACK : CLEAR_DIRECTIVE_NO_LOCATOR_ACK;
+        ack = CLEAR_DIRECTIVE_NO_LOCATOR_ACK;
       }
       commentClient.createComment(
           auth,
