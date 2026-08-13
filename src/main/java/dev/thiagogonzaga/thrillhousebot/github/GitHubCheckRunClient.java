@@ -89,12 +89,21 @@ public interface GitHubCheckRunClient {
   @GET
   @Path("/repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks")
   @Produces(MediaType.APPLICATION_JSON)
-  RequiredStatusChecks getRequiredStatusChecks(
+  RequiredStatusChecks getRequiredStatusChecksOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("branch") String branch);
+
+  /** Reads a branch's required status checks, healing a rejected credential once (#626). */
+  default RequiredStatusChecks getRequiredStatusChecks(
+      String auth, String accept, String owner, String repo, String branch) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "required status checks of " + branch + " on " + owner + "/" + repo,
+        auth,
+        credential -> getRequiredStatusChecksOnce(credential, accept, owner, repo, branch));
+  }
 
   /**
    * Effective rules for a branch, aggregating both repository and organization rulesets. Unlike
@@ -105,17 +114,26 @@ public interface GitHubCheckRunClient {
   @GET
   @Path("/repos/{owner}/{repo}/rules/branches/{branch}")
   @Produces(MediaType.APPLICATION_JSON)
-  List<BranchRule> getBranchRules(
+  List<BranchRule> getBranchRulesOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("branch") String branch);
 
+  /** Reads a branch's effective rules, healing a rejected credential once (#626). */
+  default List<BranchRule> getBranchRules(
+      String auth, String accept, String owner, String repo, String branch) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "branch rules of " + branch + " on " + owner + "/" + repo,
+        auth,
+        credential -> getBranchRulesOnce(credential, accept, owner, repo, branch));
+  }
+
   @GET
   @Path("/repos/{owner}/{repo}/commits/{ref}/check-runs")
   @Produces(MediaType.APPLICATION_JSON)
-  CheckRunsResponse getCheckRuns(
+  CheckRunsResponse getCheckRunsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -124,10 +142,19 @@ public interface GitHubCheckRunClient {
       @QueryParam("per_page") @DefaultValue("100") int perPage,
       @QueryParam("page") @DefaultValue("1") int page);
 
+  /** One page of a ref's check runs, healing a rejected credential per page (#626). */
+  default CheckRunsResponse getCheckRuns(
+      String auth, String accept, String owner, String repo, String ref, int perPage, int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "check runs page " + page + " of " + ref + " on " + owner + "/" + repo,
+        auth,
+        credential -> getCheckRunsOnce(credential, accept, owner, repo, ref, perPage, page));
+  }
+
   @GET
   @Path("/repos/{owner}/{repo}/commits/{ref}/status")
   @Produces(MediaType.APPLICATION_JSON)
-  CombinedStatus getCombinedStatus(
+  CombinedStatus getCombinedStatusOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -135,6 +162,15 @@ public interface GitHubCheckRunClient {
       @PathParam("ref") String ref,
       @QueryParam("per_page") @DefaultValue("100") int perPage,
       @QueryParam("page") @DefaultValue("1") int page);
+
+  /** One page of a ref's combined status, healing a rejected credential per page (#626). */
+  default CombinedStatus getCombinedStatus(
+      String auth, String accept, String owner, String repo, String ref, int perPage, int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "combined status page " + page + " of " + ref + " on " + owner + "/" + repo,
+        auth,
+        credential -> getCombinedStatusOnce(credential, accept, owner, repo, ref, perPage, page));
+  }
 
   /**
    * All check runs for {@code ref}, paging through {@link #getCheckRuns} (full page → fetch the

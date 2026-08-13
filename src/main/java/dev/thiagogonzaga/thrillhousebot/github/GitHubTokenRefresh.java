@@ -69,7 +69,7 @@ final class GitHubTokenRefresh {
   /** Nothing can be replaced — the state before {@link GitHubAuthClient} binds itself. */
   static final Source NONE = _ -> Optional.empty();
 
-  /** The process-wide seam: one binding, shared by every GitHub write in the instance. */
+  /** The process-wide seam: one binding, shared by every GitHub call in the instance. */
   static final GitHubTokenRefresh SHARED = new GitHubTokenRefresh();
 
   private final AtomicReference<Source> source = new AtomicReference<>(NONE);
@@ -126,9 +126,9 @@ final class GitHubTokenRefresh {
 
   /**
    * Runs a GitHub call with {@code auth} and, when GitHub rejects the credential, runs it exactly
-   * once more with a fresh one. For the writes that have no backoff loop of their own — {@link
-   * GitHubWriteRetry} folds the same refresh into its attempt loop instead, so one call there can
-   * still both refresh and back off.
+   * once more with a fresh one. For the reads (#626) and the writes that have no backoff loop of
+   * their own — {@link GitHubWriteRetry} folds the same refresh into its attempt loop instead, so
+   * one call there can still both refresh and back off.
    */
   <T> T retrying(String operation, String auth, Function<String, T> call) {
     try {

@@ -84,7 +84,7 @@ public interface GitHubCommentClient {
   @GET
   @Path("/repos/{owner}/{repo}/issues/{issueNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)
-  List<IssueComment> listCommentsPage(
+  List<IssueComment> listCommentsPageOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -92,6 +92,22 @@ public interface GitHubCommentClient {
       @PathParam("issueNumber") int issueNumber,
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
+
+  /** One page of an issue's comments, healing a rejected credential per page (#626). */
+  default List<IssueComment> listCommentsPage(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int issueNumber,
+      int perPage,
+      int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "comments page " + page + " of " + owner + "/" + repo + "#" + issueNumber,
+        auth,
+        credential ->
+            listCommentsPageOnce(credential, accept, owner, repo, issueNumber, perPage, page));
+  }
 
   /**
    * Lists a PR's issue comments (the conversation thread, not the inline diff comments), oldest
@@ -118,12 +134,21 @@ public interface GitHubCommentClient {
   @GET
   @Path("/repos/{owner}/{repo}/issues/{issueNumber}")
   @Produces(MediaType.APPLICATION_JSON)
-  IssueDetails getIssue(
+  IssueDetails getIssueOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("issueNumber") int issueNumber);
+
+  /** Reads an issue, healing a rejected credential once (#626). */
+  default IssueDetails getIssue(
+      String auth, String accept, String owner, String repo, int issueNumber) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "issue read " + owner + "/" + repo + "#" + issueNumber,
+        auth,
+        credential -> getIssueOnce(credential, accept, owner, repo, issueNumber));
+  }
 
   /** One HTTP attempt at editing a comment. Callers want {@link #updateComment} instead. */
   @PATCH

@@ -84,7 +84,7 @@ public interface GitHubReviewClient {
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/reviews")
   @Produces(MediaType.APPLICATION_JSON)
-  List<ReviewResponse> listReviewsPage(
+  List<ReviewResponse> listReviewsPageOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -92,6 +92,22 @@ public interface GitHubReviewClient {
       @PathParam("pullNumber") int pullNumber,
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
+
+  /** One page of a PR's reviews, healing a rejected credential per page (#626). */
+  default List<ReviewResponse> listReviewsPage(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      int perPage,
+      int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "reviews page " + page + " of " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential ->
+            listReviewsPageOnce(credential, accept, owner, repo, pullNumber, perPage, page));
+  }
 
   /**
    * Lists a PR's reviews, walking pages of {@value #REVIEWS_PER_PAGE} up to {@value
@@ -122,7 +138,7 @@ public interface GitHubReviewClient {
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/comments")
   @Produces(MediaType.APPLICATION_JSON)
-  List<PullRequestComment> listPullRequestCommentsPage(
+  List<PullRequestComment> listPullRequestCommentsPageOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -131,15 +147,41 @@ public interface GitHubReviewClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
+  /** One page of a PR's inline comments, healing a rejected credential per page (#626). */
+  default List<PullRequestComment> listPullRequestCommentsPage(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      int perPage,
+      int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "inline comments page " + page + " of " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential ->
+            listPullRequestCommentsPageOnce(
+                credential, accept, owner, repo, pullNumber, perPage, page));
+  }
+
   @GET
   @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}")
   @Produces(MediaType.APPLICATION_JSON)
-  PullRequestComment getPullRequestComment(
+  PullRequestComment getPullRequestCommentOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("commentId") long commentId);
+
+  /** Reads one inline comment, healing a rejected credential once (#626). */
+  default PullRequestComment getPullRequestComment(
+      String auth, String accept, String owner, String repo, long commentId) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "inline comment " + commentId + " on " + owner + "/" + repo,
+        auth,
+        credential -> getPullRequestCommentOnce(credential, accept, owner, repo, commentId));
+  }
 
   /**
    * Lists a PR's inline review comments, walking pages of {@value #COMMENTS_PER_PAGE} up to {@value
