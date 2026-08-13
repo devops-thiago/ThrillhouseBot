@@ -164,6 +164,12 @@ class RebuttalContradictionTest {
         "+    var pool = Executors.newFixedThreadPool(1 /* one worker */);",
         "+    var pool = Executors.newFixedThreadPool(/* only one */ 1);",
         "+    var pool = Executors.newFixedThreadPool(1 /* worker */, factory);",
+        // The evidence text is rejoined lines, so an explanation long enough to wrap is one the
+        // scan really sees across the break.
+        "+    var pool = Executors.newFixedThreadPool(1 /* one worker: the downstream\n"
+            + "+        store is not safe for parallel writes */);",
+        "+    var pool = Executors.newFixedThreadPool(1 /* exactly one worker, because the queue"
+            + " must stay ordered for the replay to be deterministic */);",
       })
   void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(
@@ -184,6 +190,7 @@ class RebuttalContradictionTest {
         // A comment does not make a count knowable, and the class cannot evaluate an expression.
         "+    var pool = Executors.newFixedThreadPool(2 /* two */);",
         "+    var pool = Executors.newFixedThreadPool(1 + 0);",
+        "+    var pool = Executors.newFixedThreadPool(2 /* two\n+        threads */);",
       })
   void shouldTreatAMultiThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(

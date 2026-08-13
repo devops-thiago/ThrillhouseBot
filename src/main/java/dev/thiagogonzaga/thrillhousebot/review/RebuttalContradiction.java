@@ -108,23 +108,29 @@ final class RebuttalContradiction {
           Pattern.compile(
               "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newScheduledThreadPool"
                   + "|newWorkStealingPool"),
-          // A fixed pool of more than one thread. A literal count of 1 is excluded, whatever space
-          // or block comment surrounds it, up to the end of the argument — a closing paren, or the
-          // comma of the ThreadFactory overload, which is the standard way to name a single worker.
-          // Every spelling this misses reports a serial pool as concurrent dispatch and overrules a
-          // decline that was right, so the exclusion is written to be hard to spell around: the
-          // paren alone let newFixedThreadPool(1, factory) through, and tolerating only whitespace
-          // let a /* one worker */ next to the count through.
+          // A fixed pool of more than one thread. A literal count of 1 is excluded, along with the
+          // whitespace and block comments around it, up to the end of the argument — a closing
+          // paren, or the comma of the ThreadFactory overload, which is the standard way to name a
+          // single worker. Every spelling this misses reports a serial pool as concurrent dispatch
+          // and overrules a decline that was right, so the exclusion is written to be hard to spell
+          // around: the paren alone let newFixedThreadPool(1, factory) through, tolerating only
+          // whitespace let a /* one worker */ next to the count through, and a dot that stops at a
+          // line break let that same comment through again once it wrapped. The evidence text is
+          // one string of rejoined lines, so a comment does span line breaks here.
           //
           // The skip before the count is possessive because a greedy run backtracks to zero width
           // and re-matches past its own lookahead, which let newFixedThreadPool( 1 ) escape.
+          //
+          // Both bounds are real: a comment longer than 256 characters, or a seventeenth run of
+          // them, reads as concurrent. They keep the scan over untrusted diff text linear, and they
+          // sit far above any real annotation of a thread count.
           //
           // A count that is not a literal 1 — a variable, or an expression like 1 + 0 — reads as
           // concurrent. That is deliberate and matches newFixedThreadPool(workers): the class may
           // only overrule a decline on what the code plainly shows, and it cannot evaluate.
           Pattern.compile(
-              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*.{0,64}?\\*/){0,16}+"
-                  + "(?!1(?:\\s|/\\*.{0,64}?\\*/){0,16}(?:,|\\)))"),
+              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*[\\s\\S]{0,256}?\\*/){0,16}+"
+                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,256}?\\*/){0,16}(?:,|\\)))"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future
