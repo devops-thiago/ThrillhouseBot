@@ -2888,19 +2888,17 @@ class ReviewOrchestratorTest {
       var req =
           new ReviewOrchestrator.ReviewRequest(
               "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
-      assertTrue(ReviewOrchestrator.headMoved(req, java.util.Optional.of("other-sha")));
-      assertFalse(ReviewOrchestrator.headMoved(req, java.util.Optional.of("ABCDEFGH")));
-      // Fail-open: an unreadable fresh head never abandons a finished review.
-      assertFalse(ReviewOrchestrator.headMoved(req, java.util.Optional.empty()));
+      assertTrue(ReviewOrchestrator.headMoved(req, "other-sha"));
+      assertFalse(ReviewOrchestrator.headMoved(req, "ABCDEFGH"));
       // No reviewed sha to compare against: never treated as moved.
       var noSha =
           new ReviewOrchestrator.ReviewRequest(
               "owner", "repo", 42, "", "T", "", "base", "main", 1L, false);
-      assertFalse(ReviewOrchestrator.headMoved(noSha, java.util.Optional.of("other-sha")));
+      assertFalse(ReviewOrchestrator.headMoved(noSha, "other-sha"));
       var nullSha =
           new ReviewOrchestrator.ReviewRequest(
               "owner", "repo", 42, null, "T", "", "base", "main", 1L, false);
-      assertFalse(ReviewOrchestrator.headMoved(nullSha, java.util.Optional.of("other-sha")));
+      assertFalse(ReviewOrchestrator.headMoved(nullSha, "other-sha"));
     }
 
     @Test
@@ -3058,25 +3056,71 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldLogGitHubResponseBodyWhenReviewRejected() {
-      // A rejection whose cause chain carries the HTTP response: the 422 body must be readable
-      // through the GitHubApiError seam (redacted + capped) instead of being discarded.
-      var response =
-          jakarta.ws.rs.core.Response.status(422)
-              .entity("{\"message\":\"Unprocessable Entity\",\"errors\":[\"commit_id stale\"]}")
-              .build();
-      var rejection = new RuntimeException(new jakarta.ws.rs.WebApplicationException(response));
-      var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
-      when(reviewClient.createReview(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
-          .thenThrow(rejection);
+      // The production shape end-to-end: the REST client throws ClientWebApplicationException
+      // (a jakarta.ws.rs.WebApplicationException carrying the response), and the 422 body must
+      // land in the log through the GitHubApiError seam (redacted + capped).
+      var records = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+      var handler =
+          new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord logRecord) {
+              records.add(logRecord);
+            }
 
-      assertDoesNotThrow(
-          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+            @Override
+            public void flush() {
+              // Nothing buffered.
+            }
 
-      // The generation is preserved as a comment; the diagnostics path ran without consuming the
-      // response in a way that breaks the fallback.
-      verify(commentClient)
-          .createComment(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), any());
+            @Override
+            public void close() {
+              // Nothing to release.
+            }
+          };
+      var logger =
+          org.jboss.logmanager.LogContext.getLogContext()
+              .getLogger(ReviewPublisher.class.getName());
+      var previousLevel = logger.getLevel();
+      logger.addHandler(handler);
+      logger.setLevel(java.util.logging.Level.ALL);
+      try {
+        var response =
+            jakarta.ws.rs.core.Response.status(422)
+                .entity(
+                    "{\"message\":\"Unprocessable Entity\",\"errors\":[\"commit_id is stale\"]}")
+                .build();
+        var rejection = new org.jboss.resteasy.reactive.ClientWebApplicationException(response);
+        var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
+        when(reviewClient.createReview(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+            .thenThrow(rejection);
+
+        assertDoesNotThrow(
+            () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+        // The generation is preserved as a comment, and the log carries GitHub's own words.
+        verify(commentClient)
+            .createComment(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), any());
+        var logged =
+            records.stream()
+                .map(
+                    r ->
+                        r.getParameters() != null && r.getParameters().length > 0
+                            ? String.format(r.getMessage(), r.getParameters())
+                            : r.getMessage())
+                .toList();
+        assertTrue(
+            logged.stream()
+                .anyMatch(
+                    line ->
+                        line.contains("GitHub rejected the review post for owner/repo #7")
+                            && line.contains("status=422")
+                            && line.contains("commit_id is stale")),
+            () -> "422 diagnostics not logged; saw: " + logged);
+      } finally {
+        logger.removeHandler(handler);
+        logger.setLevel(previousLevel);
+      }
     }
 
     @Test

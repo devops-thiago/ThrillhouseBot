@@ -28,7 +28,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
@@ -305,9 +304,11 @@ public class ReviewOrchestrator {
       // run (the dispatcher already queued a coalesced run for the new head). Re-read the head
       // just before the first write and abandon the post when it moved, instead of posting a
       // review — and resolving inline comments — against a diff that changed underneath it.
-      var freshHead = contextLoader.currentHeadSha(auth, req);
-      if (headMoved(req, freshHead)) {
-        abandonSupersededRun(auth, req, session, checkRunId, freshHead.get());
+      final var headReq = req;
+      var movedHead =
+          contextLoader.currentHeadSha(auth, req).filter(fresh -> headMoved(headReq, fresh));
+      if (movedHead.isPresent()) {
+        abandonSupersededRun(auth, req, session, checkRunId, movedHead.get());
         return false;
       }
 
@@ -397,13 +398,13 @@ public class ReviewOrchestrator {
 
   /**
    * Whether the freshly read head names a different commit than the one this run reviewed. False
-   * when the fresh read failed (fail-open — a finished review is never lost to its own guard) or
-   * when the run has no reviewed sha to compare against. Visible for tests.
+   * when the run has no reviewed sha to compare against; a fresh read that failed never reaches
+   * here (fail-open — a finished review is never lost to its own guard). Visible for tests.
    */
-  static boolean headMoved(ReviewRequest req, Optional<String> freshHead) {
+  static boolean headMoved(ReviewRequest req, String freshHead) {
     return req.commitSha() != null
         && !req.commitSha().isBlank()
-        && freshHead.filter(sha -> !sha.equalsIgnoreCase(req.commitSha())).isPresent();
+        && !freshHead.equalsIgnoreCase(req.commitSha());
   }
 
   /**

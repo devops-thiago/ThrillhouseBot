@@ -481,6 +481,16 @@ public class ReviewContextLoader {
    * {@code null} so the summary falls back to the diff-derived counts rather than failing the
    * review.
    */
+  PrTotals fetchPrTotals(String auth, String owner, String repo, int prNumber) {
+    try {
+      var pr = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
+      return new PrTotals(pr.changedFiles(), pr.additions(), pr.deletions());
+    } catch (RuntimeException e) {
+      Log.warn("Failed to fetch PR totals; summary will fall back to diff-derived counts", e);
+      return null;
+    }
+  }
+
   /**
    * The PR's head SHA as GitHub reports it right now — a fresh read, taken just before the run
    * posts, so a head that moved during the minutes-long model call is caught (#704). Goes through
@@ -504,16 +514,6 @@ public class ReviewContextLoader {
           req.repo(),
           req.prNumber());
       return Optional.empty();
-    }
-  }
-
-  PrTotals fetchPrTotals(String auth, String owner, String repo, int prNumber) {
-    try {
-      var pr = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
-      return new PrTotals(pr.changedFiles(), pr.additions(), pr.deletions());
-    } catch (RuntimeException e) {
-      Log.warn("Failed to fetch PR totals; summary will fall back to diff-derived counts", e);
-      return null;
     }
   }
 
