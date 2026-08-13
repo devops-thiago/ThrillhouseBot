@@ -399,12 +399,17 @@ final class RebuttalContradiction {
   }
 
   /**
-   * The reply with fenced code blocks, inline code spans and blockquoted lines removed, lower-cased
+   * The reply with fenced code blocks, blockquoted lines and inline code spans removed, lower-cased
    * boundaries intact — what the maintainer actually asserts, as opposed to what they quote.
+   *
+   * <p>Spans are stripped only after the blockquote filter: a span's newline replacement splits its
+   * line, and splitting a {@code >} line before the filter would hand the fragment after the span
+   * to the filter without its {@code >} prefix — quoted material surviving as an assertion, the
+   * over-fire this method exists to prevent. The order loses nothing in the other direction,
+   * because {@link #INLINE_CODE_SPAN} never crosses a line boundary.
    */
   private static String assertedText(String rebuttal) {
-    var withoutFences =
-        INLINE_CODE_SPAN.matcher(FENCED_BLOCK.matcher(rebuttal).replaceAll(" ")).replaceAll("\n");
+    var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
     var kept = new ArrayList<String>();
     for (var line : withoutFences.split("\n", -1)) {
       if (!line.stripLeading().startsWith(">")) {
@@ -413,7 +418,7 @@ final class RebuttalContradiction {
     }
     // Joined, not terminated: a reply that ends mid-sentence must stay unterminated, so
     // sentenceAround's end-of-text bound is a live case rather than an unreachable guard.
-    return String.join("\n", kept);
+    return INLINE_CODE_SPAN.matcher(String.join("\n", kept)).replaceAll("\n");
   }
 
   /** The sentence containing {@code index}, collapsed to one line and clipped for a note. */

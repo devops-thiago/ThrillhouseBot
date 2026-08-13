@@ -428,6 +428,19 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldNotLetASpanInsideABlockquoteLineSplitItsTailIntoAnAssertion() {
+    var rebuttal =
+        """
+        > The bot's finding names the pool `serial`; the executor runs the single-threaded pool
+        Accepted risk, we are not changing this in the current release.
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a blockquoted line must be dropped whole even when it contains a code span");
+  }
+
+  @Test
   void shouldNotBridgeAClaimPhraseAcrossAStrippedSpan() {
     var rebuttal =
         "Accepted risk — per the runbook the deliveries drain one at a`beat`time only in the"
