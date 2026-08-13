@@ -20,7 +20,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -239,14 +238,7 @@ public class FindingPipeline {
               followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList()));
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
-    return refine(
-        session,
-        aiResponse,
-        quoteSource,
-        singleInputs,
-        ctx.priorAiResponseJsons(),
-        ctx.inlineComments(),
-        lineResolver);
+    return refine(session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan);
   }
 
   /**
@@ -655,7 +647,8 @@ public class FindingPipeline {
             validated,
             batchInputs.diff(),
             batchInputs.projectStack(),
-            batchInputs.previousFindings());
+            batchInputs.previousFindings(),
+            run.plan()::recordVerificationCoverage);
     return new BatchOutcome(
         index,
         verified.findings(),
@@ -1324,9 +1317,9 @@ public class FindingPipeline {
       ReviewResponse aiResponse,
       String diff,
       AiReviewService.PromptInputs promptInputs,
-      List<String> priorAiResponseJsons,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      DiffLineResolver lineResolver) {
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver,
+      DiffBudgetPlanner.BudgetPlan plan) {
     aiResponse = quoteValidator.validate(aiResponse, diff);
     aiResponse = frameworkFilter.filter(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
@@ -1336,10 +1329,11 @@ public class FindingPipeline {
             aiResponse,
             promptInputs.diff(),
             promptInputs.projectStack(),
-            promptInputs.previousFindings());
+            promptInputs.previousFindings(),
+            plan::recordVerificationCoverage);
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
-            aiResponse, priorAiResponseJsons, inlineComments, botIdentity);
+            aiResponse, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
     aiResponse = populateMissingAnchors(aiResponse, lineResolver);
     persistAiResponse(session, aiResponse);
     return aiResponse;

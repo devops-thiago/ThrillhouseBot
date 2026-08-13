@@ -131,6 +131,10 @@ public class VerdictBuilder {
     var callFailed = withoutNames(plan.runtimeUncoveredFiles(), ceilingSkipped);
     var responseCut = plan.responseCutFiles();
     var clipped = withoutNames(plan.effectiveClippedFiles(), responseCut);
+    // Verification coverage rides on the detail whichever lane built it (#623): unlike the file
+    // classes it does not depend on the plan being budgeted — the legacy uncapped single call
+    // verifies its findings too, and an unverified set must disclose on that lane as well.
+    var verificationCoverage = plan.verificationCoverage();
     var truncation =
         plan.budgeted()
             ? new ReviewResult.TruncationDetail(
@@ -140,8 +144,16 @@ public class VerdictBuilder {
                 ceilingSkipped,
                 responseCut,
                 callFailed,
-                plan.summaryDegradation())
-            : ReviewResult.TruncationDetail.EMPTY;
+                plan.summaryDegradation(),
+                verificationCoverage)
+            : new ReviewResult.TruncationDetail(
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.NONE,
+                verificationCoverage);
     var omitted =
         plan.budgeted()
             ? plan.effectiveOmittedFiles().size() + clipped.size() + responseCut.size()
@@ -331,11 +343,19 @@ public class VerdictBuilder {
           + result.coverageGapBrief()
           + ") — partial review.";
     }
-    return switch (result.truncation().summaryDegradation()) {
-      case RESPONSE_CUT -> " The summary was shortened (response cut at the length cap).";
-      case SKIPPED_AT_CEILING -> " The summary was skipped (token spend ceiling reached).";
-      case NONE -> "";
-    };
+    var suffix =
+        switch (result.truncation().summaryDegradation()) {
+          case RESPONSE_CUT -> " The summary was shortened (response cut at the length cap).";
+          case SKIPPED_AT_CEILING -> " The summary was skipped (token spend ceiling reached).";
+          case NONE -> "";
+        };
+    // The truncated() branch above already carries the verification counts inside the coverage
+    // brief; this appends them on the reviews with no file gap, so the check run states the
+    // unverified finding set on every path the posted review does (#623).
+    if (result.truncation().verification().disclosed()) {
+      suffix += " " + ReviewResult.verificationBrief(result.truncation().verification());
+    }
+    return suffix;
   }
 
   record DiffStats(
@@ -593,6 +613,14 @@ public class VerdictBuilder {
             case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
             case NONE -> summaryMarkdown;
           };
+      // Verification-only degradation (#623): the findings post either way — the verifier fails
+      // open by design — but a finding set no second stage screened must say so. When a
+      // file-coverage gap exists the truncation banner above already folds this clause in.
+      if (diffStats.truncation().verification().disclosed()) {
+        summaryMarkdown =
+            ReviewResult.verificationNotice(diffStats.truncation().verification())
+                + summaryMarkdown;
+      }
     }
 
     return new ReviewResult(

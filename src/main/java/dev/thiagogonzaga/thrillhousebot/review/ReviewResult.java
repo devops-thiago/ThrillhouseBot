@@ -178,8 +178,14 @@ public record ReviewResult(
    * counts-only fallback ({@link SummaryDegradation#RESPONSE_CUT}), or the call was skipped (or
    * refused mid-call) because the review's token spend ceiling ({@code
    * REVIEW_MAX_TOKENS_PER_REVIEW}) was reached ({@link SummaryDegradation#SKIPPED_AT_CEILING},
-   * #518). All empty on the legacy line-cap path, where only a count is known — the rendered copy
-   * then falls back to the numeric clause.
+   * #518). {@code verification} marks how much of the finding set the second-pass verification
+   * audit covered (#623): like the summary degradation it is not a file-coverage gap — the verifier
+   * fails open by design, so every finding posts either way — but a finding set the audit never (or
+   * only partially) screened must say so instead of reading exactly like a verified one. The file
+   * classes and the summary degradation are all empty on the legacy line-cap path, where only a
+   * count is known — the rendered copy then falls back to the numeric clause — but {@code
+   * verification} is carried on that lane too: the legacy uncapped single call verifies its
+   * findings like any other, so its disclosure does not depend on the plan being budgeted.
    */
   @RegisterForReflection
   public record TruncationDetail(
@@ -188,10 +194,39 @@ public record ReviewResult(
       List<String> spendCeilingSkippedFileNames,
       List<String> responseCutFileNames,
       List<String> callFailedFileNames,
-      SummaryDegradation summaryDegradation) {
+      SummaryDegradation summaryDegradation,
+      VerificationCoverage verification) {
     public static final TruncationDetail EMPTY =
         new TruncationDetail(
-            List.of(), List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE);
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY);
+
+    /**
+     * Convenience constructor for details built before the verification-coverage class existed (and
+     * tests): every attempted verification completed, so no such clause is rendered. The production
+     * path ({@code VerdictBuilder}) passes the real coverage through the canonical constructor.
+     */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> spendCeilingSkippedFileNames,
+        List<String> responseCutFileNames,
+        List<String> callFailedFileNames,
+        SummaryDegradation summaryDegradation) {
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          spendCeilingSkippedFileNames,
+          responseCutFileNames,
+          callFailedFileNames,
+          summaryDegradation,
+          VerificationCoverage.EMPTY);
+    }
 
     /**
      * Convenience constructor for details built before the call-failed class existed (and tests):
@@ -226,10 +261,13 @@ public record ReviewResult(
           callFailedFileNames == null ? List.of() : List.copyOf(callFailedFileNames);
       summaryDegradation =
           summaryDegradation == null ? SummaryDegradation.NONE : summaryDegradation;
+      verification = verification == null ? VerificationCoverage.EMPTY : verification;
     }
 
     public boolean isEmpty() {
-      return !hasFileGaps() && summaryDegradation == SummaryDegradation.NONE;
+      return !hasFileGaps()
+          && summaryDegradation == SummaryDegradation.NONE
+          && !verification.disclosed();
     }
 
     /**
@@ -587,7 +625,67 @@ public record ReviewResult(
         // Nothing to disclose.
       }
     }
+    // Verification coverage affects trust, not coverage (#623): the findings post either way —
+    // the verifier fails open by design — but a finding set no second stage screened must not
+    // read exactly like a verified one, so the gap is stated here alongside the other
+    // degradations instead of staying log-only.
+    if (detail.verification().disclosed()) {
+      clauses.add(verificationClause(detail.verification()));
+    }
     return String.join(", and ", clauses);
+  }
+
+  /**
+   * The shared "verification covered X of Y finding(s)" clause behind every verification-coverage
+   * surface (#623), so the review banner, the check-run summary and the delta comment never drift
+   * on the counts or on what an unverified finding means. Only rendered for a {@linkplain
+   * VerificationCoverage#disclosed() disclosed} coverage. Neither branch states a cause beyond what
+   * is true for every path that reaches it: NONE covers an empty body, a spend-ceiling skip where
+   * the call was never made, a cut before the first verdict closed and a generic failure — "no
+   * verdicts were returned" is the whole truth they share — while PARTIAL covers a cut response and
+   * a complete response that simply omitted a verdict, where only the counts hold. The logs carry
+   * the specific reason.
+   */
+  private static String verificationClause(VerificationCoverage verification) {
+    if (verification.outcome() == VerificationCoverage.Outcome.PARTIAL) {
+      return String.format(
+          "the second-pass finding verification only covered %d of the %d finding(s) — the"
+              + " remaining %d post unverified, as the reviewer raised them",
+          verification.verified(), verification.candidates(), verification.unverified());
+    }
+    return String.format(
+        "the %d finding(s) were NOT verified by the second-pass audit — no verdicts were"
+            + " returned, so they post as the reviewer raised them",
+        verification.candidates());
+  }
+
+  /**
+   * Banner prepended to the summary when verification did not cover the whole finding set and no
+   * file-coverage gap exists to fold the clause into (#623). Like {@link #SUMMARY_CUT_NOTICE}, it
+   * does not hold the verdict: the verifier fails open by design, so the disclosure changes what
+   * the review says, never what it decides.
+   */
+  static String verificationNotice(VerificationCoverage verification) {
+    return String.format(
+        "> ⚠️ **Findings not fully verified.** %s.%n%n",
+        capitalize(verificationClause(verification)));
+  }
+
+  /** The one-sentence check-run form of {@link #verificationNotice(VerificationCoverage)}. */
+  public static String verificationBrief(VerificationCoverage verification) {
+    if (verification.outcome() == VerificationCoverage.Outcome.PARTIAL) {
+      return String.format(
+          "Verification covered %d of %d finding(s); the rest posted unverified.",
+          verification.verified(), verification.candidates());
+    }
+    return String.format(
+        "The %d finding(s) were not verified (no verdicts were returned).",
+        verification.candidates());
+  }
+
+  /** Sentence-cases a clause; every caller passes a non-empty format-built string. */
+  private static String capitalize(String text) {
+    return Character.toUpperCase(text.charAt(0)) + text.substring(1);
   }
 
   /** This result's coverage-gap clause, for surfaces that already hold the record. */
@@ -634,6 +732,21 @@ public record ReviewResult(
       case RESPONSE_CUT -> parts.add("summary shortened (response cut at the length cap)");
       case SKIPPED_AT_CEILING -> parts.add("summary skipped (token spend ceiling reached)");
       case NONE -> {
+        // Nothing to disclose.
+      }
+    }
+    switch (truncation.verification().outcome()) {
+      case NONE ->
+          parts.add(
+              String.format(
+                  "%d finding(s) unverified (no verdicts returned)",
+                  truncation.verification().candidates()));
+      case PARTIAL ->
+          parts.add(
+              String.format(
+                  "verification covered %d of %d finding(s)",
+                  truncation.verification().verified(), truncation.verification().candidates()));
+      case FULL -> {
         // Nothing to disclose.
       }
     }

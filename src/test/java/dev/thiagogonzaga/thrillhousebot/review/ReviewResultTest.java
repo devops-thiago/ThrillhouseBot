@@ -424,6 +424,181 @@ class ReviewResultTest {
   }
 
   @Test
+  void coverageGapClauseDisclosesAnUnverifiedFindingSet() {
+    // #623: a finding set the second-pass audit never screened must not read exactly like a
+    // verified one, so the clause states the count and that the findings post as raised.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            new VerificationCoverage(7, 0));
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "the 7 finding(s) were NOT verified by the second-pass audit — no verdicts were"
+                + " returned, so they post as the reviewer raised them"),
+        clause);
+  }
+
+  @Test
+  void coverageGapClauseDisclosesPartialVerificationWithItsCounts() {
+    // #617's salvage means some findings were verified and others not; the clause carries the
+    // honest X-of-Y instead of collapsing the state into verified-or-not.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            new VerificationCoverage(10, 6));
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertTrue(
+        clause.contains("the second-pass finding verification only covered 6 of the 10 finding(s)"),
+        clause);
+    assertTrue(clause.contains("the remaining 4 post unverified"), clause);
+  }
+
+  @Test
+  void coverageGapBriefCountsVerificationCoverageAsItsOwnEntry() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of("a.java"),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.NONE,
+                new VerificationCoverage(5, 2)));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("1 file(s) omitted"), brief);
+    assertTrue(brief.contains("verification covered 2 of 5 finding(s)"), brief);
+  }
+
+  @Test
+  void coverageGapBriefStatesAWhollyUnverifiedFindingSet() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of("a.java"),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.NONE,
+                new VerificationCoverage(4, 0)));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("4 finding(s) unverified (no verdicts returned)"), brief);
+  }
+
+  @Test
+  void fullVerificationCoverageRendersNoClauseAnywhere() {
+    // The common case must not change: a verification that ran to completion adds nothing to the
+    // clause, the brief, or the detail's emptiness.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            new VerificationCoverage(5, 5));
+
+    assertTrue(detail.isEmpty());
+    assertFalse(detail.hasFileGaps());
+    assertFalse(ReviewResult.coverageGapClause(0, detail).contains("verif"));
+  }
+
+  @Test
+  void truncationDetailWithOnlyAVerificationGapIsNotEmptyButHasNoFileGap() {
+    // Same shape as the summary degradation (#516): trust, not coverage — the per-file surfaces
+    // treat the detail as empty while the banner, clause and brief still disclose it.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            new VerificationCoverage(3, 0));
+
+    assertFalse(detail.isEmpty());
+    assertFalse(detail.hasFileGaps());
+    assertEquals("", ReviewResult.truncationDisclosure(0, detail));
+    // The pre-#623 convenience constructor carries full coverage, so no clause renders.
+    assertEquals(
+        VerificationCoverage.EMPTY,
+        new ReviewResult.TruncationDetail(
+                List.of(), List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE)
+            .verification());
+  }
+
+  @Test
+  void verificationNoticeAndBriefCarryTheCounts() {
+    var none = new VerificationCoverage(9, 0);
+    var partial = new VerificationCoverage(9, 4);
+
+    var notice = ReviewResult.verificationNotice(none);
+    assertTrue(notice.startsWith("> ⚠️ **Findings not fully verified.**"), notice);
+    assertTrue(notice.contains("The 9 finding(s) were NOT verified"), notice);
+
+    var partialNotice = ReviewResult.verificationNotice(partial);
+    assertTrue(partialNotice.contains("only covered 4 of the 9 finding(s)"), partialNotice);
+
+    assertEquals(
+        "The 9 finding(s) were not verified (no verdicts were returned).",
+        ReviewResult.verificationBrief(none));
+    assertEquals(
+        "Verification covered 4 of 9 finding(s); the rest posted unverified.",
+        ReviewResult.verificationBrief(partial));
+  }
+
+  @Test
   void coverageGapClauseKeepsTheLegacyCountAlongsideASummaryCut() {
     // #659 probe B: on the legacy path (count known, no names) a detail carrying only a summary
     // degradation skipped the numeric fallback, and nothing below it read the int — the reader

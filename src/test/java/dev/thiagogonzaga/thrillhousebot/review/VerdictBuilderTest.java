@@ -403,6 +403,121 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void anUnverifiedFindingSetIsDisclosedWithoutHoldingApproval() {
+    // #623: verification failed open (empty body or cut response) and the findings posted anyway
+    // — correct — but nothing on any surface said no second stage had screened them. The posted
+    // review and the check run must both state it, and the verdict must not move: fail-open stays.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordVerificationCoverage(new VerificationCoverage(3, 0));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertFalse(result.truncated());
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertEquals(new VerificationCoverage(3, 0), result.truncation().verification());
+    assertTrue(
+        result.summaryMarkdown().contains("**Findings not fully verified.**"),
+        result.summaryMarkdown());
+    assertTrue(
+        result.summaryMarkdown().contains("The 3 finding(s) were NOT verified"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("The 3 finding(s) were not verified (no verdicts were returned)."),
+        checkSummary);
+  }
+
+  @Test
+  void partialVerificationCoverageDisclosesTheHonestXOfY() {
+    // #554/#617 salvage partial verdicts: some findings were verified, others not, and the
+    // disclosure must represent that state rather than collapsing it either way.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordVerificationCoverage(new VerificationCoverage(4, 3));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertTrue(
+        result.summaryMarkdown().contains("only covered 3 of the 4 finding(s)"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains(
+            "Verification covered 3 of 4 finding(s); the rest posted unverified."),
+        checkSummary);
+  }
+
+  @Test
+  void fullVerificationCoverageRendersNoDisclosure() {
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordVerificationCoverage(new VerificationCoverage(2, 2));
+    plan.recordVerificationCoverage(new VerificationCoverage(3, 3));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    // The two batches accumulate to a fully covered set — the common case adds nothing anywhere.
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertFalse(
+        result.summaryMarkdown().contains("**Findings not fully verified.**"),
+        result.summaryMarkdown());
+    assertFalse(
+        VerdictBuilder.checkSummaryForResult(result).contains("verification"),
+        VerdictBuilder.checkSummaryForResult(result));
+  }
+
+  @Test
+  void anUnverifiedFindingSetAlongsideFileGapsFoldsIntoTheCoverageClause() {
+    // With a real file gap the partial-review banner renders anyway, so the verification gap
+    // becomes one more clause there — the dedicated banner must not stack on top.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordVerificationCoverage(new VerificationCoverage(2, 0));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(result.truncated());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains("the 2 finding(s) were NOT verified by the second-pass audit"),
+        result.summaryMarkdown());
+    assertFalse(
+        result.summaryMarkdown().contains("**Findings not fully verified.**"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("2 finding(s) unverified (no verdicts returned)"), checkSummary);
+  }
+
+  @Test
+  void anUnverifiedFindingSetIsDisclosedOnTheLegacyUnbudgetedLane() {
+    // The legacy uncapped single call (max-input-tokens=0) verifies its findings too; the
+    // disclosure must not silently depend on the plan being budgeted.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), false, null, null, null, null);
+    plan.recordVerificationCoverage(new VerificationCoverage(1, 0));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(
+        result.summaryMarkdown().contains("**Findings not fully verified.**"),
+        result.summaryMarkdown());
+  }
+
+  @Test
   void aCeilingSkippedSummaryAlongsideFileGapsFoldsIntoTheCoverageClause() {
     // With a real file gap the partial-review banner renders anyway, so the ceiling skip becomes
     // one more clause there — the dedicated summary-only banner must not stack on top.

@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
+import dev.thiagogonzaga.thrillhousebot.review.VerificationCoverage;
 import io.quarkus.logging.Log;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -348,8 +350,26 @@ public class FindingVerificationService {
       String diff,
       String projectStack,
       String previousFindings) {
+    return verify(ledgerSessionId, response, diff, projectStack, previousFindings, coverage -> {});
+  }
+
+  /**
+   * The {@link #verify(long, ReviewResponse, String, String, String)} variant that also reports how
+   * much of the candidate set the verifier actually covered, so the posted review can disclose an
+   * unverified or partially verified finding set instead of leaving that state log-only (#623). The
+   * sink receives exactly one {@link VerificationCoverage} per attempted verification — nothing is
+   * reported when the verifier is disabled or there is nothing to verify — and the fail-open
+   * contract is untouched: coverage changes what the review says, never which findings it keeps.
+   */
+  public ReviewResponse verify(
+      long ledgerSessionId,
+      ReviewResponse response,
+      String diff,
+      String projectStack,
+      String previousFindings,
+      Consumer<VerificationCoverage> coverageSink) {
     return floorInjectionSinkRisk(
-        audit(ledgerSessionId, response, diff, projectStack, previousFindings));
+        audit(ledgerSessionId, response, diff, projectStack, previousFindings, coverageSink));
   }
 
   /** The audit itself; {@link #verify} applies the deterministic severity floor to its result. */
@@ -358,7 +378,8 @@ public class FindingVerificationService {
       ReviewResponse response,
       String diff,
       String projectStack,
-      String previousFindings) {
+      String previousFindings,
+      Consumer<VerificationCoverage> coverageSink) {
     ReviewResponse screened = demoteHedgedBlockingFindings(response);
     if (!config.review().verifierEnabled() || screened.findings().isEmpty()) {
       return screened;
@@ -374,6 +395,7 @@ public class FindingVerificationService {
           tokenLedger.tokensSpent(ledgerSessionId),
           tokenLedger.ceiling(),
           screened.findings().size());
+      coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
       return screened;
     }
     try {
@@ -397,16 +419,26 @@ public class FindingVerificationService {
         Log.warnf(
             "Finding verification returned no response body — keeping the %d unverified finding(s)",
             screened.findings().size());
+        coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
         return screened;
       }
-      return apply(screened, parseOrSalvage(raw, screened.findings().size()));
+      var verification = parseOrSalvage(raw, screened.findings().size());
+      var applied = apply(screened, verification);
+      // Accepted only after apply() succeeded: the fail-open catch below records (N, 0) for any
+      // failure, so recording before it could double this attempt's candidates if apply threw.
+      coverageSink.accept(
+          new VerificationCoverage(
+              screened.findings().size(),
+              (int) candidatesCovered(verification.verdicts(), screened.findings().size())));
+      return applied;
     } catch (AiResponseTruncatedException e) {
-      return salvageTruncatedVerdicts(screened, e);
+      return salvageTruncatedVerdicts(screened, e, coverageSink);
     } catch (IOException | RuntimeException e) {
       Log.warnf(
           e,
           "Finding verification failed — keeping the %d unverified finding(s)",
           screened.findings().size());
+      coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
       return screened;
     }
   }
@@ -457,13 +489,16 @@ public class FindingVerificationService {
    * unverified finding.
    */
   private ReviewResponse salvageTruncatedVerdicts(
-      ReviewResponse screened, AiResponseTruncatedException e) {
+      ReviewResponse screened,
+      AiResponseTruncatedException e,
+      Consumer<VerificationCoverage> coverageSink) {
     var candidates = screened.findings().size();
     var salvaged =
         salvager.salvageArray(e.partialBody(), VERDICTS, VerificationResponse.Verdict.class);
     if (salvaged.isEmpty()) {
       // The verifier fails open by design; say why so a cap is not mistaken for a provider fault.
       Log.warnf("Finding verification — keeping unverified findings. %s", e.getMessage());
+      coverageSink.accept(new VerificationCoverage(candidates, 0));
       return screened;
     }
     var verified = candidatesCovered(salvaged, candidates);
@@ -471,7 +506,9 @@ public class FindingVerificationService {
         "Finding verification was cut at the model's response-length cap; salvaged %d verdict(s)"
             + " covering %d of %d candidate finding(s) — the remaining %d stay unverified. %s",
         salvaged.size(), verified, candidates, candidates - verified, e.getMessage());
-    return apply(screened, new VerificationResponse(salvaged));
+    var applied = apply(screened, new VerificationResponse(salvaged));
+    coverageSink.accept(new VerificationCoverage(candidates, (int) verified));
+    return applied;
   }
 
   /**

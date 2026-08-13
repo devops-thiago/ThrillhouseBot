@@ -94,7 +94,7 @@ class FindingPipelineTest {
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
-    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any()))
+    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(1));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
@@ -208,7 +208,8 @@ class FindingPipelineTest {
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), eq(2));
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), eq(2));
     verify(aiReviewService).summarize(eq(session), any());
-    verify(findingVerificationService, times(2)).verify(anyLong(), any(), any(), any(), any());
+    verify(findingVerificationService, times(2))
+        .verify(anyLong(), any(), any(), any(), any(), any());
 
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
@@ -322,7 +323,8 @@ class FindingPipelineTest {
     // #495's no-retry stands: salvage replaces the disclose step, never re-enters the retry lane.
     verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
     // The salvaged findings run the same validate/verify chain as any batch's.
-    verify(findingVerificationService, times(2)).verify(anyLong(), any(), any(), any(), any());
+    verify(findingVerificationService, times(2))
+        .verify(anyLong(), any(), any(), any(), any(), any());
 
     assertEquals(4, result.findings().size());
     assertEquals("S1", result.findings().get(0).title());
@@ -1031,7 +1033,8 @@ class FindingPipelineTest {
     verify(aiReviewService, times(1)).review(eq(session), any());
     // The salvaged findings face every check a parsed response's do, against the batch's own text.
     verify(quoteValidator).validate(any(), eq("### a.java\n"));
-    verify(findingVerificationService, times(1)).verify(anyLong(), any(), any(), any(), any());
+    verify(findingVerificationService, times(1))
+        .verify(anyLong(), any(), any(), any(), any(), any());
 
     assertEquals(3, result.findings().size());
     assertEquals("S1", result.findings().get(0).title());

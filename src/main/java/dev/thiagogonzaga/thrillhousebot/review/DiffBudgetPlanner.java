@@ -117,7 +117,8 @@ public class DiffBudgetPlanner {
       List<String> runtimeUncoveredFiles,
       List<String> spendCeilingSkippedFiles,
       List<String> responseCutFiles,
-      java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef) {
+      java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef,
+      java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -135,6 +136,65 @@ public class DiffBudgetPlanner {
           summaryDegradationRef == null
               ? new java.util.concurrent.atomic.AtomicReference<>(SummaryDegradation.NONE)
               : summaryDegradationRef;
+      verificationCoverageRef =
+          verificationCoverageRef == null
+              ? new java.util.concurrent.atomic.AtomicReference<>(VerificationCoverage.EMPTY)
+              : verificationCoverageRef;
+    }
+
+    /**
+     * Convenience constructor for plans built before the verification-coverage slot existed (and
+     * tests): coverage starts at {@link VerificationCoverage#EMPTY} and accumulates through {@link
+     * #recordVerificationCoverage} exactly as with the canonical constructor's {@code null}.
+     */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles,
+        List<String> responseCutFiles,
+        java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          responseCutFiles,
+          summaryDegradationRef,
+          null);
+    }
+
+    /**
+     * Accumulates one verification call's coverage onto the review-wide total, so a multi-batch
+     * review — one verifier call per batch — discloses the summed candidate and verified counts
+     * (#623). Recorded by the review pass onto this shared instance, exactly like the runtime file
+     * classes above; {@code VerificationCoverage.plus} is commutative, so the parallel batch lanes
+     * may record in any order.
+     */
+    void recordVerificationCoverage(VerificationCoverage coverage) {
+      if (coverage == null) {
+        return;
+      }
+      verificationCoverageRef.accumulateAndGet(coverage, VerificationCoverage::plus);
+    }
+
+    /** The review-wide verification coverage recorded so far — the disclosure's counts. */
+    public VerificationCoverage verificationCoverage() {
+      return verificationCoverageRef.get();
+    }
+
+    /**
+     * Defensive snapshot, like {@link #summaryDegradationRef()}: the live slot is only written
+     * through {@link #recordVerificationCoverage} and read through {@link #verificationCoverage()}.
+     */
+    @Override
+    public java.util.concurrent.atomic.AtomicReference<VerificationCoverage>
+        verificationCoverageRef() {
+      return new java.util.concurrent.atomic.AtomicReference<>(verificationCoverageRef.get());
     }
 
     /**
@@ -578,14 +638,23 @@ public class DiffBudgetPlanner {
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
     var budgeted = diffBudgetTokens > 0;
     if (reviewable.isEmpty()) {
-      return new BudgetPlan(List.of(), List.of(), List.of(), budgeted, null, null, null, null);
+      return new BudgetPlan(
+          List.of(), List.of(), List.of(), budgeted, null, null, null, null, null);
     }
 
     var rendered = renderAndSize(reviewable, diffBudgetTokens);
 
     if (!budgeted) {
       return new BudgetPlan(
-          List.of(toBatch(rendered.sized())), List.of(), List.of(), false, null, null, null, null);
+          List.of(toBatch(rendered.sized())),
+          List.of(),
+          List.of(),
+          false,
+          null,
+          null,
+          null,
+          null,
+          null);
     }
     return pack(rendered, diffBudgetTokens, Math.max(1, maxBatches));
   }
@@ -732,7 +801,7 @@ public class DiffBudgetPlanner {
     // exactly one class or the disclosure would list it twice and the verdict double-count it.
     var omittedSet = new HashSet<>(omitted);
     var clipped = rendered.clipped().stream().filter(n -> !omittedSet.contains(n)).toList();
-    return new BudgetPlan(batches, omitted, clipped, true, null, null, null, null);
+    return new BudgetPlan(batches, omitted, clipped, true, null, null, null, null, null);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */
