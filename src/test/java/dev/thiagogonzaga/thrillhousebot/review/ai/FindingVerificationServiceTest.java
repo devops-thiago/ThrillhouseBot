@@ -28,6 +28,8 @@ import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.Finding;
+import dev.thiagogonzaga.thrillhousebot.review.VerificationCoverage;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -539,6 +541,145 @@ class FindingVerificationServiceTest {
 
     assertEquals("medium", result.findings().get(0).risk());
     assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void reportsFullCoverageWhenEveryCandidateReceivesAVerdict() {
+    // #623: a verification that ran to completion reports full coverage, so the posted review
+    // renders no verification clause at all.
+    ReviewResponse original =
+        response(finding("critical", "high", "Bug"), finding("high", "high", "Speculative"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "confirmed", "reason": "real"},
+              {"id": 2, "verdict": "rejected", "reason": "framework idiom"}]}
+            """));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+    assertFalse(reported.get(0).disclosed());
+  }
+
+  @Test
+  void reportsZeroCoverageWhenTheModelReturnsNoBody() {
+    // #623: the empty-body soft failure keeps the findings (fail open, unchanged) but must no
+    // longer be indistinguishable from a verified set — the coverage says none were verified.
+    ReviewResponse original =
+        response(finding("critical", "high", "Bug"), finding("high", "high", "Nit"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiNoContent());
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(2, result.findings().size());
+    assertEquals(List.of(new VerificationCoverage(2, 0)), reported);
+    assertEquals(VerificationCoverage.Outcome.NONE, reported.get(0).outcome());
+  }
+
+  @Test
+  void reportsPartialCoverageWhenTheBodyIsCutMidJson() {
+    // #623 + #546/#617: the mid-JSON cut salvages the verdicts that closed, so the coverage says
+    // exactly how many candidates the audit reached — X of Y, the honest partial state.
+    ReviewResponse original =
+        response(
+            finding("critical", "high", "Hallucinated API claim"),
+            finding("high", "high", "Speculative"),
+            finding("high", "high", "Verdict cut off"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "downgraded", "risk": "low", "confidence": "low", "reason": "r"},
+              {"id": 3, "verdict": "reje"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(List.of(new VerificationCoverage(3, 2)), reported);
+    assertEquals(VerificationCoverage.Outcome.PARTIAL, reported.get(0).outcome());
+  }
+
+  @Test
+  void reportsPartialCoverageWhenTheLengthCapCutTheBody() {
+    // The reported-length-stop flavor of the same cut (#599): salvage applies the closed verdicts
+    // and the coverage carries the same X-of-Y the parse-failure lane reports.
+    ReviewResponse original =
+        response(
+            finding("critical", "high", "Hallucinated API claim"),
+            finding("high", "high", "Verdict cut off"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiTruncated(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "confi"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+  }
+
+  @Test
+  void reportsZeroCoverageWhenTheCutLeavesNoCompleteVerdict() {
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiTruncated("{\"verdicts\": [{\"id\": 1, \"verdict\": \"reje"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(List.of(new VerificationCoverage(1, 0)), reported);
+  }
+
+  @Test
+  void reportsZeroCoverageWhenTheVerifierCallFails() {
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenThrow(new RuntimeException("provider down"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(1, result.findings().size());
+    assertEquals(List.of(new VerificationCoverage(1, 0)), reported);
+  }
+
+  @Test
+  void reportsZeroCoverageWhenTheCallIsSkippedAtTheSpendCeiling() {
+    when(tokenLedger.ceilingReached(SESSION)).thenReturn(true);
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    verify(verifier, never()).verify(anyString(), anyString(), anyString(), anyString());
+    assertEquals(List.of(new VerificationCoverage(1, 0)), reported);
+  }
+
+  @Test
+  void reportsNothingWhenTheVerifierIsDisabledOrThereIsNothingToVerify() {
+    // No verification was attempted, so there is no coverage to disclose — the operator disabled
+    // the audit knowingly, and an empty finding set has nothing to screen.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    var reported = new ArrayList<VerificationCoverage>();
+
+    service.verify(
+        SESSION, response(finding("critical", "high", "Bug")), "diff", "stack", "", reported::add);
+
+    when(reviewConfig.verifierEnabled()).thenReturn(true);
+    service.verify(SESSION, response(), "diff", "stack", "", reported::add);
+
+    assertTrue(reported.isEmpty());
   }
 
   @Test

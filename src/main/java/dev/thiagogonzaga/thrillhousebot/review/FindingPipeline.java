@@ -246,7 +246,8 @@ public class FindingPipeline {
         singleInputs,
         ctx.priorAiResponseJsons(),
         ctx.inlineComments(),
-        lineResolver);
+        lineResolver,
+        plan);
   }
 
   /**
@@ -655,7 +656,8 @@ public class FindingPipeline {
             validated,
             batchInputs.diff(),
             batchInputs.projectStack(),
-            batchInputs.previousFindings());
+            batchInputs.previousFindings(),
+            run.plan()::recordVerificationCoverage);
     return new BatchOutcome(
         index,
         verified.findings(),
@@ -1326,7 +1328,8 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       List<String> priorAiResponseJsons,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      DiffLineResolver lineResolver) {
+      DiffLineResolver lineResolver,
+      DiffBudgetPlanner.BudgetPlan plan) {
     aiResponse = quoteValidator.validate(aiResponse, diff);
     aiResponse = frameworkFilter.filter(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
@@ -1336,7 +1339,8 @@ public class FindingPipeline {
             aiResponse,
             promptInputs.diff(),
             promptInputs.projectStack(),
-            promptInputs.previousFindings());
+            promptInputs.previousFindings(),
+            plan::recordVerificationCoverage);
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
             aiResponse, priorAiResponseJsons, inlineComments, botIdentity);

@@ -197,7 +197,7 @@ class ReviewOrchestratorTest {
     when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
     when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
         .thenReturn("");
-    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any()))
+    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(0));

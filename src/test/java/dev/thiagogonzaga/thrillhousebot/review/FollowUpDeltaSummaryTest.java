@@ -217,6 +217,47 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
+  void unverifiedFindingSetIsDisclosedInTheDeltaComment() {
+    // #623: the delta's "new findings this round" count must not read as fully screened when the
+    // second-pass verification never covered them — same fact the review body and check run state,
+    // in the one-sentence form, without the per-file partial-coverage framing.
+    var truncation =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            new VerificationCoverage(2, 0));
+    var result =
+        new ReviewResult(
+            List.of(finding("a.java"), finding("b.java")),
+            0,
+            0,
+            2,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            truncation);
+
+    var body = FollowUpDeltaSummary.render(result).orElseThrow();
+
+    assertTrue(
+        body.contains(
+            "The 2 finding(s) were not verified (the verification call did not" + " complete)."),
+        body);
+    assertFalse(body.contains("Large PR — partial coverage"), body);
+  }
+
+  @Test
   void untruncatedReviewCarriesNoDisclosure() {
     var body = FollowUpDeltaSummary.render(followUp(List.of(finding("a.java")), List.of(), 0));
 

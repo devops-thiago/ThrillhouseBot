@@ -88,6 +88,11 @@ final class FollowUpDeltaSummary {
             // truncation detail, not just the count — on the budgeted path the count folds in
             // clipped files, which are partially analyzed, not omitted (F8).
             + ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
+    // The delta's counts must not read as fully screened when verification did not cover them
+    // (#623) — same disclosure the posted review and check run carry, in its one-sentence form.
+    if (result.truncation().verification().disclosed()) {
+      body += "\n\n> ⚠️ " + ReviewResult.verificationBrief(result.truncation().verification());
+    }
     return Optional.of(body);
   }
 }
