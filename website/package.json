@@ -26,7 +26,8 @@
     "starlight-versions": "^0.9.1"
   },
   "overrides": {
-    "postcss": "8.5.23"
+    "postcss": "8.5.23",
+    "nanoid": "^3.3.17"
   },
   "devDependencies": {
     "unist-util-visit": "^5.1.0"
