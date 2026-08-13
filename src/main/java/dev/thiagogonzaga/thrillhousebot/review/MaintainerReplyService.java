@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -56,6 +57,7 @@ public class MaintainerReplyService {
   private final ReviewDiffFormatter diffFormatter;
   private final ReplyAssistant replyAssistant;
   private final RepoSettingsResolver repoSettingsResolver;
+  private final BotIdentity botIdentity;
 
   @Inject
   public MaintainerReplyService(
@@ -67,7 +69,8 @@ public class MaintainerReplyService {
       @RestClient GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
       ReplyAssistant replyAssistant,
-      RepoSettingsResolver repoSettingsResolver) {
+      RepoSettingsResolver repoSettingsResolver,
+      BotIdentity botIdentity) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -77,6 +80,7 @@ public class MaintainerReplyService {
     this.diffFormatter = diffFormatter;
     this.replyAssistant = replyAssistant;
     this.repoSettingsResolver = repoSettingsResolver;
+    this.botIdentity = botIdentity;
   }
 
   /**
@@ -212,10 +216,12 @@ public class MaintainerReplyService {
    * be cleared rather than leaving a maintainer who mistyped or omitted the locator to discover it
    * from a review that changes nothing.
    */
-  static final String CLEAR_DIRECTIVE_NO_LOCATOR_ACK =
-      "That comment names no finding, so nothing will be cleared. Name each one by its `path:line`"
-          + " and title exactly as the summary prints it — for example `@thrillhousebot resolved"
-          + " src/main/java/com/example/Widget.java:42 — Missing null check`.";
+  static String clearDirectiveNoLocatorAck(BotIdentity botIdentity) {
+    return "That comment names no finding, so nothing will be cleared. Name each one by its"
+        + " `path:line` and title exactly as the summary prints it — for example `@"
+        + botIdentity.primaryMention()
+        + " resolved src/main/java/com/example/Widget.java:42 — Missing null check`.";
+  }
 
   /**
    * Acknowledgement for a directive whose only locator-shaped naming reads as a spaced line range —
@@ -245,24 +251,26 @@ public class MaintainerReplyService {
    * named, and then nothing was cleared. Like the no-locator case the outcome is knowable from the
    * comment alone, so the reply states it rather than leaving it to be discovered.
    */
-  static final String CLEAR_DIRECTIVE_UNAUTHORIZED_ACK =
-      "Clearing a finding takes write access on this repository, so nothing will be cleared by that"
-          + " comment. Ask someone with write access to post the same `@thrillhousebot resolved"
-          + " path/to/File.java:42 — <title>` directive.";
+  static String clearDirectiveUnauthorizedAck(BotIdentity botIdentity) {
+    return "Clearing a finding takes write access on this repository, so nothing will be cleared"
+        + " by that comment. Ask someone with write access to post the same `@"
+        + botIdentity.primaryMention()
+        + " resolved path/to/File.java:42 — <title>` directive.";
+  }
 
   private void handleMention(String auth, ReplyTask task) {
-    if (FollowUpAnalyzer.isClearDirective(task.question())) {
+    if (FollowUpAnalyzer.isClearDirective(task.question(), botIdentity)) {
       boolean mayClear = FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation());
       boolean named = FollowUpAnalyzer.namesALocator(task.question());
       String ack;
       if (!mayClear) {
-        ack = CLEAR_DIRECTIVE_UNAUTHORIZED_ACK;
+        ack = clearDirectiveUnauthorizedAck(botIdentity);
       } else if (named) {
         ack = CLEAR_DIRECTIVE_ACK;
       } else if (FollowUpAnalyzer.namesOnlyAmbiguousRanges(task.question())) {
         ack = CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK;
       } else {
-        ack = CLEAR_DIRECTIVE_NO_LOCATOR_ACK;
+        ack = clearDirectiveNoLocatorAck(botIdentity);
       }
       commentClient.createComment(
           auth,

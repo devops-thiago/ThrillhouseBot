@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -70,6 +71,11 @@ class MaintainerReplyServiceTest {
    * a stubbed call.
    */
   private MaintainerReplyService serviceWith(ReviewDiffFormatter formatter) {
+    return serviceWith(formatter, BotIdentity.from(null));
+  }
+
+  /** Builds a service with a non-default bot identity, for custom-login installs. */
+  private MaintainerReplyService serviceWith(ReviewDiffFormatter formatter, BotIdentity identity) {
     return new MaintainerReplyService(
         authClient,
         authorizer,
@@ -79,7 +85,8 @@ class MaintainerReplyServiceTest {
         prClient,
         formatter,
         replyAssistant,
-        repoSettingsResolver);
+        repoSettingsResolver,
+        identity);
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiff(
@@ -658,6 +665,30 @@ class MaintainerReplyServiceTest {
   }
 
   /**
+   * An install whose GitHub App runs under a different login must have its own mention recognized
+   * as the directive, and its acks must spell the directive with that login — telling a maintainer
+   * to type {@code @thrillhousebot} on an install that never answers to it is dead advice (#679).
+   */
+  @Test
+  void clearDirectiveIsRecognizedUnderACustomBotLogin() {
+    authorize();
+    var identity = BotIdentity.of("my-review-bot[bot]");
+    var customService = serviceWith(diffFormatter, identity);
+
+    customService.handle(mentionTask("@my-review-bot resolved, thanks"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        MaintainerReplyService.clearDirectiveNoLocatorAck(identity), body.getValue().body());
+    assertTrue(
+        body.getValue().body().contains("`@my-review-bot resolved"),
+        "the ack must spell the directive with the configured mention name");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  /**
    * The reply runs before any review, with no prior round loaded, so it cannot know whether a
    * locator matches a real finding — but a directive carrying no locator at all provably clears
    * nothing, and saying so beats leaving a maintainer who mistyped it to infer the failure from a
@@ -672,7 +703,9 @@ class MaintainerReplyServiceTest {
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
         .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
-    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK, body.getValue().body());
+    assertEquals(
+        MaintainerReplyService.clearDirectiveNoLocatorAck(BotIdentity.from(null)),
+        body.getValue().body());
     assertTrue(
         body.getValue().body().contains("nothing will be cleared"),
         "the maintainer must not read this as a confirmation");
@@ -717,7 +750,9 @@ class MaintainerReplyServiceTest {
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
         .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
-    assertEquals(MaintainerReplyService.CLEAR_DIRECTIVE_UNAUTHORIZED_ACK, body.getValue().body());
+    assertEquals(
+        MaintainerReplyService.clearDirectiveUnauthorizedAck(BotIdentity.from(null)),
+        body.getValue().body());
     assertTrue(
         body.getValue().body().contains("nothing will be cleared"),
         "the commenter must not read this as a promise the finding closes");
@@ -731,9 +766,9 @@ class MaintainerReplyServiceTest {
     for (var ack :
         List.of(
             MaintainerReplyService.CLEAR_DIRECTIVE_ACK,
-            MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK,
+            MaintainerReplyService.clearDirectiveNoLocatorAck(BotIdentity.from(null)),
             MaintainerReplyService.CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK,
-            MaintainerReplyService.CLEAR_DIRECTIVE_UNAUTHORIZED_ACK)) {
+            MaintainerReplyService.clearDirectiveUnauthorizedAck(BotIdentity.from(null)))) {
       assertFalse(ack.startsWith("Noted"), ack);
       assertFalse(ack.contains("has been cleared"), ack);
       assertFalse(ack.contains("is cleared"), ack);

@@ -69,4 +69,28 @@ class BotIdentityTest {
     assertEquals(
         BotIdentity.of("thrillhousebot[bot]"), BotIdentity.from(List.of("thrillhousebot[bot]")));
   }
+
+  @Test
+  void mentionNamesShouldStripTheBotSuffixAndPreserveConfiguredOrder() {
+    var identity = BotIdentity.of("My-Review-Bot[bot]", "helper-account", "my-review-bot[bot]");
+
+    assertEquals(List.of("my-review-bot", "helper-account"), identity.mentionNames());
+    assertEquals("my-review-bot", identity.primaryMention());
+  }
+
+  @Test
+  void mentionNamesOfTheDefaultIdentityAreTheShippedSlugs() {
+    assertEquals(
+        List.of("thrillhousebot", "thrillhouse-bot"), BotIdentity.from(null).mentionNames());
+    assertEquals("thrillhousebot", BotIdentity.from(null).primaryMention());
+  }
+
+  @Test
+  void mentionNamesShouldFallBackToRawLoginsWhenStrippingLeavesNothing() {
+    // A login that is nothing but the suffix would otherwise yield a mention no comment contains.
+    var identity = BotIdentity.of("[bot]");
+
+    assertEquals(List.of("[bot]"), identity.mentionNames());
+    assertEquals("[bot]", identity.primaryMention());
+  }
 }

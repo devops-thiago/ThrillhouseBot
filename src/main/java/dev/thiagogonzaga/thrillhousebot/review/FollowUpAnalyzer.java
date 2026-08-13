@@ -34,9 +34,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /** Analyzes follow-up reviews by comparing new findings against prior reviews. */
@@ -739,12 +741,25 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Compiled clear directives, one per {@link BotIdentity}. A deployment has exactly one identity,
+   * so this holds a single entry in production; caching it here keeps the pattern compiled once per
+   * config rather than once per comment while letting the static directive predicates stay shared
+   * with {@link MaintainerReplyService}.
+   */
+  private static final Map<BotIdentity, Pattern> CLEAR_DIRECTIVES = new ConcurrentHashMap<>();
+
+  /**
    * The directive a maintainer writes in a PR conversation comment to clear findings the review
    * threads cannot reach. Mirrors the {@code @thrillhousebot <word>} mention form every other
    * command uses, but deliberately spells the word {@code resolved} rather than {@code resolve}, so
    * it is not the existing {@code /resolve} command (which resolves GitHub review threads) under a
    * second name — {@code TriggerDetector}'s {@code resolve} pattern ends in a word boundary and
    * therefore does not fire on {@code resolved}.
+   *
+   * <p>The mention names come from the configured bot logins ({@link BotIdentity#mentionNames}),
+   * not a hardcoded slug, so an install whose GitHub App runs under a different login still
+   * recognizes its maintainers' directives (#679). Each name is {@link Pattern#quote}d — a login is
+   * data, never regex.
    *
    * <p>The trailing lookahead rejects the interrogative: a word boundary holds before {@code ?}, so
    * "@thrillhousebot resolved? `src/A.java:10` — SQL injection" — a maintainer <em>asking</em>
@@ -754,8 +769,16 @@ public class FollowUpAnalyzer {
    * aside) is not a directive. The lookahead cannot skip past the naming, so a genuine directive
    * that happens to end in a question ("…— fixed in abc123, ok?") still counts.
    */
-  private static final Pattern CLEAR_DIRECTIVE =
-      Pattern.compile("@thrillhousebot\\s+resolved\\b(?!\\s*\\?)", Pattern.CASE_INSENSITIVE);
+  private static Pattern clearDirective(BotIdentity botIdentity) {
+    return CLEAR_DIRECTIVES.computeIfAbsent(
+        botIdentity,
+        identity -> {
+          String mentions =
+              identity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
+          return Pattern.compile(
+              "@(?:" + mentions + ")\\s+resolved\\b(?!\\s*\\?)", Pattern.CASE_INSENSITIVE);
+        });
+  }
 
   /** Fenced code blocks, dropped before a conversation comment is read as a directive. */
   private static final Pattern FENCED_CODE = Pattern.compile("(?s)```.*?```|~~~.*?~~~");
@@ -770,9 +793,16 @@ public class FollowUpAnalyzer {
    */
   private static final Pattern INLINE_CODE = Pattern.compile("`+[^`\\n]*`+");
 
-  /** Note recorded on a finding a maintainer cleared from the PR conversation. */
-  static final String CONVERSATION_CLEARED_NOTE =
-      "Cleared by a maintainer's @thrillhousebot resolved comment on the PR conversation.";
+  /**
+   * Note recorded on a finding a maintainer cleared from the PR conversation. Renders the bot's
+   * configured mention name so the note describes a comment the install's maintainers can actually
+   * have written.
+   */
+  static String conversationClearedNote(BotIdentity botIdentity) {
+    return "Cleared by a maintainer's @"
+        + botIdentity.primaryMention()
+        + " resolved comment on the PR conversation.";
+  }
 
   /**
    * Whether {@code body} <em>uses</em> the clearing directive, as opposed to quoting it. Shared
@@ -785,8 +815,8 @@ public class FollowUpAnalyzer {
    * on it would let the project's own docs close findings. Marking up the directive is the
    * universal way to show rather than issue a command, so it is the line drawn here.
    */
-  static boolean isClearDirective(String body) {
-    return body != null && CLEAR_DIRECTIVE.matcher(directiveText(body)).find();
+  static boolean isClearDirective(String body, BotIdentity botIdentity) {
+    return body != null && clearDirective(botIdentity).matcher(directiveText(body)).find();
   }
 
   /**
@@ -922,7 +952,7 @@ public class FollowUpAnalyzer {
    *   <li>its author may hold write access ({@link #mayHoldWriteAccess}) — the same association
    *       prefilter the review-thread hatch applies, so a drive-by commenter on a public repo
    *       cannot clear a hold;
-   *   <li>it <em>uses</em> the {@link #CLEAR_DIRECTIVE} rather than quoting it ({@link
+   *   <li>it <em>uses</em> the {@link #clearDirective} rather than quoting it ({@link
    *       #isClearDirective}: outside blockquotes, fences and inline code) — an ordinary comment
    *       that merely discusses a finding is engagement, not a decision, and a comment that shows
    *       the directive marked up is documentation, not an instruction;
@@ -951,7 +981,7 @@ public class FollowUpAnalyzer {
     String locator = finding.file() + ":" + finding.line();
     for (var comment : conversationComments) {
       if (!isMaintainerConversationComment(comment, botIdentity)
-          || !isClearDirective(comment.body())) {
+          || !isClearDirective(comment.body(), botIdentity)) {
         continue;
       }
       // The naming may sit in backticks (the shape the summary prints); only the directive token
@@ -1205,7 +1235,7 @@ public class FollowUpAnalyzer {
           && clearedInConversation(previous.get(id - 1), conversationComments, botIdentity)) {
         rewritten.add(
             new ReviewResponse.PreviousFindingStatus(
-                id, STATUS_RESOLVED, CONVERSATION_CLEARED_NOTE));
+                id, STATUS_RESOLVED, conversationClearedNote(botIdentity)));
       } else {
         rewritten.add(status);
       }
