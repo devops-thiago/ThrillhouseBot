@@ -151,9 +151,11 @@ public class FindingVerificationService {
   /**
    * The absence claim worded with a pronoun subject ("Nothing sanitizes the value", "nobody escapes
    * it before render"), so a subject-worded absence registers just like the step-worded one; {@link
-   * #MITIGATION_ASSERTED} excludes the same pronouns from its subject slot so the two never read
-   * one sentence both ways. Kept a separate pattern only because folding the pronouns into {@link
-   * #MITIGATION_ABSENT}'s negator alternation puts that pattern over the regex complexity budget.
+   * #MITIGATION_ASSERTED} excludes the same pronouns from its subject slot, and {@link
+   * #assertsMitigation} drops an auxiliary-order match they precede ("Nothing is sanitized"), so
+   * the two never read one sentence both ways. Kept a separate pattern only because folding the
+   * pronouns into {@link #MITIGATION_ABSENT}'s negator alternation puts that pattern over the regex
+   * complexity budget.
    */
   private static final Pattern MITIGATION_ABSENT_SUBJECT =
       Pattern.compile(
@@ -203,7 +205,11 @@ public class FindingVerificationService {
    * A finding that states the mitigation IS present ("it is escaped on render", "React escapes
    * them"). An absence claim about one layer must not floor the class when the same text says
    * another layer neutralizes the value. Negated forms are excluded, so "is not escaped" and "was
-   * never sanitized" stay absence claims instead of defeating themselves.
+   * never sanitized" stay absence claims instead of defeating themselves. The auxiliary-order
+   * alternative cannot see its own subject, so a pronoun-negated subject ("Nothing is sanitized")
+   * is excluded in {@link #assertsMitigation}, which drops a match directly preceded by a {@link
+   * #NEGATING_SUBJECT} — folding that into this pattern as lookbehinds would push it further over
+   * the regex complexity budget.
    *
    * <p>Left exactly as it stands, {@code {0,1}} and all: its complexity is over the analyzer's
    * budget and cannot come under it without dropping a copula, a verb form or the one-word gap,
@@ -217,6 +223,15 @@ public class FindingVerificationService {
               + "|\\b(?!(no|not|never|nothing|nobody)\\b)\\w+\\s+"
               + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A pronoun subject that negates the clause it opens: a {@link #MITIGATION_ASSERTED} match
+   * starting right after one ("Nothing <i>is sanitized</i> before render") is the absence claim in
+   * auxiliary order, not a mitigation. Anchored to the end of the text before the match, so a
+   * pronoun elsewhere in the finding changes nothing.
+   */
+  private static final Pattern NEGATING_SUBJECT =
+      Pattern.compile("\\b(nothing|nobody)\\s*$", Pattern.CASE_INSENSITIVE);
 
   /**
    * A conditional clause — a hypothesis the finding raises, not a fact it states. Matches from the
@@ -571,7 +586,22 @@ public class FindingVerificationService {
         // stood), while over-firing escalates a non-defect and, at high confidence, blocks the
         // merge on it.
         && !deniesTheSink(asserted)
-        && !MITIGATION_ASSERTED.matcher(asserted).find();
+        && !assertsMitigation(asserted);
+  }
+
+  /**
+   * A {@link #MITIGATION_ASSERTED} hit, unless the match opens with a negating pronoun subject:
+   * "Nothing is sanitized" is the absence claim in auxiliary order, and the pattern's first
+   * alternative starts at the auxiliary so it never sees the subject.
+   */
+  private static boolean assertsMitigation(String asserted) {
+    Matcher asserts = MITIGATION_ASSERTED.matcher(asserted);
+    while (asserts.find()) {
+      if (!NEGATING_SUBJECT.matcher(asserted.substring(0, asserts.start())).find()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean namesInjectionSink(String text) {

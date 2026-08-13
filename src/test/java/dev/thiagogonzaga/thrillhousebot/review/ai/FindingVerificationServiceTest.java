@@ -1156,6 +1156,30 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void floorsAFindingWhoseAbsenceClaimIsWordedAsNothingIsSanitized() {
+    // The auxiliary-order twin of the pronoun-subject absence: MITIGATION_ASSERTED's first
+    // alternative starts at "is" and never sees the negating subject, so "Nothing is sanitized"
+    // read as a mitigation and defeated the very floor the pronoun negators enable.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void doesNotReadDoesNotPreventSqlInjectionAsASinkDenial() {
     // #676 gap 2: SINK_DENIED's one-word gap admitted bridge verbs, so "does not prevent SQL
     // injection" — an assertion of the defect — read as a denial of the sink and suppressed the
