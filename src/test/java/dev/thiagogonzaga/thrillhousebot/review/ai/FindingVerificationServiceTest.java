@@ -1781,6 +1781,81 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenAConjoinedVerbPairAssertsTheMitigation() {
+    // A conjoined verb pair whose first verb is not defense-listed has "and escapes" as its ONLY
+    // subject-verb match, so the coordinator must stay in the subject slot: only a coordinator
+    // that continues a pronoun-negated verb chain is dropped, and "the output" before "and" is
+    // no such chain.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the framework renders the output and escapes it at render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheDefenseActionCarriesAnAdverb() {
+    // The defense-action reading admits one non-negator gap word, mirroring the do-support
+    // adverb gap: "the sanitizer always runs" asserts the defense operates and must defeat the
+    // floor just like the unmodified "the sanitizer runs".
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the sanitizer always runs on render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheMitigationFollowsAnUnbrokenTokenLongerThanTheNegationWindow() {
+    // The negation window opens on a whitespace character; when the whole window is one unbroken
+    // token (a long URL), there is none to open on, the region is empty, and the match counts as
+    // unnegated — the same reading the full-prefix scan gave it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized before innerHTML receives it, see docs#"
+                    + "a".repeat(120)
+                    + ";renderer escapes the value at render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void floorsWhenNoSanitizerRuns() {
     // The defense-action reading must not swallow its own denial: "no sanitizer runs" states the
     // defense does NOT operate, and the negating determiner before the match keeps it an absence
