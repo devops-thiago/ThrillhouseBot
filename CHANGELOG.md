@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Dependencies
+
+- Overrode `nanoid` to `^3.3.17` in the `website/` and `frontend/` npm trees to clear GHSA-2v37-7h3g-55p8, in which a custom generator loops indefinitely when it is called with a size of zero. Every Astro and Starlight package reached the vulnerable 3.3.16 through `postcss`, which asks for `^3.3.16`, so the fixed 3.3.18 satisfies the range already declared and no direct dependency moves (#660)
+
 ## [0.6.0] — 2026-08-13
 
 On-demand commands for improving a PR and generating tests, per-repository review
