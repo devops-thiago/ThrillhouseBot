@@ -459,6 +459,79 @@ class RebuttalContradictionTest {
   }
 
   @Test
+  void shouldStripASingleBacktickSpanWhoseBodyCarriesALongerBacktickRun() {
+    var rebuttal =
+        "Declining — the config literally reads `the pool is a``single-threaded pool` and we"
+            + " accept the risk for this release.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a single-backtick span closes at the next run of exactly one backtick, so a longer"
+            + " interior run is body text and the span must be stripped whole");
+  }
+
+  @Test
+  void shouldStripASpanContainingOneLineEnding() {
+    var rebuttal =
+        "Declining — the doc quotes `the handler is\nsingle-threaded by design` but that is the"
+            + " bot's wording, and the finding is accepted risk for this release.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isEmpty(),
+        "a span crossing one line ending is a valid CommonMark span and must be stripped whole");
+  }
+
+  @Test
+  void shouldTreatABacktickRunSpanningTwoLineEndingsAsLiteralText() {
+    var rebuttal =
+        "See the note` about pooling.\n\nSeparately, the handler is single-threaded so there is"
+            + " no race here, per the runbook`.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isPresent(),
+        "a backtick pair spanning more than one line ending is not stripped, so the assertion"
+            + " after the paragraph break must still be re-checked");
+  }
+
+  @Test
+  void shouldTreatAnUnclosedBacktickRunAsLiteralText() {
+    var rebuttal =
+        "Declining — see the `runbook section on pooling; the handler is single-threaded and"
+            + " there is no race here.";
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "an unclosed backtick run is literal text and must not swallow the assertion after it");
+    assertTrue(
+        contradiction.get().claim().contains("single-threaded"),
+        "the note must quote the assertion, was: " + contradiction.get().claim());
+  }
+
+  @Test
+  void shouldTreatABacktickRunAtTheEndOfTheReplyAsLiteralText() {
+    var rebuttal = "The handler is single-threaded, so there is no race here — see `";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isPresent(),
+        "a backtick run that ends the reply never closes and must stay literal");
+  }
+
+  @Test
+  void shouldNotLetADistantCloserBeyondTheBoundSwallowTheReply() {
+    var rebuttal =
+        "Opening quote `starts here. "
+            + "x".repeat(1200)
+            + " The handler is single-threaded, there is no race.` end of quote.";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isPresent(),
+        "a closer beyond the length bound must not let one backtick swallow the reply; the"
+            + " assertion inside the unswallowed text must still be re-checked");
+  }
+
+  @Test
   void shouldNotBridgeAClaimPhraseAcrossAStrippedSpan() {
     var rebuttal =
         "Accepted risk — per the runbook the deliveries drain one at a`beat`time only in the"

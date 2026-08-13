@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Inline code spans in a decline are stripped delimiter-aware** (#697): the decline re-check now scans backtick runs the CommonMark way — an opening run of N backticks closes at the next run of exactly N — so a span whose body carries a longer backtick run (`` `a``b` ``) or one line ending is stripped whole instead of leaving quoted claim text to reopen a correct decline. An unclosed run stays literal, and a length bound still keeps a stray backtick from swallowing the reply
+
 ## [0.6.1] — 2026-08-13
 
 Fixes for defects found after 0.6.0 shipped, most of them during the audit of
