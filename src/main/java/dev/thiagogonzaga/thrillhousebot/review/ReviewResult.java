@@ -171,6 +171,8 @@ public record ReviewResult(
    * was reached — a different reason with a different fix, so the rendered copy names it separately
    * — and {@code responseCutFileNames} were only partially reviewed because the model's response
    * was cut at its length cap and the findings up to the cut were kept (#500). {@code
+   * callFailedFileNames} were sent but their review call failed all its retries (#655) — a
+   * different reason again, so the rendered copy must not blame the diff budget for them. {@code
    * summaryDegradation} marks the same degradations on the summary call: the findings are complete,
    * but the prose summary either was salvaged from a length-cap-cut response or replaced by the
    * counts-only fallback ({@link SummaryDegradation#RESPONSE_CUT}), or the call was skipped (or
@@ -185,9 +187,31 @@ public record ReviewResult(
       List<String> clippedFileNames,
       List<String> spendCeilingSkippedFileNames,
       List<String> responseCutFileNames,
+      List<String> callFailedFileNames,
       SummaryDegradation summaryDegradation) {
     public static final TruncationDetail EMPTY =
-        new TruncationDetail(List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE);
+        new TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), List.of(), SummaryDegradation.NONE);
+
+    /**
+     * Convenience constructor for details built before the call-failed class existed (and tests):
+     * no review call failed, so no such clause is rendered. The production path ({@code
+     * VerdictBuilder}) passes the real list through the canonical constructor.
+     */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> spendCeilingSkippedFileNames,
+        List<String> responseCutFileNames,
+        SummaryDegradation summaryDegradation) {
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          spendCeilingSkippedFileNames,
+          responseCutFileNames,
+          List.of(),
+          summaryDegradation);
+    }
 
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
@@ -198,6 +222,8 @@ public record ReviewResult(
               : List.copyOf(spendCeilingSkippedFileNames);
       responseCutFileNames =
           responseCutFileNames == null ? List.of() : List.copyOf(responseCutFileNames);
+      callFailedFileNames =
+          callFailedFileNames == null ? List.of() : List.copyOf(callFailedFileNames);
       summaryDegradation =
           summaryDegradation == null ? SummaryDegradation.NONE : summaryDegradation;
     }
@@ -207,7 +233,7 @@ public record ReviewResult(
     }
 
     /**
-     * Whether any per-file coverage gap exists — a name in any of the four file classes. False for
+     * Whether any per-file coverage gap exists — a name in any of the five file classes. False for
      * a detail whose only content is a summary degradation: the findings then cover the whole diff,
      * so surfaces whose framing is per-file partial coverage (the on-demand disclosure, the delta
      * comment) treat such a detail as empty (#516) while the summary-aware surfaces (banner,
@@ -217,7 +243,8 @@ public record ReviewResult(
       return !omittedFileNames.isEmpty()
           || !clippedFileNames.isEmpty()
           || !spendCeilingSkippedFileNames.isEmpty()
-          || !responseCutFileNames.isEmpty();
+          || !responseCutFileNames.isEmpty()
+          || !callFailedFileNames.isEmpty();
     }
   }
 
@@ -513,6 +540,17 @@ public record ReviewResult(
               detail.spendCeilingSkippedFileNames().size(),
               nameList(detail.spendCeilingSkippedFileNames())));
     }
+    // Runtime call failure carries its own reason too (#655): these files fit the diff budget and
+    // were sent — the review call for them failed all its retries — so the budget wording would
+    // misdirect the operator toward a knob that cannot help, and the summary overview already
+    // says the call did not complete; the two surfaces must agree.
+    if (!detail.callFailedFileNames().isEmpty()) {
+      clauses.add(
+          String.format(
+              "%d file(s) were not reviewed because the review call for them did not complete"
+                  + " (%s)",
+              detail.callFailedFileNames().size(), nameList(detail.callFailedFileNames())));
+    }
     // The response-cut class is partial in a third way: the files were sent and reviewed, but the
     // model's answer was cut at its length cap — the findings produced before the cut were kept,
     // so "not reviewed" would understate the coverage and silence the honest caveat.
@@ -522,6 +560,12 @@ public record ReviewResult(
               "%d file(s) were only partially reviewed because the model's response was cut at"
                   + " its length cap (max-output-tokens) — findings up to the cut were kept (%s)",
               detail.responseCutFileNames().size(), nameList(detail.responseCutFileNames())));
+    }
+    // A detail carrying only a summary degradation still owes the reader the legacy omitted-file
+    // count (#659): nothing below the fallback reads the int, so the count vanished whenever the
+    // summary also degraded — the coverage disclosure this class exists to guarantee.
+    if (!detail.hasFileGaps() && omittedFiles > 0) {
+      clauses.add(omittedFilesClause(omittedFiles));
     }
     // A summary degradation affects prose, not findings: the findings are complete, but the
     // summary call either had its response cut at the length cap and was salvaged (or replaced by
@@ -579,6 +623,12 @@ public record ReviewResult(
           String.format(
               "%d file(s) partially reviewed (response cut at the length cap)",
               truncation.responseCutFileNames().size()));
+    }
+    if (!truncation.callFailedFileNames().isEmpty()) {
+      parts.add(
+          String.format(
+              "%d file(s) not reviewed (review call did not complete)",
+              truncation.callFailedFileNames().size()));
     }
     switch (truncation.summaryDegradation()) {
       case RESPONSE_CUT -> parts.add("summary shortened (response cut at the length cap)");

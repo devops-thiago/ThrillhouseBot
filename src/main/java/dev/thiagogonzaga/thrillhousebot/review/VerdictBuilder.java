@@ -124,16 +124,22 @@ public class VerdictBuilder {
     // whose batch response was cut but salvaged (#500) are a further class: partially reviewed,
     // holding approval like the others, disclosed with the response cut as the reason — and a file
     // both clipped and response-cut is disclosed once, under the stronger (output-side) statement.
+    // Files a failed review call left uncovered are pulled out the same way (#655): they gate
+    // approval through the omitted set, but the disclosure says the call did not complete rather
+    // than blaming the diff budget.
     var ceilingSkipped = plan.spendCeilingSkippedFiles();
+    var callFailed = withoutNames(plan.runtimeUncoveredFiles(), ceilingSkipped);
     var responseCut = plan.responseCutFiles();
     var clipped = withoutNames(plan.effectiveClippedFiles(), responseCut);
     var truncation =
         plan.budgeted()
             ? new ReviewResult.TruncationDetail(
-                withoutNames(plan.effectiveOmittedFiles(), ceilingSkipped),
+                withoutNames(
+                    withoutNames(plan.effectiveOmittedFiles(), ceilingSkipped), callFailed),
                 clipped,
                 ceilingSkipped,
                 responseCut,
+                callFailed,
                 plan.summaryDegradation())
             : ReviewResult.TruncationDetail.EMPTY;
     var omitted =
@@ -152,6 +158,7 @@ public class VerdictBuilder {
     // clipped and response-cut files keep theirs: those were partially reviewed.
     var omittedNames = new HashSet<>(truncation.omittedFileNames());
     omittedNames.addAll(truncation.spendCeilingSkippedFileNames());
+    omittedNames.addAll(truncation.callFailedFileNames());
     var changedFiles =
         toChangedFiles(
             overviewFiles.stream()
