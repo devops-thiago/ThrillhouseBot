@@ -2974,6 +2974,18 @@ class FollowUpAnalyzerTest {
             "a zero-width no-break space inside the range spelling must not clear it",
             "@thrillhousebot resolved src/A.java:1\uFEFF-3 — SQL injection",
             false),
+        // Cf is classified by code point: a supplementary-plane format character (U+E0001) is a
+        // surrogate pair, and a per-char category test reports neither half as FORMAT.
+        arguments(
+            "an astral format character inside the range spelling must not clear it",
+            "@thrillhousebot resolved src/A.java:1\uDB40\uDC01-3 — SQL injection",
+            false),
+        // The same artifact one position over: a format character inside the range's spacing must
+        // be stepped over, or the trailing-digit test fails and the range reads as a whole locator.
+        arguments(
+            "a zero-width space between the dash and the end line must not clear it",
+            "@thrillhousebot resolved src/A.java:1 -\u200B3 — SQL injection",
+            false),
         // The accepted cost of requiring a digit: a title opening with one reads as a range and
         // under-clears, which holds the finding a round rather than dropping it.
         arguments(

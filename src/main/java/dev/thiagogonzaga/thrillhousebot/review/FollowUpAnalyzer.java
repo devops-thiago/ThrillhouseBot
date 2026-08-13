@@ -871,7 +871,7 @@ public class FollowUpAnalyzer {
       while (after < text.length() && text.charAt(after) >= '0' && text.charAt(after) <= '9') {
         after++;
       }
-      if (after >= text.length() || !continuesLocator(text.charAt(after))) {
+      if (after >= text.length() || !continuesLocator(text, after)) {
         if (after < text.length() && startsSpacedRange(text, after)) {
           strongest = LocatorNaming.AMBIGUOUS_RANGE;
         } else {
@@ -997,7 +997,7 @@ public class FollowUpAnalyzer {
       if (after >= body.length()) {
         return true;
       }
-      if (!continuesLocator(body.charAt(after))
+      if (!continuesLocator(body, after)
           && (!startsSpacedRange(body, after) || separatorLeadsOwnContent(body, after, anchor))) {
         return true;
       }
@@ -1078,15 +1078,28 @@ public class FollowUpAnalyzer {
   private static int skipSpacing(String body, int from) {
     var at = from;
     var limit = Math.min(body.length(), from + MAX_RANGE_SPACING);
-    while (at < limit && isHorizontalSpace(body.charAt(at))) {
-      at++;
+    while (at < limit) {
+      var c = body.codePointAt(at);
+      if (!isHorizontalSpace(c)) {
+        break;
+      }
+      at += Character.charCount(c);
     }
     return at;
   }
 
-  /** Whether {@code c} spaces text apart on one line. {@code isSpaceChar} misses only the tab. */
-  private static boolean isHorizontalSpace(char c) {
-    return Character.isSpaceChar(c) || c == '\t';
+  /**
+   * Whether code point {@code c} spaces text apart on one line. {@code isSpaceChar} misses only the
+   * tab.
+   *
+   * <p>Format characters ({@code Cf}) count as spacing here, the same category {@link
+   * #continuesLocator} counts as a continuation: an invisible character inside a range's spacing
+   * ({@code :1 -<U+200B>3}) otherwise fails the trailing-digit test, the range stops being
+   * recognized, and {@code :1} reads as a whole locator — the over-clear direction. Stepping over
+   * it keeps the range reading, which at worst under-clears.
+   */
+  private static boolean isHorizontalSpace(int c) {
+    return Character.isSpaceChar(c) || c == '\t' || Character.getType(c) == Character.FORMAT;
   }
 
   /**
@@ -1106,8 +1119,14 @@ public class FollowUpAnalyzer {
    * what some editors insert at a hyphenation point, and the zero-width characters arrive by
    * copy-paste from rendered pages; reading them as continuations errs safe — the locator stops
    * being whole and the finding is held.
+   *
+   * <p>Classified by code point, not UTF-16 char: a supplementary-plane {@code Cf} such as U+E0001
+   * arrives as a surrogate pair, and {@code Character.getType(char)} on either half reports a
+   * surrogate rather than {@code FORMAT}, which would let an astral format character end the token
+   * and over-clear the same way.
    */
-  private static boolean continuesLocator(char c) {
+  private static boolean continuesLocator(String body, int at) {
+    var c = body.codePointAt(at);
     return Character.isLetterOrDigit(c)
         || c == '_'
         || isDash(c)
@@ -1124,7 +1143,7 @@ public class FollowUpAnalyzer {
    * keyboard is not a rarer input than one carrying an en dash from smart punctuation. Both places
    * that ask this question call here, so neither can drift into accepting a dash the other rejects.
    */
-  private static boolean isDash(char c) {
+  private static boolean isDash(int c) {
     return Character.getType(c) == Character.DASH_PUNCTUATION || c == '−';
   }
 
