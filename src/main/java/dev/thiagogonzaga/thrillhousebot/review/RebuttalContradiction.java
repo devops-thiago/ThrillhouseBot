@@ -312,13 +312,16 @@ final class RebuttalContradiction {
     return -1;
   }
 
-  /** First {@code //} at or after {@code from} that is not a URL scheme's, or {@code -1}. */
+  /**
+   * First {@code //} at or after {@code from} that is not a URL scheme's, or {@code -1}. Only ever
+   * called with {@code from} inside a literal, so the character before {@code i} always exists.
+   */
   private static int firstDoubleSlash(String line, int from) {
     var i = from;
     while (i < line.length()) {
       if (!isDoubleSlash(line, i)) {
         i++;
-      } else if (i > 0 && line.charAt(i - 1) == ':') {
+      } else if (line.charAt(i - 1) == ':') {
         i += 2;
       } else {
         return i;
