@@ -733,7 +733,7 @@ public class FindingVerificationService {
     Matcher get = MITIGATION_ASSERTED_GET.matcher(asserted);
     Matcher subject = MITIGATION_ASSERTED_SUBJECT.matcher(asserted);
     var from = 0;
-    while (from <= asserted.length()) {
+    while (true) {
       Matcher leftmost = null;
       for (Matcher wording : new Matcher[] {be, get, subject}) {
         if (wording.find(from) && (leftmost == null || wording.start() < leftmost.start())) {
@@ -746,9 +746,9 @@ public class FindingVerificationService {
       if (!NEGATING_SUBJECT.matcher(asserted.substring(0, leftmost.start())).find()) {
         return true;
       }
+      // No wording matches an empty string, so the scan always advances.
       from = leftmost.end();
     }
-    return false;
   }
 
   private static boolean hasUnnegatedMatch(Pattern mitigation, String asserted) {

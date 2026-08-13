@@ -319,6 +319,12 @@ class GitHubApiErrorTest {
       assertEquals("*** and more", body);
     }
 
+    /** A body that is nothing but a token prefix shape, masked to its very last character. */
+    @Test
+    void masksATokenStandingAlone() {
+      assertEquals("only ***", loggedBody(outbound(401, "only ghp_0123456789abcd")));
+    }
+
     @Test
     void capsAnOverLongBodySoOneFailureCannotFloodTheLog() {
       var body = loggedBody(outbound(500, "x".repeat(4_000)));
