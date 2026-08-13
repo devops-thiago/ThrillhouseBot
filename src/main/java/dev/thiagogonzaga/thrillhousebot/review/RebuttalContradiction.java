@@ -232,9 +232,15 @@ final class RebuttalContradiction {
    * code that does dispatch concurrently — the false-negative direction this class exists to close.
    *
    * <p>Quote tracking is deliberately shallow: it toggles on an unescaped {@code "}, {@code '} or
-   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to. A
-   * quote that never closes costs only a kept trailing comment, which feeds the scan text of the
-   * kind it already sees on every line carrying no {@code //} at all.
+   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to.
+   *
+   * <p>An opener with no closer on the line is therefore assumed to have been something else — a
+   * Rust lifetime ({@code &'a ctx}), an apostrophe in prose — and the scan falls back to the first
+   * {@code //} that literal swallowed. Without that fallback a single stray apostrophe kept the
+   * whole trailing comment as scan text, and a dispatch named only inside a comment could overrule
+   * a decline. Comment text is precisely what this method exists to remove, so keeping it is not a
+   * mild degradation: it is the false-positive direction, and the plain first-{@code //} cut this
+   * carve-out replaced did not have it.
    *
    * <p>The one escaping rule it does keep is where the escape applies: inside a {@code "} or {@code
    * '} literal, never inside a backtick one and never outside a literal at all. A Go raw string is
@@ -254,6 +260,7 @@ final class RebuttalContradiction {
    */
   private static String stripLineComment(String line) {
     var quote = '\0';
+    var slashInQuote = -1;
     for (var i = 0; i < line.length(); i++) {
       var c = line.charAt(i);
       if (quote != '\0') {
@@ -261,6 +268,17 @@ final class RebuttalContradiction {
           i++;
         } else if (c == quote) {
           quote = '\0';
+          // The literal closed, so anything it held was quoted text after all.
+          slashInQuote = -1;
+        } else if (c == '/' && i + 1 < line.length() && line.charAt(i + 1) == '/') {
+          // No i > 0 guard: reaching here means an opener was seen at some earlier index.
+          if (line.charAt(i - 1) == ':') {
+            i++;
+            continue;
+          }
+          if (slashInQuote < 0) {
+            slashInQuote = i;
+          }
         }
       } else if (c == '"' || c == '\'' || c == '`') {
         quote = c;
@@ -273,7 +291,8 @@ final class RebuttalContradiction {
         return line.substring(0, i);
       }
     }
-    return line;
+    // An unclosed literal means the opener was not one — fall back to the first // it swallowed.
+    return quote == '\0' || slashInQuote < 0 ? line : line.substring(0, slashInQuote);
   }
 
   /**

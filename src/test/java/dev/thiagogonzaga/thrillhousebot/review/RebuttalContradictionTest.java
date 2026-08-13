@@ -243,11 +243,36 @@ class RebuttalContradictionTest {
         "+    path := `C:\\`; // executor.submit(() -> run(ctx));",
         // The same shape with no literal involved at all.
         "+    var n = count; // executor.submit(() -> run(ctx));",
+        // An opener with no closer is not a literal: a Rust lifetime, and an apostrophe in prose.
+        "+    let f = handler(&'a ctx); // executor.submit(() -> run(ctx));",
+        "+    var n = count; // don't let this executor.submit(task) come back",
+        // A closed literal earlier on the line must not consume the fallback.
+        "+    var a = \"//x\"; let f = &'a ctx; // executor.submit(() -> run(ctx));",
+        // A file URL keeps its three slashes rather than reading as a comment.
+        "+    var u = \"file:///etc/hosts\"; // executor.submit(() -> run(ctx));",
+        // The scheme carve-out still applies inside the unclosed literal, so the fallback lands on
+        // the real comment rather than on the URL's slashes.
+        "+    let u = &'a; see http://example.com // executor.submit(() -> run(ctx));",
       })
   void shouldNotReadACommentAsDispatchEvidenceAfterABackslash(String codeLine) {
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isEmpty(),
         "a dispatch named only in a comment is not live code, so the decline stands: " + codeLine);
+  }
+
+  /** The fallback for an unclosed literal must cut at the comment, not before the code. */
+  @Test
+  void shouldKeepDispatchBeforeACommentOnALineWithAnUnclosedQuote() {
+    var codeLine = "+    let f = &'a ctx; executor.submit(() -> run(ctx)); // one per request\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the dispatch is live code before the comment, so it still refutes the decline");
+
+    var loneSlash = "+    let f = &'a ctx; executor.submit(() -> run(ctx)); /\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", loneSlash).isPresent(),
+        "a single trailing slash opens no comment, so there is nothing to fall back to");
   }
 
   static Stream<Arguments> commentScanEdgeCases() {
