@@ -737,27 +737,9 @@ public class FindingVerificationService {
     Matcher negation = NEGATING_SUBJECT.matcher(asserted);
     var starts = new int[] {-1, -1, -1};
     var ends = new int[wordings.length];
-    var exhausted = new boolean[wordings.length];
     var from = 0;
     while (true) {
-      var leftmost = -1;
-      for (var i = 0; i < wordings.length; i++) {
-        if (!exhausted[i] && starts[i] < from) {
-          // Only a consumed or overtaken candidate is re-found; one at or past `from` is still
-          // that wording's next match, since the find that produced it proved nothing of that
-          // wording starts before it. This keeps the walk a single pass per wording instead of
-          // rescanning all three from every resume point.
-          if (wordings[i].find(from)) {
-            starts[i] = wordings[i].start();
-            ends[i] = wordings[i].end();
-          } else {
-            exhausted[i] = true;
-          }
-        }
-        if (!exhausted[i] && (leftmost == -1 || starts[i] < starts[leftmost])) {
-          leftmost = i;
-        }
-      }
+      var leftmost = leftmostWording(wordings, starts, ends, from);
       if (leftmost == -1) {
         return false;
       }
@@ -770,6 +752,37 @@ public class FindingVerificationService {
       from = ends[leftmost];
       starts[leftmost] = -1;
     }
+  }
+
+  /** A wording with no further matches; loses every comparison for the leftmost slot. */
+  private static final int NO_MORE_MATCHES = Integer.MAX_VALUE;
+
+  /**
+   * The index of the wording holding the leftmost live candidate at or past {@code from}, or -1
+   * when every wording is out of matches; a position tie keeps the lowest index, the patterns'
+   * declared order. Only a consumed or overtaken candidate is re-found — one at or past {@code
+   * from} is still that wording's next match, since the find that produced it proved nothing of
+   * that wording starts before it — so the walk stays a single pass per wording instead of
+   * rescanning all three from every resume point.
+   */
+  private static int leftmostWording(Matcher[] wordings, int[] starts, int[] ends, int from) {
+    var leftmost = -1;
+    var best = NO_MORE_MATCHES;
+    for (var i = 0; i < wordings.length; i++) {
+      if (starts[i] < from) {
+        if (wordings[i].find(from)) {
+          starts[i] = wordings[i].start();
+          ends[i] = wordings[i].end();
+        } else {
+          starts[i] = NO_MORE_MATCHES;
+        }
+      }
+      if (starts[i] < best) {
+        best = starts[i];
+        leftmost = i;
+      }
+    }
+    return leftmost;
   }
 
   private static boolean hasUnnegatedMatch(Pattern mitigation, String asserted) {
