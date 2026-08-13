@@ -1255,6 +1255,52 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenTheDefenseNounObjectCarriesAModifier() {
+    // The defense-noun rejection must see through a modifier: "Nothing escapes heavy validation"
+    // still says every value IS validated.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes heavy validation before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheObjectNamesTheDefenseTool() {
+    // Tool-named objects belong to the same mitigated reading: "Nothing escapes the sanitizer"
+    // says the sanitizer catches everything.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes the sanitizer before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void floorsWhenNothingEscapesTheValueItself() {
     // The other reading of the same shape: "nothing escapes the value" is the absence claim, and
     // the defense-noun rejection must not swallow it.

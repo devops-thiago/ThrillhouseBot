@@ -156,15 +156,18 @@ public class FindingVerificationService {
    * the two never read one sentence both ways. A defense noun as the verb's direct object flips the
    * sentence's meaning — "Nothing escapes validation" says every value IS validated — so the verb
    * is held to its finite and participle forms (the noun could otherwise re-match as the verb
-   * through the word gap) and the trailing lookahead rejects a defense-noun object, keeping the
-   * over-fire direction closed (#594) while "nothing escapes the value" stays an absence claim.
-   * Kept a separate pattern only because folding the pronouns into {@link #MITIGATION_ABSENT}'s
-   * negator alternation puts that pattern over the regex complexity budget.
+   * through the word gap) and the trailing lookahead rejects a defense-stemmed word within two
+   * words of the verb, so a modified or tool-named object ("nothing escapes heavy validation",
+   * "nothing escapes the sanitizer") is rejected too, keeping the over-fire direction closed (#594)
+   * while "nothing escapes the value" stays an absence claim — a defense noun further than two
+   * words out ("nothing escapes the value before validation") no longer flips the reading. Kept a
+   * separate pattern only because folding the pronouns into {@link #MITIGATION_ABSENT}'s negator
+   * alternation puts that pattern over the regex complexity budget.
    */
   private static final Pattern MITIGATION_ABSENT_SUBJECT =
       Pattern.compile(
           "\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}(sanitiz|escap|validat|parameteriz|encod)"
-              + "(es|ed|ing)\\b(?!\\s+(validation|sanitization|escaping|encoding|filtering)\\b)",
+              + "(es|ed|ing)\\b(?!\\s+(\\w+\\s+){0,2}(sanitiz|escap|validat|encod|filter))",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -299,10 +302,15 @@ public class FindingVerificationService {
    * else ("If you follow the render path, React escapes the value") is swallowed with the protasis,
    * so its mitigation no longer defeats the floor — and so is a comma-spliced consequent whose
    * coordinator itself trails a comma ("this would be moot, however, React escapes it"), since a
-   * regex cannot tell that parenthetical from the one inside the protasis. Commas cannot serve both
-   * roles, and this is the safer half — the finding must ALSO name a sink and ALSO claim nothing
-   * sanitizes it before the floor can fire at all, and the floor only lifts risk, leaving
-   * confidence and every other signal where the model put them.
+   * regex cannot tell that parenthetical from the one inside the protasis. In the other direction,
+   * a coordinator word used adverbially without a following comma ("If, however unlikely, ..." or
+   * "If, but only if, ...") still ends the span early and can leave a protasis verb read as
+   * asserted: recognizing comma-delimited parentheticals in general needs pairing the delimiters,
+   * which a bounded regex cannot do, and that phrasing is rare in review findings — accepted as
+   * residual under-fire, the safe direction. Commas cannot serve both roles, and this is the safer
+   * half — the finding must ALSO name a sink and ALSO claim nothing sanitizes it before the floor
+   * can fire at all, and the floor only lifts risk, leaving confidence and every other signal where
+   * the model put them.
    *
    * <p>Plain "should" is NOT a marker. Only inverted "Should the API sanitize ..." is a hypothesis,
    * and its bare infinitive matches none of {@link #MITIGATION_ASSERTED}'s verb forms, so listing
