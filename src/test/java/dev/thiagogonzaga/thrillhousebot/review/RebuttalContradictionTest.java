@@ -160,6 +160,10 @@ class RebuttalContradictionTest {
         "+    var pool = Executors.newFixedThreadPool( 1 );",
         "+    var pool = Executors.newFixedThreadPool( 1 , factory);",
         "+    var pool = Executors.newFixedThreadPool(\t1\t);",
+        // A block comment naming the count is the natural place to explain a pool of one.
+        "+    var pool = Executors.newFixedThreadPool(1 /* one worker */);",
+        "+    var pool = Executors.newFixedThreadPool(/* only one */ 1);",
+        "+    var pool = Executors.newFixedThreadPool(1 /* worker */, factory);",
       })
   void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(
@@ -177,6 +181,9 @@ class RebuttalContradictionTest {
         "+    var pool = Executors.newFixedThreadPool( 10 );",
         "+    var pool = Executors.newFixedThreadPool(8, factory);",
         "+    var pool = Executors.newFixedThreadPool(workers);",
+        // A comment does not make a count knowable, and the class cannot evaluate an expression.
+        "+    var pool = Executors.newFixedThreadPool(2 /* two */);",
+        "+    var pool = Executors.newFixedThreadPool(1 + 0);",
       })
   void shouldTreatAMultiThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(

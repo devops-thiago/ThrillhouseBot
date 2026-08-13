@@ -108,13 +108,23 @@ final class RebuttalContradiction {
           Pattern.compile(
               "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newScheduledThreadPool"
                   + "|newWorkStealingPool"),
-          // A fixed pool of more than one thread. The count is excluded when it is 1 followed by
-          // the end of the argument — a closing paren, or the comma of the ThreadFactory overload,
-          // which is the standard way to name a single worker. Requiring the paren alone let
-          // newFixedThreadPool(1, factory) read as concurrent dispatch, which overrules a decline
-          // that was right. The leading whitespace is possessive: a greedy run would backtrack to
-          // zero width and re-match past its own lookahead, so newFixedThreadPool( 1 ) escaped too.
-          Pattern.compile("newFixedThreadPool\\s{0,16}\\(\\s{0,16}+(?!1\\s{0,16}(?:,|\\)))"),
+          // A fixed pool of more than one thread. A literal count of 1 is excluded, whatever space
+          // or block comment surrounds it, up to the end of the argument — a closing paren, or the
+          // comma of the ThreadFactory overload, which is the standard way to name a single worker.
+          // Every spelling this misses reports a serial pool as concurrent dispatch and overrules a
+          // decline that was right, so the exclusion is written to be hard to spell around: the
+          // paren alone let newFixedThreadPool(1, factory) through, and tolerating only whitespace
+          // let a /* one worker */ next to the count through.
+          //
+          // The skip before the count is possessive because a greedy run backtracks to zero width
+          // and re-matches past its own lookahead, which let newFixedThreadPool( 1 ) escape.
+          //
+          // A count that is not a literal 1 — a variable, or an expression like 1 + 0 — reads as
+          // concurrent. That is deliberate and matches newFixedThreadPool(workers): the class may
+          // only overrule a decline on what the code plainly shows, and it cannot evaluate.
+          Pattern.compile(
+              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*.{0,64}?\\*/){0,16}+"
+                  + "(?!1(?:\\s|/\\*.{0,64}?\\*/){0,16}(?:,|\\)))"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future
