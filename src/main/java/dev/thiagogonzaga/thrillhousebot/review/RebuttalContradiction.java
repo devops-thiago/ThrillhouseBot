@@ -427,9 +427,11 @@ final class RebuttalContradiction {
    * joins lines with {@code \n}, never a space — and a newline appears inside no claim pattern
    * while being a sentence boundary for the quoted note, so stripping can only remove matches.
    *
-   * <p>Runs of three or more backticks are handled like any other length; {@link #FENCED_BLOCK} has
-   * already consumed every paired fence, so what reaches this scan is an inline triple-backtick
-   * remnant or an unpaired fence, and both resolve correctly (span or literal).
+   * <p>Runs of three or more backticks are handled like any other length. {@link #FENCED_BLOCK}
+   * pairs triple-backtick runs only within its 10000-character bound, and the blockquote filter can
+   * re-join runs that were farther apart in the raw reply, so a paired triple run can reach this
+   * scan and be closed here even though CommonMark would read the region as a fenced block — an
+   * over-strip that only removes claim matches.
    */
   private static String stripInlineSpans(String text) {
     var out = new StringBuilder(text.length());
