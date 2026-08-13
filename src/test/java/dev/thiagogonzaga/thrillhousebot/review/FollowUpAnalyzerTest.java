@@ -3160,7 +3160,7 @@ class FollowUpAnalyzerTest {
     assertEquals(
         List.of("resolved", "unresolved"),
         rewritten.stream().map(ReviewResponse.PreviousFindingStatus::status).toList());
-    assertEquals(FollowUpAnalyzer.CONVERSATION_CLEARED_NOTE, rewritten.get(0).note());
+    assertEquals(FollowUpAnalyzer.conversationClearedNote(BOT_ID), rewritten.get(0).note());
     assertEquals("still present", rewritten.get(1).note(), "an unnamed finding keeps its note");
   }
 
@@ -3220,22 +3220,83 @@ class FollowUpAnalyzerTest {
 
   @Test
   void isClearDirectiveShouldRecognizeOnlyAnUnquotedResolvedInstruction() {
-    assertTrue(FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved src/A.java:10 — title"));
     assertTrue(
-        FollowUpAnalyzer.isClearDirective("thanks!\n\n@ThrillhouseBot   RESOLVED all of it"));
-    assertFalse(FollowUpAnalyzer.isClearDirective(null));
-    assertFalse(FollowUpAnalyzer.isClearDirective("@thrillhousebot why is this flagged?"));
+        FollowUpAnalyzer.isClearDirective(
+            "@thrillhousebot resolved src/A.java:10 — title", BOT_ID));
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective(
+            "thanks!\n\n@ThrillhouseBot   RESOLVED all of it", BOT_ID));
+    assertFalse(FollowUpAnalyzer.isClearDirective(null, BOT_ID));
+    assertFalse(FollowUpAnalyzer.isClearDirective("@thrillhousebot why is this flagged?", BOT_ID));
     assertFalse(
-        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolve"),
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolve", BOT_ID),
         "the thread-resolving command must not be read as a finding clear");
-    assertFalse(FollowUpAnalyzer.isClearDirective("> @thrillhousebot resolved"));
-    assertFalse(FollowUpAnalyzer.isClearDirective("```\n@thrillhousebot resolved\n```"));
+    assertFalse(FollowUpAnalyzer.isClearDirective("> @thrillhousebot resolved", BOT_ID));
+    assertFalse(FollowUpAnalyzer.isClearDirective("```\n@thrillhousebot resolved\n```", BOT_ID));
     assertFalse(
-        FollowUpAnalyzer.isClearDirective("write `@thrillhousebot resolved src/A.java:10 — title`"),
+        FollowUpAnalyzer.isClearDirective(
+            "write `@thrillhousebot resolved src/A.java:10 — title`", BOT_ID),
         "a marked-up directive is documentation, not an instruction");
     assertTrue(
-        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved `src/A.java:10` — title"),
+        FollowUpAnalyzer.isClearDirective(
+            "@thrillhousebot resolved `src/A.java:10` — title", BOT_ID),
         "a backticked locator is how the summary prints it and must still be a directive");
+  }
+
+  /**
+   * A GitHub mention's {@code @} opens the comment or follows a non-word character; an email
+   * address's local part never mentions the bot and must not clear anything. Whitespace between the
+   * mention and the word admits Unicode space separators (pasted text carries non-breaking spaces),
+   * while the interrogative guard also skips format characters, so no invisible character turns a
+   * question into a clearing order.
+   */
+  @Test
+  void isClearDirectiveShouldAnchorTheMentionAndReadUnicodeWhitespace() {
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective(
+            "root@thrillhousebot resolved src/A.java:10 — title", BOT_ID),
+        "an email local part is not a mention");
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective(
+            "(@thrillhousebot resolved src/A.java:10 — title)", BOT_ID),
+        "punctuation before the @ is how a parenthesized mention is written");
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective(
+            "@thrillhousebot\u00A0resolved src/A.java:10 — title", BOT_ID),
+        "a pasted non-breaking space still separates the mention from the word");
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved\u00A0? src/A.java:10", BOT_ID),
+        "a non-breaking space must not smuggle a question past the interrogative guard");
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved\u200B? src/A.java:10", BOT_ID),
+        "a zero-width character must not smuggle a question past the interrogative guard");
+  }
+
+  /**
+   * The directive is built from the configured bot logins, not a hardcoded slug, so an install
+   * whose GitHub App answers to another name still has a working clear directive (#679). The
+   * interrogative guard and the case-insensitivity travel with the configured name, and the default
+   * slug is a stranger's mention on such an install — it must clear nothing there.
+   */
+  @Test
+  void isClearDirectiveShouldMatchTheConfiguredBotLoginNotAHardcodedSlug() {
+    var custom = BotIdentity.of("my-review-bot[bot]");
+
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective("@my-review-bot resolved src/A.java:10 — title", custom));
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective("@My-Review-Bot RESOLVED src/A.java:10 — title", custom),
+        "case-insensitivity must hold for a configured login too");
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@my-review-bot resolved? src/A.java:10 — title", custom),
+        "the interrogative guard travels with the configured name");
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective("@thrillhousebot resolved src/A.java:10 — title", custom),
+        "the default slug is not this install's bot");
+    assertTrue(
+        FollowUpAnalyzer.isClearDirective(
+            "@thrillhouse-bot resolved src/A.java:10 — title", BotIdentity.from(null)),
+        "the shipped alternate slug is a first-class mention under the default identity");
   }
 
   /**

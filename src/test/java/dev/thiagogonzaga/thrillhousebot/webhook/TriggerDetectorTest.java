@@ -114,6 +114,35 @@ class TriggerDetectorTest {
     assertTrue(detector.containsBotMention("line one\n@thrillhousebot wdyt"));
   }
 
+  /**
+   * The mention gate fronts the conversational-reply path, including the {@code resolved} clear
+   * directive's acknowledgements, so it must answer to the configured bot login — a hardcoded slug
+   * would leave a custom-login install's maintainers unable to address their bot at all (#679).
+   */
+  @Test
+  void shouldDetectMentionOfTheConfiguredBotLoginNotAHardcodedSlug() {
+    var custom = new TriggerDetector(List.of("my-review-bot[bot]"));
+
+    assertTrue(custom.containsBotMention("@my-review-bot resolved src/A.java:10 — title"));
+    assertTrue(custom.containsBotMention("hey @My-Review-Bot what about this?"));
+    assertFalse(
+        custom.containsBotMention("@thrillhousebot resolved src/A.java:10 — title"),
+        "the default slug is not this install's bot");
+    assertTrue(
+        detector.containsBotMention("@thrillhouse-bot wdyt"),
+        "the shipped alternate slug is a first-class mention under the default identity");
+  }
+
+  /** An email address's local part never mentions the bot; a real mention's {@code @} does. */
+  @Test
+  void shouldNotDetectMentionInsideAnEmailAddress() {
+    var custom = new TriggerDetector(List.of("my-review-bot[bot]"));
+
+    assertFalse(custom.containsBotMention("email foo@my-review-bot.example"));
+    assertFalse(detector.containsBotMention("mail root@thrillhousebot please"));
+    assertTrue(detector.containsBotMention("(@thrillhousebot wdyt?)"));
+  }
+
   @Test
   void shouldNotDetectMentionWithoutBot() {
     assertFalse(detector.containsBotMention("looks good"));
