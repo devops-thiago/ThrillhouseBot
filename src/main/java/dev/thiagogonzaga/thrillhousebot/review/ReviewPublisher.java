@@ -754,9 +754,10 @@ public class ReviewPublisher {
    * (e.g. stale line numbers after a force-push), and to an issue comment carrying the same body
    * when GitHub definitely refused the review post (#704) — a rejected summary-only review used to
    * discard the whole generation behind a "review could not be completed" notice. Only a
-   * response-carrying 4xx counts as a refusal; an ambiguous failure (timeout, connection reset,
-   * 5xx) may have landed the review, so it throws {@link ReviewPostException} instead of risking a
-   * duplicate — as does a refusal whose comment fallback fails too.
+   * response-carrying 4xx counts as a refusal, and every attempt made here must have been one; an
+   * ambiguous failure (timeout, connection reset, 5xx) on any attempt may have landed that
+   * attempt's review, so it throws {@link ReviewPostException} instead of risking a duplicate — as
+   * does a refusal whose comment fallback fails too.
    */
   void createReviewWithFallback(
       String auth,
@@ -765,12 +766,14 @@ public class ReviewPublisher {
       int prNumber,
       GitHubReviewClient.CreateReviewRequest req) {
     RuntimeException rejection;
+    boolean anyAmbiguous;
     try {
       reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, req);
       return;
     } catch (RuntimeException e) {
       logReviewRejection(e, owner, repo, prNumber);
       rejection = e;
+      anyAmbiguous = !isRefusal(e);
     }
     // CreateReviewRequest's compact constructor normalizes a null comments list to List.of().
     if (!req.comments().isEmpty()) {
@@ -789,14 +792,15 @@ public class ReviewPublisher {
       } catch (RuntimeException retryFailure) {
         logReviewRejection(retryFailure, owner, repo, prNumber);
         rejection = retryFailure;
+        anyAmbiguous |= !isRefusal(retryFailure);
       }
     }
-    // The comment fallback fires only on a definite refusal — a response-carrying 4xx, where
-    // GitHub rejected the request and the review provably does not exist. An ambiguous failure (a
-    // timeout, a connection reset, a 5xx) is one where the review may well have landed, so posting
-    // the body again would duplicate it while asserting a refusal the code cannot support; those
-    // propagate as before.
-    if (!isRefusal(rejection)) {
+    // The comment fallback fires only when EVERY attempt was a definite refusal — a
+    // response-carrying 4xx, where GitHub rejected the request and the review provably does not
+    // exist. An ambiguous failure (a timeout, a connection reset, a 5xx) on any attempt is one
+    // where that attempt's review may well have landed, so posting the body again would duplicate
+    // it while asserting a refusal the code cannot support; those propagate as before.
+    if (anyAmbiguous) {
       throw new ReviewPostException(
           "GitHub review rejected for " + owner + "/" + repo + " #" + prNumber, rejection);
     }

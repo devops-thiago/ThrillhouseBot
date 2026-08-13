@@ -3221,6 +3221,44 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldNotPostFallbackCommentWhenFirstAttemptWasAmbiguousAndRetryWasRefused() {
+      // Mixed sequence: the comment-carrying attempt fails ambiguously (that review may have
+      // landed), then the retry without comments draws a confirmed 422. The last failure alone
+      // looks like a refusal, but the run is not — falling back would risk duplicating the first
+      // attempt's landed review.
+      var comment =
+          new GitHubReviewClient.ReviewComment(
+              "src/Main.java", 10, null, null, "RIGHT", "Fix this");
+      var req =
+          new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of(comment));
+      doThrow(new RuntimeException("read timeout"))
+          .doThrow(refusal422())
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      verify(reviewClient, times(2))
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      // The reverse order — refused first, ambiguous retry — must equally withhold the fallback.
+      doThrow(refusal422())
+          .doThrow(new RuntimeException("connection reset"))
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
     void shouldThrowReviewPostExceptionWhenCommentFallbackFailsToo() {
       var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
 
