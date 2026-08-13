@@ -3044,6 +3044,88 @@ class FollowUpAnalyzerTest {
     assertEquals(cleared ? List.of() : List.of(1), heldIds(held), name);
   }
 
+  /** One low finding at src/A.java:1 whose title itself opens with a digit. */
+  private static final String DIGIT_TITLED_FINDING_AT_LINE_ONE =
+      """
+      {"findings": [
+        {"risk": "low", "file": "src/A.java", "line": 1,
+         "title": "2 call sites of this SQL injection", "description": "raw query"}
+      ]}
+      """;
+
+  private List<ReviewResult.PreviousFindingStatus> digitTitledBackstop(String body) {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(1)));
+    return analyzer.unreportedUnresolvedStatusesFromParsed(
+        analyzer.parsePreviousResponses(List.of(DIGIT_TITLED_FINDING_AT_LINE_ONE)),
+        List.of(),
+        List.of(),
+        List.of(maintainerSays(body)),
+        resolver,
+        BOT_ID,
+        Map.of());
+  }
+
+  @Test
+  void aSeparatorLeadingTheFindingsOwnDigitTitleIsANamingNotARange() {
+    // The exact form the summary prints: path:line — <title>, with a title opening with a digit.
+    // The spaced-range guard alone reads it as a range; the clearing path holds the finding set,
+    // so the title after the separator resolves the ambiguity toward the naming (#653).
+    var held =
+        digitTitledBackstop(
+            "@thrillhousebot resolved src/A.java:1 — 2 call sites of this SQL injection");
+
+    assertEquals(List.of(), heldIds(held), "the printed form must clear the finding it names");
+  }
+
+  @Test
+  void aRangeWhoseEndIsNotTheTitleStaysARangeEvenWithTheTitleElsewhere() {
+    var held =
+        digitTitledBackstop(
+            "@thrillhousebot resolved src/A.java:1 - 3 — 2 call sites of this SQL injection");
+
+    assertEquals(
+        List.of(1),
+        heldIds(held),
+        "a real range names no single finding, whatever else the comment mentions");
+  }
+
+  @Test
+  void aSpacedHyphenRangeWhoseEndCollidesWithTheTitleStaysARange() {
+    // The genuine-range spelling with an end line equal to the title's leading digits. Only the
+    // em dash the summary prints may resolve toward the title; a spaced hyphen is how a range is
+    // typed, and the printed form never uses it.
+    var held =
+        digitTitledBackstop(
+            "@thrillhousebot resolved src/A.java:1 - 2 call sites of this SQL injection");
+
+    assertEquals(
+        List.of(1),
+        heldIds(held),
+        "a hyphen-spaced range must stay a range even when the full title happens to follow");
+  }
+
+  @Test
+  void aShortenedTitleAfterTheEmDashStaysHeld() {
+    var held = digitTitledBackstop("@thrillhousebot resolved src/A.java:1 — 2 call sites");
+
+    assertEquals(
+        List.of(1),
+        heldIds(held),
+        "only the full title exactly as printed is the summary's own row; a prefix is not");
+  }
+
+  @Test
+  void aDottedRangeStaysARangeEvenWhenTheTitleFollowsIt() {
+    var held =
+        digitTitledBackstop(
+            "@thrillhousebot resolved src/A.java:1..2 call sites of this SQL injection");
+
+    assertEquals(
+        List.of(1),
+        heldIds(held),
+        "the dotted spelling is git range syntax, never the printed separator");
+  }
+
   private List<ReviewResponse.Finding> previousFindings() {
     return analyzer.parseResponse(PREVIOUS_JSON).findings();
   }
@@ -3293,5 +3375,32 @@ class FollowUpAnalyzerTest {
     assertFalse(
         FollowUpAnalyzer.namesALocator("@thrillhousebot resolved src/A.java:1\u200B-3"),
         "a format character continues the token on the clearing side, so it must here too");
+  }
+
+  @Test
+  void namesOnlyAmbiguousRangesShouldFlagExactlyTheShapeTheAckCannotJudge() {
+    assertTrue(
+        FollowUpAnalyzer.namesOnlyAmbiguousRanges(
+            "@thrillhousebot resolved src/A.java:1 — 2 call sites of this SQL injection"),
+        "a digit-leading title is spelled exactly like a spaced range, and only the clearing"
+            + " path can tell them apart");
+    assertTrue(
+        FollowUpAnalyzer.namesOnlyAmbiguousRanges(
+            "@thrillhousebot resolved `src/A.java:1 - 3` — title"),
+        "a real spaced range is the same shape; the ack cannot distinguish it either");
+    assertFalse(FollowUpAnalyzer.namesOnlyAmbiguousRanges(null));
+    assertFalse(
+        FollowUpAnalyzer.namesOnlyAmbiguousRanges("@thrillhousebot resolved src/A.java:10 — title"),
+        "a whole locator is a naming, not an ambiguity");
+    assertFalse(
+        FollowUpAnalyzer.namesOnlyAmbiguousRanges(
+            "@thrillhousebot resolved `src/A.java:1 - 3` and `src/B.java:7`"),
+        "a whole locator beside a range makes the naming ack the right one");
+    assertFalse(
+        FollowUpAnalyzer.namesOnlyAmbiguousRanges("@thrillhousebot resolved the null check thing"),
+        "no locator shape at all is the no-locator case, not an ambiguity");
+    assertFalse(
+        FollowUpAnalyzer.namesOnlyAmbiguousRanges("@thrillhousebot resolved `src/A.java:1-3`"),
+        "an adjacent range is a continued token, which no title spelling produces");
   }
 }

@@ -680,6 +680,29 @@ class MaintainerReplyServiceTest {
   }
 
   /**
+   * A digit-leading title after the separator is spelled exactly like a spaced line range, and the
+   * reply path has no round loaded to tell them apart — but the clearing path does, by matching the
+   * finding's title. The ack must name that ambiguity, not claim no finding was named (#653).
+   */
+  @Test
+  void clearDirectiveReadingAsARangeNamesTheAmbiguityInsteadOfDenyingTheNaming() {
+    authorize();
+
+    service.handle(
+        mentionTask("@thrillhousebot resolved src/A.java:1 — 2 call sites of this SQL injection"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        MaintainerReplyService.CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK, body.getValue().body());
+    assertFalse(
+        body.getValue().body().contains("names no finding"),
+        "the maintainer wrote a correct directive and must not be told otherwise");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  /**
    * The manual-trigger allowlist admits a commenter to the mention path whatever their {@code
    * author_association}, but the clearing path requires a write-capable one. The ack must not
    * promise a closure that gate will refuse.
@@ -709,6 +732,7 @@ class MaintainerReplyServiceTest {
         List.of(
             MaintainerReplyService.CLEAR_DIRECTIVE_ACK,
             MaintainerReplyService.CLEAR_DIRECTIVE_NO_LOCATOR_ACK,
+            MaintainerReplyService.CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK,
             MaintainerReplyService.CLEAR_DIRECTIVE_UNAUTHORIZED_ACK)) {
       assertFalse(ack.startsWith("Noted"), ack);
       assertFalse(ack.contains("has been cleared"), ack);

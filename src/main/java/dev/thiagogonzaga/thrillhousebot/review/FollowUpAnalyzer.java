@@ -832,11 +832,36 @@ public class FollowUpAnalyzer {
    * too: a body names a locator when at least one locator-shaped token in it is whole.
    */
   static boolean namesALocator(String body) {
+    return strongestNaming(body) == LocatorNaming.WHOLE;
+  }
+
+  /**
+   * Whether the strongest locator-shaped naming in {@code body} is an ambiguous spaced range — the
+   * one rejection an ack cannot stand behind. The documented {@code path:line — <title>} form with
+   * a digit-leading title is spelled exactly like a spaced range, and telling them apart takes the
+   * finding set, which the reply path does not have (#548): the clearing path resolves the
+   * ambiguity by matching the text after the separator against the finding's own title ({@link
+   * #separatorLeadsOwnContent}), so the ack for this shape must name the ambiguity rather than
+   * claim no finding was named (#653).
+   */
+  static boolean namesOnlyAmbiguousRanges(String body) {
+    return strongestNaming(body) == LocatorNaming.AMBIGUOUS_RANGE;
+  }
+
+  /** What {@link #namesALocator} and {@link #namesOnlyAmbiguousRanges} tell apart. */
+  private enum LocatorNaming {
+    WHOLE,
+    AMBIGUOUS_RANGE,
+    NONE
+  }
+
+  private static LocatorNaming strongestNaming(String body) {
     if (body == null) {
-      return false;
+      return LocatorNaming.NONE;
     }
     var text = namingText(body);
     var shapes = LOCATOR_SHAPE.matcher(text);
+    var strongest = LocatorNaming.NONE;
     while (shapes.find()) {
       // The match starts at the ':'; the line number is the digit run after it. ASCII only, to
       // match the shape pattern's own \d and the clearing side: Character.isDigit accepts the
@@ -846,12 +871,15 @@ public class FollowUpAnalyzer {
       while (after < text.length() && text.charAt(after) >= '0' && text.charAt(after) <= '9') {
         after++;
       }
-      if (after >= text.length()
-          || (!continuesLocator(text.charAt(after)) && !startsSpacedRange(text, after))) {
-        return true;
+      if (after >= text.length() || !continuesLocator(text.charAt(after))) {
+        if (after < text.length() && startsSpacedRange(text, after)) {
+          strongest = LocatorNaming.AMBIGUOUS_RANGE;
+        } else {
+          return LocatorNaming.WHOLE;
+        }
       }
     }
-    return false;
+    return strongest;
   }
 
   /**
@@ -929,7 +957,7 @@ public class FollowUpAnalyzer {
       // The naming may sit in backticks (the shape the summary prints); only the directive token
       // may not — see isClearDirective.
       String body = namingText(comment.body());
-      if (namesLocator(body, locator) && body.contains(anchor)) {
+      if (namesLocator(body, locator, anchor) && body.contains(anchor)) {
         Log.infof(
             "Clearing previous finding '%s' (%s) — a maintainer named it in an"
                 + " @thrillhousebot resolved comment on the PR conversation",
@@ -954,18 +982,51 @@ public class FollowUpAnalyzer {
    * directive form ({@code @thrillhousebot resolved path/to/File.java:42 — <title>}) is spelled the
    * same way, so no legitimate naming ends in one of these characters — under-clearing here only
    * leaves the finding held for one more round, which is the safe direction.
+   *
+   * <p>One spaced-range reading is overruled: the documented {@code path:line — <title>} form with
+   * a title that opens with a digit ({@code src/A.java:1 — 2 call sites of this SQL injection}) is
+   * spelled exactly like a spaced range, and it is the very form the summary prints (#653). Only
+   * the clearing path can tell the two apart, because only it holds the finding: when the em dash
+   * the summary prints is followed by this finding's full {@code anchor}, the comment is the
+   * printed row itself — a range's end line is a number, not the finding's title — so the match
+   * counts ({@link #separatorLeadsOwnContent}).
    */
-  private static boolean namesLocator(String body, String locator) {
+  private static boolean namesLocator(String body, String locator, String anchor) {
     for (var at = body.indexOf(locator); at >= 0; at = body.indexOf(locator, at + 1)) {
       var after = at + locator.length();
       if (after >= body.length()) {
         return true;
       }
-      if (!continuesLocator(body.charAt(after)) && !startsSpacedRange(body, after)) {
+      if (!continuesLocator(body.charAt(after))
+          && (!startsSpacedRange(body, after) || separatorLeadsOwnContent(body, after, anchor))) {
         return true;
       }
     }
     return false;
+  }
+
+  /** The separator the summary prints between a finding's locator and its title: the em dash. */
+  private static final char PRINTED_SEPARATOR = '—';
+
+  /**
+   * Whether the text after a locator reads as the summary's own printed row: the em dash separator
+   * followed by this finding's full content anchor, exactly as printed. Only {@link
+   * #PRINTED_SEPARATOR} qualifies — a spaced hyphen or en dash is how a range is typed, and a range
+   * whose end line happens to equal the title's leading digits ({@code :1 - 2 call sites …} for a
+   * finding titled {@code 2 call sites …}) must stay a range; the summary never prints those
+   * separators, so refusing them costs no printed-form naming. {@code ..} is git range syntax and
+   * never the printed separator either, so a dotted range stays a range whatever follows it.
+   *
+   * <p>Only called on a spaced-range reading, which puts a separator character past the spacing —
+   * {@code skipSpacing} is deterministic, so {@code at} lands on it and never past the end.
+   */
+  private static boolean separatorLeadsOwnContent(String body, int after, String anchor) {
+    var at = skipSpacing(body, after);
+    if (body.charAt(at) != PRINTED_SEPARATOR) {
+      return false;
+    }
+    at = skipSpacing(body, at + 1);
+    return body.startsWith(anchor, at);
   }
 
   /**
@@ -975,10 +1036,11 @@ public class FollowUpAnalyzer {
    *
    * <p>The trailing digit is what tells a range apart from the documented {@code path:line —
    * <title>} separator, which is spelled identically up to that point, so it is required rather
-   * than optional: {@code :1 — SQL injection} still clears the finding. The cost is a title that
-   * opens with a digit ({@code :1 — 2 call sites}) reading as a range, which under-clears — the
-   * finding is held one more round and the maintainer can name it again, whereas an over-clear
-   * drops it silently.
+   * than optional: {@code :1 — SQL injection} still clears the finding. A title that opens with a
+   * digit ({@code :1 — 2 call sites}) therefore reads as a range here; the clearing path recovers
+   * that case by matching the text after the separator against the finding's own title ({@link
+   * #separatorLeadsOwnContent}), and where no finding set is available the rejection stays — an
+   * under-clear holds the finding one more round, whereas an over-clear drops it silently.
    *
    * <p>Written as a scan rather than a pattern so the separator test is literally {@link #isDash},
    * the one {@link #continuesLocator} applies to the adjacent spelling. An enumerated character
