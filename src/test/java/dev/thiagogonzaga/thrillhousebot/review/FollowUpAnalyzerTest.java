@@ -2941,6 +2941,10 @@ class FollowUpAnalyzerTest {
             "a dotted line range must not clear it",
             "@thrillhousebot resolved `src/A.java:1..3` — SQL injection",
             false),
+        arguments(
+            "a triple-dot line range must not clear it",
+            "@thrillhousebot resolved `src/A.java:1...3` — SQL injection",
+            false),
         // Both guards ask isDash, so a dash either rejects in both spellings or neither. A
         // fullwidth hyphen-minus and a wave dash are Pd but appear in nobody's enumeration.
         arguments(
@@ -2989,6 +2993,10 @@ class FollowUpAnalyzerTest {
         arguments(
             "a dash ending the comment is not a range and still clears",
             "@thrillhousebot resolved SQL injection at src/A.java:1 -",
+            true),
+        arguments(
+            "dots running to the end of the comment are not a range and still clear",
+            "@thrillhousebot resolved SQL injection at src/A.java:1..",
             true),
         arguments(
             "a separator spaced further than a range is written still clears",
@@ -3236,5 +3244,29 @@ class FollowUpAnalyzerTest {
     assertFalse(
         FollowUpAnalyzer.namesALocator("a:".repeat(2000)),
         "colon-heavy text with no line number still resolves to no locator");
+  }
+
+  /**
+   * The ack this feeds must not promise a closure the clearing path refuses, so the forms the
+   * whole-locator guard rejects have to read as naming nothing here too.
+   */
+  @Test
+  void namesALocatorShouldRejectTheFormsTheClearingPathRefuses() {
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:1-3` — title"),
+        "a range names no single finding, and the clearing path will not clear it");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:1 - 3` — title"),
+        "the spaced range is the same naming act as the adjacent one");
+    assertFalse(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved `src/A.java:1x` — title"),
+        "a continued line number is not a locator the clear will match");
+    assertTrue(
+        FollowUpAnalyzer.namesALocator(
+            "@thrillhousebot resolved `src/A.java:1-3` and `src/B.java:7`"),
+        "one whole locator among rejected forms is still a naming");
+    assertTrue(
+        FollowUpAnalyzer.namesALocator("@thrillhousebot resolved SQL injection at src/A.java:10"),
+        "a locator ending the comment names it");
   }
 }

@@ -823,9 +823,32 @@ public class FollowUpAnalyzer {
    * state the one thing derivable from the comment alone: that a directive naming no locator will
    * clear nothing, so a maintainer who wrote the directive but forgot (or mistyped away) the
    * locator is told immediately rather than after the next review quietly changes nothing.
+   *
+   * <p>"Locator-shaped" has to mean the same thing here as it does at clearing time. Shape alone —
+   * any {@code :<digit>} anywhere — counts {@code src/A.java:1-3} as a naming, and {@link
+   * #namesLocator} then refuses to clear it, so the maintainer is promised a closure that never
+   * comes. That is the promise-without-delivery this service exists to avoid, arrived at from the
+   * other side, so the guards {@link #continuesLocator} and {@link #startsSpacedRange} apply here
+   * too: a body names a locator when at least one locator-shaped token in it is whole.
    */
   static boolean namesALocator(String body) {
-    return body != null && LOCATOR_SHAPE.matcher(namingText(body)).find();
+    if (body == null) {
+      return false;
+    }
+    var text = namingText(body);
+    var shapes = LOCATOR_SHAPE.matcher(text);
+    while (shapes.find()) {
+      // The match starts at the ':'; the line number is the digit run after it.
+      var after = shapes.start() + 1;
+      while (after < text.length() && Character.isDigit(text.charAt(after))) {
+        after++;
+      }
+      if (after >= text.length()
+          || (!continuesLocator(text.charAt(after)) && !startsSpacedRange(text, after))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -965,7 +988,11 @@ public class FollowUpAnalyzer {
     if (at < body.length() && isDash(body.charAt(at))) {
       at++;
     } else if (at + 1 < body.length() && body.charAt(at) == '.' && body.charAt(at + 1) == '.') {
-      at += 2;
+      // The whole run, not two: 1...3 is git's own triple-dot range, and stopping at two would
+      // leave the third dot where the end line is expected and read the range as a whole locator.
+      while (at < body.length() && body.charAt(at) == '.') {
+        at++;
+      }
     } else {
       return false;
     }
