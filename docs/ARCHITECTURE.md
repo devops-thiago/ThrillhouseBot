@@ -205,9 +205,9 @@ sequenceDiagram
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
-| `review/` | Orchestrates a review: plans the token budget, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher` |
-| `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant` |
-| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver` |
+| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverage`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
+| `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
+| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
 | `config/` | Wiring: the outbound HTTP client, the review thread pool, typed config, active-model settings (caps, generation params), fail-fast startup validation, and the shared bot-identity used to recognize the bot's own activity | `HttpClientProducer`, `ReviewExecutorProducer`, `ThrillhouseConfig`, `ActiveModelSettings`, `StartupConfigValidator`, `BotIdentity` |
 | `frontend/` | The Next.js dashboard, built to a static export and served by Quarkus | — |
@@ -231,6 +231,39 @@ dashboard's session totals. Multi-call reviews do not stream tokens to the
 dashboard; they emit `review.batch` progress events instead. Batches run
 concurrently on virtual threads; a failed batch is retried once after the
 parallel pass completes.
+
+**Cost ceiling** — `REVIEW_MAX_TOKENS_PER_REVIEW` bounds the tokens one review may
+spend across every call it makes, counting retries, the verifier and the summary.
+Once reached, remaining batches are disclosed as not reviewed by name and the
+summary degrades to counts rather than making further calls. `0`, the default,
+leaves it unbounded. The summary, the verifier and maintainer replies run on a
+separate `concise` model binding with its own response cap
+(`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`) and its own reasoning effort, so they never
+share a cap sized for batch review output.
+
+**Coverage honesty** — a file the review never read does not pass silently. A
+file GitHub reported with changes but no patch text, a file that did not fit any
+batch, and a file whose batch call failed are each disclosed by name and withhold
+APPROVE. A response the model cut at its length cap keeps the findings that
+completed before the cut rather than being discarded whole.
+
+**Patch coverage as review context** — when a PR's CI publishes a coverage
+report, `PatchCoverage` reads the changed lines it does not cover and gives them
+to the review, so new code with no test behind it can be named as such. Off
+unless `REVIEW_PATCH_COVERAGE_ENABLED` is set.
+
+**Repository-supplied configuration** — `.github/thrillhousebot.yml` carries a
+repository's own ignore globs and path-scoped review instructions, read from the
+default branch and cached for five minutes. Ignore globs are additive to the
+deployment list; a repository can narrow its own review scope but cannot restore
+a file the deployment excludes. Every failure mode (missing file, invalid YAML,
+unexpected shape, uncompilable glob) is logged and skipped, leaving the
+deployment configuration in force.
+
+**Write pacing** — content-creating GitHub calls are spaced process-wide by
+`GITHUB_WRITE_MIN_INTERVAL` so a burst of comments never reaches the secondary
+rate limit in the first place, with `GITHUB_WRITE_MAX_WAIT` capping how long any
+one caller waits.
 
 Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
 `thrillhousebot.review.ai-timeout-seconds`. Cost and token metrics come from

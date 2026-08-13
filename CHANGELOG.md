@@ -2,6 +2,8 @@
 
 All notable changes to ThrillhouseBot.
 
+## [Unreleased]
+
 ## [0.6.0] — 2026-08-13
 
 On-demand commands for improving a PR and generating tests, per-repository review
@@ -48,6 +50,14 @@ not read.
 - **`quarkus:dev` did not boot usable on a fresh clone** (#591, #620): the dev-mode schema is created at startup, and the README states the `.env` and PEM steps a fresh clone needs
 - **An empty SSE frame failed the stream on the event loop** (#555). It is now skipped
 - **Runtime image size and contents** (#561, #564): the native binary is no longer stored twice, the website is out of the build context, and the H2 driver is kept out of the runtime image
+
+### Dependencies
+
+- Bumped the Quarkus platform from 3.37.4 to 3.38.0 and `quarkus-langchain4j` from 1.12.0 to 1.12.2
+- Declared `jackson-dataformat-yaml` explicitly. It was already on the classpath transitively and is version-managed by the Jackson BOM; reading a repository's own `.github/thrillhousebot.yml` uses it directly
+- Bumped the frontend `next` to 16.2.12 and the dev-only `jsdom` to 30.0.1, with `@types/node` on a patch release
+- Bumped GitHub Actions `github/codeql-action` to v4.37.6, `actions/setup-java` to v5.7.0 and `docker/login-action` to v4.6.0
+- Bumped the Spotless Maven plugin to 3.9.0
 
 ## [0.5.0] — 2026-07-26
 
