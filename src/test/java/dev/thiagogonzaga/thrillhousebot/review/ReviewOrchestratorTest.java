@@ -1587,12 +1587,6 @@ class ReviewOrchestratorTest {
         when(reviewClient.createReview(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
             .thenThrow(new RuntimeException("502 Bad Gateway"));
-        // The issue-comment fallback (#704) fails too — only then is the post truly lost; the
-        // later failure-notice comment goes through.
-        when(commentClient.createComment(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
-            .thenThrow(new RuntimeException("comment 502"))
-            .thenReturn(null);
 
         orchestrator.review(
             new ReviewOrchestrator.ReviewRequest(
@@ -3033,13 +3027,21 @@ class ReviewOrchestratorTest {
       assertTrue(captor.getAllValues().get(1).comments().isEmpty());
     }
 
+    /** A response-carrying 422 in the REST client's own exception type — a definite refusal. */
+    private static RuntimeException refusal422() {
+      return new org.jboss.resteasy.reactive.ClientWebApplicationException(
+          jakarta.ws.rs.core.Response.status(422)
+              .entity("{\"message\":\"Unprocessable\"}")
+              .build());
+    }
+
     @Test
     void shouldPostBodyAsIssueCommentWhenNoCommentsReviewRejected() {
       var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
 
       when(reviewClient.createReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
-          .thenThrow(new RuntimeException("422"));
+          .thenThrow(refusal422());
 
       assertDoesNotThrow(
           () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
@@ -3132,7 +3134,7 @@ class ReviewOrchestratorTest {
           new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of(comment));
       when(reviewClient.createReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
-          .thenThrow(new RuntimeException("422"));
+          .thenThrow(refusal422());
 
       assertDoesNotThrow(
           () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
@@ -3147,7 +3149,7 @@ class ReviewOrchestratorTest {
     void shouldUseZeroIssuesMessageWhenRejectedReviewBodyIsBlank() {
       when(reviewClient.createReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
-          .thenThrow(new RuntimeException("422"));
+          .thenThrow(refusal422());
 
       reviewPublisher.createReviewWithFallback(
           "Bearer tok",
@@ -3172,10 +3174,57 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldNotPostFallbackCommentOnAmbiguousTransportFailure() {
+      // A timeout/reset/5xx carries no proof GitHub refused — the review may have landed, so the
+      // fallback must not risk duplicating it under a "GitHub refused" note.
+      var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
+      var transportFailure = new RuntimeException("502 Bad Gateway");
+      when(reviewClient.createReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(transportFailure);
+
+      ReviewPostException ex =
+          assertThrows(
+              ReviewPostException.class,
+              () ->
+                  reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      assertSame(transportFailure, ex.getCause());
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      // A response-carrying 5xx is equally ambiguous: GitHub may have applied the write.
+      var serverError =
+          new org.jboss.resteasy.reactive.ClientWebApplicationException(
+              jakarta.ws.rs.core.Response.status(502).build());
+      doThrow(serverError)
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      // A non-4xx response (however unlikely on this path) is not a refusal either.
+      var redirect =
+          new jakarta.ws.rs.WebApplicationException(
+              jakarta.ws.rs.core.Response.status(302).build());
+      doThrow(redirect)
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
     void shouldThrowReviewPostExceptionWhenCommentFallbackFailsToo() {
       var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
 
-      var rejection = new RuntimeException("422");
+      var rejection = refusal422();
       when(reviewClient.createReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
           .thenThrow(rejection);

@@ -752,9 +752,11 @@ public class ReviewPublisher {
   /**
    * Submits a PR review, falling back to a summary-only review when inline comments are rejected
    * (e.g. stale line numbers after a force-push), and to an issue comment carrying the same body
-   * when the review post itself is refused (#704) — a rejected summary-only review used to discard
-   * the whole generation behind a "review could not be completed" notice. Throws {@link
-   * ReviewPostException} only when the comment fallback fails too.
+   * when GitHub definitely refused the review post (#704) — a rejected summary-only review used to
+   * discard the whole generation behind a "review could not be completed" notice. Only a
+   * response-carrying 4xx counts as a refusal; an ambiguous failure (timeout, connection reset,
+   * 5xx) may have landed the review, so it throws {@link ReviewPostException} instead of risking a
+   * duplicate — as does a refusal whose comment fallback fails too.
    */
   void createReviewWithFallback(
       String auth,
@@ -789,7 +791,29 @@ public class ReviewPublisher {
         rejection = retryFailure;
       }
     }
+    // The comment fallback fires only on a definite refusal — a response-carrying 4xx, where
+    // GitHub rejected the request and the review provably does not exist. An ambiguous failure (a
+    // timeout, a connection reset, a 5xx) is one where the review may well have landed, so posting
+    // the body again would duplicate it while asserting a refusal the code cannot support; those
+    // propagate as before.
+    if (!isRefusal(rejection)) {
+      throw new ReviewPostException(
+          "GitHub review rejected for " + owner + "/" + repo + " #" + prNumber, rejection);
+    }
     postReviewBodyAsComment(auth, owner, repo, prNumber, req.body(), rejection);
+  }
+
+  /**
+   * Whether this failure is a definite refusal: it carries GitHub's response and that response is a
+   * 4xx, so the request was rejected and the review was not created. False for anything ambiguous —
+   * no response at all, or a 5xx — where the write may have landed.
+   */
+  private static boolean isRefusal(RuntimeException rejection) {
+    return webApplicationFailure(rejection)
+        .map(WebApplicationException::getResponse)
+        .map(jakarta.ws.rs.core.Response::getStatus)
+        .filter(status -> status >= 400 && status < 500)
+        .isPresent();
   }
 
   /**
