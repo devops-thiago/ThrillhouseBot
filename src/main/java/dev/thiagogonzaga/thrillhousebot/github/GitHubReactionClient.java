@@ -66,7 +66,7 @@ public interface GitHubReactionClient {
   @GET
   @Path("/repos/{owner}/{repo}/pulls/comments/{commentId}/reactions")
   @Produces(MediaType.APPLICATION_JSON)
-  List<Reaction> listReviewCommentReactions(
+  List<Reaction> listReviewCommentReactionsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -76,10 +76,33 @@ public interface GitHubReactionClient {
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
 
+  /**
+   * One page of an inline comment's reactions, healing a rejected credential per page (#626).
+   * Mirrors the annotated method's parameter list one-to-one — GitHub's endpoint takes exactly
+   * these arguments, so bundling them would only add a shape the wire does not have (java:S107).
+   */
+  @SuppressWarnings("java:S107")
+  default List<Reaction> listReviewCommentReactions(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      long commentId,
+      String content,
+      int perPage,
+      int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "reactions page " + page + " of inline comment " + commentId + " on " + owner + "/" + repo,
+        auth,
+        credential ->
+            listReviewCommentReactionsOnce(
+                credential, accept, owner, repo, commentId, content, perPage, page));
+  }
+
   @GET
   @Path("/repos/{owner}/{repo}/issues/comments/{commentId}/reactions")
   @Produces(MediaType.APPLICATION_JSON)
-  List<Reaction> listIssueCommentReactions(
+  List<Reaction> listIssueCommentReactionsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -88,6 +111,29 @@ public interface GitHubReactionClient {
       @QueryParam("content") String content,
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
+
+  /**
+   * One page of an issue comment's reactions, healing a rejected credential per page (#626).
+   * Mirrors the annotated method's parameter list one-to-one — GitHub's endpoint takes exactly
+   * these arguments, so bundling them would only add a shape the wire does not have (java:S107).
+   */
+  @SuppressWarnings("java:S107")
+  default List<Reaction> listIssueCommentReactions(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      long commentId,
+      String content,
+      int perPage,
+      int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "reactions page " + page + " of issue comment " + commentId + " on " + owner + "/" + repo,
+        auth,
+        credential ->
+            listIssueCommentReactionsOnce(
+                credential, accept, owner, repo, commentId, content, perPage, page));
+  }
 
   /** One of GitHub's fixed reaction contents, e.g. {@code eyes}. */
   record CreateReactionRequest(String content) {}

@@ -23,6 +23,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.List;
@@ -57,7 +58,7 @@ public interface GitHubActionsClient {
   @GET
   @Path("/repos/{owner}/{repo}/actions/runs")
   @Produces(MediaType.APPLICATION_JSON)
-  WorkflowRuns listWorkflowRuns(
+  WorkflowRuns listWorkflowRunsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -66,17 +67,42 @@ public interface GitHubActionsClient {
       @QueryParam("status") String status,
       @QueryParam("per_page") int perPage);
 
+  /** Lists a commit's completed workflow runs, healing a rejected credential once (#626). */
+  default WorkflowRuns listWorkflowRuns(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      String headSha,
+      String status,
+      int perPage) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "workflow runs of " + headSha + " on " + owner + "/" + repo,
+        auth,
+        credential ->
+            listWorkflowRunsOnce(credential, accept, owner, repo, headSha, status, perPage));
+  }
+
   /** The artifacts one workflow run uploaded. */
   @GET
   @Path("/repos/{owner}/{repo}/actions/runs/{runId}/artifacts")
   @Produces(MediaType.APPLICATION_JSON)
-  RunArtifacts listRunArtifacts(
+  RunArtifacts listRunArtifactsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("runId") long runId,
       @QueryParam("per_page") int perPage);
+
+  /** Lists a run's artifacts, healing a rejected credential once (#626). */
+  default RunArtifacts listRunArtifacts(
+      String auth, String accept, String owner, String repo, long runId, int perPage) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "artifacts of run " + runId + " on " + owner + "/" + repo,
+        auth,
+        credential -> listRunArtifactsOnce(credential, accept, owner, repo, runId, perPage));
+  }
 
   /**
    * Starts an artifact download. GitHub answers with a {@code 302} to a short-lived, pre-signed
@@ -86,12 +112,36 @@ public interface GitHubActionsClient {
    */
   @GET
   @Path("/repos/{owner}/{repo}/actions/artifacts/{artifactId}/zip")
-  Response downloadArtifact(
+  Response downloadArtifactOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("artifactId") long artifactId);
+
+  /**
+   * Starts an artifact download, healing a rejected credential once (#626). Because the raw {@link
+   * Response} is returned rather than unmarshalled, a 401 arrives as a status instead of a {@link
+   * jakarta.ws.rs.WebApplicationException}, so the refresh is asked for directly here rather than
+   * through {@link GitHubTokenRefresh#retrying}.
+   */
+  default Response downloadArtifact(
+      String auth, String accept, String owner, String repo, long artifactId) {
+    var response = downloadArtifactOnce(auth, accept, owner, repo, artifactId);
+    if (response.getStatus() != 401) {
+      return response;
+    }
+    var fresh =
+        GitHubTokenRefresh.SHARED.replacementFor(
+            "artifact " + artifactId + " download on " + owner + "/" + repo,
+            auth,
+            new WebApplicationException(response));
+    if (fresh.isEmpty()) {
+      return response;
+    }
+    response.close();
+    return downloadArtifactOnce(fresh.get(), accept, owner, repo, artifactId);
+  }
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   record WorkflowRuns(

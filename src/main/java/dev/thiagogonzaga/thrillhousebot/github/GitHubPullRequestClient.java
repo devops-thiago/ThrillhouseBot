@@ -31,20 +31,36 @@ public interface GitHubPullRequestClient {
   int FILES_PER_PAGE = 100;
   int MAX_FILE_PAGES = 30;
 
+  /** One HTTP attempt at reading a PR. Callers want {@link #getPullRequest} instead. */
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}")
   @Produces(MediaType.APPLICATION_JSON)
-  PullRequestDetails getPullRequest(
+  PullRequestDetails getPullRequestOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("pullNumber") int pullNumber);
 
+  /**
+   * Reads a PR, minting a fresh installation token and repeating the GET once when GitHub rejects
+   * the credential (#626) — a read late in a long review carries the token resolved at its start,
+   * and a 401 leaves nothing to repair afterwards, unlike a write it simply never happened. See
+   * {@link GitHubTokenRefresh}.
+   */
+  default PullRequestDetails getPullRequest(
+      String auth, String accept, String owner, String repo, int pullNumber) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "PR read " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential -> getPullRequestOnce(credential, accept, owner, repo, pullNumber));
+  }
+
+  /** One HTTP attempt at a files page. Callers want {@link #getPullRequestFilesPage} instead. */
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/files")
   @Produces(MediaType.APPLICATION_JSON)
-  List<FileDiff> getPullRequestFilesPage(
+  List<FileDiff> getPullRequestFilesPageOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -52,6 +68,23 @@ public interface GitHubPullRequestClient {
       @PathParam("pullNumber") int pullNumber,
       @QueryParam("per_page") int perPage,
       @QueryParam("page") int page);
+
+  /** One page of a PR's files, healing a rejected credential per page (#626). */
+  default List<FileDiff> getPullRequestFilesPage(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      int perPage,
+      int page) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "PR files page " + page + " of " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential ->
+            getPullRequestFilesPageOnce(
+                credential, accept, owner, repo, pullNumber, perPage, page));
+  }
 
   /**
    * Every changed file in the PR, walking pages of {@value #FILES_PER_PAGE} up to {@value
@@ -73,10 +106,11 @@ public interface GitHubPullRequestClient {
     return all;
   }
 
+  /** One HTTP attempt at a comparison. Callers want {@link #compareCommits} instead. */
   @GET
   @Path("/repos/{owner}/{repo}/compare/{base}...{head}")
   @Produces(MediaType.APPLICATION_JSON)
-  CompareResponse compareCommits(
+  CompareResponse compareCommitsOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
@@ -84,16 +118,35 @@ public interface GitHubPullRequestClient {
       @PathParam("base") String base,
       @PathParam("head") String head);
 
+  /** Compares two commits, healing a rejected credential once (#626). */
+  default CompareResponse compareCommits(
+      String auth, String accept, String owner, String repo, String base, String head) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "compare " + base + "..." + head + " on " + owner + "/" + repo,
+        auth,
+        credential -> compareCommitsOnce(credential, accept, owner, repo, base, head));
+  }
+
+  /** One HTTP attempt at reading a file. Callers want {@link #getFileContent} instead. */
   @GET
   @Path("/repos/{owner}/{repo}/contents/{path}")
   @Produces(MediaType.APPLICATION_JSON)
-  FileContent getFileContent(
+  FileContent getFileContentOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("path") String path,
       @QueryParam("ref") String ref);
+
+  /** Reads one file's content at a ref, healing a rejected credential once (#626). */
+  default FileContent getFileContent(
+      String auth, String accept, String owner, String repo, String path, String ref) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "file content of " + path + " on " + owner + "/" + repo,
+        auth,
+        credential -> getFileContentOnce(credential, accept, owner, repo, path, ref));
+  }
 
   /**
    * The repository's file listing at a ref, in one call. {@code recursive=1} walks every directory
@@ -105,13 +158,22 @@ public interface GitHubPullRequestClient {
   @GET
   @Path("/repos/{owner}/{repo}/git/trees/{treeSha}")
   @Produces(MediaType.APPLICATION_JSON)
-  TreeResponse getTree(
+  TreeResponse getTreeOnce(
       @HeaderParam("Authorization") String auth,
       @HeaderParam("Accept") String accept,
       @PathParam("owner") String owner,
       @PathParam("repo") String repo,
       @PathParam("treeSha") String treeSha,
       @QueryParam("recursive") String recursive);
+
+  /** Reads a tree listing, healing a rejected credential once (#626). */
+  default TreeResponse getTree(
+      String auth, String accept, String owner, String repo, String treeSha, String recursive) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "tree of " + owner + "/" + repo + " at " + treeSha,
+        auth,
+        credential -> getTreeOnce(credential, accept, owner, repo, treeSha, recursive));
+  }
 
   record PullRequestDetails(
       String title,

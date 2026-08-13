@@ -35,11 +35,23 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 @RegisterProvider(GitHubErrorLogger.class)
 public interface GitHubGraphQLClient {
 
+  /** One HTTP attempt at a GraphQL operation. Callers want {@link #execute} instead. */
   @POST
   @Path("/graphql")
   @Produces(MediaType.APPLICATION_JSON)
   @Consumes(MediaType.APPLICATION_JSON)
-  JsonNode execute(@HeaderParam("Authorization") String auth, GraphQLRequest request);
+  JsonNode executeOnce(@HeaderParam("Authorization") String auth, GraphQLRequest request);
+
+  /**
+   * Runs a GraphQL operation, minting a fresh installation token and repeating the call once when
+   * GitHub rejects the credential (#626). Thread resolution runs at the very end of a review —
+   * exactly where a token read at its start has expired — and a 401 is decided before the operation
+   * runs, so repeating it can neither resolve a thread twice nor skip one.
+   */
+  default JsonNode execute(String auth, GraphQLRequest request) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "GraphQL operation", auth, credential -> executeOnce(credential, request));
+  }
 
   @RegisterForReflection
   record GraphQLRequest(String query, Map<String, Object> variables) {
