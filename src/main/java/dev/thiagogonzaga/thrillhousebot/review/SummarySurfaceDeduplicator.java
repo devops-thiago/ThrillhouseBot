@@ -111,9 +111,20 @@ final class SummarySurfaceDeduplicator {
    * One text reduced to what it asserts: its content words in order, and whether it negates. {@code
    * phraseOnly} marks a claim only the contiguous-run arm may match — the shape used for a
    * finding's description, which is long prose where the overlap coefficient would happily fire on
-   * two different observations that merely discuss the same code (#639).
+   * two different observations that merely discuss the same code (#639). The word set and phrase
+   * set are derived once here and reused across every comparison the claim takes part in (#678).
    */
-  record Claim(List<String> words, boolean negated, boolean phraseOnly) {
+  record Claim(
+      List<String> words,
+      boolean negated,
+      boolean phraseOnly,
+      Set<String> wordSet,
+      Set<String> phrases) {
+
+    Claim(List<String> words, boolean negated, boolean phraseOnly) {
+      this(
+          words, negated, phraseOnly, Set.copyOf(words), SummarySurfaceDeduplicator.phrases(words));
+    }
 
     /** A claim judged on both arms — a bullet, a walkthrough clause, or a finding title. */
     Claim(List<String> words, boolean negated) {
@@ -143,7 +154,13 @@ final class SummarySurfaceDeduplicator {
   private static List<Claim> claimsOf(Finding finding) {
     var description = claim(finding.description());
     return List.of(
-        claim(finding.title()), new Claim(description.words(), description.negated(), true));
+        claim(finding.title()),
+        new Claim(
+            description.words(),
+            description.negated(),
+            true,
+            description.wordSet(),
+            description.phrases()));
   }
 
   /**
@@ -221,18 +238,16 @@ final class SummarySurfaceDeduplicator {
   }
 
   /**
-   * True when {@code candidate} states a claim one of {@code claims} already states. The
-   * candidate's phrase and word sets are derived once and reused across every claim.
+   * True when {@code candidate} states a claim one of {@code claims} already states. Each side's
+   * phrase and word sets were derived once at construction and are reused across every pair.
    */
   private static boolean restates(Claim candidate, List<Claim> claims) {
-    Set<String> candidatePhrases = phrases(candidate.words());
-    Set<String> candidateWords = new HashSet<>(candidate.words());
     for (Claim claim : claims) {
-      if (contradicts(candidate, candidateWords, claim)) {
+      if (contradicts(candidate, claim)) {
         continue;
       }
-      if (sharesPhrase(candidatePhrases, claim.words())
-          || (!claim.phraseOnly() && overlaps(candidateWords, claim.words()))) {
+      if (sharesPhrase(candidate.phrases(), claim.phrases())
+          || (!claim.phraseOnly() && overlaps(candidate.wordSet(), claim.wordSet()))) {
         return true;
       }
     }
@@ -252,17 +267,17 @@ final class SummarySurfaceDeduplicator {
    * their content, so "the PR claims X, but the code cannot X" continues to collapse onto the
    * finding that reports X missing.
    */
-  private static boolean contradicts(Claim candidate, Set<String> candidateWords, Claim claim) {
+  private static boolean contradicts(Claim candidate, Claim claim) {
     if (candidate.negated() == claim.negated()) {
       return false;
     }
-    var claimWords = new HashSet<>(claim.words());
-    return candidateWords.containsAll(claimWords) || claimWords.containsAll(candidateWords);
+    return candidate.wordSet().containsAll(claim.wordSet())
+        || claim.wordSet().containsAll(candidate.wordSet());
   }
 
   /** True when the claim contains one of the candidate's {@value #PHRASE_TOKENS}-word runs. */
-  private static boolean sharesPhrase(Set<String> candidatePhrases, List<String> claim) {
-    return phrases(claim).stream().anyMatch(candidatePhrases::contains);
+  private static boolean sharesPhrase(Set<String> candidatePhrases, Set<String> claimPhrases) {
+    return claimPhrases.stream().anyMatch(candidatePhrases::contains);
   }
 
   private static Set<String> phrases(List<String> tokens) {
@@ -274,14 +289,13 @@ final class SummarySurfaceDeduplicator {
   }
 
   /** Overlap coefficient — shared content words over the shorter side — against the threshold. */
-  private static boolean overlaps(Set<String> candidateWords, List<String> claim) {
-    var claimWords = new HashSet<>(claim);
+  private static boolean overlaps(Set<String> candidateWords, Set<String> claimWords) {
     int shorter = Math.min(candidateWords.size(), claimWords.size());
     if (shorter < MIN_OVERLAP_TOKENS) {
       return false;
     }
-    claimWords.retainAll(candidateWords);
-    return (double) claimWords.size() / shorter >= OVERLAP_THRESHOLD;
+    long shared = claimWords.stream().filter(candidateWords::contains).count();
+    return (double) shared / shorter >= OVERLAP_THRESHOLD;
   }
 
   /**

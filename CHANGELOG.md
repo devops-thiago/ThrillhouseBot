@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Changed
+
+- **Summary-surface deduplication derives each claim's phrase and word sets once** (#678): the sets are computed when a claim is built and reused across every comparison, instead of being re-derived for each (candidate, claim) pair. Deduplication decisions are unchanged
+
 ### Fixed
 
 - **Dashboard token test no longer assumes an en-US locale** (#661): the test now asserts the same `toLocaleString()` output the component renders, so it passes on machines with any runtime locale
