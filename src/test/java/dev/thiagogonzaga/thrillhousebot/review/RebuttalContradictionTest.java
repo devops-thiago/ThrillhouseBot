@@ -224,6 +224,9 @@ class RebuttalContradictionTest {
         "+    var sep = '//'; executor.submit(() -> run(ctx));",
         // An escaped backslash closes its literal, so the escape still applies where it exists.
         "+    var dir = \"C:\\\\\"; executor.submit(() -> run(ctx));",
+        // An unclosed opener is rescanned as text, so the later closed literal is still stepped
+        // over whole rather than the line being cut at its quoted slashes.
+        "+    let f = &'a ctx; var s = \"//cdn.example.com\"; executor.submit(() -> run(ctx));",
       })
   void shouldKeepDispatchEvidenceThatFollowsAQuotedDoubleSlash(String codeLine) {
     assertTrue(
@@ -246,14 +249,17 @@ class RebuttalContradictionTest {
         // An opener with no closer is not a literal: a Rust lifetime, and an apostrophe in prose.
         "+    let f = handler(&'a ctx); // executor.submit(() -> run(ctx));",
         "+    var n = count; // don't let this executor.submit(task) come back",
-        // A closed literal earlier on the line must not consume the fallback.
+        // A closed literal earlier on the line must not consume the resumed scan.
         "+    var a = \"//x\"; let f = &'a ctx; // executor.submit(() -> run(ctx));",
+        // A closed literal after the unclosed opener is stepped over, and the real comment
+        // beyond it is still stripped.
+        "+    let f = &'a ctx; var s = \"//x\"; // executor.submit(() -> run(ctx));",
         // A file URL keeps its three slashes rather than reading as a comment.
         "+    var u = \"file:///etc/hosts\"; // executor.submit(() -> run(ctx));",
-        // The scheme carve-out still applies inside the unclosed literal, so the fallback lands on
-        // the real comment rather than on the URL's slashes.
+        // The scheme carve-out still applies after the unclosed opener, so the resumed scan lands
+        // on the real comment rather than on the URL's slashes.
         "+    let u = &'a; see http://example.com // executor.submit(() -> run(ctx));",
-        // A second // inside the same unclosed literal must not move the fallback past the first.
+        // A second // after the same unclosed opener must not move the cut past the first.
         "+    let f = &'a ctx; // note // executor.submit(() -> run(ctx));",
       })
   void shouldNotReadACommentAsDispatchEvidenceAfterABackslash(String codeLine) {
@@ -262,7 +268,7 @@ class RebuttalContradictionTest {
         "a dispatch named only in a comment is not live code, so the decline stands: " + codeLine);
   }
 
-  /** The fallback for an unclosed literal must cut at the comment, not before the code. */
+  /** The resumed scan after an unclosed opener must cut at the comment, not before the code. */
   @Test
   void shouldKeepDispatchBeforeACommentOnALineWithAnUnclosedQuote() {
     var codeLine = "+    let f = &'a ctx; executor.submit(() -> run(ctx)); // one per request\n";
@@ -274,7 +280,7 @@ class RebuttalContradictionTest {
     var loneSlash = "+    let f = &'a ctx; executor.submit(() -> run(ctx)); /\n";
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", loneSlash).isPresent(),
-        "a single trailing slash opens no comment, so there is nothing to fall back to");
+        "a single trailing slash opens no comment, so there is nothing to strip");
   }
 
   static Stream<Arguments> commentScanEdgeCases() {

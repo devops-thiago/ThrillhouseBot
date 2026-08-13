@@ -269,12 +269,13 @@ final class RebuttalContradiction {
    * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to.
    *
    * <p>An opener with no closer on the line is therefore assumed to have been something else — a
-   * Rust lifetime ({@code &'a ctx}), an apostrophe in prose — and the scan falls back to the first
-   * {@code //} that literal swallowed. Without that fallback a single stray apostrophe kept the
-   * whole trailing comment as scan text, and a dispatch named only inside a comment could overrule
-   * a decline. Comment text is precisely what this method exists to remove, so keeping it is not a
-   * mild degradation: it is the false-positive direction, and the plain first-{@code //} cut this
-   * carve-out replaced did not have it.
+   * Rust lifetime ({@code &'a ctx}), an apostrophe in prose — and the scan resumes past it,
+   * treating the opener as ordinary text. Without that a single stray apostrophe kept the whole
+   * trailing comment as scan text, and a dispatch named only inside a comment could overrule a
+   * decline — the false-positive direction, which the plain first-{@code //} cut this carve-out
+   * replaced did not have. Resuming quote-aware (rather than cutting at the first bare {@code //}
+   * the opener swallowed) keeps later literals stepped over whole, so {@code &'a ctx; var s =
+   * "//cdn.example.com"; executor.submit(...)} is not truncated inside the closed string.
    *
    * <p>The one escaping rule it does keep is where the escape applies: inside a {@code "} or {@code
    * '} literal, never inside a backtick one and never outside a literal at all. A Go raw string is
@@ -308,10 +309,11 @@ final class RebuttalContradiction {
       if (c == '"' || c == '\'' || c == '`') {
         var close = endOfLiteral(line, i);
         if (close < 0) {
-          // Never closed, so the opener was not one — fall back to what it swallowed.
-          return firstDoubleSlash(line, i + 1);
+          // Never closed, so the opener was not one — rescan it as ordinary text.
+          i++;
+        } else {
+          i = close + 1;
         }
-        i = close + 1;
       } else if (isDoubleSlash(line, i)) {
         if (i > 0 && line.charAt(i - 1) == ':') {
           i += 2;
@@ -341,24 +343,6 @@ final class RebuttalContradiction {
         return i;
       } else {
         i++;
-      }
-    }
-    return -1;
-  }
-
-  /**
-   * First {@code //} at or after {@code from} that is not a URL scheme's, or {@code -1}. Only ever
-   * called with {@code from} inside a literal, so the character before {@code i} always exists.
-   */
-  private static int firstDoubleSlash(String line, int from) {
-    var i = from;
-    while (i < line.length()) {
-      if (!isDoubleSlash(line, i)) {
-        i++;
-      } else if (line.charAt(i - 1) == ':') {
-        i += 2;
-      } else {
-        return i;
       }
     }
     return -1;
