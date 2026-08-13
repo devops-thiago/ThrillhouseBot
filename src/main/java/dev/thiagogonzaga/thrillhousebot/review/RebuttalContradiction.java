@@ -153,6 +153,40 @@ final class RebuttalContradiction {
       Pattern.compile("```.{0,10000}?```", Pattern.DOTALL | Pattern.MULTILINE);
 
   /**
+   * Inline code spans in a markdown reply — {@code `…`} or {@code ``…``} — quoted constructs, never
+   * the maintainer's assertion. A backticked quotation in a decline ("the bot's text says {@code
+   * `it never runs concurrently`}") must not be matched as the maintainer's own assertion about the
+   * code. Triple-backtick pairs are not handled here because {@link #FENCED_BLOCK} has already
+   * consumed every one this pattern's bounds could reach. The span body is bounded and confined to
+   * one line so an unclosed backtick in untrusted prose cannot swallow the rest of the reply; a
+   * span the bound misses is left in place and behaves as before.
+   *
+   * <p>Two patterns applied in order rather than one alternation, so each stays simple enough to
+   * read on its own. The double-backtick pass runs first and its body admits a lone backtick,
+   * because {@code ``…``} exists in markdown precisely to quote text containing one ({@code
+   * ``x`y``}). Without that, the first closable single-backtick pair inside the span was stripped
+   * instead and the rest of the quotation survived as prose. Both delimiters are guarded with
+   * lookarounds so a delimiter is a maximal backtick run: a single-backtick opener cannot start
+   * inside a {@code ``} delimiter, and {@code ``} cannot half-match as an empty single-backtick
+   * span. Splitting loses nothing against the alternation: the single pass cannot reach into what
+   * the double pass removed, because a span body never crosses the newline left behind.
+   *
+   * <p>Each span is replaced with a newline, not a space: a space would bridge the words abutting
+   * the backticks into a phrase that was never contiguous in the original reply ({@code one at
+   * a`beat`time} must not become "one at a time"), turning stripping into a way to <em>add</em> a
+   * claim match. The stripped text is matched with the newlines still in it — {@link #assertedText}
+   * joins lines with {@code \n}, never a space — and a newline appears inside no claim pattern
+   * while being a sentence boundary for the quoted note, so stripping can only remove matches — the
+   * keep-the-decline direction.
+   */
+  private static final Pattern DOUBLE_BACKTICK_SPAN =
+      Pattern.compile("(?<!`)``(?!`)(?:[^`\n]|`(?!`)){0,1000}?``(?!`)");
+
+  /** The single-backtick companion of {@link #DOUBLE_BACKTICK_SPAN}, applied after it. */
+  private static final Pattern SINGLE_BACKTICK_SPAN =
+      Pattern.compile("(?<!`)`(?!`)[^`\n]{0,1000}?`(?!`)");
+
+  /**
    * Replies longer than this are not analyzed at all. It keeps the markdown-stripping scan over
    * untrusted prose bounded, and skipping is the conservative outcome: an unread reply keeps its
    * decline.
@@ -382,8 +416,14 @@ final class RebuttalContradiction {
   }
 
   /**
-   * The reply with fenced code blocks and blockquoted lines removed, lower-cased boundaries intact
-   * — what the maintainer actually asserts, as opposed to what they quote.
+   * The reply with fenced code blocks, blockquoted lines and inline code spans removed, lower-cased
+   * boundaries intact — what the maintainer actually asserts, as opposed to what they quote.
+   *
+   * <p>Spans are stripped only after the blockquote filter: a span's newline replacement splits its
+   * line, and splitting a {@code >} line before the filter would hand the fragment after the span
+   * to the filter without its {@code >} prefix — quoted material surviving as an assertion, the
+   * over-fire this method exists to prevent. The order loses nothing in the other direction,
+   * because a span pattern never crosses a line boundary.
    */
   private static String assertedText(String rebuttal) {
     var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
@@ -395,7 +435,8 @@ final class RebuttalContradiction {
     }
     // Joined, not terminated: a reply that ends mid-sentence must stay unterminated, so
     // sentenceAround's end-of-text bound is a live case rather than an unreachable guard.
-    return String.join("\n", kept);
+    var withoutDoubleSpans = DOUBLE_BACKTICK_SPAN.matcher(String.join("\n", kept)).replaceAll("\n");
+    return SINGLE_BACKTICK_SPAN.matcher(withoutDoubleSpans).replaceAll("\n");
   }
 
   /** The sentence containing {@code index}, collapsed to one line and clipped for a note. */
