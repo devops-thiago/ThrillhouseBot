@@ -44,8 +44,14 @@ public class AiContextWindowExceededException extends AiReviewException {
   /**
    * Provider wordings for an input-exceeds-context-window rejection, matched case-insensitively:
    * OpenAI ({@code context_length_exceeded} / "maximum context length"), Anthropic ("prompt is too
-   * long", "input length and max_tokens exceed context limit"), and Gemini ("input token count
-   * exceeds the maximum number of tokens").
+   * long", "input length and max_tokens exceed context limit"), and Gemini ("The input token count
+   * (...) exceeds the maximum number of tokens allowed").
+   *
+   * <p>Every marker is anchored to input-side vocabulary — "context", "prompt", "input" — never to
+   * a bare token-limit phrase, so an output-side wording (e.g. a response blocked for exceeding the
+   * maximum number of tokens, which is {@link AiResponseTruncatedException}'s lane) cannot classify
+   * here and draw the input-shrinking remedy that would not fix it. Under-matching is the safe
+   * direction: a marker miss degrades to the transient-retry path, never to a lost review.
    */
   private static final List<String> CONTEXT_WINDOW_MARKERS =
       List.of(
@@ -55,7 +61,7 @@ public class AiContextWindowExceededException extends AiReviewException {
           "exceeds the context limit",
           "prompt is too long",
           "input is too long",
-          "exceeds the maximum number of tokens");
+          "input token count");
 
   /**
    * Cause-chain links inspected before giving up — same bound, same rationale as {@link

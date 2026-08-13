@@ -73,6 +73,25 @@ class AiContextWindowExceededExceptionTest {
         AiContextWindowExceededException.classify(new RuntimeException((String) null)).isPresent());
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // Output-side rejections belong to the truncation lane, not this one: classifying them
+        // here would post the input-shrinking REVIEW_MAX_INPUT_TOKENS remedy for a failure that
+        // knob cannot fix. Every marker is input-anchored so these stay unclassified.
+        "The model response was blocked: it exceeds the maximum number of tokens",
+        "The output token count exceeds the maximum number of tokens allowed (8192)",
+        "response exceeded the maximum number of tokens for this model",
+        // Generic token-limit wording with no input-side anchor stays on the transient path.
+        "too many tokens in this request, please retry later"
+      })
+  void classifyDoesNotMatchOutputSideOrGenericTokenLimitWordings(String providerMessage) {
+    assertFalse(
+        AiContextWindowExceededException.classify(new RuntimeException(providerMessage))
+            .isPresent(),
+        providerMessage);
+  }
+
   @Test
   void classifyReturnsAnAlreadyTypedRejectionWithoutRewrapping() {
     var rejection =
