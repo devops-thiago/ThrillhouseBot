@@ -607,6 +607,40 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void currentHeadShaReturnsTheFreshHead() {
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "",
+                  new GitHubPullRequestClient.Ref("fresh-sha"),
+                  new GitHubPullRequestClient.Ref("base-sha")));
+
+      assertEquals(java.util.Optional.of("fresh-sha"), loader.currentHeadSha("auth", request()));
+    }
+
+    @Test
+    void currentHeadShaIsEmptyWhenTheReadFailsOrTheHeadIsMissing() {
+      // Fail-open: a guard read that fails must not lose a finished review.
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+          .thenThrow(new RuntimeException("GitHub unavailable"))
+          .thenReturn(null)
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title", "", null, new GitHubPullRequestClient.Ref("base-sha")))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "",
+                  new GitHubPullRequestClient.Ref(""),
+                  new GitHubPullRequestClient.Ref("base-sha")));
+
+      for (var ignored = 0; ignored < 4; ignored++) {
+        assertTrue(loader.currentHeadSha("auth", request()).isEmpty());
+      }
+    }
+
+    @Test
     void shouldRejectWhenHeadChangesAfterFilesAreFetched() {
       when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(List.of());

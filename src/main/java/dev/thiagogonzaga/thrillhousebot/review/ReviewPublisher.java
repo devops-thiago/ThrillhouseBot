@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
@@ -24,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.WebApplicationException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -742,9 +744,17 @@ public class ReviewPublisher {
     }
   }
 
+  /** Lead-in for a review body preserved as an issue comment after GitHub refused it (#704). */
+  static final String REVIEW_REFUSED_NOTE =
+      "⚠️ GitHub refused the review post, so ThrillhouseBot is posting the review as a regular"
+          + " comment instead.";
+
   /**
    * Submits a PR review, falling back to a summary-only review when inline comments are rejected
-   * (e.g. stale line numbers after a force-push).
+   * (e.g. stale line numbers after a force-push), and to an issue comment carrying the same body
+   * when the review post itself is refused (#704) — a rejected summary-only review used to discard
+   * the whole generation behind a "review could not be completed" notice. Throws {@link
+   * ReviewPostException} only when the comment fallback fails too.
    */
   void createReviewWithFallback(
       String auth,
@@ -752,16 +762,18 @@ public class ReviewPublisher {
       String repo,
       int prNumber,
       GitHubReviewClient.CreateReviewRequest req) {
+    RuntimeException rejection;
     try {
       reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, req);
+      return;
     } catch (RuntimeException e) {
-      // CreateReviewRequest's compact constructor normalizes a null comments list to List.of().
-      if (req.comments().isEmpty()) {
-        throw new ReviewPostException(
-            "GitHub review rejected for " + owner + "/" + repo + " #" + prNumber, e);
-      }
+      logReviewRejection(e, owner, repo, prNumber);
+      rejection = e;
+    }
+    // CreateReviewRequest's compact constructor normalizes a null comments list to List.of().
+    if (!req.comments().isEmpty()) {
       Log.warnf(
-          e,
+          rejection,
           "PR review with inline comments rejected for %s/%s #%d — retrying without comments",
           owner,
           repo,
@@ -769,8 +781,79 @@ public class ReviewPublisher {
       var fallback =
           new GitHubReviewClient.CreateReviewRequest(
               req.commitId(), req.body(), req.event(), List.of());
-      reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, fallback);
+      try {
+        reviewClient.createReview(auth, ACCEPT, owner, repo, prNumber, fallback);
+        return;
+      } catch (RuntimeException retryFailure) {
+        logReviewRejection(retryFailure, owner, repo, prNumber);
+        rejection = retryFailure;
+      }
     }
+    postReviewBodyAsComment(auth, owner, repo, prNumber, req.body(), rejection);
+  }
+
+  /**
+   * Preserves a refused review as an issue comment: the same body, prefixed with a note that GitHub
+   * refused the review post. Goes through {@link GitHubCommentClient#createComment}, so the comment
+   * gets the same body cap (#487) and paced/backed-off write path (#597/#568) as every other
+   * conversation comment. A blank body (a bare first-review APPROVE) is replaced with the
+   * clean-review message so the comment still states an outcome.
+   */
+  private void postReviewBodyAsComment(
+      String auth, String owner, String repo, int prNumber, String body, RuntimeException cause) {
+    var outcome = body == null || body.isBlank() ? PrSummaryGenerator.ZERO_ISSUES_MESSAGE : body;
+    try {
+      commentClient.createComment(
+          auth,
+          ACCEPT,
+          owner,
+          repo,
+          prNumber,
+          new GitHubCommentClient.CreateCommentRequest(REVIEW_REFUSED_NOTE + "\n\n" + outcome));
+    } catch (RuntimeException commentFailure) {
+      var failure =
+          new ReviewPostException(
+              "GitHub review rejected for "
+                  + owner
+                  + "/"
+                  + repo
+                  + " #"
+                  + prNumber
+                  + " and the comment fallback failed too",
+              cause);
+      failure.addSuppressed(commentFailure);
+      throw failure;
+    }
+    Log.warnf(
+        "GitHub review rejected for %s/%s #%d — the review body was preserved as an issue comment",
+        owner, repo, prNumber);
+  }
+
+  /**
+   * Logs what GitHub actually said when it rejected a review post (#704). The runtime's default
+   * exception mapper surfaces the status and nothing else, so without this line a 422 here is
+   * undiagnosable after the fact. The body is read through {@link GitHubApiError}, which redacts
+   * anything credential-shaped and caps the length before it reaches the log.
+   */
+  private static void logReviewRejection(
+      RuntimeException rejection, String owner, String repo, int prNumber) {
+    var diagnostics =
+        webApplicationFailure(rejection)
+            .flatMap(GitHubApiError::of)
+            .map(GitHubApiError::diagnostics)
+            .orElse("no HTTP response to read (" + rejection + ")");
+    Log.warnf(
+        "GitHub rejected the review post for %s/%s #%d: %s", owner, repo, prNumber, diagnostics);
+  }
+
+  /** The HTTP-carrying failure in the cause chain, if any — the one whose response can be read. */
+  private static Optional<WebApplicationException> webApplicationFailure(Throwable rejection) {
+    for (Throwable t = rejection; t != null; t = t.getCause()) {
+      if (t instanceof WebApplicationException web) {
+        return Optional.of(web);
+      }
+    }
+    return Optional.empty();
   }
 
   /**

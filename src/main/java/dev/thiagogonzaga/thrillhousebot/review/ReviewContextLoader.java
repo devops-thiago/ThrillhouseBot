@@ -32,6 +32,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -480,6 +481,32 @@ public class ReviewContextLoader {
    * {@code null} so the summary falls back to the diff-derived counts rather than failing the
    * review.
    */
+  /**
+   * The PR's head SHA as GitHub reports it right now — a fresh read, taken just before the run
+   * posts, so a head that moved during the minutes-long model call is caught (#704). Goes through
+   * {@link GitHubPullRequestClient#getPullRequest}, so a credential that expired mid-run is healed
+   * the same way every other late read is (#626/#693). Fail-open: a failed or headless read returns
+   * empty, and the caller posts rather than losing a finished review to this guard.
+   */
+  Optional<String> currentHeadSha(String auth, ReviewOrchestrator.ReviewRequest req) {
+    try {
+      var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      return Optional.ofNullable(pr)
+          .map(GitHubPullRequestClient.PullRequestDetails::head)
+          .map(GitHubPullRequestClient.Ref::sha)
+          .filter(sha -> !sha.isBlank());
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Could not re-read the head of %s/%s #%d before posting — posting against the reviewed"
+              + " sha",
+          req.owner(),
+          req.repo(),
+          req.prNumber());
+      return Optional.empty();
+    }
+  }
+
   PrTotals fetchPrTotals(String auth, String owner, String repo, int prNumber) {
     try {
       var pr = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);

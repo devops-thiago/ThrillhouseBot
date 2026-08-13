@@ -38,5 +38,10 @@ public enum ReviewSkipReason {
   /** An automatic review completed within {@code review.auto-review-min-interval}. */
   RATE_LIMITED,
   /** The review executor rejected the task (saturated or shutting down). */
-  DISPATCH_REJECTED
+  DISPATCH_REJECTED,
+  /**
+   * The PR head moved while the review ran, so the finished run abandoned its post — the coalesced
+   * run for the new head covers it (#704).
+   */
+  HEAD_MOVED
 }
