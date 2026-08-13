@@ -729,25 +729,46 @@ public class FindingVerificationService {
    * one-pattern form never read as a mitigation.
    */
   private static boolean hasUnnegatedAssertedMatch(String asserted) {
-    Matcher be = MITIGATION_ASSERTED_BE.matcher(asserted);
-    Matcher get = MITIGATION_ASSERTED_GET.matcher(asserted);
-    Matcher subject = MITIGATION_ASSERTED_SUBJECT.matcher(asserted);
+    Matcher[] wordings = {
+      MITIGATION_ASSERTED_BE.matcher(asserted),
+      MITIGATION_ASSERTED_GET.matcher(asserted),
+      MITIGATION_ASSERTED_SUBJECT.matcher(asserted)
+    };
+    Matcher negation = NEGATING_SUBJECT.matcher(asserted);
+    var starts = new int[] {-1, -1, -1};
+    var ends = new int[wordings.length];
+    var exhausted = new boolean[wordings.length];
     var from = 0;
     while (true) {
-      Matcher leftmost = null;
-      for (Matcher wording : new Matcher[] {be, get, subject}) {
-        if (wording.find(from) && (leftmost == null || wording.start() < leftmost.start())) {
-          leftmost = wording;
+      var leftmost = -1;
+      for (var i = 0; i < wordings.length; i++) {
+        if (!exhausted[i] && starts[i] < from) {
+          // Only a consumed or overtaken candidate is re-found; one at or past `from` is still
+          // that wording's next match, since the find that produced it proved nothing of that
+          // wording starts before it. This keeps the walk a single pass per wording instead of
+          // rescanning all three from every resume point.
+          if (wordings[i].find(from)) {
+            starts[i] = wordings[i].start();
+            ends[i] = wordings[i].end();
+          } else {
+            exhausted[i] = true;
+          }
+        }
+        if (!exhausted[i] && (leftmost == -1 || starts[i] < starts[leftmost])) {
+          leftmost = i;
         }
       }
-      if (leftmost == null) {
+      if (leftmost == -1) {
         return false;
       }
-      if (!NEGATING_SUBJECT.matcher(asserted.substring(0, leftmost.start())).find()) {
+      // A region instead of a substring, so dropping a negated match never copies the text; the
+      // pattern's $ honors the region end under the matcher's default anchoring bounds.
+      if (!negation.region(0, starts[leftmost]).find()) {
         return true;
       }
       // No wording matches an empty string, so the scan always advances.
-      from = leftmost.end();
+      from = ends[leftmost];
+      starts[leftmost] = -1;
     }
   }
 
