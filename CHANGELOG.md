@@ -6,6 +6,8 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A review post GitHub refuses is diagnosed, abandoned when stale, and never lost** (#704): a rejected review post now logs GitHub's own response body (redacted and length-capped) instead of only the status code; a run whose PR head moved while the model call ran abandons its post — counted as a structured `HEAD_MOVED` skip, its check run concluded as skipped — because the coalesced run for the new head re-reviews and posts in its place; and a summary-only review GitHub definitely refused (a response-carrying 4xx — an ambiguous timeout/5xx still fails, since the review may have landed) falls back to posting the same body as an issue comment through the capped, paced write path, instead of discarding the generation behind a "review could not be completed" notice
+
 - **Inline code spans in a decline are stripped delimiter-aware** (#697): the decline re-check now scans backtick runs the CommonMark way — an opening run of N backticks closes at the next run of exactly N — so a span whose body carries a longer backtick run (`` `a``b` ``) or one line ending is stripped whole instead of leaving quoted claim text to reopen a correct decline. An unclosed run stays literal, and a length bound still keeps a stray backtick from swallowing the reply
 - **Mention-form commands follow the configured bot login** (#698): `TriggerDetector` builds the `@<bot> <command>` trigger patterns from `BotIdentity.mentionNames()` instead of a hardcoded slug, so `@my-review-bot review` works on a custom-login install; the mention's `@` must open the comment or follow a non-word character, so an email local part never triggers a command. Slash forms and default-config behavior are unchanged
 

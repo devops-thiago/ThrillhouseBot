@@ -114,6 +114,9 @@ class ReviewOrchestratorTest {
 
   private FindingPipeline findingPipeline;
 
+  private final ReviewSkipEmitter skipEmitter =
+      new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
+
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   private ReviewOrchestrator orchestrator;
@@ -257,6 +260,7 @@ class ReviewOrchestratorTest {
         verdictBuilder,
         findingPipeline,
         mock(FindingFeedbackCaptureService.class),
+        skipEmitter,
         reviewExecutor);
   }
 
@@ -2874,6 +2878,132 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void headMovedComparesTheReviewedShaAgainstTheFreshHead() {
+      var req =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
+      assertTrue(ReviewOrchestrator.headMoved(req, "other-sha"));
+      assertFalse(ReviewOrchestrator.headMoved(req, "ABCDEFGH"));
+      // No reviewed sha to compare against: never treated as moved.
+      var noSha =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 42, "", "T", "", "base", "main", 1L, false);
+      assertFalse(ReviewOrchestrator.headMoved(noSha, "other-sha"));
+      var nullSha =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 42, null, "T", "", "base", "main", 1L, false);
+      assertFalse(ReviewOrchestrator.headMoved(nullSha, "other-sha"));
+    }
+
+    @Test
+    void abandonSupersededRunSurvivesCheckRunAndPersistenceFailures() {
+      var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
+      session.id = 7L;
+      session.setPublicId("test-public-id");
+      var req =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
+      doThrow(new RuntimeException("check run API down"))
+          .when(checkRunClient)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
+
+      assertDoesNotThrow(
+          () -> orchestrator.abandonSupersededRun("Bearer tok", req, session, 1L, "movedsha"));
+      // And with no check run to conclude, the abandon still counts and broadcasts.
+      assertDoesNotThrow(
+          () -> orchestrator.abandonSupersededRun("Bearer tok", req, session, -1L, "movedsha"));
+
+      assertEquals(2L, skipEmitter.countsByReason().get("HEAD_MOVED"));
+      verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+    }
+
+    @Test
+    void shouldAbandonPostWhenHeadMovedDuringReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        // The head is the reviewed sha while the context loads, then moves before the post — the
+        // #701 shape: a push landing during the minutes-long model call.
+        when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "Test PR",
+                    "",
+                    new GitHubPullRequestClient.Ref("abcdefgh"),
+                    new GitHubPullRequestClient.Ref("base-sha"),
+                    1,
+                    1,
+                    1))
+            .thenReturn(
+                new GitHubPullRequestClient.PullRequestDetails(
+                    "Test PR",
+                    "",
+                    new GitHubPullRequestClient.Ref("d4389d2aa"),
+                    new GitHubPullRequestClient.Ref("base-sha"),
+                    1,
+                    1,
+                    1));
+
+        var surfaced =
+            orchestrator.review(
+                new ReviewOrchestrator.ReviewRequest(
+                    "owner",
+                    "repo",
+                    42,
+                    "abcdefgh",
+                    "Test PR",
+                    "",
+                    "base1234567",
+                    "main",
+                    123L,
+                    false));
+
+        assertFalse(surfaced);
+        // Nothing lands on the PR: no review, no summary comment, no failure notice.
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        // Counted as a structured skip, and the stale check run is concluded as skipped.
+        assertEquals(1L, skipEmitter.countsByReason().get("HEAD_MOVED"));
+        var updateCaptor =
+            ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(), anyString(), anyString(), anyString(), eq(1L), updateCaptor.capture());
+        assertEquals("skipped", updateCaptor.getValue().conclusion());
+        verify(session).setStatus(ReviewSession.STATUS_FAILED);
+        verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+      }
+    }
+
+    @Test
     void shouldFallbackWhenInlineCommentsRejected() {
       var comment =
           new GitHubReviewClient.ReviewComment(
@@ -2897,14 +3027,249 @@ class ReviewOrchestratorTest {
       assertTrue(captor.getAllValues().get(1).comments().isEmpty());
     }
 
+    /** A response-carrying 422 in the REST client's own exception type — a definite refusal. */
+    private static RuntimeException refusal422() {
+      return new org.jboss.resteasy.reactive.ClientWebApplicationException(
+          jakarta.ws.rs.core.Response.status(422)
+              .entity("{\"message\":\"Unprocessable\"}")
+              .build());
+    }
+
     @Test
-    void shouldThrowReviewPostExceptionWhenFallbackImpossible() {
+    void shouldPostBodyAsIssueCommentWhenNoCommentsReviewRejected() {
       var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
 
-      var rejection = new RuntimeException("422");
+      when(reviewClient.createReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(refusal422());
+
+      assertDoesNotThrow(
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      verify(reviewClient, times(1))
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      var captor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), captor.capture());
+      assertTrue(captor.getValue().body().startsWith(ReviewPublisher.REVIEW_REFUSED_NOTE));
+      assertTrue(captor.getValue().body().contains("body"));
+    }
+
+    @Test
+    void shouldLogGitHubResponseBodyWhenReviewRejected() {
+      // The production shape end-to-end: the REST client throws ClientWebApplicationException
+      // (a jakarta.ws.rs.WebApplicationException carrying the response), and the 422 body must
+      // land in the log through the GitHubApiError seam (redacted + capped).
+      var records = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+      var handler =
+          new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord logRecord) {
+              records.add(logRecord);
+            }
+
+            @Override
+            public void flush() {
+              // Nothing buffered.
+            }
+
+            @Override
+            public void close() {
+              // Nothing to release.
+            }
+          };
+      var logger =
+          org.jboss.logmanager.LogContext.getLogContext()
+              .getLogger(ReviewPublisher.class.getName());
+      var previousLevel = logger.getLevel();
+      logger.addHandler(handler);
+      logger.setLevel(java.util.logging.Level.ALL);
+      try {
+        var response =
+            jakarta.ws.rs.core.Response.status(422)
+                .entity(
+                    "{\"message\":\"Unprocessable Entity\",\"errors\":[\"commit_id is stale\"]}")
+                .build();
+        var rejection = new org.jboss.resteasy.reactive.ClientWebApplicationException(response);
+        var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
+        when(reviewClient.createReview(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+            .thenThrow(rejection);
+
+        assertDoesNotThrow(
+            () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+        // The generation is preserved as a comment, and the log carries GitHub's own words.
+        verify(commentClient)
+            .createComment(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), any());
+        var logged =
+            records.stream()
+                .map(
+                    r ->
+                        r.getParameters() != null && r.getParameters().length > 0
+                            ? String.format(r.getMessage(), r.getParameters())
+                            : r.getMessage())
+                .toList();
+        assertTrue(
+            logged.stream()
+                .anyMatch(
+                    line ->
+                        line.contains("GitHub rejected the review post for owner/repo #7")
+                            && line.contains("status=422")
+                            && line.contains("commit_id is stale")),
+            () -> "422 diagnostics not logged; saw: " + logged);
+      } finally {
+        logger.removeHandler(handler);
+        logger.setLevel(previousLevel);
+      }
+    }
+
+    @Test
+    void shouldPostBodyAsIssueCommentWhenRetryWithoutCommentsAlsoRejected() {
+      var comment =
+          new GitHubReviewClient.ReviewComment(
+              "src/Main.java", 10, null, null, "RIGHT", "Fix this");
+      var req =
+          new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of(comment));
+      when(reviewClient.createReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(refusal422());
+
+      assertDoesNotThrow(
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      verify(reviewClient, times(2))
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(commentClient)
+          .createComment(eq("Bearer tok"), anyString(), eq("owner"), eq("repo"), eq(7), any());
+    }
+
+    @Test
+    void shouldUseZeroIssuesMessageWhenRejectedReviewBodyIsBlank() {
+      when(reviewClient.createReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(refusal422());
+
+      reviewPublisher.createReviewWithFallback(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          new GitHubReviewClient.CreateReviewRequest("sha", "", "APPROVE", List.of()));
+      reviewPublisher.createReviewWithFallback(
+          "Bearer tok",
+          "owner",
+          "repo",
+          7,
+          new GitHubReviewClient.CreateReviewRequest("sha", null, "APPROVE", List.of()));
+
+      var captor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient, times(2))
+          .createComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      for (var comment : captor.getAllValues()) {
+        assertTrue(comment.body().contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE));
+      }
+    }
+
+    @Test
+    void shouldNotPostFallbackCommentOnAmbiguousTransportFailure() {
+      // A timeout/reset/5xx carries no proof GitHub refused — the review may have landed, so the
+      // fallback must not risk duplicating it under a "GitHub refused" note.
+      var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
+      var transportFailure = new RuntimeException("502 Bad Gateway");
+      when(reviewClient.createReview(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(transportFailure);
+
+      ReviewPostException ex =
+          assertThrows(
+              ReviewPostException.class,
+              () ->
+                  reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      assertSame(transportFailure, ex.getCause());
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      // A response-carrying 5xx is equally ambiguous: GitHub may have applied the write.
+      var serverError =
+          new org.jboss.resteasy.reactive.ClientWebApplicationException(
+              jakarta.ws.rs.core.Response.status(502).build());
+      doThrow(serverError)
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      // A non-4xx response (however unlikely on this path) is not a refusal either.
+      var redirect =
+          new jakarta.ws.rs.WebApplicationException(
+              jakarta.ws.rs.core.Response.status(302).build());
+      doThrow(redirect)
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldNotPostFallbackCommentWhenFirstAttemptWasAmbiguousAndRetryWasRefused() {
+      // Mixed sequence: the comment-carrying attempt fails ambiguously (that review may have
+      // landed), then the retry without comments draws a confirmed 422. The last failure alone
+      // looks like a refusal, but the run is not — falling back would risk duplicating the first
+      // attempt's landed review.
+      var comment =
+          new GitHubReviewClient.ReviewComment(
+              "src/Main.java", 10, null, null, "RIGHT", "Fix this");
+      var req =
+          new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of(comment));
+      doThrow(new RuntimeException("read timeout"))
+          .doThrow(refusal422())
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+
+      verify(reviewClient, times(2))
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      // The reverse order — refused first, ambiguous retry — must equally withhold the fallback.
+      doThrow(refusal422())
+          .doThrow(new RuntimeException("connection reset"))
+          .when(reviewClient)
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      assertThrows(
+          ReviewPostException.class,
+          () -> reviewPublisher.createReviewWithFallback("Bearer tok", "owner", "repo", 7, req));
+      verify(commentClient, never())
+          .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void shouldThrowReviewPostExceptionWhenCommentFallbackFailsToo() {
+      var req = new GitHubReviewClient.CreateReviewRequest("sha", "body", "COMMENT", List.of());
+
+      var rejection = refusal422();
       when(reviewClient.createReview(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
           .thenThrow(rejection);
+      var commentFailure = new RuntimeException("comment 403");
+      when(commentClient.createComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(commentFailure);
 
       ReviewPostException ex =
           assertThrows(
@@ -2914,6 +3279,7 @@ class ReviewOrchestratorTest {
 
       assertTrue(ex.getMessage().contains("owner/repo #7"));
       assertSame(rejection, ex.getCause());
+      assertSame(commentFailure, ex.getSuppressed()[0]);
       verify(reviewClient, times(1))
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }

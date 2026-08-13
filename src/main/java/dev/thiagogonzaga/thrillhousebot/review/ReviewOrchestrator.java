@@ -100,6 +100,8 @@ public class ReviewOrchestrator {
 
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
+  private final ReviewSkipEmitter skipEmitter;
+
   private final ExecutorService reviewExecutor;
 
   /**
@@ -215,6 +217,7 @@ public class ReviewOrchestrator {
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
       FindingFeedbackCaptureService findingFeedbackCapture,
+      ReviewSkipEmitter skipEmitter,
       @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
     this.authClient = authClient;
@@ -229,6 +232,7 @@ public class ReviewOrchestrator {
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
     this.findingFeedbackCapture = findingFeedbackCapture;
+    this.skipEmitter = skipEmitter;
     this.reviewExecutor = reviewExecutor;
   }
 
@@ -296,6 +300,18 @@ public class ReviewOrchestrator {
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
+      // #704: the model call can run for minutes; a push landing in that window supersedes this
+      // run (the dispatcher already queued a coalesced run for the new head). Re-read the head
+      // just before the first write and abandon the post when it moved, instead of posting a
+      // review — and resolving inline comments — against a diff that changed underneath it.
+      final var headReq = req;
+      var movedHead =
+          contextLoader.currentHeadSha(auth, req).filter(fresh -> headMoved(headReq, fresh));
+      if (movedHead.isPresent()) {
+        abandonSupersededRun(auth, req, session, checkRunId, movedHead.get());
+        return false;
+      }
+
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       // Opt-in follow-up delta comment. Runs only when no summary was posted this round, and its
       // outcome is intentionally discarded — it must not feed summaryPosted below.
@@ -375,6 +391,68 @@ public class ReviewOrchestrator {
       }
     }
     return resultSurfaced;
+  }
+
+  /** SKIPPED check-run title when the finished run's post was abandoned (#704). */
+  static final String SUPERSEDED_CHECK_TITLE = "Review superseded by a newer commit";
+
+  /**
+   * Whether the freshly read head names a different commit than the one this run reviewed. False
+   * when the run has no reviewed sha to compare against; a fresh read that failed never reaches
+   * here (fail-open — a finished review is never lost to its own guard). Visible for tests.
+   */
+  static boolean headMoved(ReviewRequest req, String freshHead) {
+    return req.commitSha() != null
+        && !req.commitSha().isBlank()
+        && !freshHead.equalsIgnoreCase(req.commitSha());
+  }
+
+  /**
+   * Retires a run whose head moved while it reviewed: counted as a structured skip, the check run
+   * on the reviewed (old) sha concluded as skipped, and the session closed out — nothing is posted
+   * to the PR and no user-facing error is raised, because the dispatcher's coalesced run for the
+   * new head re-reviews and posts in this run's place (#704). Visible for tests.
+   */
+  void abandonSupersededRun(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
+    skipEmitter.recordSkip(
+        ReviewSkipReason.HEAD_MOVED,
+        req.owner(),
+        req.repo(),
+        req.prNumber(),
+        "head moved from "
+            + req.commitSha()
+            + " to "
+            + freshHead
+            + " while the review ran — abandoning the post; the queued run for the new head"
+            + " replaces it");
+    if (checkRunId > 0) {
+      try {
+        checkRunManager.updateCheckRun(
+            new CheckRunManager.CheckRunUpdate(
+                auth,
+                req.owner(),
+                req.repo(),
+                checkRunId,
+                CHECK_STATUS_COMPLETED,
+                "skipped",
+                SUPERSEDED_CHECK_TITLE,
+                "The pull request head moved to "
+                    + freshHead
+                    + " while this review ran, so its"
+                    + " result was not posted. The review of the new head replaces it.",
+                sessionUrl(session)));
+      } catch (RuntimeException checkRunError) {
+        Log.warnf(checkRunError, "Failed to mark superseded check run %d as skipped", checkRunId);
+      }
+    }
+    try {
+      applyReviewFailure(
+          session, "Superseded: the PR head moved to " + freshHead + " during the review");
+    } catch (RuntimeException persistenceError) {
+      Log.warnf(persistenceError, "Failed to persist superseded review session %d", session.id);
+    }
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
   }
 
   /**
