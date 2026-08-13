@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mention-form commands follow the configured bot login** (#698): `TriggerDetector` builds the `@<bot> <command>` trigger patterns from `BotIdentity.mentionNames()` instead of a hardcoded slug, so `@my-review-bot review` works on a custom-login install; the mention's `@` must open the comment or follow a non-word character, so an email local part never triggers a command. Slash forms and default-config behavior are unchanged
+
 ## [0.6.1] — 2026-08-13
 
 Fixes for defects found after 0.6.0 shipped, most of them during the audit of

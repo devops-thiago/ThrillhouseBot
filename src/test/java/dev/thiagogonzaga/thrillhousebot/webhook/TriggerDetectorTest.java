@@ -143,6 +143,46 @@ class TriggerDetectorTest {
     assertTrue(detector.containsBotMention("(@thrillhousebot wdyt?)"));
   }
 
+  /**
+   * The mention-form commands must follow the configured bot login just like the conversational
+   * gate — a hardcoded slug leaves {@code @my-review-bot review} dead on a custom-login install
+   * while the slash forms still work (#698).
+   */
+  @Test
+  void shouldDetectMentionFormCommandForTheConfiguredBotLogin() {
+    var custom = new TriggerDetector(List.of("my-review-bot[bot]"));
+
+    assertTrue(custom.isReviewTrigger("@my-review-bot review"));
+    assertEquals(CommentCommand.REVIEW, custom.detectCommand("please @My-Review-Bot review this"));
+    assertEquals(CommentCommand.DESCRIBE, custom.detectCommand("@my-review-bot describe"));
+    assertEquals(
+        CommentCommand.NONE,
+        custom.detectCommand("@thrillhousebot review"),
+        "the default slug is not this install's bot");
+    assertEquals(
+        CommentCommand.REVIEW,
+        custom.detectCommand("/review"),
+        "slash forms are login-independent");
+  }
+
+  /** Default-config behavior is unchanged, including the shipped alternate slug. */
+  @Test
+  void shouldStillDetectMentionFormCommandUnderTheDefaultIdentity() {
+    assertTrue(detector.isReviewTrigger("@thrillhousebot review"));
+    assertTrue(detector.isReviewTrigger("@Thrillhousebot review please"));
+    assertEquals(CommentCommand.REVIEW, detector.detectCommand("@thrillhouse-bot review"));
+    assertEquals(CommentCommand.IMPROVE, detector.detectCommand("hey @thrillhousebot improve"));
+  }
+
+  /** An email address's local part is not a mention, so it never triggers a command (#698). */
+  @Test
+  void shouldNotDetectMentionFormCommandInsideAnEmailAddress() {
+    assertEquals(CommentCommand.NONE, detector.detectCommand("foo@thrillhousebot review"));
+    var custom = new TriggerDetector(List.of("my-review-bot[bot]"));
+    assertEquals(CommentCommand.NONE, custom.detectCommand("mail foo@my-review-bot review"));
+    assertEquals(CommentCommand.REVIEW, custom.detectCommand("(@my-review-bot review)"));
+  }
+
   @Test
   void shouldNotDetectMentionWithoutBot() {
     assertFalse(detector.containsBotMention("looks good"));
