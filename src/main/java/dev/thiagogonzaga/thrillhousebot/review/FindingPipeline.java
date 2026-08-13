@@ -47,6 +47,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.IntStream;
+import org.jboss.logging.Logger;
 
 /**
  * The post-AI finding chain: validate quotes, dedupe, verify against the diff, drop already-replied
@@ -56,6 +57,14 @@ import java.util.stream.IntStream;
  */
 @ApplicationScoped
 public class FindingPipeline {
+
+  /**
+   * Logger pinned to this class so the empty-batch warning emitted from {@link BatchPrompts} keeps
+   * the category operators already filter on: the build-time {@code Log} facade binds its category
+   * to the class holding the call, which for a nested type would silently relabel the WARN to
+   * {@code FindingPipeline$BatchPrompts}.
+   */
+  private static final Logger LOG = Logger.getLogger(FindingPipeline.class);
 
   /** Directory rows listed in the scope header before the remainder is rolled up by count. */
   private static final int MAX_SCOPE_DIRECTORIES = 10;
@@ -107,6 +116,45 @@ public class FindingPipeline {
           baseComparison,
           ReviewPromptAssembler.combineSections(
               template.repoInstructions(), heuristicFailureModesFor(batch)));
+    }
+
+    /**
+     * The heuristic failure-mode review dimension (#123 / #420) for one batch, appended to that
+     * batch's trailing guidance.
+     *
+     * <p>{@link ReviewPromptAssembler} decides this section from {@code ctx.diff()}, which {@link
+     * ReviewContextLoader} leaves empty whenever token budgeting is on — the shipped default — so
+     * the whole dimension was silently absent from every default-configuration review (#486 P3). It
+     * is decided here instead because this is the first point that holds the material the call
+     * actually receives: the plan's batch text. Only the batches whose own slice introduces a
+     * decision rule pay for it, which is stricter than the whole-diff gate it replaces. The two
+     * cannot both emit the section: this runs only on a budgeted plan, and the assembler's gate
+     * only has material when budgeting is off — the loader keys the empty {@code ctx.diff()} on the
+     * setting the planner keys {@code budgeted} on.
+     *
+     * <p>Sizing: the section is a single fixed constant, and the planner sized the shared overhead
+     * before it existed. That mirrors the {@linkplain #withheldMaterialNotice withheld-material
+     * notice} this class already adds after planning, and it is what the token safety margin (10%
+     * of the input cap by default, ~4800 tokens against this section's ~700) is held back for.
+     *
+     * <p>Warns through {@link #LOG}, pinned to the enclosing class, so the operator-facing category
+     * is unchanged by this method living in {@link BatchPrompts}.
+     */
+    private static String heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch batch) {
+      var scanned = heuristicScanSource(batch.text());
+      if (scanned.isBlank()) {
+        // Loud on purpose: an empty input is exactly what made this dimension die unnoticed, and a
+        // detector fed nothing reports "no heuristic code" in the same voice as a detector that
+        // read
+        // the diff and found none.
+        LOG.warnf(
+            "Review batch covering %d file(s) carries no diff text, so the heuristic failure-mode"
+                + " review dimension has no material to evaluate and is omitted from that call —"
+                + " this is a planning defect, not a pull request that introduces no heuristic code",
+            batch.files().size());
+        return "";
+      }
+      return ReviewPromptAssembler.heuristicFailureModesSection(scanned);
     }
 
     /**
@@ -1041,46 +1089,6 @@ public class FindingPipeline {
     return previous == null || previous.isBlank()
         ? file.filename()
         : previous + " → " + file.filename();
-  }
-
-  /**
-   * The heuristic failure-mode review dimension (#123 / #420) for one batch, appended to that
-   * batch's trailing guidance.
-   *
-   * <p>{@link ReviewPromptAssembler} decides this section from {@code ctx.diff()}, which {@link
-   * ReviewContextLoader} leaves empty whenever token budgeting is on — the shipped default — so the
-   * whole dimension was silently absent from every default-configuration review (#486 P3). It is
-   * decided here instead because this is the first point that holds the material the call actually
-   * receives: the plan's batch text. Only the batches whose own slice introduces a decision rule
-   * pay for it, which is stricter than the whole-diff gate it replaces. The two cannot both emit
-   * the section: this runs only on a budgeted plan, and the assembler's gate only has material when
-   * budgeting is off — the loader keys the empty {@code ctx.diff()} on the setting the planner keys
-   * {@code budgeted} on.
-   *
-   * <p>Sizing: the section is a single fixed constant, and the planner sized the shared overhead
-   * before it existed. That mirrors the {@linkplain #withheldMaterialNotice withheld-material
-   * notice} this class already adds after planning, and it is what the token safety margin (10% of
-   * the input cap by default, ~4800 tokens against this section's ~700) is held back for.
-   *
-   * <p>Deliberately <em>not</em> moved into {@link BatchPrompts}, its only caller: {@code Log}
-   * binds its category to the enclosing class at build time, so relocating the warning below would
-   * relabel an operator-facing WARN from this class to {@code FindingPipeline$BatchPrompts} and
-   * silently break any log filter keyed on the category.
-   */
-  private static String heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch batch) {
-    var scanned = heuristicScanSource(batch.text());
-    if (scanned.isBlank()) {
-      // Loud on purpose: an empty input is exactly what made this dimension die unnoticed, and a
-      // detector fed nothing reports "no heuristic code" in the same voice as a detector that read
-      // the diff and found none.
-      Log.warnf(
-          "Review batch covering %d file(s) carries no diff text, so the heuristic failure-mode"
-              + " review dimension has no material to evaluate and is omitted from that call —"
-              + " this is a planning defect, not a pull request that introduces no heuristic code",
-          batch.files().size());
-      return "";
-    }
-    return ReviewPromptAssembler.heuristicFailureModesSection(scanned);
   }
 
   /**

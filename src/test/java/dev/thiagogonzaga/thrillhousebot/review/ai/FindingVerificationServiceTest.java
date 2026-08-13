@@ -1185,7 +1185,7 @@ class FindingVerificationServiceTest {
   @Test
   void floorsAnInjectionSinkFindingWhoseOnlySanitizerMentionIsAConditionalItRejects() {
     // #608: the finding argues its own severity is critical and publishes MEDIUM, because
-    // MITIGATION_ASSERTED read "API sanitizes" out of the conditional "If the feedback API
+    // MITIGATION_ASSERTED_SUBJECT read "API sanitizes" out of the conditional "If the feedback API
     // sanitizes body on write" — a hypothesis the very next clause rejects. #575's prompt REQUIRES
     // that clause on this class, so the defeater fired on wording the prompt guarantees is there.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
@@ -1318,8 +1318,8 @@ class FindingVerificationServiceTest {
 
   @Test
   void floorsAFindingWhoseAbsenceClaimIsWordedAsNothingIsSanitized() {
-    // The auxiliary-order twin of the pronoun-subject absence: MITIGATION_ASSERTED's first
-    // alternative starts at "is" and never sees the negating subject, so "Nothing is sanitized"
+    // The auxiliary-order twin of the pronoun-subject absence: MITIGATION_ASSERTED_BE starts at
+    // "is" and never sees the negating subject, so "Nothing is sanitized"
     // read as a mitigation and defeated the very floor the pronoun negators enable.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original =
@@ -1342,8 +1342,9 @@ class FindingVerificationServiceTest {
 
   @Test
   void doesNotFloorWhenADoSupportedMitigationFollowsThePronounAbsence() {
-    // "does escape" is emphatic but still a statement of fact, invisible to MITIGATION_ASSERTED's
-    // copula and subject-slot shapes. With the pronoun absence match dropped by NEGATING_SUBJECT,
+    // "does escape" is emphatic but still a statement of fact, invisible to the
+    // MITIGATION_ASSERTED_* copula and subject-slot shapes. With the pronoun absence match dropped
+    // by NEGATING_SUBJECT,
     // this text would otherwise floor although it says another layer neutralizes the value —
     // the over-fire direction (#594).
     when(reviewConfig.verifierEnabled()).thenReturn(false);

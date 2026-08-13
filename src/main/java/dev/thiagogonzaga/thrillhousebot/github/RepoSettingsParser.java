@@ -268,23 +268,30 @@ final class RepoSettingsParser {
     for (String value : raw) {
       // Never null: entries come from asText() (empty string at worst) or String.split.
       var pattern = value.trim();
-      if (pattern.isEmpty()) {
-        continue;
+      if (isKeepablePattern(pattern, source)) {
+        if (patterns.size() >= MAX_PATTERNS) {
+          log.warn(
+              "Repository config {}: more than {} ignore patterns; using the first {}",
+              source,
+              MAX_PATTERNS,
+              MAX_PATTERNS);
+          break;
+        }
+        patterns.add(pattern);
       }
-      if (pattern.length() > MAX_PATTERN_LENGTH) {
-        log.warn("Repository config {}: dropping over-long ignore pattern", source);
-        continue;
-      }
-      if (patterns.size() >= MAX_PATTERNS) {
-        log.warn(
-            "Repository config {}: more than {} ignore patterns; using the first {}",
-            source,
-            MAX_PATTERNS,
-            MAX_PATTERNS);
-        break;
-      }
-      patterns.add(pattern);
     }
     return List.copyOf(patterns);
+  }
+
+  /** Whether a trimmed entry survives sanitization: blanks drop silently, over-long ones warn. */
+  private static boolean isKeepablePattern(String pattern, String source) {
+    if (pattern.isEmpty()) {
+      return false;
+    }
+    if (pattern.length() > MAX_PATTERN_LENGTH) {
+      log.warn("Repository config {}: dropping over-long ignore pattern", source);
+      return false;
+    }
+    return true;
   }
 }
