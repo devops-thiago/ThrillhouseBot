@@ -1205,6 +1205,29 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotReadDoesNotMitigateSqlInjectionAsASinkDenial() {
+    // The bridge-verb set is the defense-verb family, not just "prevent": "does not mitigate SQL
+    // injection" targets the missing defense the same way and must not read as a denial.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Unsanitized channel value concatenated into the query text",
+                "The library does not mitigate SQL injection on this path.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void floorsAConditionalWhoseCoordinatorSitsInsideTheProtasis() {
     // #676 gap 3: the conditional span ended at ANY coordinator, so the parenthetical "however"
     // inside "If, however, the API always sanitizes ..." truncated the protasis and left

@@ -185,11 +185,18 @@ public class FindingVerificationService {
   /**
    * A bridge verb filling {@link #SINK_DENIED}'s one-word gap ("does not <i>prevent</i> SQL
    * injection"): the negation then targets the missing defense, not the sink, so the sentence
-   * asserts the defect and must not read as a denial. Matched against the gap group whole, so a
-   * bridge verb elsewhere in the finding changes nothing.
+   * asserts the defect and must not read as a denial. The stems are the defense verbs a finding
+   * puts between a negation and a sink name — warding it off (prevent, stop, block, guard, protect,
+   * defend), removing it (mitigate, eliminate, avoid, fix, address, handle) or neutralizing the
+   * value (sanitize, escape, validate, filter, neutralize); an adjective or quantifier gap ("no
+   * possible SQL injection") stays a denial. Matched against the gap group whole, so a bridge verb
+   * elsewhere in the finding changes nothing.
    */
   private static final Pattern BRIDGE_VERB_GAP =
-      Pattern.compile("(prevent|stop|block|guard|protect)\\w*[\\s-]+", Pattern.CASE_INSENSITIVE);
+      Pattern.compile(
+          "(prevent|stop|block|guard|protect|defend|mitigat|eliminat|avoid|fix|address|handle"
+              + "|sanitiz|escap|validat|filter|neutraliz)\\w*[\\s-]+",
+          Pattern.CASE_INSENSITIVE);
 
   /**
    * The same denial worded about the exposure rather than the class ("not exploitable", "no
