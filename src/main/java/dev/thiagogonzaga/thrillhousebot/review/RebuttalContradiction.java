@@ -155,10 +155,11 @@ final class RebuttalContradiction {
   /**
    * Inline code spans in a markdown reply — {@code `…`} through {@code ```…```} on one line —
    * quoted constructs, never the maintainer's assertion. A backticked quotation in a decline
-   * ("declining, {@code `executor.submit`} here is on the single-threaded pool") must not be
-   * matched as an assertion about the code. The span body is bounded and confined to one line so an
-   * unclosed backtick in untrusted prose cannot swallow the rest of the reply; a span this misses
-   * only under-fires, which keeps the decline — the safe direction.
+   * ("the bot's text says {@code `it never runs concurrently`}") must not be matched as the
+   * maintainer's own assertion about the code. The span body is bounded and confined to one line so
+   * an unclosed backtick in untrusted prose cannot swallow the rest of the reply. Stripping can
+   * only remove claim matches, never add one, so this moves outcomes solely toward keeping the
+   * decline — the safe direction; a span the bound misses is left in place and behaves as before.
    */
   private static final Pattern INLINE_CODE_SPAN = Pattern.compile("(`{1,3})[^`\n]{0,1000}?\\1");
 
