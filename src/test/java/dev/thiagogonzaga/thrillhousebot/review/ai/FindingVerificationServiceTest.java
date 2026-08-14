@@ -1855,6 +1855,31 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void floorsWhenTheOperateVerbHasNoDefenseSubject() {
+    // An operate verb without a defense-stemmed subject before it ("the template runs") is not a
+    // defense action: the subject check must reject it and the floor still fires on the absence
+    // claim.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "The template runs on every request, nothing sanitizes the value before"
+                    + " innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void floorsWhenNotASingleSanitizerRuns() {
     // The negating determiner admits two modifier words: "Not a single sanitizer runs" is the
     // same denial as "no sanitizer runs", and the defense-action reading must not swallow it.
