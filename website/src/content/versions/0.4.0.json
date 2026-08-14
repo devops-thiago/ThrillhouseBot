@@ -25,12 +25,20 @@
       "slug": "architecture"
     },
     {
+      "label": "Finding feedback",
+      "slug": "feedback"
+    },
+    {
       "label": "How it compares",
       "slug": "comparison"
     },
     {
       "label": "Contributing",
       "slug": "contributing"
+    },
+    {
+      "label": "Review-quality evaluation",
+      "slug": "review-eval"
     }
   ]
 }

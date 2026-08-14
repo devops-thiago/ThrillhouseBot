@@ -19,7 +19,64 @@ against an existing tag. The jobs run in order:
 5. **bump-version** — opens a PR moving `main` to the next `-SNAPSHOT` version.
 
 To cut a release: update `CHANGELOG.md`, set the release version in `pom.xml`,
-merge, then tag the merge commit `vX.Y.Z` and push the tag.
+freeze the outgoing docs version (below), merge, then tag the merge commit
+`vX.Y.Z` and push the tag.
+
+## Freezing the docs version
+
+The version picker on the docs site is driven by `website/versions.json`, and
+each archived version is a snapshot under `website/src/content/docs/<slug>/`.
+Neither is produced by CI, so **the freeze is a manual step in the release PR**.
+Skipping it leaves the site serving the new version's docs under the old
+version's label. It has been missed at four cuts so far (0.4.0, 0.5.0, 0.6.0 and
+0.6.1), each time caught only at the following release.
+
+Take the snapshot of the version being *replaced*, from that version's own tag,
+because `archive-docs-version.mjs` expands the `remarkInclude` markers at archive
+time and would otherwise capture the working tree:
+
+```bash
+git restore --source vX.Y.Z -- README.md CONTRIBUTING.md docs/ website/src/content/docs/
+cd website && npm run docs:archive -- X.Y.Z
+git restore --source HEAD -- README.md CONTRIBUTING.md docs/ website/src/content/docs/
+```
+
+Then set `current.label` in `website/versions.json` to the version being cut, and
+confirm `npm run build` picks up the new pages.
+
+Check `git status` after the second restore: a restore from a tag brings back any
+file deleted since that tag, so anything outside the new archive directory and
+`versions.json` is a file the release should not be resurrecting.
+
+## Publishing the docs
+
+`.github/workflows/docs.yml` deploys the live site on `release: published` only,
+so the site tracks releases rather than `main`. That trigger runs **against the
+tag ref**, which makes the deploy depend on one repo setting: the `github-pages`
+environment must allow the tag to deploy.
+
+Current policies, under **Settings → Environments → github-pages → Deployment
+branches and tags**:
+
+```
+branch: main
+tag: v*
+```
+
+Without the tag rule the deploy fails at the very last step with:
+
+> Tag "vX.Y.Z" is not allowed to deploy to github-pages due to environment
+> protection rules.
+
+That is what happened to every release through 0.6.1, and the workaround —
+dispatching the workflow from `main` — publishes `main`'s docs instead of the
+release's, which is exactly what the release-only trigger exists to prevent. If
+a deploy fails this way, fix the policy and re-run the workflow against the tag
+rather than dispatching from `main`. Inspect the policies with:
+
+```bash
+gh api repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies
+```
 
 ## Automated version bump
 
