@@ -21,7 +21,11 @@ const versionsMetaDir = join(websiteRoot, "src/content/versions");
 const versionsPath = join(websiteRoot, "versions.json");
 
 // Keep in sync with the sidebar in astro.config.mjs (starlight-versions stores
-// a copy per archived release).
+// a copy per archived release). A page archived with no entry here is
+// unreachable from the version's navigation, so the archive aborts on one
+// rather than writing a sidebar that silently hides it. Entries whose page is
+// absent from the snapshot are dropped, which is how older versions archive
+// cleanly.
 const SIDEBAR = [
   { label: "Home", slug: "index" },
   { label: "Getting started", slug: "getting-started" },
@@ -29,6 +33,7 @@ const SIDEBAR = [
   { label: "Configuration", slug: "configuration" },
   { label: "AI providers", slug: "providers" },
   { label: "Architecture", slug: "architecture" },
+  { label: "Finding feedback", slug: "feedback" },
   { label: "How it compares", slug: "comparison" },
   { label: "Contributing", slug: "contributing" },
 ];
@@ -112,8 +117,24 @@ function listMarkdownFiles(dir) {
   });
 }
 
+const sources = listMarkdownFiles(docsDir);
+const archivedSlugs = new Set(
+  sources.map((src) => relative(docsDir, src).replace(/\.mdx?$/, "")),
+);
+
+const unlisted = [...archivedSlugs].filter((s) => !SIDEBAR.some((e) => e.slug === s)).sort();
+if (unlisted.length > 0) {
+  console.error(`Pages with no SIDEBAR entry: ${unlisted.join(", ")}`);
+  console.error(
+    "Archiving them now would leave them reachable only by direct URL. Add them to",
+  );
+  console.error("SIDEBAR in this script (and to astro.config.mjs if missing), then re-run.");
+  process.exit(1);
+}
+const sidebar = SIDEBAR.filter((e) => archivedSlugs.has(e.slug));
+
 mkdirSync(destDocs, { recursive: true });
-for (const src of listMarkdownFiles(docsDir)) {
+for (const src of sources) {
   const rel = relative(docsDir, src);
   const out = join(destDocs, rel);
   mkdirSync(dirname(out), { recursive: true });
@@ -136,7 +157,7 @@ if (existsSync(assetsDir)) {
 }
 
 mkdirSync(versionsMetaDir, { recursive: true });
-writeFileSync(destVersionConfig, `${JSON.stringify({ sidebar: SIDEBAR }, null, 2)}\n`);
+writeFileSync(destVersionConfig, `${JSON.stringify({ sidebar }, null, 2)}\n`);
 console.log(`wrote ${relative(websiteRoot, destVersionConfig)}`);
 
 const versions = JSON.parse(readFileSync(versionsPath, "utf8"));
