@@ -1830,6 +1830,31 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void floorsWhenDoSupportFollowsTheNegatingPronoun() {
+    // A do-support pair opening right after the negating pronoun ("nothing does escape") is the
+    // absence claim in emphatic order, and the dropped match must not stop the scan from reading
+    // the rest of the text.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized and nothing does escape the value before innerHTML"
+                    + " receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
   void floorsWhenNotASingleSanitizerRuns() {
     // The negating determiner admits two modifier words: "Not a single sanitizer runs" is the
     // same denial as "no sanitizer runs", and the defense-action reading must not swallow it.
