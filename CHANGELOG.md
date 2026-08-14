@@ -4,13 +4,24 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-08-14
+
+Follow-ups to the review threads on 0.6.1, plus the first piece of the release
+chain automation. A review GitHub refuses is now diagnosed and preserved, a
+review whose PR moved under it stands down for the run that replaces it, and the
+decline re-check and injection-sink floor each close a further set of gaps found
+by the dogfood corpus. No configuration changes; upgrading is a redeploy.
+
+### Changed
+
+- **The post-release version bump fails loudly** (#11): the release workflow's bump job branched on `gh pr create` succeeding or the PR already existing, and reported success for every other outcome, so a bump lost to a permissions or API error passed silently. It now distinguishes the three cases and fails the job on the third. `docs/RELEASING.md` describes the release flow end to end, including the one-time repository settings the bump depends on
+
 ### Fixed
 
-- **A review post GitHub refuses is diagnosed, abandoned when stale, and never lost** (#704): a rejected review post now logs GitHub's own response body (redacted and length-capped) instead of only the status code; a run whose PR head moved while the model call ran abandons its post — counted as a structured `HEAD_MOVED` skip, its check run concluded as skipped — because the coalesced run for the new head re-reviews and posts in its place; and a summary-only review GitHub definitely refused (a response-carrying 4xx — an ambiguous timeout/5xx still fails, since the review may have landed) falls back to posting the same body as an issue comment through the capped, paced write path, instead of discarding the generation behind a "review could not be completed" notice
-
-- **Inline code spans in a decline are stripped delimiter-aware** (#697): the decline re-check now scans backtick runs the CommonMark way — an opening run of N backticks closes at the next run of exactly N — so a span whose body carries a longer backtick run (`` `a``b` ``) or one line ending is stripped whole instead of leaving quoted claim text to reopen a correct decline. An unclosed run stays literal, and a length bound still keeps a stray backtick from swallowing the reply
-- **Mention-form commands follow the configured bot login** (#698): `TriggerDetector` builds the `@<bot> <command>` trigger patterns from `BotIdentity.mentionNames()` instead of a hardcoded slug, so `@my-review-bot review` works on a custom-login install; the mention's `@` must open the comment or follow a non-word character, so an email local part never triggers a command. Slash forms and default-config behavior are unchanged
-- **The injection-sink floor closes four residual defeater gaps** (#696): "Nothing escapes parameterization" and "Nothing escapes; the sanitizer runs on render" read as the mitigations they assert instead of over-firing the floor, a do-supported mitigation with an adverb ("does always escape") defeats the floor, a modal absence claim ("Nothing can sanitize the value") now registers and floors at high, and a comma-coordinated asserted mitigation ("Nothing escapes, but the sanitizer runs on render") defeats the floor while its denial twin ("...but the sanitizer is disabled") still floors
+- **A review post GitHub refuses is diagnosed, abandoned when stale, and never lost** (#704): a rejected review post logs GitHub's own response body, redacted and length-capped, so the cause is visible; previously only the status code reached the logs. A run whose PR head moved during the model call now stands down, recorded as a structured `HEAD_MOVED` skip with its check run concluded as skipped, because the coalesced run for the new head re-reviews and posts in its place. A summary-only review that GitHub definitely refused, meaning a response-carrying 4xx, falls back to posting the same body as an issue comment through the capped and paced write path, so the generation survives. An ambiguous timeout or 5xx still fails, since the review may have landed
+- **Inline code spans in a decline are stripped delimiter-aware** (#697): the decline re-check scans backtick runs the CommonMark way, where an opening run of N backticks closes at the next run of exactly N. A span whose body carries a longer backtick run (`` `a``b` ``) or one line ending is now stripped whole, so quoted claim text can no longer reopen a correct decline. An unclosed run stays literal, and a length bound keeps a stray backtick from swallowing the reply
+- **Mention-form commands follow the configured bot login** (#698): `TriggerDetector` builds the `@<bot> <command>` trigger patterns from `BotIdentity.mentionNames()`, so `@my-review-bot review` works on an install whose GitHub App runs under a custom login. The mention's `@` must open the comment or follow a non-word character, so an email local part never triggers a command. Slash forms and default-config behaviour are unchanged
+- **The injection-sink floor closes four residual defeater gaps** (#696): "Nothing escapes parameterization" and "Nothing escapes; the sanitizer runs on render" are read as the mitigations they assert, so the floor no longer over-fires on them. A do-supported mitigation carrying an adverb ("does always escape") defeats the floor. A modal absence claim ("Nothing can sanitize the value") registers and floors at high. A comma-coordinated asserted mitigation ("Nothing escapes, but the sanitizer runs on render") defeats the floor, while its denial twin ("...but the sanitizer is disabled") still floors
 
 ## [0.6.1] — 2026-08-13
 

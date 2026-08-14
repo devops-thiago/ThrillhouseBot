@@ -53,3 +53,6 @@ rewrite.yml
 website/node_modules/
 website/dist/
 website/.astro/
+
+# Local agent tooling, not part of the project
+.claude/
