@@ -1880,6 +1880,32 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenARealSubjectInterruptsTheChain() {
+    // A clause with its own subject breaks the link run: "the framework sanitizes" is a real
+    // subject-verb mitigation (the pronoun check needs "nothing" directly before it, and the
+    // {0,3} word gap cannot cross the comma), so neither it nor its "or validates" continuation
+    // is chained away and the floor stays defeated.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, the framework sanitizes, or validates the value before"
+                    + " innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void floorsWhenNotASingleSanitizerRuns() {
     // The negating determiner admits two modifier words: "Not a single sanitizer runs" is the
     // same denial as "no sanitizer runs", and the defense-action reading must not swallow it.

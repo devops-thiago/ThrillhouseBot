@@ -339,7 +339,14 @@ public class FindingVerificationService {
    * end-anchored like {@link #NEGATING_SUBJECT}, only because the single pattern that spelled the
    * whole chain out was more than the regex complexity budget allows. Consulted only for a match
    * whose subject slot holds a {@link #COORDINATOR_SUBJECT}, so a real subject earlier in the
-   * sentence is never chained away.
+   * sentence is never chained away: a clause with its own subject ("Nothing escapes, the framework
+   * sanitizes, or validates ...") breaks the link run — the non-defense word before its verb ends
+   * the walk, and the subject-verb pair itself already defeats the floor as a mitigation. Accepted
+   * residual, the safe under-fire direction: a chain verb carrying its own object ("Nothing
+   * escapes, sanitizes the value, or validates ...") also breaks the run, so its trailing
+   * coordinator pair reads as a mitigation and the floor stays silent — carrying objects through
+   * the links is an open-ended grammar problem, and the absence claim was already registered by the
+   * chain's earlier verbs.
    */
   private static final Pattern ABSENCE_CHAIN_LINK =
       Pattern.compile(
