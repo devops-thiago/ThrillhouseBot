@@ -23,6 +23,11 @@ by the dogfood corpus. No configuration changes; upgrading is a redeploy.
 - **Mention-form commands follow the configured bot login** (#698): `TriggerDetector` builds the `@<bot> <command>` trigger patterns from `BotIdentity.mentionNames()`, so `@my-review-bot review` works on an install whose GitHub App runs under a custom login. The mention's `@` must open the comment or follow a non-word character, so an email local part never triggers a command. Slash forms and default-config behaviour are unchanged
 - **The injection-sink floor closes four residual defeater gaps** (#696): "Nothing escapes parameterization" and "Nothing escapes; the sanitizer runs on render" are read as the mitigations they assert, so the floor no longer over-fires on them. A do-supported mitigation carrying an adverb ("does always escape") defeats the floor. A modal absence claim ("Nothing can sanitize the value") registers and floors at high. A comma-coordinated asserted mitigation ("Nothing escapes, but the sanitizer runs on render") defeats the floor, while its denial twin ("...but the sanitizer is disabled") still floors
 
+### Dependencies
+
+- Bumped the Quarkus platform from 3.38.0 to 3.38.1 (#706)
+- Bumped `actions/attest-build-provenance` from 4.1.1 to 4.2.2 in the release workflow (#708)
+
 ## [0.6.1] — 2026-08-13
 
 Fixes for defects found after 0.6.0 shipped, most of them during the audit of

@@ -54,5 +54,5 @@ website/node_modules/
 website/dist/
 website/.astro/
 
-# Local agent tooling, not part of the project
+# Local tool config, not part of the project
 .claude/
