@@ -99,10 +99,10 @@ not a reaction.
 | `/resume` | Re-enable the bot on a paused PR | write |
 | `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval (see **Clearing a finding with no thread** under Configuration) | write |
 
-**Access** — every command except `/help` requires the commenter to hold write access to
-the repository (or to be named in
-`THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`), since reviews spend the operator's
-AI budget.
+**Access** — every slash command except `/help` requires the commenter to hold write access
+to the repository, or to be named in `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`,
+since reviews spend the operator's AI budget. The allowlist covers the slash commands only:
+the `@thrillhousebot resolved` directive always requires write access, as described below.
 
 **`@thrillhousebot resolved`** — a directive, not a slash command: it has no `/resolved`
 form, and it is read by the *next* review rather than acted on immediately. The bot replies
@@ -288,7 +288,7 @@ will change per provider:
 | `GITHUB_WRITE_MIN_INTERVAL` | Duration spacing two content-creating GitHub calls (comments, review comments, thread replies, reviews), shared process-wide. GitHub secondary-rate-limits rapid content creation and answers `403`; pacing keeps the bot inside that envelope instead of discovering it by rejection — its published guidance is no more than one such request per second. `0` disables pacing | `1s` |
 | `GITHUB_WRITE_MAX_WAIT` | Duration ceiling on how long one caller waits for its content-creation slot. Past it the call goes out unpaced and the bounded backoff handles a refusal, so a long queue never parks a finished command | `60s` |
 | `WEBHOOK_DEDUP_TTL` | Webhook deduplication time-to-live for GitHub redeliveries | `24h` |
-| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to trigger manual `/review` without repo access | _(empty)_ |
+| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to run the slash commands without repo access; does not extend to the `@thrillhousebot resolved` directive, which always requires write access | _(empty)_ |
 | `MANUAL_TRIGGER_AUTH_TIMEOUT` | Upper bound on the manual-trigger write-access check on the webhook ACK thread; fails closed (denies) if GitHub is slower | `5s` |
 | `ACK_REACTION_TIMEOUT` | Upper bound on the 👀 command-ack reaction on the webhook ACK thread; the wait is abandoned (reaction may land late) if GitHub is slower | `3s` |
 | `AUTO_REVIEW_MIN_INTERVAL` | Minimum interval between automatic reviews of the same PR — pushes within the window are skipped silently, even on a new head SHA (in-memory, per replica). A manual `/review` always bypasses; unset or `0` reviews every push | `0` (disabled) |
