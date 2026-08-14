@@ -311,6 +311,18 @@ class GitHubApiErrorTest {
       assertEquals("*** abcdefghij0123456789", body);
     }
 
+    /**
+     * A bearer BEFORE a token: the leftmost-match walk must pick the value shape although the
+     * prefix shape also matched further right, and the trailing token's mask ends the text, so the
+     * scan exits at the end rather than on a failed search.
+     */
+    @Test
+    void masksABearerFollowedByATokenLeftmostFirst() {
+      var body = loggedBody(outbound(401, "Bearer abcdefghij0123456789 ghp_abcdefghij0123456789"));
+
+      assertEquals("*** ***", body);
+    }
+
     /** The other direction: a bearer value that is itself a token keeps nothing past the mask. */
     @Test
     void masksABearerCarryingATokenValueAsOneLeftmostMatch() {

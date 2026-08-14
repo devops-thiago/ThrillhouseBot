@@ -141,8 +141,8 @@ public class FindingVerificationService {
    * The same absence claim worded as a missing step ("no sanitization", "never escaped"), with room
    * for a few words between the negator and the neutralizing verb. Read as a union with {@link
    * #UNMITIGATED_ADJECTIVE} and the pronoun-subject wording {@link #claimsAbsenceAsSubject
-   * recognizes}; the three are one claim recognized separately only because one alternation of
-   * every wording is more than the regex complexity budget allows.
+   * recognizes} in its finite and modal forms; the wordings are one claim recognized separately
+   * only because one alternation of every wording is more than the regex complexity budget allows.
    */
   private static final Pattern MITIGATION_ABSENT =
       Pattern.compile(
@@ -165,6 +165,23 @@ public class FindingVerificationService {
           "\\b(sanitiz|escap|validat|parameteriz|encod)(es|ed|ing)\\b", Pattern.CASE_INSENSITIVE);
 
   /**
+   * The same verb token with a modal ("Nothing <i>can sanitize</i> the value", "nobody <i>could
+   * escape</i> it in time"): {@link #ABSENCE_SUBJECT_VERB}'s finite-only suffix group never sees
+   * the bare infinitive a modal takes, so this common wording read as no absence claim at all
+   * (#696). Under-fire is the safe direction, but not a reason to keep a hole this common. {@link
+   * #claimsAbsenceAsSubject} holds it to the same subject prefix and the same defense-noun-object
+   * rejection, for the same reason: "nothing can escape validation" says every value IS validated.
+   * One non-negator gap word is admitted between the modal and the verb, so an adverb ("Nothing can
+   * ever sanitize") does not hide the claim — mirroring {@link #MITIGATION_DO_SUPPORTED}'s adverb
+   * gap.
+   */
+  private static final Pattern ABSENCE_MODAL_VERB =
+      Pattern.compile(
+          "\\b(can|could|will|would|may|might|must)\\s+(?!(no|not|never)\\b)(\\w+\\s+)?"
+              + "(sanitiz|escap|validat|parameteriz|encod)e\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
    * The negating pronoun subject within three words of the text BEFORE a {@link
    * #ABSENCE_SUBJECT_VERB} match — anchored to that boundary with {@code \z}, it is the verbatim
    * subject-and-gap prefix of the one-pattern form. {@link #MITIGATION_ASSERTED_SUBJECT} excludes
@@ -183,11 +200,26 @@ public class FindingVerificationService {
    * object ("nothing escapes heavy validation", "nothing escapes the sanitizer") is rejected too,
    * keeping the over-fire direction closed (#594) while "nothing escapes the value" stays an
    * absence claim — a defense noun further than two words out ("nothing escapes the value before
-   * validation") no longer flips the reading.
+   * validation") no longer flips the reading. The defense stems match the verb group plus "filter"
+   * — "parameteriz" included, so "nothing escapes parameterization" reads as the mitigation it
+   * asserts (#696) — and the separator admits clause-break punctuation (semicolon, colon, dashes)
+   * besides whitespace, so a defense noun across a clause break ("Nothing escapes; the sanitizer
+   * runs on render") still flips the reading. The comma and sentence-ending punctuation are
+   * deliberately excluded: a comma carries coordination ("Nothing escapes, sanitizes, or validates
+   * the value") and appositive denials ("Nothing escapes, but the sanitizer is disabled"), both of
+   * which must stay absence claims, and a defense noun in the NEXT sentence must not defuse this
+   * sentence's absence claim. A comma-coordinated ASSERTED mitigation ("Nothing escapes, but the
+   * sanitizer runs on render") keeps its absence claim registered here by the same exclusion —
+   * {@link #hasUndeniedDefenseAction} reads the follow-up clause and defeats the floor instead
+   * (#696). Accepted residual, the safe under-fire direction: a DENIED defense across the clause
+   * break ("Nothing escapes; the sanitizer is disabled") still flips the reading, because a regex
+   * cannot carry the denial back over the punctuation.
    */
   private static final Pattern DEFENSE_OBJECT_AFTER_VERB =
       Pattern.compile(
-          "\\s+(\\w+\\s+){0,2}(sanitiz|escap|validat|encod|filter)", Pattern.CASE_INSENSITIVE);
+          "[\\s;:\\u2013\\u2014-]+(\\w+[\\s;:\\u2013\\u2014-]+){0,2}"
+              + "(sanitiz|escap|validat|parameteriz|encod|filter)",
+          Pattern.CASE_INSENSITIVE);
 
   /**
    * A finding that RULES THE SINK OUT rather than reporting it ("so there is no SQL injection",
@@ -282,13 +314,50 @@ public class FindingVerificationService {
   /**
    * The same assertion worded with the mitigating layer in the subject slot ("React escapes them");
    * the third leg of {@link #MITIGATION_ASSERTED_BE}'s union. The negating pronouns are excluded
-   * from the subject slot so a pronoun-worded absence claim never reads as a mitigation.
+   * from the subject slot so a pronoun-worded absence claim never reads as a mitigation. The
+   * coordinators stay IN the subject slot — a conjoined verb pair ("the framework renders the
+   * output and escapes it") has no other subject-verb match when its first verb is not
+   * defense-listed, and dropping "and escapes" would over-fire the floor on an asserted mitigation
+   * (#696). A coordinator continuing a pronoun-negated verb chain instead ("Nothing escapes,
+   * sanitizes, or validates the value") is dropped in {@link #hasUnnegatedAssertedMatch} by the
+   * {@link #continuesAbsenceChain} check, which reads the chain back to its negated subject.
    */
   private static final Pattern MITIGATION_ASSERTED_SUBJECT =
       Pattern.compile(
           "\\b(?!(no|not|never|nothing|nobody)\\b)\\w+\\s+"
               + "(sanitizes|escapes|validates|parameterizes|encodes)\\b",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * One link of the pronoun-negated defense-verb chain closing the text before a
+   * coordinator-subject {@link #MITIGATION_ASSERTED_SUBJECT} match: in "Nothing escapes, sanitizes,
+   * <i>or validates</i> the value", the "or validates" pair continues the ONE absence claim the
+   * chain opened, so it must not read as a mitigation — while "the framework renders the output
+   * <i>and escapes</i> it" has no such chain before its coordinator and stays the asserted
+   * mitigation it is. {@link #continuesAbsenceChain} walks these links back from the coordinator
+   * until {@link #NEGATING_SUBJECT_BEFORE_VERB} confirms the negated subject; one link per pattern,
+   * end-anchored like {@link #NEGATING_SUBJECT}, only because the single pattern that spelled the
+   * whole chain out was more than the regex complexity budget allows. Consulted only for a match
+   * whose subject slot holds a {@link #COORDINATOR_SUBJECT}, so a real subject earlier in the
+   * sentence is never chained away: a clause with its own subject ("Nothing escapes, the framework
+   * sanitizes, or validates ...") breaks the link run — the non-defense word before its verb ends
+   * the walk, and the subject-verb pair itself already defeats the floor as a mitigation. Accepted
+   * residual, the safe under-fire direction: a chain verb carrying its own object ("Nothing
+   * escapes, sanitizes the value, or validates ...") also breaks the run, so its trailing
+   * coordinator pair reads as a mitigation and the floor stays silent — carrying objects through
+   * the links is an open-ended grammar problem, and the absence claim was already registered by the
+   * chain's earlier verbs.
+   */
+  private static final Pattern ABSENCE_CHAIN_LINK =
+      Pattern.compile(
+          "\\b(sanitiz|escap|validat|parameteriz|encod)\\w*[,\\s]+\\z", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The coordinator subject that hands a {@link #MITIGATION_ASSERTED_SUBJECT} match to {@link
+   * #continuesAbsenceChain}. Matched against the match's own span, anchored at its start.
+   */
+  private static final Pattern COORDINATOR_SUBJECT =
+      Pattern.compile("^(and|or|nor)\\b", Pattern.CASE_INSENSITIVE);
 
   /**
    * A pronoun subject that negates the clause it opens: a {@link #MITIGATION_ASSERTED_BE} or {@link
@@ -303,15 +372,68 @@ public class FindingVerificationService {
    * The mitigation asserted with do-support ("the framework does escape the value", "React did
    * sanitize it"): emphatic, but still a statement of fact, and invisible to the copula and
    * subject-slot patterns {@link #MITIGATION_ASSERTED_BE}, {@link #MITIGATION_ASSERTED_GET} and
-   * {@link #MITIGATION_ASSERTED_SUBJECT}. The verb must follow the auxiliary directly, so the
-   * negated "does not escape" stays an absence claim; modals are deliberately absent — "should
-   * escape" is a recommendation, not an assertion. Kept a separate pattern because folding it into
-   * the others would put them back over the regex complexity budget.
+   * {@link #MITIGATION_ASSERTED_SUBJECT}. One gap word is admitted between the auxiliary and the
+   * verb, so an emphatic adverb ("does always escape") does not hide the assertion (#696); the gap
+   * word must not be a negator, so "does not escape" and "did never sanitize" stay absence claims.
+   * Modals are deliberately absent — "should escape" is a recommendation, not an assertion. Kept a
+   * separate pattern because folding it into the others would put them back over the regex
+   * complexity budget.
    */
   private static final Pattern MITIGATION_DO_SUPPORTED =
       Pattern.compile(
-          "\\b(do|does|did)\\s+(sanitiz|escap|validat|parameteriz|encod)es?\\b",
+          "\\b(do|does|did)\\s+(?!(no|not|never)\\b)(\\w+\\s+)?"
+              + "(sanitiz|escap|validat|parameteriz|encod)es?\\b",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The mitigation asserted as the defense itself operating ("the sanitizer runs on render", "the
+   * validation applies to every request"): a defense-stemmed subject with an operate-family verb
+   * after it. Invisible to every other mitigation pattern — the clause has no auxiliary and its
+   * verb is not in the subject-slot list — and exactly the wording a comma-coordinated follow-up
+   * takes ("Nothing escapes, but the sanitizer runs on render"), where {@link
+   * #DEFENSE_OBJECT_AFTER_VERB}'s comma exclusion keeps the absence claim registered, so without
+   * this pattern the floor over-fired on a sentence that asserts the defense runs (#696). One gap
+   * word is admitted between the subject and the verb, mirroring {@link #MITIGATION_DO_SUPPORTED}'s
+   * adverb gap, so "the sanitizer always runs" is not hidden by its adverb; the gap word must not
+   * be a negator, so "the sanitizer never runs" stays an absence statement, and {@link
+   * #hasUndeniedDefenseAction} drops a match preceded by a {@link #NEGATING_DETERMINER}, so "no
+   * sanitizer runs" stays one too. Held in two patterns — {@link #DEFENSE_ACTION_SUBJECT} is the
+   * subject-and-gap prefix, end-anchored before this verb token, with the gap word captured so the
+   * negator exclusion moves into {@link #hasUndeniedDefenseAction} — only because the single
+   * pattern that spelled both out was more than the regex complexity budget allows.
+   */
+  private static final Pattern DEFENSE_ACTION_VERB =
+      Pattern.compile(
+          "\\b(runs?|ran|running|executes?|executed|applies|applied|fires?|fired)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The defense-stemmed subject and its one-word gap before a {@link #DEFENSE_ACTION_VERB} token,
+   * end-anchored like {@link #NEGATING_SUBJECT_BEFORE_VERB}; the gap word is captured for the
+   * negator exclusion in {@link #hasUndeniedDefenseAction}.
+   */
+  private static final Pattern DEFENSE_ACTION_SUBJECT =
+      Pattern.compile(
+          "\\b(sanitiz|escap|validat|parameteriz|encod|filter)\\w*\\s+((\\w+)\\s+)?\\z",
+          Pattern.CASE_INSENSITIVE);
+
+  /** The gap word that turns a defense-action pair into its own denial ("sanitizer never runs"). */
+  private static final Pattern DEFENSE_ACTION_NEGATOR_GAP =
+      Pattern.compile("no|not|never", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A negating determiner or preposition closing the text before a {@link #DEFENSE_ACTION_SUBJECT}
+   * match ("<i>no</i> sanitizer runs", "<i>without</i> escaping applied"), with room for two
+   * modifiers ("no working sanitizer runs", "not a single sanitizer runs"): the clause then states
+   * the defense does NOT operate and must not read as a mitigation. Anchored to the end of the text
+   * before the match, like {@link #NEGATING_SUBJECT}. Accepted residual, matching pre-#696
+   * behavior: an idiomatic negator ("no doubt the sanitizer runs", "not to mention") also satisfies
+   * this pattern and denies a genuinely asserted mitigation — exempting idioms is an open-ended
+   * lexicon problem a bounded regex cannot close.
+   */
+  private static final Pattern NEGATING_DETERMINER =
+      Pattern.compile(
+          "\\b(no|not|never|without|nor)\\s+(\\w+\\s+){0,2}\\z", Pattern.CASE_INSENSITIVE);
 
   /**
    * A conditional clause — a hypothesis the finding raises, not a fact it states. Matches from the
@@ -717,7 +839,32 @@ public class FindingVerificationService {
    */
   private static boolean assertsMitigation(String asserted) {
     return hasUnnegatedAssertedMatch(asserted)
-        || hasUnnegatedMatch(MITIGATION_DO_SUPPORTED, asserted);
+        || hasUnnegatedMatch(MITIGATION_DO_SUPPORTED, asserted)
+        || hasUndeniedDefenseAction(asserted);
+  }
+
+  /**
+   * A defense-action pair — a {@link #DEFENSE_ACTION_VERB} token whose text up to the token
+   * satisfies {@link #DEFENSE_ACTION_SUBJECT} — unless its gap word is a {@link
+   * #DEFENSE_ACTION_NEGATOR_GAP} ("the sanitizer never runs") or a {@link #NEGATING_DETERMINER}
+   * closes the text before the subject ("no sanitizer runs"): "the sanitizer runs on render"
+   * asserts the defense operates, while both negated forms state it does not. Regions instead of
+   * substrings, like every other before-the-match check here.
+   */
+  private static boolean hasUndeniedDefenseAction(String asserted) {
+    Matcher verb = DEFENSE_ACTION_VERB.matcher(asserted);
+    Matcher subject = DEFENSE_ACTION_SUBJECT.matcher(asserted);
+    Matcher denial = NEGATING_DETERMINER.matcher(asserted);
+    while (verb.find()) {
+      if (subject.region(0, verb.start()).find()) {
+        String gap = subject.group(3);
+        if ((gap == null || !DEFENSE_ACTION_NEGATOR_GAP.matcher(gap).matches())
+            && !denial.region(0, subject.start()).find()) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -745,13 +892,37 @@ public class FindingVerificationService {
       }
       // A region instead of a substring, so dropping a negated match never copies the text; the
       // pattern's $ honors the region end under the matcher's default anchoring bounds.
-      if (!negation.region(0, starts[leftmost]).find()) {
+      if (!negation.region(0, starts[leftmost]).find()
+          && !continuesAbsenceChain(asserted, starts[leftmost], ends[leftmost])) {
         return true;
       }
       // No wording matches an empty string, so the scan always advances.
       from = ends[leftmost];
       starts[leftmost] = -1;
     }
+  }
+
+  /**
+   * Whether a mitigation-asserted match is really the tail of a coordinated absence claim: its
+   * subject slot holds a {@link #COORDINATOR_SUBJECT} and an unbroken run of {@link
+   * #ABSENCE_CHAIN_LINK}s walks back from it to a {@link #NEGATING_SUBJECT_BEFORE_VERB}, as in
+   * "Nothing escapes, sanitizes, <i>or validates</i> the value". Each link starts strictly before
+   * the previous one, so the walk always terminates.
+   */
+  private static boolean continuesAbsenceChain(String asserted, int start, int end) {
+    if (!COORDINATOR_SUBJECT.matcher(asserted).region(start, end).lookingAt()) {
+      return false;
+    }
+    Matcher link = ABSENCE_CHAIN_LINK.matcher(asserted);
+    Matcher negated = NEGATING_SUBJECT_BEFORE_VERB.matcher(asserted);
+    var at = start;
+    while (link.region(0, at).find()) {
+      at = link.start();
+      if (negated.region(0, at).find()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** A wording with no further matches; loses every comparison for the leftmost slot. */
@@ -787,8 +958,9 @@ public class FindingVerificationService {
 
   private static boolean hasUnnegatedMatch(Pattern mitigation, String asserted) {
     Matcher asserts = mitigation.matcher(asserted);
+    Matcher negation = NEGATING_SUBJECT.matcher(asserted);
     while (asserts.find()) {
-      if (!NEGATING_SUBJECT.matcher(asserted.substring(0, asserts.start())).find()) {
+      if (!negation.region(0, asserts.start()).find()) {
         return true;
       }
     }
@@ -801,7 +973,7 @@ public class FindingVerificationService {
         || (SQL.matcher(text).find() && STRING_BUILT.matcher(text).find());
   }
 
-  /** The absence claim in any of its three wordings; one claim, three recognizers. */
+  /** The absence claim in any of its four wordings; one claim, three recognizers. */
   private static boolean claimsNothingNeutralizesIt(String text) {
     return UNMITIGATED_ADJECTIVE.matcher(text).find()
         || MITIGATION_ABSENT.matcher(text).find()
@@ -809,16 +981,23 @@ public class FindingVerificationService {
   }
 
   /**
-   * The absence claim worded with a pronoun subject: a {@link #ABSENCE_SUBJECT_VERB} token whose
-   * text up to the token satisfies {@link #NEGATING_SUBJECT_BEFORE_VERB} and whose text from the
-   * token's end does not open on a {@link #DEFENSE_OBJECT_AFTER_VERB}. Checking every verb token
-   * against an anchored prefix and an anchored trailer decides exactly the parses the one-pattern
-   * form decided through backtracking and its trailing lookahead — including the parse where a
-   * defense noun flips an earlier verb's reading while a later verb in the same subject gap stays
-   * clean — so the split changes what the analyzer counts, not what the recognizer accepts.
+   * The absence claim worded with a pronoun subject, finite ("Nothing sanitizes the value") or
+   * modal ("Nothing can sanitize the value", #696): an {@link #ABSENCE_SUBJECT_VERB} or {@link
+   * #ABSENCE_MODAL_VERB} token whose text up to the token satisfies {@link
+   * #NEGATING_SUBJECT_BEFORE_VERB} and whose text from the token's end does not open on a {@link
+   * #DEFENSE_OBJECT_AFTER_VERB}. Checking every verb token against an anchored prefix and an
+   * anchored trailer decides exactly the parses the one-pattern form decided through backtracking
+   * and its trailing lookahead — including the parse where a defense noun flips an earlier verb's
+   * reading while a later verb in the same subject gap stays clean — so the split changes what the
+   * analyzer counts, not what the recognizer accepts.
    */
   private static boolean claimsAbsenceAsSubject(String text) {
-    Matcher verb = ABSENCE_SUBJECT_VERB.matcher(text);
+    return claimsAbsenceOnVerbToken(ABSENCE_SUBJECT_VERB, text)
+        || claimsAbsenceOnVerbToken(ABSENCE_MODAL_VERB, text);
+  }
+
+  private static boolean claimsAbsenceOnVerbToken(Pattern verbToken, String text) {
+    Matcher verb = verbToken.matcher(text);
     // Regions instead of substrings, so stepping through the verb tokens never copies the text;
     // with the matchers' default opaque and anchoring bounds a region IS the whole input to the
     // pattern, so {@code \z} stops at the region end and the semantics stay those of a substring.

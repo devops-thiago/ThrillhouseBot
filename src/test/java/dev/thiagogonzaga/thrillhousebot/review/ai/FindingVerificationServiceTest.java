@@ -1418,6 +1418,30 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotFloorWhenNothingEscapesParameterization() {
+    // #696 item 1: the defense-noun lookahead omitted "parameteriz" although the verb group has
+    // it, so "Nothing escapes parameterization" — a mitigation saying every value IS
+    // parameterized — read as an absence claim and over-fired the floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/InvoiceExporter/Data/InvoiceRepository.cs",
+                27,
+                "Channel value concatenated into the SQL query text",
+                "Nothing escapes parameterization before the query runs.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
   void doesNotFloorWhenTheSubjectSlotMitigationPrecedesTheCopulaOne() {
     // Same union, opposite order: the subject-slot match sits before the copula match, so the
     // leftmost pick has to displace the copula candidate rather than keep it.
@@ -1439,6 +1463,542 @@ class FindingVerificationServiceTest {
 
     assertSame(original, result);
     assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenTheAbsenceClaimTakesAModal() {
+    // #696 item 2: the suffix group admitted only finite forms, so the bare infinitive a modal
+    // takes ("Nothing can sanitize ...") never registered as an absence claim and the floor
+    // stayed silent on a named sink.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing can sanitize the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenTheModalAbsenceObjectIsADefenseNoun() {
+    // The modal wording carries the same flipped reading: "Nothing can escape validation" says
+    // every value IS validated, and must not register as an absence claim — over-firing is the
+    // dangerous direction (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing can escape validation before the value reaches innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheDoSupportedMitigationCarriesAnAdverb() {
+    // #696 item 3: MITIGATION_DO_SUPPORTED required the verb directly after the auxiliary, so
+    // "does always escape" was invisible and the floor over-fired despite an asserted mitigation.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized here, but the framework does always escape the value at"
+                    + " render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenDoSupportIsNegatedThroughTheAdverbGap() {
+    // The do-support gap word must never be a negator: "does not escape" is the absence claim,
+    // and reading it as a mitigation through the new adverb gap would silence the floor on a
+    // demonstrated sink.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "The template engine does not escape the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenPunctuationSeparatesTheDefenseNounObject() {
+    // #696 item 4: the defense-noun lookahead's separator was whitespace-only, so "Nothing
+    // escapes; the sanitizer runs on render" stopped at the semicolon and read as a bare absence
+    // claim. Clause-break punctuation now counts as separation, so the same-sentence defense noun
+    // still flips the reading.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes; the sanitizer runs on render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenTheModalAbsenceCarriesAnAdverb() {
+    // The modal wording admits one non-negator gap word, mirroring the do-support adverb gap:
+    // "Nothing can ever sanitize ..." is the same absence claim and must still floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing can ever sanitize the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheModalAbsenceSubjectCarriesAPhrase() {
+    // The modal token shares the finite wording's subject prefix, so a phrase-modified subject
+    // ("Nothing in this template can sanitize ...") registers just like the finite shape does.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing in this template can sanitize the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheDefenseAcrossTheCommaIsDenied() {
+    // The defense-noun separator deliberately excludes the comma: "Nothing escapes, but the
+    // sanitizer is disabled" DENIES the defense it names, and letting the comma carry the
+    // lookahead across would silence the floor on a stated absence claim.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the sanitizer is disabled in this diff.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheAbsenceVerbsAreCoordinatedByCommas() {
+    // Comma-coordinated absence verbs must not flip their own claim: in "Nothing escapes,
+    // sanitizes, or validates the value" each continuation verb is part of the absence claim,
+    // not a defense-noun object of the verb before it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, sanitizes, or validates the value before innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenAnAssertedMitigationFollowsTheNegatedAuxiliaryOrder() {
+    // The mitigation-asserted scan must resume past a negated match: "Nothing is sanitized" is
+    // dropped by NEGATING_SUBJECT, but the subject-slot assertion later in the same text still
+    // defeats the floor — over-firing is the dangerous direction (#594).
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized on write, yet the renderer escapes the value on render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheAssertedMitigationPrecedesTheNegatedAuxiliaryOrder() {
+    // The mirror ordering: the subject-slot assertion sits BEFORE the negated auxiliary-order
+    // match, so the leftmost-match walk must pick the earlier subject-slot wording over the
+    // later-starting copula match, and the absence scan must step past the non-negated
+    // "renderer escapes" token to register "nothing is sanitized".
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "The renderer escapes the value on render, although nothing is sanitized on"
+                    + " write.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenALaterAbsenceVerbFollowsADefenseNounObject() {
+    // The pronoun-subject scan must resume past a flipped verb: "Nothing escapes validation" is
+    // the mitigated reading, but the second clause's "nothing sanitizes the value" is a real
+    // absence claim and must still floor.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes validation and nothing sanitizes the value before innerHTML"
+                    + " receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenTheCommaCoordinatedFollowUpAssertsTheDefenseRuns() {
+    // The comma keeps the absence claim registered (it must, for the denial cases), so the
+    // follow-up clause "the sanitizer runs on render" — no auxiliary, verb not in the
+    // subject-slot list — needs its own mitigation reading, or the floor over-fires on a
+    // sentence that asserts the defense operates.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the sanitizer runs on render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenAConjoinedVerbPairAssertsTheMitigation() {
+    // A conjoined verb pair whose first verb is not defense-listed has "and escapes" as its ONLY
+    // subject-verb match, so the coordinator must stay in the subject slot: only a coordinator
+    // that continues a pronoun-negated verb chain is dropped, and "the output" before "and" is
+    // no such chain.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the framework renders the output and escapes it at render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void doesNotFloorWhenTheDefenseActionCarriesAnAdverb() {
+    // The defense-action reading admits one non-negator gap word, mirroring the do-support
+    // adverb gap: "the sanitizer always runs" asserts the defense operates and must defeat the
+    // floor just like the unmodified "the sanitizer runs".
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, but the sanitizer always runs on render.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenDoSupportFollowsTheNegatingPronoun() {
+    // A do-support pair opening right after the negating pronoun ("nothing does escape") is the
+    // absence claim in emphatic order, and the dropped match must not stop the scan from reading
+    // the rest of the text.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing is sanitized and nothing does escape the value before innerHTML"
+                    + " receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheOperateVerbHasNoDefenseSubject() {
+    // An operate verb without a defense-stemmed subject before it ("the template runs") is not a
+    // defense action: the subject check must reject it and the floor still fires on the absence
+    // claim.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "The template runs on every request, nothing sanitizes the value before"
+                    + " innerHTML.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void doesNotFloorWhenARealSubjectInterruptsTheChain() {
+    // A clause with its own subject breaks the link run: "the framework sanitizes" is a real
+    // subject-verb mitigation (the pronoun check needs "nothing" directly before it, and the
+    // {0,3} word gap cannot cross the comma), so neither it nor its "or validates" continuation
+    // is chained away and the floor stays defeated.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "high",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes, the framework sanitizes, or validates the value before"
+                    + " innerHTML receives it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+    assertEquals("low", result.findings().get(0).risk());
+  }
+
+  @Test
+  void floorsWhenNotASingleSanitizerRuns() {
+    // The negating determiner admits two modifier words: "Not a single sanitizer runs" is the
+    // same denial as "no sanitizer runs", and the defense-action reading must not swallow it.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Not a single sanitizer runs before innerHTML receives the value, nothing escapes"
+                    + " it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenNoSanitizerRuns() {
+    // The defense-action reading must not swallow its own denial: "no sanitizer runs" states the
+    // defense does NOT operate, and the negating determiner before the match keeps it an absence
+    // statement.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "The value reaches innerHTML and no sanitizer runs before it, nothing escapes it.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheSanitizerNeverRuns() {
+    // The defense-action verb must follow its subject directly: "the sanitizer never runs" is an
+    // absence statement, and the adverb gap that would read it as a mitigation is deliberately
+    // absent.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes the value, and the sanitizer never runs on this path.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
+  }
+
+  @Test
+  void floorsWhenTheDefenseNounSitsInTheNextSentence() {
+    // Sentence-ending punctuation is excluded from the lookahead's separator on purpose: a
+    // defense noun in the NEXT sentence is a different claim and must not defuse this sentence's
+    // absence claim.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                "src/components/Comment.tsx",
+                14,
+                "User comment written to innerHTML",
+                "Nothing escapes. The sanitizer was removed in this diff.",
+                null,
+                null));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals("low", result.findings().get(0).confidence());
   }
 
   @Test

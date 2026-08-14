@@ -10,6 +10,7 @@ All notable changes to ThrillhouseBot.
 
 - **Inline code spans in a decline are stripped delimiter-aware** (#697): the decline re-check now scans backtick runs the CommonMark way — an opening run of N backticks closes at the next run of exactly N — so a span whose body carries a longer backtick run (`` `a``b` ``) or one line ending is stripped whole instead of leaving quoted claim text to reopen a correct decline. An unclosed run stays literal, and a length bound still keeps a stray backtick from swallowing the reply
 - **Mention-form commands follow the configured bot login** (#698): `TriggerDetector` builds the `@<bot> <command>` trigger patterns from `BotIdentity.mentionNames()` instead of a hardcoded slug, so `@my-review-bot review` works on a custom-login install; the mention's `@` must open the comment or follow a non-word character, so an email local part never triggers a command. Slash forms and default-config behavior are unchanged
+- **The injection-sink floor closes four residual defeater gaps** (#696): "Nothing escapes parameterization" and "Nothing escapes; the sanitizer runs on render" read as the mitigations they assert instead of over-firing the floor, a do-supported mitigation with an adverb ("does always escape") defeats the floor, a modal absence claim ("Nothing can sanitize the value") now registers and floors at high, and a comma-coordinated asserted mitigation ("Nothing escapes, but the sanitizer runs on render") defeats the floor while its denial twin ("...but the sanitizer is disabled") still floors
 
 ## [0.6.1] — 2026-08-13
 
