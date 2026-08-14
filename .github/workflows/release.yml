@@ -320,6 +320,40 @@ jobs:
             gh release create "${args[@]}"
           fi
 
+  # The Docs workflow's `release: published` trigger does not fire for the
+  # release created above: it is created with the default GITHUB_TOKEN, and
+  # GitHub suppresses workflow runs for events that token raises — the same
+  # guard that keeps CI from starting on the bump PR below. In the repo's whole
+  # history that trigger has never once fired, so every release through v0.6.2
+  # published its docs by hand. workflow_dispatch is exempt from the guard, so
+  # the deploy is dispatched explicitly here. The trigger stays on docs.yml for
+  # a release published by hand in the UI, which does fire it.
+  #
+  # Gated on update_latest for the same reason as the bump: the live site tracks
+  # the highest release, so a patch cut on an older line must not republish the
+  # site from its tag.
+  publish-docs:
+    needs: [verify, release, promote]
+    if: needs.promote.outputs.update_latest == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the docs deploy against the release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Deploying from the tag needs the github-pages environment to admit
+          # it: Settings → Environments → github-pages must carry a `v*` tag
+          # policy alongside the `main` branch rule, or the deploy job fails
+          # with "not allowed to deploy to github-pages due to environment
+          # protection rules". Failing here is deliberate — a silent miss is
+          # what let the site sit four versions behind.
+          gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          echo "Dispatched docs.yml against $TAG"
+
   bump-version:
     needs: [verify, release, promote]
     if: needs.promote.outputs.update_latest == 'true'
