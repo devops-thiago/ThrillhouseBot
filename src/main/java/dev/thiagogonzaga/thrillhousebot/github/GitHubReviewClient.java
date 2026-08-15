@@ -317,20 +317,49 @@ public interface GitHubReviewClient {
    * A pull request review comment. When {@code startLine} is set, the comment spans the inclusive
    * range {@code start_line}..{@code line} so a GitHub suggestion replaces every line in it; a
    * single-line comment leaves both range fields null and they are omitted from the payload.
+   *
+   * <p>{@code subjectType} selects what the thread hangs off. It is null — and omitted — for the
+   * line-anchored comments that are the normal case, and {@value #SUBJECT_TYPE_FILE} for a thread
+   * filed on the file as a whole (#712). GitHub rejects a file-level request that also carries a
+   * position, so {@code line}, {@code side} and both range fields are nullable and left out
+   * together; the {@code NON_NULL} inclusion above is what keeps them off that payload.
    */
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record CreatePullRequestCommentRequest(
       @JsonProperty("commit_id") String commitId,
       String body,
       String path,
-      int line,
+      Integer line,
       String side,
       @JsonProperty("start_line") Integer startLine,
-      @JsonProperty("start_side") String startSide) {
+      @JsonProperty("start_side") String startSide,
+      @JsonProperty("subject_type") String subjectType) {
     public CreatePullRequestCommentRequest {
       body = CommentBodyLimit.cap(body);
     }
+
+    /** The line-anchored shape, which names no subject type — GitHub defaults it to the line. */
+    public CreatePullRequestCommentRequest(
+        String commitId,
+        String body,
+        String path,
+        Integer line,
+        String side,
+        Integer startLine,
+        String startSide) {
+      this(commitId, body, path, line, side, startLine, startSide, null);
+    }
+
+    /** A thread on the file as a whole: no line, no side, no range — only the path. */
+    public static CreatePullRequestCommentRequest onFile(
+        String commitId, String body, String path) {
+      return new CreatePullRequestCommentRequest(
+          commitId, body, path, null, null, null, null, SUBJECT_TYPE_FILE);
+    }
   }
+
+  /** GitHub's {@code subject_type} for a review thread that targets a whole file. */
+  String SUBJECT_TYPE_FILE = "file";
 
   /** Reply posted into an existing review thread, keyed by the thread's root comment id in path. */
   record ReplyToReviewCommentRequest(String body) {

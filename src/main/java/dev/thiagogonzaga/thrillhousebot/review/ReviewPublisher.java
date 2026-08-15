@@ -431,11 +431,21 @@ public class ReviewPublisher {
     return parts;
   }
 
+  /**
+   * The findings that reached the review body because GitHub took no thread for them at all —
+   * neither on their line nor, since #712, on their file.
+   *
+   * <p>The wording no longer blames the diff. The old "could not be anchored to the current diff"
+   * asserted a cause the code cannot know: the same sentence covered a line genuinely outside the
+   * diff and a post GitHub simply refused, and on the round-7 corpus it was overwhelmingly the
+   * second. Two independent scorers read it as a line-attribution defect and went looking for an
+   * off-by-N that was not there, so the text now states only what happened.
+   */
   private static String unanchoredFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
-        .append(" issue(s) that could not be anchored to the current diff:\n\n");
+        .append(" issue(s) GitHub accepted no review thread for:\n\n");
     appendFindingList(sb, findings);
     return sb.toString();
   }
@@ -604,9 +614,14 @@ public class ReviewPublisher {
   }
 
   /**
-   * How many findings anchored as inline comments, the ones that could not be anchored, the ones
+   * How many findings opened a review thread, the ones GitHub took no thread for at all, the ones
    * skipped because {@code maxReviewComments} was reached (never tried for anchoring), and the ones
    * withheld because confidence is low (routed to the summary instead).
+   *
+   * <p>{@code posted} counts threads, not line anchors: since #712 a finding whose line-anchored
+   * comment cannot land is retried on the file, and a thread on the file is still a thread — the
+   * decline path, the status notes and the attribution all reach it. Only a finding that neither
+   * route could give a thread lands in {@code unanchored}.
    */
   record InlineCommentResult(
       int posted,
@@ -616,10 +631,11 @@ public class ReviewPublisher {
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
-   * survive 422s that would reject an entire batched review. Findings whose line falls outside the
-   * diff (or are otherwise rejected) are returned as {@code unanchored} so the caller can still
-   * report them in the review body rather than dropping them. Low-confidence medium/low findings
-   * are skipped here and surfaced in the PR summary's "Things to double-check" section instead.
+   * survive 422s that would reject an entire batched review. A finding whose line falls outside the
+   * diff, or whose line-anchored comment GitHub rejects, falls back to a thread on the file (#712);
+   * only when that fails too is it returned as {@code unanchored} so the caller can still report it
+   * in the review body rather than dropping it. Low-confidence medium/low findings are skipped here
+   * and surfaced in the PR summary's "Things to double-check" section instead.
    */
   InlineCommentResult postInlineComments(
       String auth,
@@ -657,14 +673,38 @@ public class ReviewPublisher {
   private record CommentTarget(
       String auth, String owner, String repo, int prNumber, String commitSha) {}
 
+  /**
+   * Opens one finding's review thread, preferring the diff line it cites and falling back to a
+   * thread on the file as a whole when no line-anchored comment lands (#712).
+   *
+   * <p>The fallback exists because a failure here used to end the finding's life as a review
+   * thread: it was reported in the review body as "could not be anchored to the current diff" and
+   * lost its code context, its suggestion block <em>and</em> — the expensive part — the thread
+   * every follow-up feature reaches it through. {@code FollowUpAnalyzer.recheckDeclines} is handed
+   * the inline comment list, so a finding with no thread cannot be declined at all (#709); a status
+   * note has nowhere to land; and a maintainer who clears one reads "Previous findings resolved: 1"
+   * with no way to tell which.
+   *
+   * <p>The round-7 dogfood corpus is what forced this: on twelve all-added-file pull requests, 12
+   * of 13 findings on the java PR and 11 of 13 on the node PR were published as bare bullets, and
+   * every line they cited was inside an added hunk. The line arithmetic was never wrong — {@code
+   * c/src/rollup.c:47} opened a thread in the same run in which {@code :45} was reported
+   * unanchored, and {@code src/allocator.js:12} posted forty minutes after {@code :31} and {@code
+   * :33} had been declared un-anchorable in the same file. What actually happened is that GitHub
+   * refused the POST: across the whole corpus, comment creation stopped dead for 72 seconds and
+   * again for 16, and every finding whose turn fell inside one of those windows was recorded as a
+   * line-number failure. A file-level thread is a second, independent chance at the one thing the
+   * finding cannot afford to lose, and it is also the honest answer for a line that genuinely is
+   * outside the diff.
+   */
   private boolean postFindingComment(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
       Log.debugf(
-          "Skipping inline comment for %s:%d — line is outside PR diff",
+          "Line for %s:%d is outside the PR diff — filing the finding on the file instead",
           finding.file(), finding.line());
-      return false;
+      return postFileLevelComment(target, finding, findingId);
     }
 
     var resolvedLine = line.getAsInt();
@@ -694,8 +734,51 @@ public class ReviewPublisher {
                 target, finding, findingId, resolvedLine, Optional.empty(), false))) {
       return true;
     }
-    Log.warnf("GitHub rejected inline comment for %s:%d", finding.file(), finding.line());
-    return false;
+    Log.warnf(
+        "GitHub rejected inline comment for %s:%d — filing it on the file instead",
+        finding.file(), finding.line());
+    return postFileLevelComment(target, finding, findingId);
+  }
+
+  /**
+   * Lead-in of a finding filed on the file rather than on its line. It names the line the finding
+   * cites so the reader can still navigate to it, and says the suggestion was dropped rather than
+   * leaving its absence to be read as "there was no fix" — GitHub can only apply a {@code
+   * suggestion} block inside a line-anchored thread, so carrying one here would render an Apply
+   * button that cannot work.
+   */
+  private static String fileLevelLeadIn(Finding finding) {
+    return "_Filed on the file: ThrillhouseBot could not open a thread on "
+        + MarkdownSafe.inlineCode(finding.file() + ":" + finding.line())
+        + ", so this finding has no line anchor and no applicable suggestion. Replies on this"
+        + " thread still count._";
+  }
+
+  /**
+   * Posts one finding as a thread on the file as a whole. Carries the same hidden finding marker as
+   * a line-anchored comment, which is what {@code FollowUpAnalyzer} binds a thread to a finding
+   * with, so the decline path, the status notes and the resolved-finding attribution all keep
+   * working on a finding that never reached its line.
+   */
+  private boolean postFileLevelComment(CommentTarget target, Finding finding, int findingId) {
+    var body =
+        fileLevelLeadIn(finding)
+            + "\n\n"
+            + suggestionFormatter.formatReviewComment(finding, false, findingId);
+    try {
+      reviewClient.createPullRequestComment(
+          target.auth(),
+          ACCEPT,
+          target.owner(),
+          target.repo(),
+          target.prNumber(),
+          GitHubReviewClient.CreatePullRequestCommentRequest.onFile(
+              target.commitSha(), body, finding.file()));
+      return true;
+    } catch (RuntimeException e) {
+      Log.debugf(e, "File-level comment rejected for %s", finding.file());
+      return false;
+    }
   }
 
   /**
