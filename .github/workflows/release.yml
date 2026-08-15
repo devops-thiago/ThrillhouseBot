@@ -337,22 +337,46 @@ jobs:
     if: needs.promote.outputs.update_latest == 'true'
     runs-on: ubuntu-latest
     permissions:
+      # write to dispatch the run, read to poll for it and watch it
       actions: write
     steps:
-      - name: Dispatch the docs deploy against the release tag
+      - name: Deploy the docs from the release tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify.outputs.tag }}
         run: |
           set -euo pipefail
-          # Deploying from the tag needs the github-pages environment to admit
-          # it: Settings → Environments → github-pages must carry a `v*` tag
-          # policy alongside the `main` branch rule, or the deploy job fails
-          # with "not allowed to deploy to github-pages due to environment
-          # protection rules". Failing here is deliberate — a silent miss is
-          # what let the site sit four versions behind.
+          # The dispatch only queues the run: `gh workflow run` exits 0 as soon
+          # as GitHub accepts it. The failure this job exists to catch happens
+          # later, inside the deploy — most likely the github-pages environment
+          # refusing the tag, which needs a `v*` policy alongside the `main`
+          # branch rule and produces "not allowed to deploy to github-pages due
+          # to environment protection rules". Waiting for the run is therefore
+          # the whole point: exiting on the dispatch would reproduce the silent
+          # miss that left the site four versions behind, just one step later.
+          before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
-          echo "Dispatched docs.yml against $TAG"
+
+          # The dispatch returns no run id, so resolve it by polling for a run
+          # of this workflow on this tag created at or after the dispatch. The
+          # created-after bound is what keeps an earlier manual republish of the
+          # same tag from being mistaken for this one.
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow docs.yml \
+              --branch "$TAG" --event workflow_dispatch --limit 20 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$before\")] | sort_by(.createdAt) | last | .databaseId // empty")
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::Dispatched docs.yml against $TAG but no run appeared within 5 minutes"
+            exit 1
+          fi
+
+          echo "Watching docs run $run_id for $TAG"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 15
 
   bump-version:
     needs: [verify, release, promote]

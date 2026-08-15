@@ -66,6 +66,14 @@ a patch on an older line cannot republish the site from its tag.
 `workflow_dispatch` is exempt from the recursion guard. The declared trigger is
 kept because a release published by hand in the UI does fire it.
 
+The job then **waits for the run it dispatched** and fails with it. `gh workflow
+run` returns as soon as GitHub accepts the dispatch, so a job that stopped there
+would go green while the deploy failed underneath it — the same silent miss one
+step later. The run carries no id back, so the job polls for a `docs.yml` run on
+the tag created at or after the dispatch, which is also what stops an earlier
+manual republish of the same tag from being mistaken for it. A release whose
+docs fail to publish now fails visibly in the release pipeline.
+
 **The tag must be allowed to deploy.** The build runs **against the tag ref**,
 so the deploy depends on one repo setting: the `github-pages` environment must
 admit the tag.
