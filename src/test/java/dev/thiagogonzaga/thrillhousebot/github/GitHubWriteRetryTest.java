@@ -290,12 +290,21 @@ class GitHubWriteRetryTest {
   void anExhaustedWindowWaitsUntilItsResetInstant() {
     var calls = new AtomicInteger();
 
+    // Deliberately NOT the content-creation wording: that block is floored regardless of the
+    // rate-limit headers (#722), because they describe the primary window it leaves untouched. This
+    // is the plain primary exhaustion, where the reset instant really is the deadline.
     var result =
         retry.call(
             "a comment on o/r #7",
             () -> {
               if (calls.incrementAndGet() == 1) {
-                throw throttled("x-ratelimit-remaining", "0", "x-ratelimit-reset", "1800000021");
+                throw failure(
+                    403,
+                    "{\"message\":\"API rate limit exceeded\"}",
+                    "x-ratelimit-remaining",
+                    "0",
+                    "x-ratelimit-reset",
+                    "1800000021");
               }
               return "posted";
             });

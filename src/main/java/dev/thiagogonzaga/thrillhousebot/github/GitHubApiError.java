@@ -76,9 +76,17 @@ public final class GitHubApiError {
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
    * a primary rate limit both arrive as 403; only the message distinguishes them from a permission
    * refusal when the headers are absent.
+   *
+   * <p>"blocked from content creation" is carried here as well as in {@link
+   * #CONTENT_CREATION_BLOCK}, because broadening only the latter would be inert: a body that named
+   * the block without one of the other phrases would not be read as a throttle at all, so the call
+   * would fail fast and the floor below it would never be consulted (#722). A 403 that says
+   * creation is blocked is a throttle by definition, never a permission refusal.
    */
   private static final Pattern THROTTLE_WORDING =
-      Pattern.compile("(?i)secondary rate limit|abuse detection|rate limit exceeded");
+      Pattern.compile(
+          "(?i)secondary rate limit|abuse detection|rate limit exceeded"
+              + "|blocked from content creation");
 
   /** Collapses the whitespace of a body so one failure stays on one log line. */
   private static final Pattern WHITESPACE = Pattern.compile("\\s+");
@@ -89,9 +97,15 @@ public final class GitHubApiError {
   /**
    * The wording of the block that stops content creation specifically, rather than any other
    * throttle. It is the one that lasts long enough for the shape of the backoff to matter (#722).
+   *
+   * <p>The measured body carried both "secondary rate limit" and "temporarily blocked from content
+   * creation", and GitHub's older wording for the same block says "abuse detection". The third
+   * alternative covers a body that names the block without either of the first two: it is the
+   * failure whose delay this pattern decides, so missing it would leave the linear fallback and its
+   * thirty seconds against a window three times as wide.
    */
   private static final Pattern CONTENT_CREATION_BLOCK =
-      Pattern.compile("(?i)secondary rate limit|abuse detection");
+      Pattern.compile("(?i)secondary rate limit|abuse detection|blocked from content creation");
 
   /**
    * Floor on one wait while GitHub is blocking content creation and named no deadline of its own
@@ -203,9 +217,15 @@ public final class GitHubApiError {
    * <p>One exception, added in #722: when GitHub is blocking content creation and named no deadline
    * of its own, a derived delay is floored at {@link #CONTENT_CREATION_BLOCK_MIN_DELAY}. Both
    * derivations undershoot that block badly — the linear fallback by design, a stale reset instant
-   * by returning nothing at all — and the reset belongs to the primary window, which the block
-   * leaves untouched. A window that really is exhausted keeps its reset, since there the instant is
-   * a deadline for this failure rather than a number about another one.
+   * by returning nothing at all.
+   *
+   * <p>The floor applies to <em>every</em> rate-limit header on such a block, including {@code
+   * x-ratelimit-remaining: 0}. Those headers describe the <em>primary</em> window, which a
+   * content-creation block leaves untouched, so a primary window that is also spent says nothing
+   * about when creation reopens: a block carrying {@code remaining=0} and a reset ten seconds out
+   * would otherwise wait ten seconds a time and spend the whole budget inside the 72-second window
+   * this is sized against. An earlier revision carved that case out and reintroduced exactly the
+   * failure the floor exists to prevent.
    */
   public Duration retryDelay(int attempt, Instant now) {
     var fromHeader = retryAfterSeconds();
@@ -217,12 +237,6 @@ public final class GitHubApiError {
         reset.isPresent()
             ? atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset.get())))
             : FALLBACK_DELAY.multipliedBy(attempt);
-    if (primaryWindowExhausted() && !derived.isZero()) {
-      // The primary quota really is spent and its window has a future reset, so that instant is
-      // this failure's own deadline — GitHub naming a time, the same as a Retry-After. Flooring it
-      // would hold the call past a window that has already reopened.
-      return derived;
-    }
     return blocksContentCreation() && derived.compareTo(CONTENT_CREATION_BLOCK_MIN_DELAY) < 0
         ? CONTENT_CREATION_BLOCK_MIN_DELAY
         : derived;
@@ -234,16 +248,6 @@ public final class GitHubApiError {
    */
   private boolean blocksContentCreation() {
     return CONTENT_CREATION_BLOCK.matcher(body).find();
-  }
-
-  /**
-   * Whether the primary rate-limit window is genuinely spent, which is what makes its reset instant
-   * a deadline for this failure rather than a number belonging to a window it never touched. The
-   * content-creation block behind #722 carried {@code remaining=4771}: quota to spare, and creation
-   * blocked anyway.
-   */
-  private boolean primaryWindowExhausted() {
-    return parseLong(rateLimitRemaining).filter(remaining -> remaining == 0L).isPresent();
   }
 
   /**

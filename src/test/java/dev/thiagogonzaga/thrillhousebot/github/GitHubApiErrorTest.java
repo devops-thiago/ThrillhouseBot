@@ -272,6 +272,36 @@ class GitHubApiErrorTest {
       }
 
       @Test
+      void isFlooredEvenWhenThePrimaryWindowAlsoReadsExhausted() {
+        // The rate-limit headers describe the PRIMARY window, which this block leaves untouched, so
+        // remaining=0 alongside a near reset says nothing about when creation reopens. An earlier
+        // revision carved this case out and let it return 10s a time — three waits inside the very
+        // window the budget is sized against, which is the #722 failure all over again.
+        var error =
+            GitHubApiError.from(
+                outbound(
+                    403,
+                    SECONDARY_LIMIT_BODY,
+                    "x-ratelimit-remaining",
+                    "0",
+                    "x-ratelimit-reset",
+                    String.valueOf(NOW.getEpochSecond() + 10)));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void isRecognisedFromTheBlockWordingAlone() {
+        // A body naming the block without "secondary rate limit" or "abuse detection" is still the
+        // same failure, and must be both retried at all and floored.
+        var body =
+            "{\"message\":\"You have been temporarily blocked from content creation. Please try"
+                + " again later.\"}";
+        var error = GitHubApiError.from(outbound(403, body));
+        assertTrue(error.isThrottled(), "a blocked-creation 403 is a throttle, not a refusal");
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
       void stillYieldsToADeadlineGitHubNamed() {
         // An explicit Retry-After is GitHub speaking about this block, so the floor must not
         // override it — not even upwards.
