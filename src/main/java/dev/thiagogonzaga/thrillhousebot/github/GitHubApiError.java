@@ -77,16 +77,16 @@ public final class GitHubApiError {
    * a primary rate limit both arrive as 403; only the message distinguishes them from a permission
    * refusal when the headers are absent.
    *
-   * <p>"blocked from content creation" is carried here as well as in {@link
-   * #CONTENT_CREATION_BLOCK}, because broadening only the latter would be inert: a body that named
-   * the block without one of the other phrases would not be read as a throttle at all, so the call
-   * would fail fast and the floor below it would never be consulted (#722). A 403 that says
+   * <p>The blocked-creation wording is carried here as well as in {@link #CONTENT_CREATION_BLOCK},
+   * in the same two word orders, because broadening only the latter would be inert: a body that
+   * named the block without one of the other phrases would not be read as a throttle at all, so the
+   * call would fail fast and the floor below it would never be consulted (#722). A 403 that says
    * creation is blocked is a throttle by definition, never a permission refusal.
    */
   private static final Pattern THROTTLE_WORDING =
       Pattern.compile(
           "(?i)secondary rate limit|abuse detection|rate limit exceeded"
-              + "|blocked from content creation");
+              + "|blocked from (?:content creation|creating content)");
 
   /** Collapses the whitespace of a body so one failure stays on one log line. */
   private static final Pattern WHITESPACE = Pattern.compile("\\s+");
@@ -100,12 +100,18 @@ public final class GitHubApiError {
    *
    * <p>The measured body carried both "secondary rate limit" and "temporarily blocked from content
    * creation", and GitHub's older wording for the same block says "abuse detection". The third
-   * alternative covers a body that names the block without either of the first two: it is the
-   * failure whose delay this pattern decides, so missing it would leave the linear fallback and its
-   * thirty seconds against a window three times as wide.
+   * alternative covers a body that names the block without either of the first two, in both word
+   * orders GitHub is known to phrase it — "blocked from content creation" and "blocked from
+   * creating content" — because this pattern decides the delay, and missing a variant leaves the
+   * linear fallback and its thirty seconds against a window three times as wide.
+   *
+   * <p>It is deliberately the whole phrase rather than "content creation" alone: this runs over an
+   * error body that is attacker-influenced text, and the bare noun phrase is loose enough to appear
+   * in a message that is not this block.
    */
   private static final Pattern CONTENT_CREATION_BLOCK =
-      Pattern.compile("(?i)secondary rate limit|abuse detection|blocked from content creation");
+      Pattern.compile(
+          "(?i)secondary rate limit|abuse detection|blocked from (?:content creation|creating content)");
 
   /**
    * Floor on one wait while GitHub is blocking content creation and named no deadline of its own
@@ -211,8 +217,8 @@ public final class GitHubApiError {
    * How long to wait before repeating a throttled call, given the attempt just made and the current
    * time. {@code Retry-After} wins when GitHub sent one; otherwise the reset instant of the
    * exhausted rate-limit window is honoured; otherwise a linear backoff off {@link #FALLBACK_DELAY}
-   * so a silent throttle still slows down. Never negative — a reset already in the past means the
-   * window has reopened and the call can go straight back out.
+   * so a silent throttle still slows down. Never negative — for everything but the block below, a
+   * reset already in the past means the window has reopened and the call can go straight back out.
    *
    * <p>One exception, added in #722: when GitHub is blocking content creation and named no deadline
    * of its own, a derived delay is floored at {@link #CONTENT_CREATION_BLOCK_MIN_DELAY}. Both

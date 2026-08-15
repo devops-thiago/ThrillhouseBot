@@ -302,6 +302,19 @@ class GitHubApiErrorTest {
       }
 
       @Test
+      void isRecognisedFromTheGerundWordingToo() {
+        // Same block, named "blocked from creating content" rather than "content creation". The
+        // rule's contract is that it recognises a body naming the block, so it must not turn on
+        // which word order GitHub happened to use.
+        var body =
+            "{\"message\":\"You have been temporarily blocked from creating content. Please retry"
+                + " your request again later.\"}";
+        var error = GitHubApiError.from(outbound(403, body));
+        assertTrue(error.isThrottled(), "a blocked-creation 403 is a throttle, not a refusal");
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
       void stillYieldsToADeadlineGitHubNamed() {
         // An explicit Retry-After is GitHub speaking about this block, so the floor must not
         // override it — not even upwards.
