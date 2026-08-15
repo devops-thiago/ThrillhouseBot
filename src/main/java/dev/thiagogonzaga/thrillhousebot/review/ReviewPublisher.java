@@ -728,16 +728,51 @@ public class ReviewPublisher {
         finding.hasSuggestion() && finding.suggestionOld().strip().contains("\n");
     var includeSuggestion = finding.hasSuggestion() && (!multiLineSuggestion || range.isPresent());
 
-    if (tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion)
-        || (includeSuggestion
-            && tryPostInlineComment(
-                target, finding, findingId, resolvedLine, Optional.empty(), false))) {
+    var rejection =
+        tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion);
+    if (rejection.isEmpty()) {
       return true;
     }
+    var reason = rejection.get();
+    if (includeSuggestion) {
+      var withoutSuggestion =
+          tryPostInlineComment(target, finding, findingId, resolvedLine, Optional.empty(), false);
+      if (withoutSuggestion.isEmpty()) {
+        return true;
+      }
+      // Both reasons, when they differ. The two attempts fail for different causes often enough to
+      // matter: a suggestion block GitHub will not take is a 422 about the payload, while a
+      // content-creation block is a 403 about the moment. Reporting only the second would name the
+      // payload for a finding that was actually refused by a throttle, which is the class of wrong
+      // diagnosis this whole change exists to stop.
+      var second = withoutSuggestion.get();
+      reason =
+          reason.equals(second) ? second : "with suggestion: " + reason + "; without: " + second;
+    }
     Log.warnf(
-        "GitHub rejected inline comment for %s:%d — filing it on the file instead",
-        finding.file(), finding.line());
+        "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
+        finding.file(), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
+  }
+
+  /**
+   * What GitHub said, for the log line an operator reads when a finding loses its line thread.
+   *
+   * <p>Every rejection reason used to be discarded at debug level, which is off in production, so
+   * the only record a run left was that a comment "could not be anchored to the current diff" — a
+   * claim about line numbers the code was in no position to make. That wording sent two scorers and
+   * then #712 hunting an off-by-N that did not exist, and the twenty-nine rejections behind it are
+   * now permanently undiagnosable: the status that separates a throttle from a rejected position
+   * was never written down (#722).
+   *
+   * <p>Falls back to the exception's own text for a connection-level failure, which carries no
+   * response to read a status off.
+   */
+  private static String rejectionReason(RuntimeException e) {
+    if (e instanceof WebApplicationException w) {
+      return GitHubApiError.of(w).map(GitHubApiError::diagnostics).orElseGet(e::toString);
+    }
+    return e.toString();
   }
 
   /**
@@ -776,7 +811,9 @@ public class ReviewPublisher {
               target.commitSha(), body, finding.file()));
       return true;
     } catch (RuntimeException e) {
-      Log.debugf(e, "File-level comment rejected for %s", finding.file());
+      Log.warnf(
+          "GitHub rejected the file-level thread for %s (%s) — the finding keeps no thread at all",
+          finding.file(), rejectionReason(e));
       return false;
     }
   }
@@ -786,8 +823,13 @@ public class ReviewPublisher {
    * start_line}..{@code line} (both RIGHT side); otherwise it anchors to the single {@code line}.
    * The retry without a suggestion block always passes an empty range — a multi-line span is only
    * meaningful with a suggestion to apply across it.
+   *
+   * <p>Returns empty when the comment landed, and otherwise what GitHub said, so the caller can put
+   * the reason in the one line it logs rather than discarding it (#722). A first attempt that fails
+   * is ordinary — it is how a rejected suggestion block is discovered — so it stays at debug; only
+   * the attempt the caller gives up on is worth a warning.
    */
-  private boolean tryPostInlineComment(
+  private Optional<String> tryPostInlineComment(
       CommentTarget target,
       Finding finding,
       int findingId,
@@ -812,15 +854,17 @@ public class ReviewPublisher {
               "RIGHT",
               startLine,
               startSide));
-      return true;
+      return Optional.empty();
     } catch (RuntimeException e) {
+      var reason = rejectionReason(e);
       Log.debugf(
           e,
-          "Inline comment rejected for %s:%d (suggestion=%s)",
+          "Inline comment rejected for %s:%d (suggestion=%s): %s",
           finding.file(),
           endLine,
-          includeSuggestion);
-      return false;
+          includeSuggestion,
+          reason);
+      return Optional.of(reason);
     }
   }
 

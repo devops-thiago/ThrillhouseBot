@@ -76,15 +76,66 @@ public final class GitHubApiError {
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
    * a primary rate limit both arrive as 403; only the message distinguishes them from a permission
    * refusal when the headers are absent.
+   *
+   * <p>The blocked-creation wording is carried here as well as in {@link #CONTENT_CREATION_BLOCK},
+   * in the same two word orders, because broadening only the latter would be inert: a body that
+   * named the block without one of the other phrases would not be read as a throttle at all, so the
+   * call would fail fast and the floor below it would never be consulted (#722). A 403 that says
+   * creation is blocked is a throttle by definition, never a permission refusal.
    */
   private static final Pattern THROTTLE_WORDING =
-      Pattern.compile("(?i)secondary rate limit|abuse detection|rate limit exceeded");
+      Pattern.compile(
+          "(?i)secondary rate limit|abuse detection|rate limit exceeded"
+              + "|blocked from (?:content creation|creating content)");
 
   /** Collapses the whitespace of a body so one failure stays on one log line. */
   private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
   /** Backoff used when GitHub throttles without saying for how long. */
   static final Duration FALLBACK_DELAY = Duration.ofSeconds(5);
+
+  /**
+   * The wording of the block that stops content creation specifically, rather than any other
+   * throttle. It is the one that lasts long enough for the shape of the backoff to matter (#722).
+   *
+   * <p>Deliberately narrower than {@link #THROTTLE_WORDING}, and in particular it does NOT match
+   * the bare phrase "secondary rate limit". That is GitHub's generic secondary-limit wording, sent
+   * for any endpoint, and it is a milder class than the block this floor is sized against: matching
+   * it would floor every such throttle at 30s and hold a PR's dispatcher slot for up to the whole
+   * budget, where the linear backoff's 5s, 10s then 15s is all that class asks for.
+   *
+   * <p>What is matched is wording that names the block itself. The measured body said "You have
+   * exceeded a secondary rate limit and have been temporarily blocked from content creation", so it
+   * matches on its second half; GitHub's older wording for the same block says "abuse detection";
+   * and both word orders of the creation phrase are taken, since the rule must not turn on which
+   * one GitHub happened to use.
+   *
+   * <p>It is deliberately the whole phrase rather than "content creation" alone: this runs over an
+   * error body that is attacker-influenced text, and the bare noun phrase is loose enough to appear
+   * in a message that is not this block.
+   */
+  private static final Pattern CONTENT_CREATION_BLOCK =
+      Pattern.compile("(?i)abuse detection|blocked from (?:content creation|creating content)");
+
+  /**
+   * Floor on one wait while GitHub is blocking content creation and named no deadline of its own
+   * (#722).
+   *
+   * <p>The measured block ran 72 seconds, and both ways of deriving a delay without a {@code
+   * Retry-After} undershoot it badly. The linear fallback gives 5s, 10s then 15s — thirty seconds
+   * of waiting spread across the whole budget. An {@code x-ratelimit-reset} already in the past
+   * gives zero, so every attempt fires at once and the budget is gone in milliseconds, which is
+   * worse than not repeating at all: it spends the repeats the generated content depends on while
+   * GitHub is still refusing.
+   *
+   * <p>Neither number is GitHub speaking about this block. The reset instant belongs to the
+   * <em>primary</em> window, which a secondary limit leaves alone — the run behind #722 is exactly
+   * that, a content-creation block carrying {@code x-ratelimit-remaining=4771}. So a delay that was
+   * derived rather than given is floored here, which is what makes {@link
+   * GitHubWriteRetry#TOTAL_BUDGET} a floor for this failure instead of only a ceiling. An explicit
+   * {@code Retry-After} still wins outright: there GitHub is naming its own deadline.
+   */
+  static final Duration CONTENT_CREATION_BLOCK_MIN_DELAY = Duration.ofSeconds(30);
 
   private final int status;
   private final String retryAfter;
@@ -170,8 +221,21 @@ public final class GitHubApiError {
    * How long to wait before repeating a throttled call, given the attempt just made and the current
    * time. {@code Retry-After} wins when GitHub sent one; otherwise the reset instant of the
    * exhausted rate-limit window is honoured; otherwise a linear backoff off {@link #FALLBACK_DELAY}
-   * so a silent throttle still slows down. Never negative — a reset already in the past means the
-   * window has reopened and the call can go straight back out.
+   * so a silent throttle still slows down. Never negative — for everything but the block below, a
+   * reset already in the past means the window has reopened and the call can go straight back out.
+   *
+   * <p>One exception, added in #722: when GitHub is blocking content creation and named no deadline
+   * of its own, a derived delay is floored at {@link #CONTENT_CREATION_BLOCK_MIN_DELAY}. Both
+   * derivations undershoot that block badly — the linear fallback by design, a stale reset instant
+   * by returning nothing at all.
+   *
+   * <p>The floor applies to <em>every</em> rate-limit header on such a block, including {@code
+   * x-ratelimit-remaining: 0}. Those headers describe the <em>primary</em> window, which a
+   * content-creation block leaves untouched, so a primary window that is also spent says nothing
+   * about when creation reopens: a block carrying {@code remaining=0} and a reset ten seconds out
+   * would otherwise wait ten seconds a time and spend the whole budget inside the 72-second window
+   * this is sized against. An earlier revision carved that case out and reintroduced exactly the
+   * failure the floor exists to prevent.
    */
   public Duration retryDelay(int attempt, Instant now) {
     var fromHeader = retryAfterSeconds();
@@ -179,10 +243,21 @@ public final class GitHubApiError {
       return atLeastZero(Duration.ofSeconds(fromHeader.get()));
     }
     var reset = parseLong(rateLimitReset);
-    if (reset.isPresent()) {
-      return atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset.get())));
-    }
-    return FALLBACK_DELAY.multipliedBy(attempt);
+    var derived =
+        reset.isPresent()
+            ? atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset.get())))
+            : FALLBACK_DELAY.multipliedBy(attempt);
+    return blocksContentCreation() && derived.compareTo(CONTENT_CREATION_BLOCK_MIN_DELAY) < 0
+        ? CONTENT_CREATION_BLOCK_MIN_DELAY
+        : derived;
+  }
+
+  /**
+   * Whether GitHub is blocking content creation rather than throttling in some milder way — the
+   * failure whose measured width the budget is sized against (#722).
+   */
+  private boolean blocksContentCreation() {
+    return CONTENT_CREATION_BLOCK.matcher(body).find();
   }
 
   /**

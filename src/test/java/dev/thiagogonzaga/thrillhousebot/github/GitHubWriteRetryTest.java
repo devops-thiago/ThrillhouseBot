@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -41,8 +42,10 @@ import org.junit.jupiter.api.Test;
  * Covers {@link GitHubWriteRetry} — the backoff #568 asked for on the calls that publish work the
  * bot has already paid for, and, just as importantly, the failures it refuses to repeat.
  *
- * <p>The bounds are written out as literals (3 attempts, a 30-second ceiling on one wait) so the
- * tests pin them rather than restate whatever the production constants happen to say.
+ * <p>The bounds are written out as literals (4 attempts, a 30-second ceiling on one wait) so the
+ * tests pin them rather than restate whatever the production constants happen to say. The fourth
+ * attempt is #722: the budget was three, and a measured 72-second content-creation block outlasted
+ * it.
  */
 class GitHubWriteRetryTest {
 
@@ -183,7 +186,7 @@ class GitHubWriteRetryTest {
   }
 
   @Test
-  void aPersistentThrottleGivesUpAfterThreeAttempts() {
+  void aPersistentThrottleGivesUpAfterFourAttempts() {
     var calls = new AtomicInteger();
     var lastFailure = throttled("Retry-After", "4");
 
@@ -198,17 +201,20 @@ class GitHubWriteRetryTest {
                       throw lastFailure;
                     }));
 
-    // Bounded: one post and two repeats, so a throttled PR cannot hold its dispatcher slot forever.
+    // Bounded: one post and three repeats, so a throttled PR cannot hold its dispatcher slot
+    // forever. The third repeat is what #722 added, after a measured 72-second content-creation
+    // block outlasted the two the budget had.
     assertSame(lastFailure, thrown);
-    assertEquals(3, calls.get());
-    assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+    assertEquals(4, calls.get());
+    assertEquals(
+        List.of(Duration.ofSeconds(4), Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
   }
 
   @Test
   void aSpentBudgetStillGivesUpSilentlyWhenWarningsAreOff() {
     // The give-up line sits behind a level check, because diagnostics() builds its string eagerly
     // and a parameter placeholder only defers the toString. With the logger off nothing may be
-    // logged, and the retry must still spend the same three attempts and rethrow the same failure.
+    // logged, and the retry must still spend the same four attempts and rethrow the same failure.
     var julLogger = Logger.getLogger(GitHubWriteRetry.class.getName());
     var logged = new CopyOnWriteArrayList<LogRecord>();
     var capture =
@@ -247,8 +253,9 @@ class GitHubWriteRetryTest {
                       }));
 
       assertSame(lastFailure, thrown);
-      assertEquals(3, calls.get());
-      assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+      assertEquals(4, calls.get());
+      assertEquals(
+          List.of(Duration.ofSeconds(4), Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
       assertTrue(logged.isEmpty(), logged.toString());
     } finally {
       julLogger.removeHandler(capture);
@@ -270,20 +277,34 @@ class GitHubWriteRetryTest {
                   throw throttled("Retry-After", "3600");
                 }));
 
-    // 30s a wait, twice: the whole call waits at most a minute whatever GitHub asks for.
-    assertEquals(List.of(Duration.ofSeconds(30), Duration.ofSeconds(30)), slept);
+    // 30s a wait, three times: the whole call waits at most TOTAL_BUDGET whatever GitHub asks for.
+    assertEquals(
+        List.of(Duration.ofSeconds(30), Duration.ofSeconds(30), Duration.ofSeconds(30)), slept);
+    assertEquals(
+        GitHubWriteRetry.TOTAL_BUDGET,
+        slept.stream().reduce(Duration.ZERO, Duration::plus),
+        "the clamped waits add up to exactly the documented budget");
   }
 
   @Test
   void anExhaustedWindowWaitsUntilItsResetInstant() {
     var calls = new AtomicInteger();
 
+    // Deliberately NOT the content-creation wording: that block is floored regardless of the
+    // rate-limit headers (#722), because they describe the primary window it leaves untouched. This
+    // is the plain primary exhaustion, where the reset instant really is the deadline.
     var result =
         retry.call(
             "a comment on o/r #7",
             () -> {
               if (calls.incrementAndGet() == 1) {
-                throw throttled("x-ratelimit-remaining", "0", "x-ratelimit-reset", "1800000021");
+                throw failure(
+                    403,
+                    "{\"message\":\"API rate limit exceeded\"}",
+                    "x-ratelimit-remaining",
+                    "0",
+                    "x-ratelimit-reset",
+                    "1800000021");
               }
               return "posted";
             });
@@ -596,6 +617,73 @@ class GitHubWriteRetryTest {
                       }));
 
       assertSame(rejection, thrown);
+    }
+  }
+
+  /**
+   * #722. The budget used to be three attempts, documented as "long enough to outlast the
+   * minute-long window GitHub's content-creation secondary limit uses". A dogfood round measured a
+   * content-creation block lasting 72 seconds — with primary quota nowhere near exhausted — and
+   * sixty seconds of budget expired inside it, so the writes were given up on and the findings lost
+   * their threads.
+   */
+  @Nested
+  class TheMeasuredSecondaryLimitWindow {
+
+    /** The window measured in #722, which the budget has to outlast to be worth having. */
+    private static final Duration OBSERVED_BLOCK = Duration.ofSeconds(72);
+
+    @Test
+    void aBlockAsLongAsTheMeasuredOneIsOutlasted() {
+      var calls = new AtomicInteger();
+      var elapsed = new AtomicLong();
+      // A clock the recorded waits actually advance, so GitHub stays blocked until as much time
+      // has passed as the measured window lasted.
+      var backoff =
+          new GitHubWriteRetry(
+              wait -> elapsed.addAndGet(wait.toSeconds()),
+              () -> Instant.ofEpochSecond(1_800_000_000L));
+
+      var result =
+          backoff.call(
+              "a comment on o/r #7",
+              () -> {
+                calls.incrementAndGet();
+                if (elapsed.get() < OBSERVED_BLOCK.toSeconds()) {
+                  throw throttled("Retry-After", "30");
+                }
+                return "posted";
+              });
+
+      assertEquals("posted", result);
+      assertTrue(
+          elapsed.get() >= OBSERVED_BLOCK.toSeconds(),
+          "the budget has to span the block, not expire inside it — waited only " + elapsed.get());
+      assertTrue(calls.get() >= 4, "a block this wide costs more than the old two repeats");
+    }
+
+    @Test
+    void theTotalBudgetOutlastsIt() {
+      assertTrue(
+          GitHubWriteRetry.TOTAL_BUDGET.compareTo(OBSERVED_BLOCK) > 0,
+          "TOTAL_BUDGET ("
+              + GitHubWriteRetry.TOTAL_BUDGET
+              + ") must outlast the measured "
+              + OBSERVED_BLOCK
+              + " block");
+    }
+
+    @Test
+    void theBudgetIsDerivedFromTheTwoBoundsThatProduceIt() {
+      // Both values are read into locals first. Passing the constant itself as the actual argument
+      // reads to SonarCloud (java:S3415) as the expected value in the wrong position, since a
+      // static final field is exactly what that rule looks for on the right-hand side.
+      var budget = GitHubWriteRetry.TOTAL_BUDGET;
+      var derivedFromTheBounds =
+          GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT.multipliedBy(GitHubWriteRetry.MAX_ATTEMPTS - 1L);
+
+      assertEquals(Duration.ofSeconds(90), budget);
+      assertEquals(Duration.ofSeconds(90), derivedFromTheBounds);
     }
   }
 }

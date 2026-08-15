@@ -32,6 +32,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -3936,6 +3938,155 @@ class ReviewOrchestratorTest {
 
       assertEquals(0, inline.posted());
       assertEquals(List.of(finding), inline.unanchored());
+    }
+
+    /**
+     * #722. The reason a comment was refused used to be logged at debug, which is off in
+     * production, so a run recorded only that the comment "could not be anchored" — a claim about
+     * line numbers. Twenty-nine rejections in one dogfood round are undiagnosable because of it,
+     * and #712 was filed against the wrong layer on the strength of that wording. The status and
+     * body GitHub sent have to reach the warning an operator actually sees.
+     */
+    @Test
+    void shouldLogWhatGitHubSaidWhenTheLineAnchoredCommentIsRefused() {
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", null, null);
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+      var secondaryLimit =
+          new WebApplicationException(
+              Response.status(403)
+                  .entity(
+                      "{\"message\":\"You have exceeded a secondary rate limit and have been"
+                          + " temporarily blocked from content creation.\"}")
+                  .build());
+      doThrow(secondaryLimit)
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() == null));
+
+      var julLogger = java.util.logging.Logger.getLogger(ReviewPublisher.class.getName());
+      var logged = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+      var capture =
+          new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord entry) {
+              logged.add(entry);
+            }
+
+            @Override
+            public void flush() {
+              // Nothing is buffered.
+            }
+
+            @Override
+            public void close() {
+              // Nothing to release.
+            }
+          };
+      julLogger.addHandler(capture);
+      try {
+        reviewPublisher.postInlineComments(
+            "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+      } finally {
+        julLogger.removeHandler(capture);
+      }
+
+      var warning =
+          logged.stream()
+              .map(java.util.logging.LogRecord::getMessage)
+              .filter(m -> m.contains("GitHub rejected inline comment"))
+              .findFirst()
+              .orElse("");
+      assertTrue(
+          warning.contains("status=403"),
+          "the status separating a throttle from a bad position must be in the line: " + warning);
+      assertTrue(
+          warning.contains("secondary rate limit"),
+          "GitHub's own wording must survive to the operator: " + warning);
+    }
+
+    /**
+     * #722. The two attempts fail for different causes often enough to matter: a suggestion block
+     * GitHub will not take is a 422 about the payload, a content-creation block is a 403 about the
+     * moment. Reporting only the second names the payload for a finding a throttle actually
+     * refused, which is the class of wrong diagnosis this change exists to stop.
+     */
+    @Test
+    void shouldLogBothReasonsWhenTheSuggestionRetryFailsDifferently() {
+      var finding =
+          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "t", "d", "old code", "new code");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+      doThrow(
+              new WebApplicationException(
+                  Response.status(403)
+                      .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
+                      .build()),
+              new WebApplicationException(
+                  Response.status(422)
+                      .entity("{\"message\":\"line must be part of the diff\"}")
+                      .build()))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() == null));
+
+      var julLogger = java.util.logging.Logger.getLogger(ReviewPublisher.class.getName());
+      var logged = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+      var capture =
+          new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord entry) {
+              logged.add(entry);
+            }
+
+            @Override
+            public void flush() {
+              // Nothing is buffered.
+            }
+
+            @Override
+            public void close() {
+              // Nothing to release.
+            }
+          };
+      julLogger.addHandler(capture);
+      try {
+        reviewPublisher.postInlineComments(
+            "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+      } finally {
+        julLogger.removeHandler(capture);
+      }
+
+      var warning =
+          logged.stream()
+              .map(java.util.logging.LogRecord::getMessage)
+              .filter(m -> m.contains("GitHub rejected inline comment"))
+              .findFirst()
+              .orElse("");
+      assertTrue(
+          warning.contains("status=403") && warning.contains("secondary rate limit"),
+          "the throttle that refused the first attempt must not be dropped: " + warning);
+      assertTrue(
+          warning.contains("status=422"),
+          "the second attempt's reason belongs there too: " + warning);
     }
 
     @Test

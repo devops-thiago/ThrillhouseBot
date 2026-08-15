@@ -46,6 +46,15 @@ class GitHubApiErrorTest {
       "{\"message\":\"You have exceeded a secondary rate limit. Please wait a few minutes before"
           + " you try again.\",\"documentation_url\":\"https://docs.github.com/rest\"}";
 
+  /**
+   * The body measured in #722: the generic secondary-limit sentence AND the clause naming the
+   * block. {@link #SECONDARY_LIMIT_BODY} is the generic wording on its own, which is a milder
+   * throttle class and must keep the linear backoff.
+   */
+  private static final String CONTENT_CREATION_BLOCK_BODY =
+      "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
+          + " from content creation. Please retry your request again later.\"}";
+
   private static final String PERMISSION_BODY =
       "{\"message\":\"Resource not accessible by integration\",\"status\":\"403\"}";
 
@@ -195,9 +204,143 @@ class GitHubApiErrorTest {
 
     @Test
     void aSilentThrottleBacksOffLinearlyByAttempt() {
+      // A throttle that is not a content-creation block keeps the linear backoff: it is the mild
+      // case, and slowing down a little is all it asks for.
+      var error = GitHubApiError.from(outbound(403, "{\"message\":\"rate limit exceeded\"}"));
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
+      assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
+    @Test
+    void theGenericSecondaryLimitIsNotTreatedAsTheContentCreationBlock() {
+      // GitHub sends this one for any endpoint, and it is a milder class than the block the floor
+      // is sized against. Flooring it would hold a PR's dispatcher slot for up to the whole budget
+      // over a throttle that asks only for a short pause.
       var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
       assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
       assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
+    /**
+     * #722. The budget is sized against a measured 72-second content-creation block, but sizing the
+     * attempts only bounds one call's wait from above. These pin the floor that makes the budget a
+     * floor as well, which is what the sizing was for.
+     */
+    @Nested
+    class AContentCreationBlockGitHubGaveNoDeadlineFor {
+
+      @Test
+      void isNotLeftToTheLinearFallback() {
+        // 5s, 10s then 15s spreads thirty seconds of waiting across the whole budget and gives up
+        // well inside a block of the measured width.
+        var error = GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(2, NOW));
+      }
+
+      @Test
+      void isNotRepeatedInstantlyOnAStaleResetInstant() {
+        // The reset belongs to the primary window, which a secondary limit leaves untouched — the
+        // run behind #722 carried remaining=4771 while content creation was blocked. Taken
+        // literally a past reset says "go now", spending every attempt in milliseconds while GitHub
+        // is still refusing, which is worse than not repeating at all.
+        var error =
+            GitHubApiError.from(
+                outbound(
+                    403,
+                    CONTENT_CREATION_BLOCK_BODY,
+                    "x-ratelimit-remaining",
+                    "4771",
+                    "x-ratelimit-reset",
+                    String.valueOf(NOW.getEpochSecond() - 90)));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void spansTheMeasuredBlockOnceTheWaitsAreClamped() {
+        var error = GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY));
+        var total = Duration.ZERO;
+        for (var attempt = 1; attempt < GitHubWriteRetry.MAX_ATTEMPTS; attempt++) {
+          var wait = error.retryDelay(attempt, NOW);
+          total =
+              total.plus(
+                  wait.compareTo(GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT) > 0
+                      ? GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT
+                      : wait);
+        }
+        assertTrue(
+            total.compareTo(Duration.ofSeconds(72)) >= 0,
+            "the clamped waits have to span the measured block, got " + total);
+      }
+
+      @Test
+      void keepsADerivedWaitThatIsAlreadyLongerThanTheFloor() {
+        // The floor lifts a wait that undershoots; it must not shorten one. A reset further out
+        // than the floor is the longer of the two and stays, with the retry's own ceiling left to
+        // clamp it.
+        var error =
+            GitHubApiError.from(
+                outbound(
+                    403,
+                    CONTENT_CREATION_BLOCK_BODY,
+                    "x-ratelimit-remaining",
+                    "4771",
+                    "x-ratelimit-reset",
+                    String.valueOf(NOW.getEpochSecond() + 120)));
+        assertEquals(Duration.ofSeconds(120), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void isFlooredEvenWhenThePrimaryWindowAlsoReadsExhausted() {
+        // The rate-limit headers describe the PRIMARY window, which this block leaves untouched, so
+        // remaining=0 alongside a near reset says nothing about when creation reopens. An earlier
+        // revision carved this case out and let it return 10s a time — three waits inside the very
+        // window the budget is sized against, which is the #722 failure all over again.
+        var error =
+            GitHubApiError.from(
+                outbound(
+                    403,
+                    CONTENT_CREATION_BLOCK_BODY,
+                    "x-ratelimit-remaining",
+                    "0",
+                    "x-ratelimit-reset",
+                    String.valueOf(NOW.getEpochSecond() + 10)));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void isRecognisedFromTheBlockWordingAlone() {
+        // A body naming the block without "secondary rate limit" or "abuse detection" is still the
+        // same failure, and must be both retried at all and floored.
+        var body =
+            "{\"message\":\"You have been temporarily blocked from content creation. Please try"
+                + " again later.\"}";
+        var error = GitHubApiError.from(outbound(403, body));
+        assertTrue(error.isThrottled(), "a blocked-creation 403 is a throttle, not a refusal");
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void isRecognisedFromTheGerundWordingToo() {
+        // Same block, named "blocked from creating content" rather than "content creation". The
+        // rule's contract is that it recognises a body naming the block, so it must not turn on
+        // which word order GitHub happened to use.
+        var body =
+            "{\"message\":\"You have been temporarily blocked from creating content. Please retry"
+                + " your request again later.\"}";
+        var error = GitHubApiError.from(outbound(403, body));
+        assertTrue(error.isThrottled(), "a blocked-creation 403 is a throttle, not a refusal");
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void stillYieldsToADeadlineGitHubNamed() {
+        // An explicit Retry-After is GitHub speaking about this block, so the floor must not
+        // override it — not even upwards.
+        var error =
+            GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY, "Retry-After", "3"));
+        assertEquals(Duration.ofSeconds(3), error.retryDelay(1, NOW));
+      }
     }
   }
 
