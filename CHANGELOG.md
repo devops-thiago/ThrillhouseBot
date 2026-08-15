@@ -4,6 +4,24 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-08-15
+
+Follow-ups from the round-7 dogfood corpus, on two surfaces: the GitHub write
+path, and what a review says about its own work. A comment GitHub throttles is
+now outlasted and its refusal explained, a finding whose inline comment cannot
+land keeps a working review thread, and a review can no longer claim coverage
+or closures its audit never made. The docs site also deploys itself on
+release. No configuration changes; upgrading is a redeploy.
+
+### Fixed
+
+- **A comment GitHub refuses is outlasted, and the refusal reason reaches the log** (#722): the content-creation secondary limit was measured blocking for 72 seconds while the write retry's budget spanned 60, and both ways of deriving a delay without a `Retry-After` undershot it — the linear fallback summed to 30 seconds, and a stale `x-ratelimit-reset` yielded zero, spending every attempt while GitHub was still refusing. The retry now makes four attempts and floors a derived delay at 30 seconds during a content-creation block; an explicit `Retry-After` still wins outright, and a genuinely exhausted primary window keeps its own reset instant. Every rejection now logs GitHub's status and message at warning level, so a throttle is distinguishable from a rejected position — the round that motivated this left 29 rejections undiagnosable and blamed line anchoring for them. When the with-suggestion and without-suggestion attempts fail differently, both reasons are kept
+- **A finding whose inline comment cannot land posts a file-level thread, not a bare bullet** (#712): the bullet carried no code context, no suggestion block and no review thread, and everything thread-dependent died with it — the finding could not be declined, a status note had nowhere to land, and clearing it acknowledged a count rather than a name. The suspected anchoring defect was ruled out: the same file and line posted successfully at the same commit, which is what pointed to the throttle above
+- **An overturned decline is disclosed on every review body, and a round names the findings it closed** (#713, #714): the note explaining that a decline was overturned on diff evidence rode only the no-new-findings body, so a round that also raised a finding dropped it, and a maintainer who wrote a considered decline could not tell whether it was read, rebutted, or missed. The note now rides the with-findings bodies too, above the partial-coverage banner. The resolved tally likewise names each finding it closed instead of reporting a bare count
+- **Verification coverage counts only the verdicts the audit acted on** (#710): the coverage record asked whether some verdict carried a finding's id, but `apply()` acts only on `confirmed`, `downgraded` and `rejected` — a blank or unrecognized verdict falls open and the finding posts unscreened. Such findings were counted as screened anyway, so a review could claim full verification over a set it never ruled on. One decision normalizer now feeds both the switch and the count, and an unrecognized verdict counts as unverified, which errs toward an over-cautious clause rather than silence
+- **The verifier sees the PR description it judges description-gap findings against** (#711, first part): a finding weighing the author's stated intent against the code had half its claim in material the verifier never received, and the verifier's own prompt tells it to reject a claim whose material is missing — so survival came down to whether the model noticed the absence. Five planted description-versus-code mismatches split three kept, two rejected, on identical grounds. The verifier now receives the PR title and description under the same untrusted-data fencing the reviewer uses
+- **The docs site deploys itself on release** (#717): the `release: published` trigger in `docs.yml` has fired zero times in the repository's history, because the release is created with the workflow's own `GITHUB_TOKEN` and GitHub starts no workflows for events that token raises — every site deploy through v0.6.2 was manual. `release.yml` now dispatches the docs build against the release tag once the release exists, gated on `update_latest` so a patch cut on an older line does not republish the site; the job fails loudly when the dispatch is refused
+
 ## [0.6.2] — 2026-08-14
 
 Follow-ups to the review threads on 0.6.1, plus the first piece of the release
