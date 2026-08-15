@@ -531,9 +531,17 @@ class ReviewOrchestratorTest {
 
     @Test
     void reopenedDeclineNoteReachesTheBodyWhenNoFindingCouldBeAnchored() {
-      // Same disclosure on the other with-findings branch: nothing anchored inline, so the review
-      // body carries the un-anchored list. The decline note must ride along there too, and stay
-      // above the partial-coverage banner (#713).
+      // Same disclosure on the other with-findings branch: nothing landed inline, so the review
+      // body carries the list of findings GitHub took no thread for. The decline note must ride
+      // along there too, and stay above the partial-coverage banner (#713).
+      //
+      // Reaching that branch takes both routes failing now: a finding whose line comment is refused
+      // falls back to a file-level thread (#712), so refusing only the line-anchored post would
+      // leave the finding threaded and this body unbuilt.
+      doThrow(new RuntimeException("422"))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       var result =
           new ReviewResult(
               List.of(new Finding(RiskLevel.MEDIUM, "src/Gone.java", 10, "t", "d", null, null)),
@@ -555,7 +563,7 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.contains("could not be anchored"), body);
+      assertTrue(body.contains("GitHub accepted no review thread for"), body);
       assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
       assertTrue(
           body.indexOf(RebuttalContradiction.NOTE_LEAD_IN) < body.indexOf("partial review"), body);
