@@ -542,14 +542,49 @@ public class FindingVerificationService {
       String projectStack,
       String previousFindings,
       Consumer<VerificationCoverage> coverageSink) {
+    return verify(
+        ledgerSessionId, response, "", diff, projectStack, previousFindings, coverageSink);
+  }
+
+  /**
+   * The variant that also hands the verifier the PR title and description, pre-escaped and fenced
+   * the same way the review call receives them.
+   *
+   * <p>#711: without it a candidate weighing the description against the code is unverifiable by
+   * construction — the claim's other half is simply absent — and the verifier's own prompt tells it
+   * to reject a claim whose material is not provided. Across one dogfood round, five PRs planted
+   * the same description-versus-code mismatch and the verifier rejected two of them on exactly that
+   * ground while keeping three, which is a coin flip rather than a judgement: the code fact was
+   * equally checkable in all five. Supplying the material makes the ground inapplicable instead of
+   * asking the model to remember not to apply it.
+   *
+   * <p>Empty {@code prContext} is the honest default for a caller that has none, and leaves the
+   * section out of the prompt entirely rather than sending an empty heading.
+   */
+  public ReviewResponse verify(
+      long ledgerSessionId,
+      ReviewResponse response,
+      String prContext,
+      String diff,
+      String projectStack,
+      String previousFindings,
+      Consumer<VerificationCoverage> coverageSink) {
     return floorInjectionSinkRisk(
-        audit(ledgerSessionId, response, diff, projectStack, previousFindings, coverageSink));
+        audit(
+            ledgerSessionId,
+            response,
+            prContext,
+            diff,
+            projectStack,
+            previousFindings,
+            coverageSink));
   }
 
   /** The audit itself; {@link #verify} applies the deterministic severity floor to its result. */
   private ReviewResponse audit(
       long ledgerSessionId,
       ReviewResponse response,
+      String prContext,
       String diff,
       String projectStack,
       String previousFindings,
@@ -576,6 +611,7 @@ public class FindingVerificationService {
       var result =
           verifier.verify(
               PromptTemplateEscaper.escape(renderCandidates(screened.findings())),
+              prContext == null ? "" : prContext,
               diff,
               projectStack,
               previousFindings == null ? "" : previousFindings);
