@@ -650,6 +650,132 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void reportsPartialCoverageWhenACutSalvagesAVerdictCarryingNoDecision() {
+    // #710: the cut lands after the verdicts array closed, so Jackson fails on the ROOT object
+    // ("expected close marker for Object") and salvage recovers every element — including one the
+    // model left without a decision. That candidate posts exactly as the reviewer raised it, like
+    // one with no verdict at all, so counting its id as coverage published a set that mixes
+    // verified and unverified findings and reads as fully screened. The count follows what the
+    // audit could act on, not what carried an id.
+    ReviewResponse original =
+        response(finding("critical", "high", "Ruled on"), finding("high", "high", "Never decided"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "reason": "still weighing this one"}]"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    // Fail-open is untouched: the undecided candidate survives at its original rating.
+    assertEquals(1, result.findings().size());
+    assertEquals("Never decided", result.findings().get(0).title());
+    assertEquals("high", result.findings().get(0).risk());
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+    assertEquals(VerificationCoverage.Outcome.PARTIAL, reported.get(0).outcome());
+  }
+
+  @Test
+  void reportsPartialCoverageWhenTheLengthCapSalvagesAVerdictCarryingNoDecision() {
+    // The same drift on the reported-length-stop lane (#599), driven end to end: the truncation
+    // unwinds into the salvage, which recovers both closed elements, and only the one the audit
+    // acted on counts as coverage.
+    ReviewResponse original =
+        response(finding("critical", "high", "Ruled on"), finding("high", "high", "Never decided"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiTruncated(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "downgraded", "risk": "low", "confidence": "low", "reason": "r"},
+              {"id": 2, "reason": "still weighing this one"}]"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(2, result.findings().size());
+    assertEquals("low", result.findings().get(0).risk());
+    assertEquals("high", result.findings().get(1).risk());
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+    assertEquals(VerificationCoverage.Outcome.PARTIAL, reported.get(0).outcome());
+  }
+
+  @Test
+  void reportsZeroCoverageWhenACutSalvagesOnlyVerdictsCarryingNoDecision() {
+    // The zero edge of the same rule: elements came back, so the salvage is not empty and the
+    // parse failure is never rethrown — but none of them decided anything, which leaves the
+    // findings in the state the empty-body path leaves them in, and must disclose the same way.
+    ReviewResponse original =
+        response(finding("critical", "high", "Bug"), finding("low", "high", "Nit"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "reason": "still weighing this one"},
+              {"id": 2, "verdict": "", "reason": "and this one"}]"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(2, result.findings().size());
+    assertEquals(List.of(new VerificationCoverage(2, 0)), reported);
+    assertEquals(VerificationCoverage.Outcome.NONE, reported.get(0).outcome());
+  }
+
+  @Test
+  void reportsFullCoverageWhenACutSalvagedEveryCandidatesVerdict() {
+    // Characterization, not red/green — the other edge #710 asks about, pinned so it cannot drift
+    // into a false alarm. A cut that lands after the verdicts array closed destroyed only the
+    // body's tail: every candidate received a decision the audit applied, so the finding set WAS
+    // fully screened and owes the reader no clause. The cut is still logged for the operator.
+    ReviewResponse original =
+        response(finding("critical", "high", "Ruled on"), finding("high", "high", "Also ruled on"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "confirmed", "reason": "real"}]"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(1, result.findings().size());
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+    assertFalse(reported.get(0).disclosed());
+  }
+
+  @Test
+  void doesNotCountAVerdictWhoseDecisionTheAuditCannotRead() {
+    // Not cut at all: a complete body whose verdict carries a label this service does not act on.
+    // The finding posts exactly as raised — the fail-open default — so the review must not claim
+    // it was screened, on the same reasoning strictRisk/strictConfidence refuse to guess at a
+    // garbled rating rather than collapsing a finding on it.
+    ReviewResponse original =
+        response(finding("critical", "high", "Ruled on"), finding("high", "high", "Unreadable"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "needs-more-thought", "reason": "unclear"}]}"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("Unreadable", result.findings().get(0).title());
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+    assertEquals(VerificationCoverage.Outcome.PARTIAL, reported.get(0).outcome());
+  }
+
+  @Test
   void reportsZeroCoverageWhenTheCutLeavesNoCompleteVerdict() {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString()))

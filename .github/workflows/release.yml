@@ -320,6 +320,64 @@ jobs:
             gh release create "${args[@]}"
           fi
 
+  # The Docs workflow's `release: published` trigger does not fire for the
+  # release created above: it is created with the default GITHUB_TOKEN, and
+  # GitHub suppresses workflow runs for events that token raises — the same
+  # guard that keeps CI from starting on the bump PR below. In the repo's whole
+  # history that trigger has never once fired, so every release through v0.6.2
+  # published its docs by hand. workflow_dispatch is exempt from the guard, so
+  # the deploy is dispatched explicitly here. The trigger stays on docs.yml for
+  # a release published by hand in the UI, which does fire it.
+  #
+  # Gated on update_latest for the same reason as the bump: the live site tracks
+  # the highest release, so a patch cut on an older line must not republish the
+  # site from its tag.
+  publish-docs:
+    needs: [verify, release, promote]
+    if: needs.promote.outputs.update_latest == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # write to dispatch the run, read to poll for it and watch it
+      actions: write
+    steps:
+      - name: Deploy the docs from the release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The dispatch only queues the run: `gh workflow run` exits 0 as soon
+          # as GitHub accepts it. The failure this job exists to catch happens
+          # later, inside the deploy — most likely the github-pages environment
+          # refusing the tag, which needs a `v*` policy alongside the `main`
+          # branch rule and produces "not allowed to deploy to github-pages due
+          # to environment protection rules". Waiting for the run is therefore
+          # the whole point: exiting on the dispatch would reproduce the silent
+          # miss that left the site four versions behind, just one step later.
+          before=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+
+          # The dispatch returns no run id, so resolve it by polling for a run
+          # of this workflow on this tag created at or after the dispatch. The
+          # created-after bound is what keeps an earlier manual republish of the
+          # same tag from being mistaken for this one.
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow docs.yml \
+              --branch "$TAG" --event workflow_dispatch --limit 20 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$before\")] | sort_by(.createdAt) | last | .databaseId // empty")
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::Dispatched docs.yml against $TAG but no run appeared within 5 minutes"
+            exit 1
+          fi
+
+          echo "Watching docs run $run_id for $TAG"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 15
+
   bump-version:
     needs: [verify, release, promote]
     if: needs.promote.outputs.update_latest == 'true'

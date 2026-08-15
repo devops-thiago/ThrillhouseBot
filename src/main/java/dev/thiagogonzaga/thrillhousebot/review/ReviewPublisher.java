@@ -131,6 +131,9 @@ public class ReviewPublisher {
    *
    * @param summaryPosted whether {@link #publishSummary} created or refreshed a summary comment on
    *     this round — when it did, this comment is skipped rather than posted beside it
+   * @param previousFindings the previous round's findings, in prompt-id order, so the comment can
+   *     name the ones it closed by {@code path:line} and title instead of reporting a bare count
+   *     (#714)
    * @return {@code true} when the delta comment was created; {@code false} when the feature is off,
    *     the review is a first review, a summary was posted, or the round has no delta to report
    */
@@ -140,11 +143,12 @@ public class ReviewPublisher {
       String repo,
       int prNumber,
       ReviewResult result,
-      boolean summaryPosted) {
+      boolean summaryPosted,
+      List<ReviewResponse.Finding> previousFindings) {
     if (!config.review().followUpSummary().enabled() || result.isFirstReview() || summaryPosted) {
       return false;
     }
-    var body = FollowUpDeltaSummary.render(result);
+    var body = FollowUpDeltaSummary.render(result, previousFindings);
     if (body.isEmpty()) {
       Log.debugf(
           "No delta to report for %s/%s #%d — skipping the follow-up summary comment",
@@ -366,6 +370,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
       }
       var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
+      fallbackParts.addAll(reopenedDeclineNotes(result));
       appendTruncationNotice(fallbackParts, result);
       createReviewWithFallback(
           auth,
@@ -382,6 +387,7 @@ public class ReviewPublisher {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
     bodyParts.addAll(skippedFindingsBodyParts(inline));
+    bodyParts.addAll(reopenedDeclineNotes(result));
     appendTruncationNotice(bodyParts, result);
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
@@ -571,20 +577,39 @@ public class ReviewPublisher {
   }
 
   /**
-   * Appends the explanatory note of each unresolved previous finding whose decline the re-check
-   * overturned ({@link RebuttalContradiction}) — the reply's premise, the contradicting line, and
-   * the "reply again to keep the decline" escape hatch. Without this the maintainer sees only the
-   * generic "N previous finding(s) remain unresolved" line and no reason their decline was not
-   * honored (F6). Only the reopened-decline note is surfaced; the backstop's generic carry-over
-   * note and the model's own unresolved notes stay out of the review body.
+   * The explanatory note of each unresolved previous finding whose decline the re-check overturned
+   * ({@link RebuttalContradiction}) — the reply's premise, the contradicting line, and the "reply
+   * again to keep the decline" escape hatch. Without them the maintainer sees only the generic "N
+   * previous finding(s) remain unresolved" line and no reason their decline was not honored (F6).
+   * Only the reopened-decline note is surfaced; the backstop's generic carry-over note and the
+   * model's own unresolved notes stay out of the review body.
+   *
+   * <p>Every review body must carry these, not just the no-new-findings one (#713). The note used
+   * to render from {@link #noIssuesBody} alone, so a round that happened to raise a finding took
+   * the with-findings path and dropped it silently — leaving "the model never read this as a
+   * decline" and "the model accepted the decline and the deterministic re-check overturned it"
+   * indistinguishable from outside, which is the same undisclosed-decision harm as #542/#598. Each
+   * note is self-contained (it names the claim, the contradicting line and the way to keep the
+   * decline), so it reads correctly as its own review-body section with no unresolved-count lead-in
+   * above it — that sentence opens with "No new issues in this revision", which a round posting
+   * findings must not claim.
    */
-  private static void appendReopenedDeclineNotes(StringBuilder sb, ReviewResult result) {
+  private static List<String> reopenedDeclineNotes(ReviewResult result) {
+    var notes = new ArrayList<String>();
     for (var status : result.previousStatuses()) {
       if ("unresolved".equalsIgnoreCase(status.status())
           && status.note() != null
           && status.note().startsWith(RebuttalContradiction.NOTE_LEAD_IN)) {
-        sb.append("\n\n").append(status.note().strip());
+        notes.add(status.note().strip());
       }
+    }
+    return notes;
+  }
+
+  /** {@link #reopenedDeclineNotes} appended to the no-new-findings body's unresolved line. */
+  private static void appendReopenedDeclineNotes(StringBuilder sb, ReviewResult result) {
+    for (var note : reopenedDeclineNotes(result)) {
+      sb.append("\n\n").append(note);
     }
   }
 
@@ -976,6 +1001,10 @@ public class ReviewPublisher {
    * ReviewResult#previousStatuses}), not the raw model statuses: a decline the re-check overturned
    * is {@code unresolved} here, so its thread is correctly left open rather than resolved on a
    * status the code already rejected (F7).
+   *
+   * <p>A finding a maintainer cleared with an {@code @thrillhousebot resolved} directive also gets
+   * a reply on its thread before the thread closes (#714), so the record of the close sits at the
+   * point of the discussion rather than only in a count on a separate comment.
    */
   void resolveAddressedThreads(
       String auth,
@@ -984,13 +1013,12 @@ public class ReviewPublisher {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResult.PreviousFindingStatus> statuses) {
     try {
-      List<Integer> addressed =
+      List<ReviewResult.PreviousFindingStatus> addressed =
           statuses.stream()
               .filter(
                   s ->
                       "resolved".equalsIgnoreCase(s.status())
                           || "justified".equalsIgnoreCase(s.status()))
-              .map(ReviewResult.PreviousFindingStatus::id)
               .toList();
       if (addressed.isEmpty() || inlineComments.isEmpty()) {
         return;
@@ -1000,13 +1028,17 @@ public class ReviewPublisher {
       var threads =
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;
-      for (int findingId : addressed) {
-        var rootCommentId = rootByFinding.get(findingId);
+      for (var status : addressed) {
+        var rootCommentId = rootByFinding.get(status.id());
         ReviewThreadService.ThreadRef thread =
             rootCommentId != null ? threads.get(rootCommentId) : null;
-        if (thread != null
-            && !thread.resolved()
-            && reviewThreadService.resolve(auth, thread.id())) {
+        if (thread == null || thread.resolved()) {
+          continue;
+        }
+        if (clearedByDirective(status)) {
+          replyOnClearedThread(auth, req, rootCommentId);
+        }
+        if (reviewThreadService.resolve(auth, thread.id())) {
           resolved++;
         }
       }
@@ -1017,6 +1049,57 @@ public class ReviewPublisher {
       }
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
+    }
+  }
+
+  /**
+   * Whether this status was closed by a maintainer's clearing directive rather than by a landed fix
+   * or a model verdict. Matched on the exact note {@link FollowUpAnalyzer#conversationClearedNote}
+   * writes — that rewrite is the only producer of it — so a thread only ever gets the reply below
+   * when the directive is what closed it.
+   */
+  private boolean clearedByDirective(ReviewResult.PreviousFindingStatus status) {
+    return FollowUpAnalyzer.conversationClearedNote(botIdentity).equals(status.note());
+  }
+
+  /**
+   * The reply left on a thread the clearing directive closed. Deterministic prose, not a generated
+   * answer: it states exactly what happened, so it cannot overstate or contradict the decision the
+   * review already took. The directive is rendered inside a code span, which is precisely the form
+   * {@link FollowUpAnalyzer#isClearDirective} treats as documentation rather than a command — a bot
+   * comment that reads as a fresh directive is not something a later round should act on.
+   */
+  static String clearedThreadReply(BotIdentity botIdentity) {
+    return "✅ Closed by a maintainer's `@"
+        + botIdentity.primaryMention()
+        + " resolved` comment on the PR conversation — this finding is no longer tracked as open."
+        + " Re-open this thread if that was not intended.";
+  }
+
+  /**
+   * Posts {@link #clearedThreadReply} into the cleared finding's thread, ahead of resolving it, so
+   * the record lands inside the thread rather than after it closes. Swallows its own failures: the
+   * reply is disclosure, and losing it must not cost the thread resolution that follows.
+   */
+  private void replyOnClearedThread(
+      String auth, ReviewOrchestrator.ReviewRequest req, long rootCommentId) {
+    try {
+      reviewClient.replyToReviewComment(
+          auth,
+          ACCEPT,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          rootCommentId,
+          new GitHubReviewClient.ReplyToReviewCommentRequest(clearedThreadReply(botIdentity)));
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to reply on cleared thread %d for %s/%s #%d (continuing)",
+          rootCommentId,
+          req.owner(),
+          req.repo(),
+          req.prNumber());
     }
   }
 }

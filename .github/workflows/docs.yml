@@ -3,6 +3,11 @@ name: Docs
 on:
   # Live site tracks GitHub Releases only — unreleased work on main /
   # release branches does not publish until a version is cut.
+  #
+  # This fires only for a release published by hand in the UI. A release created
+  # by the Release workflow uses the default GITHUB_TOKEN, and GitHub does not
+  # start workflow runs for events that token raises, so release.yml dispatches
+  # this workflow explicitly (its publish-docs job) instead of relying on it.
   release:
     types: [published]
   pull_request:

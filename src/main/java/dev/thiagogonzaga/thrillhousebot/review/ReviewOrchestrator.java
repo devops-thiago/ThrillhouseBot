@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -315,7 +316,7 @@ public class ReviewOrchestrator {
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       // Opt-in follow-up delta comment. Runs only when no summary was posted this round, and its
       // outcome is intentionally discarded — it must not feed summaryPosted below.
-      publishFollowUpDeltaBestEffort(auth, req, result, summaryPosted);
+      publishFollowUpDeltaBestEffort(auth, req, result, summaryPosted, previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -486,10 +487,14 @@ public class ReviewOrchestrator {
    * stands in for the review, so it can never gate the redundant-review skips.
    */
   private void publishFollowUpDeltaBestEffort(
-      String auth, ReviewRequest req, ReviewResult result, boolean summaryPosted) {
+      String auth,
+      ReviewRequest req,
+      ReviewResult result,
+      boolean summaryPosted,
+      List<ReviewResponse.Finding> previousFindings) {
     try {
       reviewPublisher.publishFollowUpDelta(
-          auth, req.owner(), req.repo(), req.prNumber(), result, summaryPosted);
+          auth, req.owner(), req.repo(), req.prNumber(), result, summaryPosted, previousFindings);
     } catch (RuntimeException e) {
       Log.warnf(
           e,
