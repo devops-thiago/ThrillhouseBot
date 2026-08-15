@@ -366,6 +366,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
       }
       var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
+      fallbackParts.addAll(reopenedDeclineNotes(result));
       appendTruncationNotice(fallbackParts, result);
       createReviewWithFallback(
           auth,
@@ -382,6 +383,7 @@ public class ReviewPublisher {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
     bodyParts.addAll(skippedFindingsBodyParts(inline));
+    bodyParts.addAll(reopenedDeclineNotes(result));
     appendTruncationNotice(bodyParts, result);
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
@@ -561,20 +563,39 @@ public class ReviewPublisher {
   }
 
   /**
-   * Appends the explanatory note of each unresolved previous finding whose decline the re-check
-   * overturned ({@link RebuttalContradiction}) — the reply's premise, the contradicting line, and
-   * the "reply again to keep the decline" escape hatch. Without this the maintainer sees only the
-   * generic "N previous finding(s) remain unresolved" line and no reason their decline was not
-   * honored (F6). Only the reopened-decline note is surfaced; the backstop's generic carry-over
-   * note and the model's own unresolved notes stay out of the review body.
+   * The explanatory note of each unresolved previous finding whose decline the re-check overturned
+   * ({@link RebuttalContradiction}) — the reply's premise, the contradicting line, and the "reply
+   * again to keep the decline" escape hatch. Without them the maintainer sees only the generic "N
+   * previous finding(s) remain unresolved" line and no reason their decline was not honored (F6).
+   * Only the reopened-decline note is surfaced; the backstop's generic carry-over note and the
+   * model's own unresolved notes stay out of the review body.
+   *
+   * <p>Every review body must carry these, not just the no-new-findings one (#713). The note used
+   * to render from {@link #noIssuesBody} alone, so a round that happened to raise a finding took
+   * the with-findings path and dropped it silently — leaving "the model never read this as a
+   * decline" and "the model accepted the decline and the deterministic re-check overturned it"
+   * indistinguishable from outside, which is the same undisclosed-decision harm as #542/#598. Each
+   * note is self-contained (it names the claim, the contradicting line and the way to keep the
+   * decline), so it reads correctly as its own review-body section with no unresolved-count lead-in
+   * above it — that sentence opens with "No new issues in this revision", which a round posting
+   * findings must not claim.
    */
-  private static void appendReopenedDeclineNotes(StringBuilder sb, ReviewResult result) {
+  private static List<String> reopenedDeclineNotes(ReviewResult result) {
+    var notes = new ArrayList<String>();
     for (var status : result.previousStatuses()) {
       if ("unresolved".equalsIgnoreCase(status.status())
           && status.note() != null
           && status.note().startsWith(RebuttalContradiction.NOTE_LEAD_IN)) {
-        sb.append("\n\n").append(status.note().strip());
+        notes.add(status.note().strip());
       }
+    }
+    return notes;
+  }
+
+  /** {@link #reopenedDeclineNotes} appended to the no-new-findings body's unresolved line. */
+  private static void appendReopenedDeclineNotes(StringBuilder sb, ReviewResult result) {
+    for (var note : reopenedDeclineNotes(result)) {
+      sb.append("\n\n").append(note);
     }
   }
 

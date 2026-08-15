@@ -58,6 +58,15 @@ class ReviewOrchestratorTest {
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
   private static final BotIdentity BOT_ID = BotIdentity.of(BOT_LOGIN);
 
+  /** A reopened decline's status note, exactly as {@link RebuttalContradiction} renders it. */
+  private static final String DECLINE_NOTE =
+      RebuttalContradiction.NOTE_LEAD_IN
+          + " the reply argues \"only ever called from the command path\", but the reviewed"
+          + " code dispatches this path concurrently — \"executor.execute(() -> execute(ctx));"
+          + "\". A single call site does not serialize work handed to an executor or a new"
+          + " thread, so the premise does not refute the finding. Reply again to keep the"
+          + " decline.";
+
   @Mock private ThrillhouseConfig config;
 
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
@@ -421,13 +430,7 @@ class ReviewOrchestratorTest {
       // A maintainer's decline the code contradicts is reopened as unresolved carrying the
       // contradiction note. The review body must surface that note next to the unresolved line so
       // the maintainer sees why their decline was not honored, and how to keep it (F6).
-      var note =
-          RebuttalContradiction.NOTE_LEAD_IN
-              + " the reply argues \"only ever called from the command path\", but the reviewed"
-              + " code dispatches this path concurrently — \"executor.execute(() -> execute(ctx));"
-              + "\". A single call site does not serialize work handed to an executor or a new"
-              + " thread, so the premise does not refute the finding. Reply again to keep the"
-              + " decline.";
+      var note = DECLINE_NOTE;
       var result =
           new ReviewResult(
               List.of(),
@@ -485,6 +488,112 @@ class ReviewOrchestratorTest {
       var body = captor.getValue().body();
       assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
       assertFalse(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+    }
+
+    @Test
+    void reopenedDeclineNoteAlsoReachesTheBodyOfARoundThatPostsFindings() {
+      // #713: the note used to render only on the no-new-findings body, so any round that also
+      // raised a finding took the with-findings path and dropped it — the maintainer was told the
+      // finding is still open and never that their stated reason had been examined and rejected.
+      // A COMMENT round whose single finding anchors inline builds an otherwise empty review body,
+      // so the note is the only thing that can put a review on the PR here.
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Main.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", DECLINE_NOTE)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "auth",
+          "owner",
+          "repo",
+          5,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+      assertTrue(body.contains("Reply again to keep the decline."), body);
+    }
+
+    @Test
+    void reopenedDeclineNoteReachesTheBodyWhenNoFindingCouldBeAnchored() {
+      // Same disclosure on the other with-findings branch: nothing anchored inline, so the review
+      // body carries the un-anchored list. The decline note must ride along there too, and stay
+      // above the partial-coverage banner (#713).
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Gone.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", DECLINE_NOTE)),
+              List.of(),
+              7);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("could not be anchored"), body);
+      assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+      assertTrue(
+          body.indexOf(RebuttalContradiction.NOTE_LEAD_IN) < body.indexOf("partial review"), body);
+    }
+
+    @Test
+    void findingsBodyOmitsNotesThatAreNotReopenedDeclines() {
+      // The with-findings surface applies the same filter as the no-findings one: a plain
+      // unresolved note and a resolved finding's note are both left out, so a COMMENT round whose
+      // finding anchored inline still posts no review body at all (#713).
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Main.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", "still broken"),
+                  new ReviewResult.PreviousFindingStatus(2, "resolved", DECLINE_NOTE)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "auth",
+          "owner",
+          "repo",
+          5,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }
 
     @Test
