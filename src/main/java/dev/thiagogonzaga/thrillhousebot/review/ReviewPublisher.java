@@ -702,7 +702,7 @@ public class ReviewPublisher {
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
       Log.debugf(
-          "Skipping inline comment for %s:%d — line is outside PR diff",
+          "Line for %s:%d is outside the PR diff — filing the finding on the file instead",
           finding.file(), finding.line());
       return postFileLevelComment(target, finding, findingId);
     }
