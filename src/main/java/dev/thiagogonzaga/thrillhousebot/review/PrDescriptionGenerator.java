@@ -29,12 +29,16 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Builds the {@code /describe} suggestion: an improved PR title and description generated from the
- * diff, posted as a comment the author may copy in. It never edits the pull request, so the
- * author's own title and body are never overwritten.
+ * diff, posted as a comment the author may copy in. By default it never edits the pull request, so
+ * the author's own title and body are never overwritten; a deployment that opts in with {@code
+ * thrillhousebot.review.describe.apply=true} instead has the caller apply the suggestion to the PR,
+ * for which {@link #generateSuggestion} also parses the title and description out of the model
+ * output and prepares a confirmation comment that preserves what was replaced.
  *
  * <p>Loads the PR's current title/body and diff and the repository instructions (via {@link
  * AbstractPrSuggestionGenerator}), asks the {@link PrDescribeAssistant} for a suggestion, then
@@ -78,6 +82,28 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
       description. Re-run with `/describe`.*
       """;
 
+  static final String APPLIED_HEADER = "## 🤖 ThrillhouseBot — PR title & description updated\n\n";
+
+  static final String APPLIED_FOOTER =
+      """
+
+
+      ---
+      *Applied by `/describe` — this deployment opts in with \
+      `thrillhousebot.review.describe.apply=true`. The previous title and description are \
+      preserved above. Edit the PR to adjust, or re-run `/describe` after more changes.*
+      """;
+
+  /**
+   * The two required sections of the model's answer, in the exact shape the prompts demand. The
+   * title line's wrapping backticks (and a stray blank line before it) are tolerated and stripped,
+   * because the title goes into the PR's single-line title field verbatim.
+   */
+  private static final Pattern SUGGESTION_SECTIONS =
+      Pattern.compile(
+          "###\\s+Suggested title\\s*\\R+(.+?)\\R+\\s*###\\s+Suggested description\\s*\\R+(.+)",
+          Pattern.DOTALL);
+
   private final PrDescribeAssistant describeAssistant;
 
   @Inject
@@ -102,6 +128,21 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
   }
 
   /**
+   * Everything one {@code /describe} run produced. {@code suggestBody} is the suggestion comment of
+   * the default suggest-only path. {@code title}, {@code description} and {@code applyBody} serve
+   * the opt-in apply path: the parsed pieces to PATCH onto the PR, and the confirmation comment —
+   * carrying the replaced title and body — to post once the PATCH succeeded. All three are {@code
+   * null} when the model output did not parse into the two required sections (or when there was
+   * nothing to describe at all), leaving the suggestion comment as the only thing to post.
+   */
+  public record Suggestion(String title, String description, String suggestBody, String applyBody) {
+    /** Whether this suggestion parsed into pieces the apply path can put on the PR. */
+    public boolean applicable() {
+      return title != null && description != null && applyBody != null;
+    }
+  }
+
+  /**
    * Generates the suggestion comment body for a PR, or {@code null} when there is nothing to
    * suggest (no diff) or the model produced no usable answer. The caller is responsible for posting
    * it.
@@ -111,6 +152,32 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
    */
   @ActivateRequestContext
   public String generate(
+      String owner,
+      String repo,
+      int prNumber,
+      String defaultBranch,
+      long installationId,
+      String auth) {
+    var suggestion = doGenerate(owner, repo, prNumber, defaultBranch, installationId, auth);
+    return suggestion == null ? null : suggestion.suggestBody();
+  }
+
+  /**
+   * The {@link #generate} run with its pieces kept apart, for the opt-in apply path. Same contract:
+   * {@code null} when there is nothing to suggest or no usable answer came back.
+   */
+  @ActivateRequestContext
+  public Suggestion generateSuggestion(
+      String owner,
+      String repo,
+      int prNumber,
+      String defaultBranch,
+      long installationId,
+      String auth) {
+    return doGenerate(owner, repo, prNumber, defaultBranch, installationId, auth);
+  }
+
+  private Suggestion doGenerate(
       String owner,
       String repo,
       int prNumber,
@@ -139,7 +206,9 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
       // Nothing fitted, but the files that did not are known: name them rather than go quiet. A
       // plan that covered nothing and omitted nothing means no file was in scope at all (every one
       // ignored), which is genuinely nothing to say.
-      return plan.truncated() ? NOT_COVERED + disclosure(plan) : null;
+      return plan.truncated()
+          ? new Suggestion(null, null, NOT_COVERED + disclosure(plan), null)
+          : null;
     }
     var drafted = describeEachBatch(inputs, plan);
     if (drafted.partials().isEmpty()) {
@@ -149,12 +218,82 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
     if (suggestion == null) {
       return null;
     }
-    return HEADER
-        + suggestion
-        + batchFailureNote(
-            drafted.failedBatches(), COMMAND, "the files in them are not described here.")
-        + FOOTER
-        + disclosure(plan);
+    var note =
+        batchFailureNote(
+            drafted.failedBatches(), COMMAND, "the files in them are not described here.");
+    var suggestBody = HEADER + suggestion + note + FOOTER + disclosure(plan);
+    var parsed = parseSections(suggestion);
+    if (parsed == null) {
+      return new Suggestion(null, null, suggestBody, null);
+    }
+    var applyBody =
+        APPLIED_HEADER + previousContent(inputs) + note + APPLIED_FOOTER + disclosure(plan);
+    return new Suggestion(parsed.title(), parsed.description(), suggestBody, applyBody);
+  }
+
+  /** The parsed sections of a well-formed answer; see {@link #parseSections}. */
+  record TitleAndDescription(String title, String description) {}
+
+  /**
+   * Extracts the proposed title and description from the model's answer, or {@code null} when the
+   * answer does not carry both sections in the demanded shape. Only the apply path needs this — a
+   * suggestion comment posts the answer as-is — so a shape the parser cannot read degrades the run
+   * to suggest-only rather than failing it.
+   */
+  static TitleAndDescription parseSections(String suggestion) {
+    if (suggestion == null) {
+      return null;
+    }
+    var matcher = SUGGESTION_SECTIONS.matcher(suggestion);
+    if (!matcher.find()) {
+      return null;
+    }
+    var title =
+        matcher
+            .group(1)
+            .lines()
+            .map(String::strip)
+            .filter(line -> !line.isEmpty())
+            .findFirst()
+            .orElse("");
+    if (title.startsWith("`")) {
+      // A title opening with a backtick is only readable as one wrapping pair. Anything else — an
+      // opener with no close on the line, a multi-backtick wrapper, a bare ``` fence line — would
+      // be applied verbatim, backticks and all, so those degrade to suggest-only instead. (A title
+      // merely *ending* in an inline code span, like "fix: guard `null`", stays accepted: only an
+      // opening backtick makes the line read as a wrapper.)
+      if (title.length() < 2 || !title.endsWith("`")) {
+        return null;
+      }
+      String inner = title.substring(1, title.length() - 1).strip();
+      if (inner.isEmpty() || inner.startsWith("`") || inner.endsWith("`")) {
+        return null;
+      }
+      title = inner;
+    }
+    var description = matcher.group(2).strip();
+    if (title.isEmpty() || description.isEmpty()) {
+      return null;
+    }
+    return new TitleAndDescription(title, description);
+  }
+
+  /**
+   * The replaced title and body, collapsed into the confirmation comment so the apply overwrite is
+   * never destructive: whatever `/describe` replaced stays recoverable on the PR itself.
+   */
+  private static String previousContent(Inputs inputs) {
+    var title = inputs.title() == null || inputs.title().isBlank() ? "_(none)_" : inputs.title();
+    var body =
+        inputs.body() == null || inputs.body().isBlank() ? "_(no description)_" : inputs.body();
+    return "The title and description of this pull request were replaced with the suggestion"
+        + " ThrillhouseBot generated from the diff.\n\n"
+        + "<details>\n<summary>Previous title and description</summary>\n\n"
+        + "**Title:** "
+        + title
+        + "\n\n"
+        + body
+        + "\n\n</details>";
   }
 
   /** The per-batch partial descriptions that came back, plus how many batch calls failed. */

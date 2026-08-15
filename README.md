@@ -89,7 +89,7 @@ not a reaction.
 | `/help` | List the available commands | anyone |
 | `/review` | Run (or re-run) a full review of the PR | write |
 | `/summary` | Post the PR summary if it isn't already on the PR — regenerates it if the comment was deleted, otherwise no-op | write |
-| `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
+| `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in. Never overwrites the PR by default; a deployment that opts in with `REVIEW_DESCRIBE_APPLY=true` has it replace the PR's title and body instead | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
 | `/improve` | Run a whole-PR improvement pass over the diff and post the improvements as committable suggestions (with copy-paste blocks for the ones that can't be pinned to the diff) | write |
@@ -129,6 +129,16 @@ description, `/changelog` merges the candidate entries into one entry. That redu
 extra model call, reserved out of `REVIEW_MAX_AI_CALLS` and spent only when the PR actually needed
 more than one batch, so a run never exceeds the same ceiling as one review. Any file the budget
 could not cover is named in a partial-coverage note under the suggestion.
+
+**`/describe` apply mode (opt-in)** — by default `/describe` only posts a suggestion comment
+and never touches the PR. A deployment that sets `REVIEW_DESCRIBE_APPLY=true` changes that:
+`/describe` then **replaces the PR's title and body** with the generated suggestion, so enable
+it only where maintainers expect the bot to edit their PRs. The edit is gated twice — it needs
+that explicit config *and* a commenter who passes the same write-access check as every command —
+and it is never destructive: the confirmation comment the bot posts carries the previous title
+and description, so anything replaced stays recoverable on the PR. When the model output doesn't
+parse into a title and description, or the GitHub update fails, the run falls back to posting the
+plain suggestion comment instead of editing the PR.
 
 **`/add-docs`** — on demand, the bot reads the diff and proposes documentation comments for
 the public symbols changed in the PR, honoring the repository instructions and each file's
@@ -305,6 +315,7 @@ will change per provider:
 | `REVIEW_ADD_DOCS_ENABLED` | Allow the on-demand `/add-docs` command to generate docstrings as committable suggestions | `true` |
 | `REVIEW_IMPROVE_ENABLED` | Allow the on-demand `/improve` command to run a whole-PR improvement pass and post committable suggestions | `true` |
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
+| `REVIEW_DESCRIBE_APPLY` | ⚠️ Opt-in auto-edit: make `/describe` **replace the PR's title and body** with the generated suggestion instead of only posting it as a comment (see [Commands](#commands)). The previous title and description are preserved in the confirmation comment, and the edit still requires a write-authorized commenter | `false` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_PATCH_COVERAGE_ENABLED` | Feed patch coverage into the review context: the added lines the repository's own coverage report records as never executed (see [Repository configuration](#repository-configuration)). Only takes effect for a repository that names its coverage artifact in `.github/thrillhousebot.yml` | `false` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. Only the first review posts the full summary; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
