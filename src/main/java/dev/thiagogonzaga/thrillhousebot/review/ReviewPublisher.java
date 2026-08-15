@@ -733,6 +733,7 @@ public class ReviewPublisher {
     if (rejection.isEmpty()) {
       return true;
     }
+    var reason = rejection.get();
     if (includeSuggestion) {
       var withoutSuggestion =
           tryPostInlineComment(target, finding, findingId, resolvedLine, Optional.empty(), false);
@@ -744,15 +745,13 @@ public class ReviewPublisher {
       // content-creation block is a 403 about the moment. Reporting only the second would name the
       // payload for a finding that was actually refused by a throttle, which is the class of wrong
       // diagnosis this whole change exists to stop.
-      rejection =
-          rejection
-              .filter(first -> !first.equals(withoutSuggestion.get()))
-              .map(first -> "with suggestion: " + first + "; without: " + withoutSuggestion.get())
-              .or(() -> withoutSuggestion);
+      var second = withoutSuggestion.get();
+      reason =
+          reason.equals(second) ? second : "with suggestion: " + reason + "; without: " + second;
     }
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
-        finding.file(), finding.line(), rejection.get());
+        finding.file(), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
   }
 
