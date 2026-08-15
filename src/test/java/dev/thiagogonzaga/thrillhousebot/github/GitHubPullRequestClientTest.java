@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -113,5 +114,41 @@ class GitHubPullRequestClientTest {
     assertEquals(27, pr.changedFiles());
     assertEquals(975, pr.additions());
     assertEquals(196, pr.deletions());
+  }
+
+  @Test
+  void updateRequestPassesShortFieldsThroughUnchanged() {
+    var request = new GitHubPullRequestClient.UpdatePullRequestRequest("feat: title", "Body.");
+
+    assertEquals("feat: title", request.title());
+    assertEquals("Body.", request.body());
+  }
+
+  @Test
+  void updateRequestCapsTheTitleAtGitHubsLimitWithoutAMultiLineNotice() {
+    var request = new GitHubPullRequestClient.UpdatePullRequestRequest("t".repeat(300), "Body.");
+
+    assertEquals(GitHubPullRequestClient.TITLE_MAX_LENGTH, request.title().length());
+    // A title is a single-line field, so the cut is plain — the shared truncation notice would
+    // put newlines into it.
+    assertEquals(-1, request.title().indexOf('\n'));
+  }
+
+  @Test
+  void updateRequestCapsTheBodyLikeEveryOtherOutgoingCommentField() {
+    var request = new GitHubPullRequestClient.UpdatePullRequestRequest("t", "b".repeat(70_000));
+
+    assertEquals(CommentBodyLimit.MAX_LENGTH, request.body().length());
+    assertTrue(request.body().endsWith(CommentBodyLimit.TRUNCATION_NOTICE));
+  }
+
+  @Test
+  void updateRequestSerializesTitleAndBodyOnlySoNothingElseAboutThePrCanChange() throws Exception {
+    var json =
+        new ObjectMapper()
+            .writeValueAsString(
+                new GitHubPullRequestClient.UpdatePullRequestRequest("feat: title", "Body."));
+
+    assertEquals("{\"title\":\"feat: title\",\"body\":\"Body.\"}", json);
   }
 }

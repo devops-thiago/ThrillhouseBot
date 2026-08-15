@@ -180,6 +180,12 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `REVIEW_CI_CONTEXT_INCLUDE_LOGS`<br>`thrillhousebot.review.ci-context.include-logs` | Also include the last 30 lines of up to two failing GitHub Actions job logs. Ignored unless `REVIEW_CI_CONTEXT_ENABLED` is on. | boolean | `false` |
 | `REVIEW_CI_CONTEXT_MAX_CHARS`<br>`thrillhousebot.review.ci-context.max-chars` | Character cap on the CI section (500–20000). | integer | `4000` |
 
+## `thrillhousebot.review.describe`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_DESCRIBE_APPLY`<br>`thrillhousebot.review.describe.apply` | Make `/describe` replace the PR's title and body with the generated suggestion instead of only posting it as a comment. The previous title and description are kept in the confirmation comment, and the commenter still needs write access. See [Commands](https://github.com/devops-thiago/ThrillhouseBot#commands). | boolean | `false` |
+
 ## `thrillhousebot.review.diagram`
 
 | Variable | Description | Type | Default |

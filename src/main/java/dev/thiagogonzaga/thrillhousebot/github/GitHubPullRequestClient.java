@@ -56,6 +56,38 @@ public interface GitHubPullRequestClient {
         credential -> getPullRequestOnce(credential, accept, owner, repo, pullNumber));
   }
 
+  /** One HTTP attempt at editing a PR. Callers want {@link #updatePullRequest} instead. */
+  @PATCH
+  @Path("/repos/{owner}/{repo}/pulls/{pullNumber}")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Consumes(MediaType.APPLICATION_JSON)
+  PullRequestDetails updatePullRequestOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("pullNumber") int pullNumber,
+      UpdatePullRequestRequest request);
+
+  /**
+   * Replaces a PR's title and body — the opt-in {@code /describe} apply path — with the same
+   * throttle backoff every other GitHub write gets. Losing this write to a throttle would post a
+   * confirmation comment describing an edit that never happened, so it retries like the comment
+   * writes do rather than only healing a rejected credential.
+   */
+  default PullRequestDetails updatePullRequest(
+      String auth,
+      String accept,
+      String owner,
+      String repo,
+      int pullNumber,
+      UpdatePullRequestRequest request) {
+    return GitHubWriteRetry.DEFAULT.call(
+        "an update of the title/body of PR " + owner + "/" + repo + "#" + pullNumber,
+        auth,
+        credential -> updatePullRequestOnce(credential, accept, owner, repo, pullNumber, request));
+  }
+
   /** One HTTP attempt at a files page. Callers want {@link #getPullRequestFilesPage} instead. */
   @GET
   @Path("/repos/{owner}/{repo}/pulls/{pullNumber}/files")
@@ -191,6 +223,29 @@ public interface GitHubPullRequestClient {
   record Ref(String sha, String ref) {
     public Ref(String sha) {
       this(sha, null);
+    }
+  }
+
+  /** GitHub's hard maximum PR-title length, in characters; a longer title is rejected with 422. */
+  int TITLE_MAX_LENGTH = 256;
+
+  /**
+   * Body of the PR update PATCH. Only the title and body fields are sent, so nothing else about the
+   * PR (state, base, …) can change. Both fields are capped to the limit GitHub enforces for them,
+   * like every other outgoing text field: the body with the shared truncation notice, the title
+   * with a plain cut because the multi-line notice cannot go in a single-line field.
+   */
+  record UpdatePullRequestRequest(String title, String body) {
+    public UpdatePullRequestRequest {
+      if (title != null && title.length() > TITLE_MAX_LENGTH) {
+        int keep = TITLE_MAX_LENGTH;
+        // Never leave a dangling high surrogate at the cut point.
+        if (Character.isHighSurrogate(title.charAt(keep - 1))) {
+          keep--;
+        }
+        title = title.substring(0, keep);
+      }
+      body = CommentBodyLimit.cap(body);
     }
   }
 

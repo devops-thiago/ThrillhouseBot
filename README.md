@@ -109,7 +109,7 @@ command word gets a written answer instead.
 | `/help` | List the commands | anyone |
 | `/review` | Run (or re-run) a full review | write |
 | `/summary` | Post the PR summary when the PR has none, for example after it was deleted. If one is already there, the bot replies that it did nothing. | write |
-| `/describe` | Suggest a PR title and description, as a comment to copy in. The PR is never edited. | write |
+| `/describe` | Suggest a PR title and description, as a comment to copy in. The PR is not edited unless the deployment sets `REVIEW_DESCRIBE_APPLY=true`; see **Describe apply mode**. | write |
 | `/changelog` | Draft a CHANGELOG entry (Added, Changed, Fixed, Security…), as a comment to copy in | write |
 | `/add-docs` | Suggest doc comments for the symbols the PR changed, as committable suggestions | write |
 | `/improve` | Suggest improvements across the whole PR, as committable suggestions | write |
@@ -148,6 +148,15 @@ answer. `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`,
 `/improve` and `/generate-tests` reply with a short paused notice and do
 nothing else. `/help`, `/resolve`, `/resume` and the learnings commands keep
 working.
+
+**Describe apply mode.** By default `/describe` only posts a comment. A
+deployment that sets `REVIEW_DESCRIBE_APPLY=true` makes it **replace the PR's
+title and body** with the generated suggestion, so turn it on only where
+maintainers expect the bot to edit their PRs. The edit needs both that setting
+and a commenter who passes the write-access check above. The confirmation
+comment keeps the previous title and description, so nothing replaced is lost.
+When the answer does not parse into a title and a description, or the GitHub
+update fails, the bot posts the plain suggestion comment instead.
 
 **Batching.** `/describe`, `/changelog`, `/add-docs`, `/improve` and
 `/generate-tests` read the whole change set, not the first
