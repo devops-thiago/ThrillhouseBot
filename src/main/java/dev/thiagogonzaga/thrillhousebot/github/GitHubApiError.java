@@ -98,20 +98,24 @@ public final class GitHubApiError {
    * The wording of the block that stops content creation specifically, rather than any other
    * throttle. It is the one that lasts long enough for the shape of the backoff to matter (#722).
    *
-   * <p>The measured body carried both "secondary rate limit" and "temporarily blocked from content
-   * creation", and GitHub's older wording for the same block says "abuse detection". The third
-   * alternative covers a body that names the block without either of the first two, in both word
-   * orders GitHub is known to phrase it — "blocked from content creation" and "blocked from
-   * creating content" — because this pattern decides the delay, and missing a variant leaves the
-   * linear fallback and its thirty seconds against a window three times as wide.
+   * <p>Deliberately narrower than {@link #THROTTLE_WORDING}, and in particular it does NOT match
+   * the bare phrase "secondary rate limit". That is GitHub's generic secondary-limit wording, sent
+   * for any endpoint, and it is a milder class than the block this floor is sized against: matching
+   * it would floor every such throttle at 30s and hold a PR's dispatcher slot for up to the whole
+   * budget, where the linear backoff's 5s, 10s then 15s is all that class asks for.
+   *
+   * <p>What is matched is wording that names the block itself. The measured body said "You have
+   * exceeded a secondary rate limit and have been temporarily blocked from content creation", so it
+   * matches on its second half; GitHub's older wording for the same block says "abuse detection";
+   * and both word orders of the creation phrase are taken, since the rule must not turn on which
+   * one GitHub happened to use.
    *
    * <p>It is deliberately the whole phrase rather than "content creation" alone: this runs over an
    * error body that is attacker-influenced text, and the bare noun phrase is loose enough to appear
    * in a message that is not this block.
    */
   private static final Pattern CONTENT_CREATION_BLOCK =
-      Pattern.compile(
-          "(?i)secondary rate limit|abuse detection|blocked from (?:content creation|creating content)");
+      Pattern.compile("(?i)abuse detection|blocked from (?:content creation|creating content)");
 
   /**
    * Floor on one wait while GitHub is blocking content creation and named no deadline of its own

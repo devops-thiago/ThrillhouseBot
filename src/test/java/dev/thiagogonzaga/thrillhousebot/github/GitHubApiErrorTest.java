@@ -46,6 +46,15 @@ class GitHubApiErrorTest {
       "{\"message\":\"You have exceeded a secondary rate limit. Please wait a few minutes before"
           + " you try again.\",\"documentation_url\":\"https://docs.github.com/rest\"}";
 
+  /**
+   * The body measured in #722: the generic secondary-limit sentence AND the clause naming the
+   * block. {@link #SECONDARY_LIMIT_BODY} is the generic wording on its own, which is a milder
+   * throttle class and must keep the linear backoff.
+   */
+  private static final String CONTENT_CREATION_BLOCK_BODY =
+      "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
+          + " from content creation. Please retry your request again later.\"}";
+
   private static final String PERMISSION_BODY =
       "{\"message\":\"Resource not accessible by integration\",\"status\":\"403\"}";
 
@@ -202,6 +211,16 @@ class GitHubApiErrorTest {
       assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
     }
 
+    @Test
+    void theGenericSecondaryLimitIsNotTreatedAsTheContentCreationBlock() {
+      // GitHub sends this one for any endpoint, and it is a milder class than the block the floor
+      // is sized against. Flooring it would hold a PR's dispatcher slot for up to the whole budget
+      // over a throttle that asks only for a short pause.
+      var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
+      assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
     /**
      * #722. The budget is sized against a measured 72-second content-creation block, but sizing the
      * attempts only bounds one call's wait from above. These pin the floor that makes the budget a
@@ -214,7 +233,7 @@ class GitHubApiErrorTest {
       void isNotLeftToTheLinearFallback() {
         // 5s, 10s then 15s spreads thirty seconds of waiting across the whole budget and gives up
         // well inside a block of the measured width.
-        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
+        var error = GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY));
         assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
         assertEquals(Duration.ofSeconds(30), error.retryDelay(2, NOW));
       }
@@ -229,7 +248,7 @@ class GitHubApiErrorTest {
             GitHubApiError.from(
                 outbound(
                     403,
-                    SECONDARY_LIMIT_BODY,
+                    CONTENT_CREATION_BLOCK_BODY,
                     "x-ratelimit-remaining",
                     "4771",
                     "x-ratelimit-reset",
@@ -239,7 +258,7 @@ class GitHubApiErrorTest {
 
       @Test
       void spansTheMeasuredBlockOnceTheWaitsAreClamped() {
-        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
+        var error = GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY));
         var total = Duration.ZERO;
         for (var attempt = 1; attempt < GitHubWriteRetry.MAX_ATTEMPTS; attempt++) {
           var wait = error.retryDelay(attempt, NOW);
@@ -263,7 +282,7 @@ class GitHubApiErrorTest {
             GitHubApiError.from(
                 outbound(
                     403,
-                    SECONDARY_LIMIT_BODY,
+                    CONTENT_CREATION_BLOCK_BODY,
                     "x-ratelimit-remaining",
                     "4771",
                     "x-ratelimit-reset",
@@ -281,7 +300,7 @@ class GitHubApiErrorTest {
             GitHubApiError.from(
                 outbound(
                     403,
-                    SECONDARY_LIMIT_BODY,
+                    CONTENT_CREATION_BLOCK_BODY,
                     "x-ratelimit-remaining",
                     "0",
                     "x-ratelimit-reset",
@@ -318,7 +337,8 @@ class GitHubApiErrorTest {
       void stillYieldsToADeadlineGitHubNamed() {
         // An explicit Retry-After is GitHub speaking about this block, so the floor must not
         // override it — not even upwards.
-        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY, "Retry-After", "3"));
+        var error =
+            GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY, "Retry-After", "3"));
         assertEquals(Duration.ofSeconds(3), error.retryDelay(1, NOW));
       }
     }
