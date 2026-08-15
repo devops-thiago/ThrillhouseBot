@@ -41,6 +41,7 @@ public interface FindingVerifier {
   @UserMessage(FindingVerifierPrompts.USER)
   Result<String> verify(
       @V("findings") String findings,
+      @V("prContext") String prContext,
       @V("diff") String diff,
       @V("projectStack") String projectStack,
       @V("previousFindings") String previousFindings);

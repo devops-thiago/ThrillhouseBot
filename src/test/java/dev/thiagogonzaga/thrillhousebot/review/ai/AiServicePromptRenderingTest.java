@@ -266,6 +266,7 @@ class AiServicePromptRenderingTest {
             () ->
                 findingVerifier.verify(
                     PromptTemplateEscaper.escape("FINDINGS_SENTINEL"),
+                    PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
                     PromptTemplateEscaper.escape("DIFF_SENTINEL"),
                     PromptTemplateEscaper.escape("STACK_SENTINEL"),
                     PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL")));
@@ -274,6 +275,11 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("DIFF_SENTINEL"), "diff missing from verifier prompt");
     assertTrue(user.contains("STACK_SENTINEL"), "projectStack missing");
     assertTrue(user.contains("PREVFINDINGS_SENTINEL"), "previousFindings missing");
+    // #711: a candidate weighing the PR description against the code is unverifiable without it,
+    // and the verifier's own prompt tells it to reject a claim whose material is not provided.
+    assertTrue(
+        user.contains("PRCONTEXT_SENTINEL"),
+        "the PR title and description must reach the verifier prompt");
   }
 
   @Test
