@@ -152,6 +152,18 @@ class GitHubWritePacerTest {
     assertEquals(List.of(), waited);
   }
 
+  /**
+   * The two ceilings are documented as the same number and held separately, because reading one
+   * from the other makes the static initializers circular — {@link GitHubWriteRetry} holds this
+   * class's {@code DEFAULT}, so the dependency only runs one way. This is what keeps the literal
+   * honest: widening the backoff budget without widening this one fails here rather than leaving a
+   * caller waiting longer for a pacing slot than being refused and repeated would have taken.
+   */
+  @Test
+  void theDefaultCeilingMatchesTheBackoffBudgetItIsDocumentedAgainst() {
+    assertEquals(GitHubWriteRetry.TOTAL_BUDGET, GitHubWritePacer.DEFAULT_MAX_WAIT);
+  }
+
   @AfterEach
   void clearProbe() {
     System.clearProperty(PROBE_KEY);

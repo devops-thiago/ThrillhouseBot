@@ -60,20 +60,43 @@ import org.slf4j.LoggerFactory;
  * virtual thread and pins no platform thread. What a wait does hold is the per-PR serialization
  * slot in the dispatcher, so the wait is bounded twice over: at most {@value #MAX_ATTEMPTS}
  * attempts, and no single wait longer than {@link #MAX_DELAY_PER_ATTEMPT} however long a {@code
- * Retry-After} asks for. One call therefore waits at most {@value #MAX_ATTEMPTS} − 1 × 30s = 60s,
- * which is also long enough to outlast the minute-long window GitHub's content-creation secondary
- * limit uses. Once the attempts are spent the failure propagates unchanged, and the log says the
- * generated content was lost so an operator can see the command needs re-running.
+ * Retry-After} asks for. One call therefore waits at most {@link #TOTAL_BUDGET}. Once the attempts
+ * are spent the failure propagates unchanged, and the log says the generated content was lost so an
+ * operator can see the command needs re-running.
+ *
+ * <h2>Why the budget is what it is</h2>
+ *
+ * #722: the budget was three attempts, and its own documentation claimed the resulting 60s was
+ * "long enough to outlast the minute-long window GitHub's content-creation secondary limit uses".
+ * That was an assumption, and measurement contradicted it. During one dogfood round GitHub answered
+ * content creation with {@code 403 You have exceeded a secondary rate limit and have been
+ * temporarily blocked from content creation} — with {@code x-ratelimit-remaining} still at 4771, so
+ * primary quota was nowhere near exhausted — across a window of <strong>72 seconds</strong>,
+ * simultaneously on unrelated pull requests. Sixty seconds of budget expired inside it and the
+ * writes were given up on.
+ *
+ * <p>The budget is therefore sized to outlast a window of that width with margin, which is what
+ * {@value #MAX_ATTEMPTS} attempts buys. It is deliberately not sized to outlast an arbitrary block:
+ * a secondary limit that outlasts this is telling the deployment it is writing too fast, and the
+ * answer there is the pacing in {@link GitHubWritePacer}, not a longer wait holding a PR's slot.
  */
 public final class GitHubWriteRetry {
 
   private static final Logger log = LoggerFactory.getLogger(GitHubWriteRetry.class);
 
-  /** Total attempts, first included: one post plus at most two repeats. */
-  public static final int MAX_ATTEMPTS = 3;
+  /** Total attempts, first included: one post plus at most three repeats. */
+  public static final int MAX_ATTEMPTS = 4;
 
   /** Longest single wait honoured, however long a {@code Retry-After} asks for. */
   public static final Duration MAX_DELAY_PER_ATTEMPT = Duration.ofSeconds(30);
+
+  /**
+   * Longest one call can wait in total: every repeat waiting the per-attempt ceiling. Derived
+   * rather than written down so it cannot drift from the two bounds that produce it, and exposed
+   * because {@link GitHubWritePacer} sizes its own ceiling against it — a caller waiting for a
+   * pacing slot must never wait longer than simply being refused and repeated would take.
+   */
+  public static final Duration TOTAL_BUDGET = MAX_DELAY_PER_ATTEMPT.multipliedBy(MAX_ATTEMPTS - 1L);
 
   /** Parks the current thread; the seam that lets the tests run the backoff without waiting. */
   @FunctionalInterface

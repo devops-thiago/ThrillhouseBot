@@ -51,10 +51,11 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@value #MIN_INTERVAL_KEY} (default {@code 1s}): spacing between two content-creating
  *       requests. Zero or negative disables pacing entirely.
- *   <li>{@value #MAX_WAIT_KEY} (default {@code 60s}): ceiling on how long one caller waits for its
- *       slot, so a queue that has grown past the ceiling degrades to the {@link GitHubWriteRetry}
- *       backoff — which is where the bot was before #579 — rather than parking a command for
- *       minutes while it holds its per-PR dispatcher slot.
+ *   <li>{@value #MAX_WAIT_KEY} (default {@code 90s}, the {@link GitHubWriteRetry#TOTAL_BUDGET}):
+ *       ceiling on how long one caller waits for its slot, so a queue that has grown past the
+ *       ceiling degrades to the {@link GitHubWriteRetry} backoff — which is where the bot was
+ *       before #579 — rather than parking a command for minutes while it holds its per-PR
+ *       dispatcher slot.
  * </ul>
  *
  * <p>Waiting never costs the payload: a pacing wait that is interrupted proceeds with the call
@@ -74,8 +75,16 @@ public final class GitHubWritePacer {
   /** GitHub's published guidance: no more than one content-creating request per second. */
   static final Duration DEFAULT_MIN_INTERVAL = Duration.ofSeconds(1);
 
-  /** Matches the total {@link GitHubWriteRetry} budget: no wait here is worse than a refusal. */
-  static final Duration DEFAULT_MAX_WAIT = Duration.ofSeconds(60);
+  /**
+   * Matches the total {@link GitHubWriteRetry} budget: no wait here is worse than a refusal. Held
+   * as a literal rather than read from {@code GitHubWriteRetry.TOTAL_BUDGET} because that class
+   * already holds a {@link #DEFAULT} of this one, and reading it back would make the two static
+   * initializers circular — whichever loaded second would see a null. {@code GitHubWritePacerTest}
+   * asserts the two are equal instead, so widening the backoff budget for a window like the
+   * 72-second one measured in #722 fails a test here rather than leaving this ceiling silently
+   * short of it.
+   */
+  static final Duration DEFAULT_MAX_WAIT = Duration.ofSeconds(90);
 
   /** Parks the current thread; the seam that lets the tests run the pacing without waiting. */
   @FunctionalInterface
