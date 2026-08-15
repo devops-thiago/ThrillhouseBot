@@ -526,4 +526,161 @@ class PrDescriptionGeneratorTest {
         +cache.put("k", "v");
         +return cache;""");
   }
+
+  private static final String WELL_FORMED_ANSWER =
+      """
+      ### Suggested title
+      `feat: add the widget`
+
+      ### Suggested description
+      Adds the widget.
+
+      - detail one
+      - detail two""";
+
+  private PrDescriptionGenerator.Suggestion generateSuggestion() {
+    return generator.generateSuggestion("owner", "repo", 7, "main", 12345L, AUTH);
+  }
+
+  @Test
+  void suggestionCarriesTheParsedTitleAndDescriptionForTheApplyPath() {
+    prWithFiles(foo());
+    describeReturns(WELL_FORMED_ANSWER);
+
+    var suggestion = generateSuggestion();
+
+    assertNotNull(suggestion);
+    assertTrue(suggestion.applicable());
+    assertEquals("feat: add the widget", suggestion.title());
+    assertEquals("Adds the widget.\n\n- detail one\n- detail two", suggestion.description());
+    // The suggest body is byte-identical to what generate() posts on the suggest-only path.
+    assertEquals(generate(), suggestion.suggestBody());
+  }
+
+  @Test
+  void applyBodyPreservesThePreviousTitleAndDescription() {
+    prWithFilesAndDetails(new PullRequestDetails("Old title", "Old body text", null, null));
+    describeReturns(WELL_FORMED_ANSWER);
+
+    var suggestion = generateSuggestion();
+
+    assertNotNull(suggestion);
+    assertTrue(suggestion.applicable());
+    assertTrue(suggestion.applyBody().startsWith(PrDescriptionGenerator.APPLIED_HEADER));
+    // The overwrite must never be destructive: the replaced title and body are on the comment.
+    assertTrue(suggestion.applyBody().contains("Old title"), suggestion.applyBody());
+    assertTrue(suggestion.applyBody().contains("Old body text"), suggestion.applyBody());
+    assertTrue(
+        suggestion.applyBody().contains(PrDescriptionGenerator.APPLIED_FOOTER),
+        suggestion.applyBody());
+  }
+
+  @Test
+  void suggestionDegradesToSuggestOnlyWhenTheAnswerLacksTheSections() {
+    prWithFiles(foo());
+    describeReturns("Here is a nicer description of the change, with no sections at all.");
+
+    var suggestion = generateSuggestion();
+
+    assertNotNull(suggestion);
+    assertFalse(suggestion.applicable());
+    assertNull(suggestion.applyBody());
+    assertTrue(suggestion.suggestBody().startsWith(PrDescriptionGenerator.HEADER));
+  }
+
+  @Test
+  void uncoverablePlanYieldsANonApplicableSuggestion() {
+    when(activeModel.maxInputTokens()).thenReturn(10);
+    prWithFiles(foo(), otherFile());
+
+    var suggestion = generateSuggestion();
+
+    assertNotNull(suggestion);
+    assertFalse(suggestion.applicable());
+    assertTrue(suggestion.suggestBody().startsWith(PrDescriptionGenerator.NOT_COVERED));
+  }
+
+  @Test
+  void parseSectionsReadsTheDemandedShape() {
+    var parsed = PrDescriptionGenerator.parseSections(WELL_FORMED_ANSWER);
+
+    assertNotNull(parsed);
+    assertEquals("feat: add the widget", parsed.title());
+    assertEquals("Adds the widget.\n\n- detail one\n- detail two", parsed.description());
+  }
+
+  @Test
+  void parseSectionsToleratesAnUnbacktickedTitle() {
+    var parsed =
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\nfix: plain title\n\n### Suggested description\nBody.");
+
+    assertNotNull(parsed);
+    assertEquals("fix: plain title", parsed.title());
+    assertEquals("Body.", parsed.description());
+  }
+
+  @Test
+  void parseSectionsRejectsAMultiBacktickTitleWrapperInsteadOfApplyingItVerbatim() {
+    // Stripping one pair of a ``…`` wrapper would leave `…` as the title and PATCH the backticks
+    // onto the PR; the run must degrade to suggest-only instead.
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n``feat: add the widget``\n\n### Suggested description\nBody."));
+    // A bare code-fence line must not become the literal title "`".
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n```\n\n### Suggested description\nBody."));
+  }
+
+  @Test
+  void parseSectionsRejectsAnUnclosedBacktickOpenerInsteadOfApplyingItVerbatim() {
+    // An opener with no close on the line would otherwise skip the strip branch entirely and be
+    // PATCHed onto the PR with the leading backtick(s) intact.
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n`feat: add the widget\n\n### Suggested description\nBody."));
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n```feat: add the widget\n\n### Suggested description\nBody."));
+    // The mirrored malformation — a wrapper whose inside still ends with a backtick — too.
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n`feat: add the widget``\n\n### Suggested description\nBody."));
+  }
+
+  @Test
+  void parseSectionsKeepsATitleThatMerelyEndsWithAnInlineCodeSpan() {
+    // Only an opening backtick makes the line read as a wrapper; a trailing code span is a
+    // legitimate title shape and must not degrade the run.
+    var parsed =
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\nfix: guard `null`\n\n### Suggested description\nBody.");
+
+    assertNotNull(parsed);
+    assertEquals("fix: guard `null`", parsed.title());
+  }
+
+  @Test
+  void parseSectionsKeepsInnerCodeSpansOfASinglyWrappedTitle() {
+    var parsed =
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n`fix: guard `null` input`\n\n### Suggested description\nBody.");
+
+    assertNotNull(parsed);
+    assertEquals("fix: guard `null` input", parsed.title());
+  }
+
+  @Test
+  void parseSectionsRejectsAnswersWithoutBothSections() {
+    assertNull(PrDescriptionGenerator.parseSections(null));
+    assertNull(PrDescriptionGenerator.parseSections("no sections here"));
+    assertNull(PrDescriptionGenerator.parseSections("### Suggested title\n`only a title`"));
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n``\n\n### Suggested description\nBody."));
+    assertNull(
+        PrDescriptionGenerator.parseSections(
+            "### Suggested title\n`t`\n\n### Suggested description\n   "));
+  }
 }

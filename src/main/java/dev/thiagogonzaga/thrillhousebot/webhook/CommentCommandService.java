@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
@@ -95,6 +96,7 @@ public class CommentCommandService {
   private final ExecutorService executor;
   private final GitHubAuthClient authClient;
   private final GitHubCommentClient commentClient;
+  private final GitHubPullRequestClient prClient;
   private final GitHubReviewClient reviewClient;
   private final ReviewThreadService reviewThreadService;
   private final ReviewDispatcher reviewDispatcher;
@@ -114,6 +116,7 @@ public class CommentCommandService {
       @ReviewExecutor ExecutorService executor,
       GitHubAuthClient authClient,
       @RestClient GitHubCommentClient commentClient,
+      @RestClient GitHubPullRequestClient prClient,
       @RestClient GitHubReviewClient reviewClient,
       ReviewThreadService reviewThreadService,
       ReviewDispatcher reviewDispatcher,
@@ -130,6 +133,7 @@ public class CommentCommandService {
     this.executor = executor;
     this.authClient = authClient;
     this.commentClient = commentClient;
+    this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.reviewThreadService = reviewThreadService;
     this.reviewDispatcher = reviewDispatcher;
@@ -251,6 +255,10 @@ public class CommentCommandService {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
+    if (config.review().describe().apply()) {
+      describeAndApply(ctx, auth);
+      return;
+    }
     log.info(
         "Generating title/description suggestion for {}/{} #{} (triggered by @{})",
         ctx.owner(),
@@ -266,6 +274,73 @@ public class CommentCommandService {
             ctx.installationId(),
             auth);
     postComment(auth, ctx, suggestion != null ? suggestion : noOutputNotice("/describe"));
+  }
+
+  /**
+   * The opt-in {@code /describe} apply path ({@code thrillhousebot.review.describe.apply=true}):
+   * replaces the PR's title and body with the generated suggestion, then posts the confirmation
+   * comment that preserves what was replaced. It reaches the PR only behind the same write-access
+   * gate as every command plus that explicit config, and it degrades to the suggest-only comment —
+   * never to silence, and never to a confirmation of an edit that did not happen — both when the
+   * model output did not parse into a title and description and when the PR update itself failed.
+   */
+  private void describeAndApply(CommandContext ctx, String auth) {
+    log.info(
+        "Generating title/description for {}/{} #{} to apply (triggered by @{})",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    var suggestion =
+        descriptionGenerator.generateSuggestion(
+            ctx.owner(),
+            ctx.repo(),
+            ctx.prNumber(),
+            ctx.defaultBranch(),
+            ctx.installationId(),
+            auth);
+    if (suggestion == null) {
+      postComment(auth, ctx, noOutputNotice("/describe"));
+      return;
+    }
+    if (!suggestion.applicable()) {
+      log.info(
+          "/describe output for {}/{} #{} did not parse into a title and description —"
+              + " posting it as a suggestion instead",
+          ctx.owner(),
+          ctx.repo(),
+          num(ctx));
+      postComment(auth, ctx, suggestion.suggestBody());
+      return;
+    }
+    try {
+      prClient.updatePullRequest(
+          auth,
+          ACCEPT,
+          ctx.owner(),
+          ctx.repo(),
+          ctx.prNumber(),
+          new GitHubPullRequestClient.UpdatePullRequestRequest(
+              suggestion.title(), suggestion.description()));
+    } catch (RuntimeException e) {
+      log.warn(
+          "Failed to update the title/body of {}/{} #{} — posting the suggestion instead",
+          ctx.owner(),
+          ctx.repo(),
+          num(ctx),
+          e);
+      postComment(auth, ctx, suggestion.suggestBody());
+      return;
+    }
+    // The audit trail of the overwrite: this log line for the operator, and the confirmation
+    // comment below — carrying the replaced title and body — for the PR itself.
+    log.info(
+        "Applied /describe to {}/{} #{} (triggered by @{}): PR title and description replaced",
+        ctx.owner(),
+        ctx.repo(),
+        num(ctx),
+        ctx.login());
+    postComment(auth, ctx, suggestion.applyBody());
   }
 
   private void handleChangelog(CommandContext ctx, String auth) {

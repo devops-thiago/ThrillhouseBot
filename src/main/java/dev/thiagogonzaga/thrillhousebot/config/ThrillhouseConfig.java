@@ -396,6 +396,8 @@ public interface ThrillhouseConfig {
 
     LabelsConfig labels();
 
+    DescribeConfig describe();
+
     DiagramConfig diagram();
 
     @WithName("patch-coverage")
@@ -514,6 +516,22 @@ public interface ThrillhouseConfig {
     @WithName("max-labels")
     @WithDefault("3")
     int maxLabels();
+  }
+
+  /**
+   * Opt-in apply mode for the {@code /describe} command, mirroring {@link LabelsConfig#apply()}:
+   * suggestion-only is the released behaviour, and letting the bot mutate the PR is the operator's
+   * explicit call.
+   */
+  interface DescribeConfig {
+    /**
+     * When {@code true}, a {@code /describe} from a write-authorized user replaces the PR's title
+     * and body with the generated suggestion; the previous title and body are preserved in the
+     * confirmation comment, so the overwrite is never destructive. When {@code false} (the
+     * default), the suggestion is only posted as a comment to copy in and the PR is never edited.
+     */
+    @WithDefault("false")
+    boolean apply();
   }
 
   interface DashboardConfig {

@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in apply mode for `/describe`** (#325): with `REVIEW_DESCRIBE_APPLY=true`, a write-authorized `/describe` replaces the PR's title and body with the generated suggestion instead of only posting it as a comment. Off by default — suggest-only stays the released behaviour. The confirmation comment preserves the previous title and description so the overwrite is never destructive, the apply is logged for audit, and a run whose output doesn't parse or whose GitHub update fails falls back to the plain suggestion comment
+
 ## [0.6.2] — 2026-08-14
 
 Follow-ups to the review threads on 0.6.1, plus the first piece of the release
