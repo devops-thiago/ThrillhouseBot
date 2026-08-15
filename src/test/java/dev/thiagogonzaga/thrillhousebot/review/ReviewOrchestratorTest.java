@@ -5937,6 +5937,68 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldReplyOnAThreadTheClearDirectiveClosedBeforeResolvingIt() {
+      // #714: a clear directive left no record anywhere near the discussion it ended — the thread
+      // simply closed. The reply states what happened at the point of the original discussion, and
+      // must land before the thread resolves so it sits inside it. Only the directive's own note
+      // earns one: a landed fix and a maintainer's decline close their threads as they always did.
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(
+                  1, "resolved", FollowUpAnalyzer.conversationClearedNote(BOT_ID)),
+              new ReviewResult.PreviousFindingStatus(2, "resolved", "fixed"),
+              new ReviewResult.PreviousFindingStatus(3, "justified", "intentional"));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L, 2, 200L, 3, 300L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(
+              Map.of(
+                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  200L, new ReviewThreadService.ThreadRef("T2", false),
+                  300L, new ReviewThreadService.ThreadRef("T3", false)));
+      var order = inOrder(reviewClient, reviewThreadService);
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
+      order
+          .verify(reviewClient)
+          .replyToReviewComment(
+              eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(5), eq(100L), reply.capture());
+      order.verify(reviewThreadService).resolve(AUTH, "T1");
+      assertEquals(ReviewPublisher.clearedThreadReply(BOT_ID), reply.getValue().body());
+      verify(reviewClient, times(1))
+          .replyToReviewComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), any());
+      verify(reviewThreadService).resolve(AUTH, "T2");
+      verify(reviewThreadService).resolve(AUTH, "T3");
+    }
+
+    @Test
+    void shouldStillResolveAClearedThreadWhenItsReplyFails() {
+      // The reply is disclosure, not the close: losing it must not cost the thread resolution.
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(
+                  1, "resolved", FollowUpAnalyzer.conversationClearedNote(BOT_ID)));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T1", false)));
+      when(reviewClient.replyToReviewComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), any()))
+          .thenThrow(new RuntimeException("comment rejected"));
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      verify(reviewThreadService).resolve(AUTH, "T1");
+    }
+
+    @Test
     void shouldSwallowThreadResolutionFailures() {
       var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"));
       when(followUpAnalyzer.matchFindingThreads(

@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -160,7 +161,8 @@ class ReviewPublisherTest {
   void followUpDeltaIsNotPostedWhenTheFeatureIsOff() {
     followUpSummaryEnabled(false);
 
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false));
+    assertFalse(
+        publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false, List.of()));
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }
@@ -169,7 +171,8 @@ class ReviewPublisherTest {
   void followUpDeltaIsPostedWhenEnabledAndTheDeltaIsNonEmpty() {
     followUpSummaryEnabled(true);
 
-    assertTrue(publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false));
+    assertTrue(
+        publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false, List.of()));
 
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
@@ -183,6 +186,34 @@ class ReviewPublisherTest {
   }
 
   @Test
+  void postedFollowUpDeltaNamesTheFindingsItClosed() {
+    // #714: the comment used to carry the resolved count and nothing else, so a maintainer who
+    // cleared a finding by directive could only learn whether the match took by diffing the PR's
+    // thread state across rounds. The previous round reaches the publisher, so the comment can
+    // name what closed with the directive's own identifiers.
+    followUpSummaryEnabled(true);
+
+    assertTrue(
+        publisher.publishFollowUpDelta(
+            "auth",
+            "o",
+            "r",
+            1,
+            RESOLVED_FOLLOW_UP,
+            false,
+            List.of(
+                new ReviewResponse.Finding(
+                    "high", "src/main/java/A.java", 42, "Unbounded retry", "d", null, null))));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    assertTrue(
+        body.getValue().body().contains("  - `src/main/java/A.java:42` — Unbounded retry"),
+        body.getValue().body());
+  }
+
+  @Test
   void followUpDeltaIsSkippedWhenNothingChangedThisRound() {
     // Enabled, but the round raised nothing and closed nothing — previous findings that merely
     // stayed open are not a delta, so the PR gets no comment at all.
@@ -190,7 +221,7 @@ class ReviewPublisherTest {
     var stalled =
         followUpResult(List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
 
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, stalled, false));
+    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, stalled, false, List.of()));
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }
@@ -220,7 +251,7 @@ class ReviewPublisherTest {
             0);
 
     assertTrue(publisher.publishSummary("auth", "o", "r", 1, firstReview, false));
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, firstReview, false));
+    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, firstReview, false, List.of()));
 
     var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient, times(1))
@@ -235,7 +266,8 @@ class ReviewPublisherTest {
     // summary comment for this round, so the delta must not land beside it.
     followUpSummaryEnabled(true);
 
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, true));
+    assertFalse(
+        publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, true, List.of()));
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }

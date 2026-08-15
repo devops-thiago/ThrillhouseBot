@@ -131,6 +131,9 @@ public class ReviewPublisher {
    *
    * @param summaryPosted whether {@link #publishSummary} created or refreshed a summary comment on
    *     this round — when it did, this comment is skipped rather than posted beside it
+   * @param previousFindings the previous round's findings, in prompt-id order, so the comment can
+   *     name the ones it closed by {@code path:line} and title instead of reporting a bare count
+   *     (#714)
    * @return {@code true} when the delta comment was created; {@code false} when the feature is off,
    *     the review is a first review, a summary was posted, or the round has no delta to report
    */
@@ -140,11 +143,12 @@ public class ReviewPublisher {
       String repo,
       int prNumber,
       ReviewResult result,
-      boolean summaryPosted) {
+      boolean summaryPosted,
+      List<ReviewResponse.Finding> previousFindings) {
     if (!config.review().followUpSummary().enabled() || result.isFirstReview() || summaryPosted) {
       return false;
     }
-    var body = FollowUpDeltaSummary.render(result);
+    var body = FollowUpDeltaSummary.render(result, previousFindings);
     if (body.isEmpty()) {
       Log.debugf(
           "No delta to report for %s/%s #%d — skipping the follow-up summary comment",
@@ -914,6 +918,10 @@ public class ReviewPublisher {
    * ReviewResult#previousStatuses}), not the raw model statuses: a decline the re-check overturned
    * is {@code unresolved} here, so its thread is correctly left open rather than resolved on a
    * status the code already rejected (F7).
+   *
+   * <p>A finding a maintainer cleared with an {@code @thrillhousebot resolved} directive also gets
+   * a reply on its thread before the thread closes (#714), so the record of the close sits at the
+   * point of the discussion rather than only in a count on a separate comment.
    */
   void resolveAddressedThreads(
       String auth,
@@ -922,13 +930,12 @@ public class ReviewPublisher {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResult.PreviousFindingStatus> statuses) {
     try {
-      List<Integer> addressed =
+      List<ReviewResult.PreviousFindingStatus> addressed =
           statuses.stream()
               .filter(
                   s ->
                       "resolved".equalsIgnoreCase(s.status())
                           || "justified".equalsIgnoreCase(s.status()))
-              .map(ReviewResult.PreviousFindingStatus::id)
               .toList();
       if (addressed.isEmpty() || inlineComments.isEmpty()) {
         return;
@@ -938,13 +945,17 @@ public class ReviewPublisher {
       var threads =
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;
-      for (int findingId : addressed) {
-        var rootCommentId = rootByFinding.get(findingId);
+      for (var status : addressed) {
+        var rootCommentId = rootByFinding.get(status.id());
         ReviewThreadService.ThreadRef thread =
             rootCommentId != null ? threads.get(rootCommentId) : null;
-        if (thread != null
-            && !thread.resolved()
-            && reviewThreadService.resolve(auth, thread.id())) {
+        if (thread == null || thread.resolved()) {
+          continue;
+        }
+        if (clearedByDirective(status)) {
+          replyOnClearedThread(auth, req, rootCommentId);
+        }
+        if (reviewThreadService.resolve(auth, thread.id())) {
           resolved++;
         }
       }
@@ -955,6 +966,57 @@ public class ReviewPublisher {
       }
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
+    }
+  }
+
+  /**
+   * Whether this status was closed by a maintainer's clearing directive rather than by a landed fix
+   * or a model verdict. Matched on the exact note {@link FollowUpAnalyzer#conversationClearedNote}
+   * writes — that rewrite is the only producer of it — so a thread only ever gets the reply below
+   * when the directive is what closed it.
+   */
+  private boolean clearedByDirective(ReviewResult.PreviousFindingStatus status) {
+    return FollowUpAnalyzer.conversationClearedNote(botIdentity).equals(status.note());
+  }
+
+  /**
+   * The reply left on a thread the clearing directive closed. Deterministic prose, not a generated
+   * answer: it states exactly what happened, so it cannot overstate or contradict the decision the
+   * review already took. The directive is rendered inside a code span, which is precisely the form
+   * {@link FollowUpAnalyzer#isClearDirective} treats as documentation rather than a command — a bot
+   * comment that reads as a fresh directive is not something a later round should act on.
+   */
+  static String clearedThreadReply(BotIdentity botIdentity) {
+    return "✅ Closed by a maintainer's `@"
+        + botIdentity.primaryMention()
+        + " resolved` comment on the PR conversation — this finding is no longer tracked as open."
+        + " Re-open this thread if that was not intended.";
+  }
+
+  /**
+   * Posts {@link #clearedThreadReply} into the cleared finding's thread, ahead of resolving it, so
+   * the record lands inside the thread rather than after it closes. Swallows its own failures: the
+   * reply is disclosure, and losing it must not cost the thread resolution that follows.
+   */
+  private void replyOnClearedThread(
+      String auth, ReviewOrchestrator.ReviewRequest req, long rootCommentId) {
+    try {
+      reviewClient.replyToReviewComment(
+          auth,
+          ACCEPT,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          rootCommentId,
+          new GitHubReviewClient.ReplyToReviewCommentRequest(clearedThreadReply(botIdentity)));
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to reply on cleared thread %d for %s/%s #%d (continuing)",
+          rootCommentId,
+          req.owner(),
+          req.repo(),
+          req.prNumber());
     }
   }
 }
