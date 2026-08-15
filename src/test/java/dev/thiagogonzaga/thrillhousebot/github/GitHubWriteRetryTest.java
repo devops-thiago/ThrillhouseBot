@@ -675,10 +675,15 @@ class GitHubWriteRetryTest {
 
     @Test
     void theBudgetIsDerivedFromTheTwoBoundsThatProduceIt() {
-      assertEquals(Duration.ofSeconds(90), GitHubWriteRetry.TOTAL_BUDGET);
-      assertEquals(
-          Duration.ofSeconds(90),
-          GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT.multipliedBy(GitHubWriteRetry.MAX_ATTEMPTS - 1L));
+      // Both values are read into locals first. Passing the constant itself as the actual argument
+      // reads to SonarCloud (java:S3415) as the expected value in the wrong position, since a
+      // static final field is exactly what that rule looks for on the right-hand side.
+      var budget = GitHubWriteRetry.TOTAL_BUDGET;
+      var derivedFromTheBounds =
+          GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT.multipliedBy(GitHubWriteRetry.MAX_ATTEMPTS - 1L);
+
+      assertEquals(Duration.ofSeconds(90), budget);
+      assertEquals(Duration.ofSeconds(90), derivedFromTheBounds);
     }
   }
 }
