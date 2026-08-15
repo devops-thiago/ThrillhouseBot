@@ -58,6 +58,15 @@ class ReviewOrchestratorTest {
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
   private static final BotIdentity BOT_ID = BotIdentity.of(BOT_LOGIN);
 
+  /** A reopened decline's status note, exactly as {@link RebuttalContradiction} renders it. */
+  private static final String DECLINE_NOTE =
+      RebuttalContradiction.NOTE_LEAD_IN
+          + " the reply argues \"only ever called from the command path\", but the reviewed"
+          + " code dispatches this path concurrently — \"executor.execute(() -> execute(ctx));"
+          + "\". A single call site does not serialize work handed to an executor or a new"
+          + " thread, so the premise does not refute the finding. Reply again to keep the"
+          + " decline.";
+
   @Mock private ThrillhouseConfig config;
 
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
@@ -421,13 +430,7 @@ class ReviewOrchestratorTest {
       // A maintainer's decline the code contradicts is reopened as unresolved carrying the
       // contradiction note. The review body must surface that note next to the unresolved line so
       // the maintainer sees why their decline was not honored, and how to keep it (F6).
-      var note =
-          RebuttalContradiction.NOTE_LEAD_IN
-              + " the reply argues \"only ever called from the command path\", but the reviewed"
-              + " code dispatches this path concurrently — \"executor.execute(() -> execute(ctx));"
-              + "\". A single call site does not serialize work handed to an executor or a new"
-              + " thread, so the premise does not refute the finding. Reply again to keep the"
-              + " decline.";
+      var note = DECLINE_NOTE;
       var result =
           new ReviewResult(
               List.of(),
@@ -485,6 +488,112 @@ class ReviewOrchestratorTest {
       var body = captor.getValue().body();
       assertTrue(body.contains("1 previous finding(s) remain unresolved"), body);
       assertFalse(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+    }
+
+    @Test
+    void reopenedDeclineNoteAlsoReachesTheBodyOfARoundThatPostsFindings() {
+      // #713: the note used to render only on the no-new-findings body, so any round that also
+      // raised a finding took the with-findings path and dropped it — the maintainer was told the
+      // finding is still open and never that their stated reason had been examined and rejected.
+      // A COMMENT round whose single finding anchors inline builds an otherwise empty review body,
+      // so the note is the only thing that can put a review on the PR here.
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Main.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", DECLINE_NOTE)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "auth",
+          "owner",
+          "repo",
+          5,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+      assertTrue(body.contains("Reply again to keep the decline."), body);
+    }
+
+    @Test
+    void reopenedDeclineNoteReachesTheBodyWhenNoFindingCouldBeAnchored() {
+      // Same disclosure on the other with-findings branch: nothing anchored inline, so the review
+      // body carries the un-anchored list. The decline note must ride along there too, and stay
+      // above the partial-coverage banner (#713).
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Gone.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", DECLINE_NOTE)),
+              List.of(),
+              7);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("could not be anchored"), body);
+      assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+      assertTrue(
+          body.indexOf(RebuttalContradiction.NOTE_LEAD_IN) < body.indexOf("partial review"), body);
+    }
+
+    @Test
+    void findingsBodyOmitsNotesThatAreNotReopenedDeclines() {
+      // The with-findings surface applies the same filter as the no-findings one: a plain
+      // unresolved note and a resolved finding's note are both left out, so a COMMENT round whose
+      // finding anchored inline still posts no review body at all (#713).
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Main.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", "still broken"),
+                  new ReviewResult.PreviousFindingStatus(2, "resolved", DECLINE_NOTE)),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          "auth",
+          "owner",
+          "repo",
+          5,
+          "sha",
+          result,
+          resolverFor(fileDiffWithLine("src/Main.java", 10)));
+
+      verify(reviewClient, never())
+          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }
 
     @Test
@@ -5825,6 +5934,68 @@ class ReviewOrchestratorTest {
       reviewPublisher.resolveAddressedThreads(AUTH, request(), List.of(), List.of(), resolved);
 
       verifyNoInteractions(reviewThreadService);
+    }
+
+    @Test
+    void shouldReplyOnAThreadTheClearDirectiveClosedBeforeResolvingIt() {
+      // #714: a clear directive left no record anywhere near the discussion it ended — the thread
+      // simply closed. The reply states what happened at the point of the original discussion, and
+      // must land before the thread resolves so it sits inside it. Only the directive's own note
+      // earns one: a landed fix and a maintainer's decline close their threads as they always did.
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(
+                  1, "resolved", FollowUpAnalyzer.conversationClearedNote(BOT_ID)),
+              new ReviewResult.PreviousFindingStatus(2, "resolved", "fixed"),
+              new ReviewResult.PreviousFindingStatus(3, "justified", "intentional"));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L, 2, 200L, 3, 300L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(
+              Map.of(
+                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  200L, new ReviewThreadService.ThreadRef("T2", false),
+                  300L, new ReviewThreadService.ThreadRef("T3", false)));
+      var order = inOrder(reviewClient, reviewThreadService);
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
+      order
+          .verify(reviewClient)
+          .replyToReviewComment(
+              eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(5), eq(100L), reply.capture());
+      order.verify(reviewThreadService).resolve(AUTH, "T1");
+      assertEquals(ReviewPublisher.clearedThreadReply(BOT_ID), reply.getValue().body());
+      verify(reviewClient, times(1))
+          .replyToReviewComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), any());
+      verify(reviewThreadService).resolve(AUTH, "T2");
+      verify(reviewThreadService).resolve(AUTH, "T3");
+    }
+
+    @Test
+    void shouldStillResolveAClearedThreadWhenItsReplyFails() {
+      // The reply is disclosure, not the close: losing it must not cost the thread resolution.
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(
+                  1, "resolved", FollowUpAnalyzer.conversationClearedNote(BOT_ID)));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(Map.of(100L, new ReviewThreadService.ThreadRef("T1", false)));
+      when(reviewClient.replyToReviewComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), any()))
+          .thenThrow(new RuntimeException("comment rejected"));
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      verify(reviewThreadService).resolve(AUTH, "T1");
     }
 
     @Test
