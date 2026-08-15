@@ -637,15 +637,11 @@ class GitHubWriteRetryTest {
     void aBlockAsLongAsTheMeasuredOneIsOutlasted() {
       var calls = new AtomicInteger();
       var elapsed = new AtomicLong();
-      var waits = new ArrayList<Duration>();
       // A clock the recorded waits actually advance, so GitHub stays blocked until as much time
       // has passed as the measured window lasted.
       var backoff =
           new GitHubWriteRetry(
-              wait -> {
-                waits.add(wait);
-                elapsed.addAndGet(wait.toSeconds());
-              },
+              wait -> elapsed.addAndGet(wait.toSeconds()),
               () -> Instant.ofEpochSecond(1_800_000_000L));
 
       var result =
@@ -679,9 +675,10 @@ class GitHubWriteRetryTest {
 
     @Test
     void theBudgetIsDerivedFromTheTwoBoundsThatProduceIt() {
+      assertEquals(Duration.ofSeconds(90), GitHubWriteRetry.TOTAL_BUDGET);
       assertEquals(
-          GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT.multipliedBy(GitHubWriteRetry.MAX_ATTEMPTS - 1L),
-          GitHubWriteRetry.TOTAL_BUDGET);
+          Duration.ofSeconds(90),
+          GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT.multipliedBy(GitHubWriteRetry.MAX_ATTEMPTS - 1L));
     }
   }
 }
