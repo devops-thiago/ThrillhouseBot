@@ -87,7 +87,7 @@ class ConciseModelTruncationTest {
     when(conciseChatModel.chat(any(ChatRequest.class)))
         .thenReturn(lengthStoppedResponse("[{\"id\":1,\"verdi"));
 
-    var result = findingVerifier.verify("[]", "diff", "", "");
+    var result = findingVerifier.verify("[]", "", "diff", "", "");
 
     var thrown =
         assertThrows(

@@ -693,6 +693,7 @@ public class FindingPipeline {
         findingVerificationService.verify(
             ledgerSessionId(run.session()),
             validated,
+            batchInputs.prContext(),
             batchInputs.diff(),
             batchInputs.projectStack(),
             batchInputs.previousFindings(),
@@ -1335,6 +1336,7 @@ public class FindingPipeline {
         findingVerificationService.verify(
             ledgerSessionId(session),
             aiResponse,
+            promptInputs.prContext(),
             promptInputs.diff(),
             promptInputs.projectStack(),
             promptInputs.previousFindings(),

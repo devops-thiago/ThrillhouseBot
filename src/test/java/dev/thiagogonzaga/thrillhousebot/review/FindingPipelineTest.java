@@ -94,7 +94,7 @@ class FindingPipelineTest {
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
-    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any(), any()))
+    when(findingVerificationService.verify(anyLong(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(1));
     when(followUpAnalyzer.dropRepliedDuplicates(any(), any(), any(), any()))
         .thenAnswer(inv -> inv.getArgument(0));
@@ -208,8 +208,12 @@ class FindingPipelineTest {
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), eq(2));
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), eq(2));
     verify(aiReviewService).summarize(eq(session), any());
+    // #711: the PR context is the material a description-versus-code candidate is judged against,
+    // so the batch's own prContext has to reach the verifier — not the diff, and not nothing.
+    var verifiedPrContext = ArgumentCaptor.forClass(String.class);
     verify(findingVerificationService, times(2))
-        .verify(anyLong(), any(), any(), any(), any(), any());
+        .verify(anyLong(), any(), verifiedPrContext.capture(), any(), any(), any(), any());
+    assertEquals(List.of("ctx", "ctx"), verifiedPrContext.getAllValues());
 
     assertEquals(2, result.findings().size());
     assertSame(summary, result.summary());
@@ -324,7 +328,7 @@ class FindingPipelineTest {
     verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
     // The salvaged findings run the same validate/verify chain as any batch's.
     verify(findingVerificationService, times(2))
-        .verify(anyLong(), any(), any(), any(), any(), any());
+        .verify(anyLong(), any(), any(), any(), any(), any(), any());
 
     assertEquals(4, result.findings().size());
     assertEquals("S1", result.findings().get(0).title());
@@ -1034,7 +1038,7 @@ class FindingPipelineTest {
     // The salvaged findings face every check a parsed response's do, against the batch's own text.
     verify(quoteValidator).validate(any(), eq("### a.java\n"));
     verify(findingVerificationService, times(1))
-        .verify(anyLong(), any(), any(), any(), any(), any());
+        .verify(anyLong(), any(), any(), any(), any(), any(), any());
 
     assertEquals(3, result.findings().size());
     assertEquals("S1", result.findings().get(0).title());
@@ -1762,7 +1766,8 @@ class FindingPipelineTest {
     var result = p.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
 
     // No billed verifier call is made past the ceiling (the summary call stays refused too)...
-    verify(findingVerifier, never()).verify(anyString(), anyString(), anyString(), anyString());
+    verify(findingVerifier, never())
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString());
     verify(aiReviewService, never()).summarize(any(), any());
     // ...and the skip fails open: both batches' unverified findings survive.
     assertEquals(2, result.findings().size());
