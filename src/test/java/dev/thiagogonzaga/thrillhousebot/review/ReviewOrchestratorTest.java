@@ -2431,6 +2431,13 @@ class ReviewOrchestratorTest {
         when(commentClient.createComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
             .thenThrow(new RuntimeException("503 Service Unavailable"));
+        // The PR reports no files, so the finding has no line to anchor to and GitHub refuses the
+        // file-level fallback too (#712) — that is what leaves it for the review body, and so what
+        // makes a review the run's visible outcome at all.
+        doThrow(new RuntimeException("422"))
+            .when(reviewClient)
+            .createPullRequestComment(
+                anyString(), anyString(), anyString(), anyString(), anyInt(), any());
 
         orchestrator.review(
             new ReviewOrchestrator.ReviewRequest(
@@ -3697,21 +3704,121 @@ class ReviewOrchestratorTest {
           0);
     }
 
+    /**
+     * GitHub refusing the file-level fallback as well — the only way a finding is left with no
+     * review thread at all, and so the only way it still reaches the review body (#712).
+     */
+    private void rejectFileLevelComments() {
+      doThrow(new RuntimeException("422"))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() != null));
+    }
+
+    private GitHubReviewClient.CreatePullRequestCommentRequest capturedComment() {
+      var captor =
+          ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
+      return captor.getValue();
+    }
+
+    /**
+     * #712: a line the diff does not carry costs the finding its line anchor, never its thread. The
+     * fallback is a thread on the file, which the decline path, the status notes and the
+     * resolved-finding attribution all still reach.
+     */
     @Test
-    void shouldSkipFindingsOutsideDiff() {
+    void shouldFileFindingOnTheFileWhenItsLineIsOutsideDiff() {
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT);
       var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
+      when(suggestionFormatter.formatReviewComment(eq(finding), eq(false), anyInt()))
+          .thenReturn("body");
 
-      var posted =
-          reviewPublisher
-              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
-              .posted();
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
 
-      assertEquals(0, posted);
-      verify(reviewClient, never())
+      assertEquals(1, inline.posted());
+      assertTrue(inline.unanchored().isEmpty());
+      var request = capturedComment();
+      assertEquals(GitHubReviewClient.SUBJECT_TYPE_FILE, request.subjectType());
+      assertEquals("missing.java", request.path());
+      // GitHub rejects a file-level comment that also carries a position.
+      assertNull(request.line());
+      assertNull(request.side());
+      assertNull(request.startLine());
+      assertNull(request.startSide());
+      // The line the finding cites survives in the body, so the reader can still navigate to it.
+      assertTrue(request.body().contains("missing.java:10"));
+      assertTrue(request.body().endsWith("body"));
+    }
+
+    /**
+     * #712: the round-7 corpus lost 12 of 13 findings on one pull request to GitHub refusing the
+     * POST — not to a bad line number. A rejected line-anchored comment must still leave a thread.
+     */
+    @Test
+    void shouldFileFindingOnTheFileWhenGitHubRejectsTheLineAnchoredComment() {
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", null, null);
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+      doThrow(new RuntimeException("422"))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() == null));
+
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(1, inline.posted());
+      assertTrue(inline.unanchored().isEmpty());
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> GitHubReviewClient.SUBJECT_TYPE_FILE.equals(req.subjectType())));
+    }
+
+    /** Only a finding GitHub took no thread for at all is reported in the review body. */
+    @Test
+    void shouldReportFindingWhenTheFileLevelThreadIsRejectedToo() {
+      var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
+      var result = resultWithFinding(finding, ReviewState.COMMENT);
+      var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+      doThrow(new RuntimeException("422"))
+          .when(reviewClient)
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+
+      var inline =
+          reviewPublisher.postInlineComments(
+              "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      assertEquals(0, inline.posted());
+      assertEquals(List.of(finding), inline.unanchored());
     }
 
     @Test
@@ -3791,7 +3898,8 @@ class ReviewOrchestratorTest {
               .posted();
 
       assertEquals(0, posted);
-      verify(reviewClient, times(2))
+      // Two line-anchored attempts (with and without the suggestion) plus the file-level fallback.
+      verify(reviewClient, times(3))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }
@@ -4047,7 +4155,7 @@ class ReviewOrchestratorTest {
                   req ->
                       req.body().contains("Things to double-check")
                           && req.body().contains("Maybe nit")
-                          && !req.body().contains("could not be anchored")));
+                          && !req.body().contains("GitHub accepted no review thread")));
     }
 
     @Test
@@ -4129,11 +4237,12 @@ class ReviewOrchestratorTest {
                       req.body().contains("comment cap was reached")
                           && req.body().contains("Two")
                           && req.body().contains("desc two")
-                          && !req.body().contains("could not be anchored")));
+                          && !req.body().contains("GitHub accepted no review thread")));
     }
 
     @Test
     void shouldListFindingsWithDescriptionsInReviewBodyWhenNoneAnchorInlineOnFirstReview() {
+      rejectFileLevelComments();
       var finding =
           new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "the X path NPEs", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT); // isFirstReview = true
@@ -4165,6 +4274,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void truncatedReviewDisclosesPartialReviewWhenNoFindingsAnchorInline() {
+      rejectFileLevelComments();
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result =
           new ReviewResult(
@@ -4207,6 +4317,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldListFindingsInReviewBodyWhenNoneAnchorInlineOnFollowUp() {
+      rejectFileLevelComments();
       var finding =
           new Finding(RiskLevel.CRITICAL, "missing.java", 10, "Auth bypass", "desc", null, null);
       var blankDescription =
@@ -4257,6 +4368,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldSurfaceAnUnanchoredFindingInBodyEvenWhenOthersAnchorInline() {
+      rejectFileLevelComments();
       var anchored =
           new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
       var floating =
@@ -4294,7 +4406,12 @@ class ReviewOrchestratorTest {
 
       verify(reviewClient)
           .createPullRequestComment(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() == null));
       verify(reviewClient)
           .createReview(
               anyString(),
@@ -4312,6 +4429,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void firstReviewStillReportsAnUnanchoredTopFindingWithItsDescriptionInTheBody() {
+      rejectFileLevelComments();
       var anchored =
           new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Anchored bug", "a", null, null);
       var floating =
@@ -4363,6 +4481,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void firstReviewStillListsAnUnanchoredFindingBeyondTheSummaryTopFive() {
+      rejectFileLevelComments();
       var findings = new java.util.ArrayList<Finding>();
       for (int i = 1; i <= 5; i++) {
         findings.add(new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Top " + i, "d", null, null));
@@ -4489,9 +4608,16 @@ class ReviewOrchestratorTest {
               .posted();
 
       assertEquals(0, posted);
+      // Exactly one line-anchored attempt — the suggestion-less retry is what must not happen; the
+      // file-level fallback (#712) is a different request and is counted separately.
       verify(reviewClient, times(1))
           .createPullRequestComment(
-              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() == null));
       verify(suggestionFormatter, never()).formatReviewComment(finding, false);
     }
 
