@@ -195,9 +195,89 @@ class GitHubApiErrorTest {
 
     @Test
     void aSilentThrottleBacksOffLinearlyByAttempt() {
-      var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
+      // A throttle that is not a content-creation block keeps the linear backoff: it is the mild
+      // case, and slowing down a little is all it asks for.
+      var error = GitHubApiError.from(outbound(403, "{\"message\":\"rate limit exceeded\"}"));
       assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
       assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
+    /**
+     * #722. The budget is sized against a measured 72-second content-creation block, but sizing the
+     * attempts only bounds one call's wait from above. These pin the floor that makes the budget a
+     * floor as well, which is what the sizing was for.
+     */
+    @Nested
+    class AContentCreationBlockGitHubGaveNoDeadlineFor {
+
+      @Test
+      void isNotLeftToTheLinearFallback() {
+        // 5s, 10s then 15s spreads thirty seconds of waiting across the whole budget and gives up
+        // well inside a block of the measured width.
+        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(2, NOW));
+      }
+
+      @Test
+      void isNotRepeatedInstantlyOnAStaleResetInstant() {
+        // The reset belongs to the primary window, which a secondary limit leaves untouched — the
+        // run behind #722 carried remaining=4771 while content creation was blocked. Taken
+        // literally a past reset says "go now", spending every attempt in milliseconds while GitHub
+        // is still refusing, which is worse than not repeating at all.
+        var error =
+            GitHubApiError.from(
+                outbound(
+                    403,
+                    SECONDARY_LIMIT_BODY,
+                    "x-ratelimit-remaining",
+                    "4771",
+                    "x-ratelimit-reset",
+                    String.valueOf(NOW.getEpochSecond() - 90)));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void spansTheMeasuredBlockOnceTheWaitsAreClamped() {
+        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY));
+        var total = Duration.ZERO;
+        for (var attempt = 1; attempt < GitHubWriteRetry.MAX_ATTEMPTS; attempt++) {
+          var wait = error.retryDelay(attempt, NOW);
+          total =
+              total.plus(
+                  wait.compareTo(GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT) > 0
+                      ? GitHubWriteRetry.MAX_DELAY_PER_ATTEMPT
+                      : wait);
+        }
+        assertTrue(
+            total.compareTo(Duration.ofSeconds(72)) >= 0,
+            "the clamped waits have to span the measured block, got " + total);
+      }
+
+      @Test
+      void keepsADerivedWaitThatIsAlreadyLongerThanTheFloor() {
+        // The floor lifts a wait that undershoots; it must not shorten one. A reset further out
+        // than the floor is the longer of the two and stays, with the retry's own ceiling left to
+        // clamp it.
+        var error =
+            GitHubApiError.from(
+                outbound(
+                    403,
+                    SECONDARY_LIMIT_BODY,
+                    "x-ratelimit-remaining",
+                    "4771",
+                    "x-ratelimit-reset",
+                    String.valueOf(NOW.getEpochSecond() + 120)));
+        assertEquals(Duration.ofSeconds(120), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void stillYieldsToADeadlineGitHubNamed() {
+        // An explicit Retry-After is GitHub speaking about this block, so the floor must not
+        // override it — not even upwards.
+        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY, "Retry-After", "3"));
+        assertEquals(Duration.ofSeconds(3), error.retryDelay(1, NOW));
+      }
     }
   }
 

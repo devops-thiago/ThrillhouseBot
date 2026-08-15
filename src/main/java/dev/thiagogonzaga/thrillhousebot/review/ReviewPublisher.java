@@ -739,7 +739,16 @@ public class ReviewPublisher {
       if (withoutSuggestion.isEmpty()) {
         return true;
       }
-      rejection = withoutSuggestion;
+      // Both reasons, when they differ. The two attempts fail for different causes often enough to
+      // matter: a suggestion block GitHub will not take is a 422 about the payload, while a
+      // content-creation block is a 403 about the moment. Reporting only the second would name the
+      // payload for a finding that was actually refused by a throttle, which is the class of wrong
+      // diagnosis this whole change exists to stop.
+      rejection =
+          rejection
+              .filter(first -> !first.equals(withoutSuggestion.get()))
+              .map(first -> "with suggestion: " + first + "; without: " + withoutSuggestion.get())
+              .or(() -> withoutSuggestion);
     }
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",

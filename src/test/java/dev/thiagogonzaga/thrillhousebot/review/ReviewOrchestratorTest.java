@@ -4014,6 +4014,81 @@ class ReviewOrchestratorTest {
           "GitHub's own wording must survive to the operator: " + warning);
     }
 
+    /**
+     * #722. The two attempts fail for different causes often enough to matter: a suggestion block
+     * GitHub will not take is a 422 about the payload, a content-creation block is a 403 about the
+     * moment. Reporting only the second names the payload for a finding a throttle actually
+     * refused, which is the class of wrong diagnosis this change exists to stop.
+     */
+    @Test
+    void shouldLogBothReasonsWhenTheSuggestionRetryFailsDifferently() {
+      var finding =
+          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "t", "d", "old code", "new code");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
+          .thenReturn("body");
+      doThrow(
+              new WebApplicationException(
+                  Response.status(403)
+                      .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
+                      .build()),
+              new WebApplicationException(
+                  Response.status(422)
+                      .entity("{\"message\":\"line must be part of the diff\"}")
+                      .build()))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> req.subjectType() == null));
+
+      var julLogger = java.util.logging.Logger.getLogger(ReviewPublisher.class.getName());
+      var logged = new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+      var capture =
+          new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord entry) {
+              logged.add(entry);
+            }
+
+            @Override
+            public void flush() {
+              // Nothing is buffered.
+            }
+
+            @Override
+            public void close() {
+              // Nothing to release.
+            }
+          };
+      julLogger.addHandler(capture);
+      try {
+        reviewPublisher.postInlineComments(
+            "Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+      } finally {
+        julLogger.removeHandler(capture);
+      }
+
+      var warning =
+          logged.stream()
+              .map(java.util.logging.LogRecord::getMessage)
+              .filter(m -> m.contains("GitHub rejected inline comment"))
+              .findFirst()
+              .orElse("");
+      assertTrue(
+          warning.contains("status=403") && warning.contains("secondary rate limit"),
+          "the throttle that refused the first attempt must not be dropped: " + warning);
+      assertTrue(
+          warning.contains("status=422"),
+          "the second attempt's reason belongs there too: " + warning);
+    }
+
     @Test
     void shouldPostToNearestLineWhenExactLineMissing() {
       var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 15, "Bug", "desc", null, null);

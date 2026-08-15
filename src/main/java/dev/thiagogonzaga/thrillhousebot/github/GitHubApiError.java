@@ -86,6 +86,33 @@ public final class GitHubApiError {
   /** Backoff used when GitHub throttles without saying for how long. */
   static final Duration FALLBACK_DELAY = Duration.ofSeconds(5);
 
+  /**
+   * The wording of the block that stops content creation specifically, rather than any other
+   * throttle. It is the one that lasts long enough for the shape of the backoff to matter (#722).
+   */
+  private static final Pattern CONTENT_CREATION_BLOCK =
+      Pattern.compile("(?i)secondary rate limit|abuse detection");
+
+  /**
+   * Floor on one wait while GitHub is blocking content creation and named no deadline of its own
+   * (#722).
+   *
+   * <p>The measured block ran 72 seconds, and both ways of deriving a delay without a {@code
+   * Retry-After} undershoot it badly. The linear fallback gives 5s, 10s then 15s — thirty seconds
+   * of waiting spread across the whole budget. An {@code x-ratelimit-reset} already in the past
+   * gives zero, so every attempt fires at once and the budget is gone in milliseconds, which is
+   * worse than not repeating at all: it spends the repeats the generated content depends on while
+   * GitHub is still refusing.
+   *
+   * <p>Neither number is GitHub speaking about this block. The reset instant belongs to the
+   * <em>primary</em> window, which a secondary limit leaves alone — the run behind #722 is exactly
+   * that, a content-creation block carrying {@code x-ratelimit-remaining=4771}. So a delay that was
+   * derived rather than given is floored here, which is what makes {@link
+   * GitHubWriteRetry#TOTAL_BUDGET} a floor for this failure instead of only a ceiling. An explicit
+   * {@code Retry-After} still wins outright: there GitHub is naming its own deadline.
+   */
+  static final Duration CONTENT_CREATION_BLOCK_MIN_DELAY = Duration.ofSeconds(30);
+
   private final int status;
   private final String retryAfter;
   private final String rateLimitRemaining;
@@ -172,6 +199,13 @@ public final class GitHubApiError {
    * exhausted rate-limit window is honoured; otherwise a linear backoff off {@link #FALLBACK_DELAY}
    * so a silent throttle still slows down. Never negative — a reset already in the past means the
    * window has reopened and the call can go straight back out.
+   *
+   * <p>One exception, added in #722: when GitHub is blocking content creation and named no deadline
+   * of its own, a derived delay is floored at {@link #CONTENT_CREATION_BLOCK_MIN_DELAY}. Both
+   * derivations undershoot that block badly — the linear fallback by design, a stale reset instant
+   * by returning nothing at all — and the reset belongs to the primary window, which the block
+   * leaves untouched. A window that really is exhausted keeps its reset, since there the instant is
+   * a deadline for this failure rather than a number about another one.
    */
   public Duration retryDelay(int attempt, Instant now) {
     var fromHeader = retryAfterSeconds();
@@ -179,10 +213,37 @@ public final class GitHubApiError {
       return atLeastZero(Duration.ofSeconds(fromHeader.get()));
     }
     var reset = parseLong(rateLimitReset);
-    if (reset.isPresent()) {
-      return atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset.get())));
+    var derived =
+        reset.isPresent()
+            ? atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset.get())))
+            : FALLBACK_DELAY.multipliedBy(attempt);
+    if (primaryWindowExhausted() && !derived.isZero()) {
+      // The primary quota really is spent and its window has a future reset, so that instant is
+      // this failure's own deadline — GitHub naming a time, the same as a Retry-After. Flooring it
+      // would hold the call past a window that has already reopened.
+      return derived;
     }
-    return FALLBACK_DELAY.multipliedBy(attempt);
+    return blocksContentCreation() && derived.compareTo(CONTENT_CREATION_BLOCK_MIN_DELAY) < 0
+        ? CONTENT_CREATION_BLOCK_MIN_DELAY
+        : derived;
+  }
+
+  /**
+   * Whether GitHub is blocking content creation rather than throttling in some milder way — the
+   * failure whose measured width the budget is sized against (#722).
+   */
+  private boolean blocksContentCreation() {
+    return CONTENT_CREATION_BLOCK.matcher(body).find();
+  }
+
+  /**
+   * Whether the primary rate-limit window is genuinely spent, which is what makes its reset instant
+   * a deadline for this failure rather than a number belonging to a window it never touched. The
+   * content-creation block behind #722 carried {@code remaining=4771}: quota to spare, and creation
+   * blocked anyway.
+   */
+  private boolean primaryWindowExhausted() {
+    return parseLong(rateLimitRemaining).filter(remaining -> remaining == 0L).isPresent();
   }
 
   /**
