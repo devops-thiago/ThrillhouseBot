@@ -50,10 +50,33 @@ file deleted since that tag, so anything outside the new archive directory and
 
 ## Publishing the docs
 
-`.github/workflows/docs.yml` deploys the live site on `release: published` only,
-so the site tracks releases rather than `main`. That trigger runs **against the
-tag ref**, which makes the deploy depend on one repo setting: the `github-pages`
-environment must allow the tag to deploy.
+`.github/workflows/docs.yml` deploys the live site from a release tag, so the
+site tracks releases rather than `main`. Two things have to hold for that to
+happen on its own, and through v0.6.2 neither did.
+
+**The deploy is dispatched, not triggered.** `docs.yml` declares
+`release: published`, but that event never fires for our releases: the `release`
+job creates them with the default `GITHUB_TOKEN`, and GitHub does not start
+workflow runs for events that token raises — the same recursion guard that keeps
+CI from starting on the bump PR. In the repo's whole history the trigger has
+never once fired, and every release through v0.6.2 published its docs by hand.
+The `publish-docs` job in `release.yml` now dispatches `docs.yml` against the
+tag after the release is created, gated on the release being the highest one so
+a patch on an older line cannot republish the site from its tag.
+`workflow_dispatch` is exempt from the recursion guard. The declared trigger is
+kept because a release published by hand in the UI does fire it.
+
+The job then **waits for the run it dispatched** and fails with it. `gh workflow
+run` returns as soon as GitHub accepts the dispatch, so a job that stopped there
+would go green while the deploy failed underneath it — the same silent miss one
+step later. The run carries no id back, so the job polls for a `docs.yml` run on
+the tag created at or after the dispatch, which is also what stops an earlier
+manual republish of the same tag from being mistaken for it. A release whose
+docs fail to publish now fails visibly in the release pipeline.
+
+**The tag must be allowed to deploy.** The build runs **against the tag ref**,
+so the deploy depends on one repo setting: the `github-pages` environment must
+admit the tag.
 
 Current policies, under **Settings → Environments → github-pages → Deployment
 branches and tags**:
@@ -68,14 +91,20 @@ Without the tag rule the deploy fails at the very last step with:
 > Tag "vX.Y.Z" is not allowed to deploy to github-pages due to environment
 > protection rules.
 
-That is what happened to every release through 0.6.1, and the workaround —
+That is what happened to every release through v0.6.1, and the workaround —
 dispatching the workflow from `main` — publishes `main`'s docs instead of the
-release's, which is exactly what the release-only trigger exists to prevent. If
-a deploy fails this way, fix the policy and re-run the workflow against the tag
-rather than dispatching from `main`. Inspect the policies with:
+release's, which is exactly what tracking releases exists to prevent. If a deploy
+fails this way, fix the policy and re-run against the tag rather than dispatching
+from `main`. Inspect the policies with:
 
 ```bash
 gh api repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies
+```
+
+To republish an already-released version by hand, for a docs hotfix on its tag:
+
+```bash
+gh workflow run docs.yml --ref vX.Y.Z
 ```
 
 ## Automated version bump
