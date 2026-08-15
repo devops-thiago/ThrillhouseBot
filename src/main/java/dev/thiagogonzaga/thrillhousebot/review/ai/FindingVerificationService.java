@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -498,6 +499,18 @@ public class FindingVerificationService {
   private static final String VERDICTS = "verdicts";
 
   /**
+   * The decision labels the audit acts on, and so the only ones {@link #candidatesCovered} counts
+   * as a screened candidate. Read through {@link #decisionOf} by both that count and {@link
+   * #apply}'s switch, so what the review DOES with a verdict and what it CLAIMS it verified cannot
+   * drift (#710): every other label — absent, blank, or a word this service does not recognize —
+   * lands in {@code apply}'s fail-open default, where the finding posts exactly as the reviewer
+   * raised it. The strictness matches {@link #strictRisk}/{@link #strictConfidence}: an
+   * uninterpretable label from model output is treated as absent rather than guessed at.
+   */
+  private static final Set<String> ACTED_ON_DECISIONS =
+      Set.of("confirmed", "downgraded", "rejected");
+
+  /**
    * Audits the response's findings; {@code diff}, {@code projectStack} and {@code previousFindings}
    * must already be escaped for prompt templating, the same values handed to the review call.
    * Previous findings let the verifier reject re-raises of answered findings. {@code
@@ -673,17 +686,55 @@ public class FindingVerificationService {
   }
 
   /**
-   * How many distinct candidates the salvaged verdicts actually cover. Salvage is best-effort over
-   * model output, so a verdict can carry an id outside the 1-based candidate range; counting only
-   * the ids in range keeps the log honest about what stayed unverified.
+   * How many distinct candidates the verdicts actually screened — the {@code verified} half of the
+   * {@link VerificationCoverage} every lane reports, and so what the published review claims a
+   * second stage ruled on (#623). Salvage is best-effort over model output, so a verdict can carry
+   * an id outside the 1-based candidate range; counting only the ids in range keeps the log honest
+   * about what stayed unverified.
+   *
+   * <p>An id alone is not coverage. A verdict whose decision label is absent, blank or not one of
+   * {@link #ACTED_ON_DECISIONS} falls into {@link #apply}'s fail-open default, where the candidate
+   * posts exactly as the reviewer raised it — the same state a candidate with no verdict at all
+   * ends in — so counting it screened published an unverified finding inside a set the review
+   * called fully verified (#710). That is the harm #623 exists to prevent, and it is the dangerous
+   * direction: the empty-body path keeps every finding unverified and says so, while a set that
+   * mixes verified and unverified findings and reads as fully screened tells the reader nothing is
+   * outstanding. Undercounting instead only costs an over-cautious clause on a finding the audit
+   * did rule on in words this service cannot read.
+   *
+   * <p>Both cut lanes (#546/#617) measure through here, which settles the two edges a cut can land
+   * on. Nothing decidable salvaged reports {@code (N, 0)} — {@link
+   * VerificationCoverage.Outcome#NONE}, the same disclosure the empty-body path renders, because
+   * the findings are in the same state: the verifier ruled on none of them. A cut whose salvage
+   * covers every candidate reports {@code (N, N)} — genuinely {@link
+   * VerificationCoverage.Outcome#FULL}, and deliberately silent. That is not a hypothetical shape:
+   * a body cut after the verdicts array closed raises Jackson's "expected close marker for Object"
+   * against the ROOT object, and every verdict in it is complete. What the cut destroyed there is
+   * the body's tail — the closing punctuation, or elements for ids that do not exist — so every
+   * finding did receive a decision the audit applied, and disclosing a gap would tell the reader a
+   * fully screened set was not screened. The cut is logged either way, so an operator chasing the
+   * response-length cap keeps the signal the reader does not need.
    */
   private static long candidatesCovered(
       List<VerificationResponse.Verdict> salvaged, int candidates) {
     return salvaged.stream()
+        .filter(verdict -> ACTED_ON_DECISIONS.contains(decisionOf(verdict)))
         .mapToInt(VerificationResponse.Verdict::id)
         .filter(id -> id >= 1 && id <= candidates)
         .distinct()
         .count();
+  }
+
+  /**
+   * The verdict's decision, normalized the one way both {@link #apply} and {@link
+   * #candidatesCovered} read it; the empty string for a candidate with no verdict and for a verdict
+   * carrying no label. One reader so the two cannot disagree about what counts as a decision — the
+   * drift #710 was filed on.
+   */
+  private static String decisionOf(VerificationResponse.Verdict verdict) {
+    return verdict == null || verdict.verdict() == null
+        ? ""
+        : verdict.verdict().toLowerCase(Locale.ROOT);
   }
 
   /**
@@ -1105,8 +1156,7 @@ public class FindingVerificationService {
     for (var i = 0; i < response.findings().size(); i++) {
       var finding = response.findings().get(i);
       var verdict = byId.get(i + 1);
-      String decision = verdict != null && verdict.verdict() != null ? verdict.verdict() : "";
-      switch (decision.toLowerCase(Locale.ROOT)) {
+      switch (decisionOf(verdict)) {
         case "rejected" -> {
           rejected++;
           Log.infof(
