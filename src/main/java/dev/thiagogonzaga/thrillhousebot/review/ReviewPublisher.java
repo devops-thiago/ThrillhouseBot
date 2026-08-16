@@ -767,7 +767,7 @@ public class ReviewPublisher {
     }
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
-        finding.file(), finding.line(), reason);
+        MarkdownSafe.oneLine(finding.file()), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
   }
 
@@ -829,7 +829,7 @@ public class ReviewPublisher {
     } catch (RuntimeException e) {
       Log.warnf(
           "GitHub rejected the file-level thread for %s (%s) — the finding keeps no thread at all",
-          finding.file(), rejectionReason(e));
+          MarkdownSafe.oneLine(finding.file()), rejectionReason(e));
       return false;
     }
   }
