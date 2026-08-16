@@ -4,6 +4,23 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-08-16
+
+Four defects the audit of 0.6.3 turned up, three of them in the write path
+0.6.3 had just changed. A finding the file-level fallback rescued no longer
+announces itself as lost, a content-creation block is outlasted however
+GitHub words its deadline, an error body is bounded before it is scanned for
+credentials, and a review can no longer report full verification over a
+finding its audit never ruled on. No configuration changes; upgrading is a
+redeploy.
+
+### Fixed
+
+- **A rescued finding is no longer announced as lost** (#729): the dropped-post accounting counted refused HTTP calls, but since #712 one finding has up to three routes to the pull request, so a throttle on the line-anchored route was remembered as a loss even when the file-level fallback then landed the content. The review body that followed carried "an earlier reply on this pull request was never posted — run the command again" directly above the finding it claimed to have thrown away, and counted two losses for one finding when both line-anchored routes were tried. The routes for one finding are now one delivery: a throttled route is held rather than remembered, a route that lands settles it, and only a delivery that ends undelivered is remembered, once. A write that genuinely fails every route is still announced
+- **A content-creation block is outlasted however GitHub words its deadline** (#730): #722's floor applied only to a delay derived from headers, so an explicit `Retry-After` shorter than the floor was taken at face value — four attempts inside fifteen seconds against a block measured at seventy-two, which gave up sooner than the linear backoff it replaced. The floor now applies to the wait however it was derived. A `Retry-After` longer than the floor still wins outright, and a primary window that really is exhausted keeps its own reset instant
+- **An error body is bounded before it is scanned for credentials** (#731): redaction ran over whatever the configured API host sent, and its JWT shape is quadratic — 160 KB cost nineteen seconds of CPU and 1.2 MB about eighteen minutes, spent on the review's own thread inside the failure path that exists to explain a failed write. The body is now cut before the scan. Bounding first narrowed what redaction covered, so the token shape was widened to match a token the cut split: everything after its first dot is optional, and the one shape left unmasked is a cut before that dot, which exposes the header's algorithm and type claims and no secret. The collapse also takes Unicode format controls, so a bidi override cannot reorder what an operator reads
+- **Verification coverage counts only the verdicts the audit acted on** (#735): #710's fix shared the decision reader between the audit and the count but not the duplicate-id resolution — the audit collapsed duplicates first and read the survivor, the count filtered by label first and collapsed after. An id whose first verdict was unreadable was therefore kept unverified and counted as screened, so a review could still report full verification over a finding it never ruled on. Both now collapse through the same first-wins resolution
+
 ## [0.6.3] — 2026-08-15
 
 Follow-ups from the round-7 dogfood corpus, on two surfaces: the GitHub write
