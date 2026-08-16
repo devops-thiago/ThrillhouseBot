@@ -926,8 +926,35 @@ public class ReviewPublisher {
    * ambiguous failure (timeout, connection reset, 5xx) on any attempt may have landed that
    * attempt's review, so it throws {@link ReviewPostException} instead of risking a duplicate — as
    * does a refusal whose comment fallback fails too.
+   *
+   * <p>Every route here is a route to the <em>same</em> review body, so they are one delivery
+   * ({@link GitHubReviewClient#asOneComment}) for exactly the reason a finding's routes are (#729,
+   * #741): the dropped-post notice counts content the pull request never received, and a body the
+   * comment fallback rescued was received. Ungrouped, a content-creation block — a 403, so a
+   * definite refusal — made {@code createReview} remember a loss that the fallback's own {@code
+   * carrying} then read back, printing "an earlier reply on this pull request was never posted"
+   * above the very comment delivering the body, and counting one lost body twice when neither route
+   * landed (#748).
    */
   void createReviewWithFallback(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      GitHubReviewClient.CreateReviewRequest req) {
+    GitHubReviewClient.asOneComment(
+        owner,
+        repo,
+        prNumber,
+        () -> {
+          createReviewRoutes(auth, owner, repo, prNumber, req);
+          // The routes report through their return or their exception, not through a value.
+          return null;
+        });
+  }
+
+  /** The routes themselves, in preference order. See {@link #createReviewWithFallback}. */
+  private void createReviewRoutes(
       String auth,
       String owner,
       String repo,

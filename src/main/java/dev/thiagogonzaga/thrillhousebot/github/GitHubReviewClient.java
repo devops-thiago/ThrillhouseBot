@@ -252,18 +252,23 @@ public interface GitHubReviewClient {
   }
 
   /**
-   * Runs {@code routes} — several {@link #createPullRequestComment} calls that are alternative ways
-   * of getting the <em>same</em> content onto the pull request — as one delivery, so a throttle
-   * that costs one route its turn is only announced to the pull request if no route delivered the
-   * content at all (#729).
+   * Runs {@code routes} — several content-creating calls that are alternative ways of getting the
+   * <em>same</em> content onto the pull request — as one delivery, so a throttle that costs one
+   * route its turn is only announced to the pull request if no route delivered the content at all
+   * (#729).
    *
    * <p>Without this the accounting counts refused HTTP calls rather than lost content: #721's
    * file-level fallback lands the finding and the review body published moments later still leads
    * with "an earlier reply on this pull request was never posted … run the command again", twice
    * over for a finding whose suggestion block earned the line-anchored route a second attempt.
    *
+   * <p>The routes need not all be {@link #createPullRequestComment}: #704's fallback carries a
+   * refused review body over to {@link GitHubCommentClient#createComment}, and those two are one
+   * delivery for the same reason (#748). What has to match is the pull request they aim at — a
+   * group speaks for one pull request only.
+   *
    * <p>Lives here rather than at the call site because the notice registry is this package's, and
-   * the call it groups is {@link #createPullRequestComment} on this interface.
+   * {@link #createPullRequestComment} on this interface is the call it was built for.
    */
   static <T> T asOneComment(String owner, String repo, int pullNumber, Supplier<T> routes) {
     return GitHubLostWrites.SHARED.asOneDelivery(

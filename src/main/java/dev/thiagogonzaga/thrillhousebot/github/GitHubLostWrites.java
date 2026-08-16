@@ -211,11 +211,17 @@ public final class GitHubLostWrites {
    * finding that really is lost still announces itself — and announces itself once rather than once
    * per attempt.
    *
-   * <p>Nesting reuses the outer group rather than opening a second one, so a caller cannot lose
-   * another caller's routes by grouping its own.
+   * <p>Nesting for the <em>same</em> pull request reuses the outer group rather than opening a
+   * second one, so a caller cannot lose another caller's routes by grouping its own. Nesting for a
+   * different pull request cannot reuse it: a group speaks only for the pull request it was opened
+   * on ({@link #deliveryFor}), so handing the inner routes the outer group would leave them with no
+   * accounting at all and remember each of them separately — the per-route over-count #729 removed,
+   * reintroduced for the nested caller and silently, with no log and no exception (#748). The inner
+   * group therefore takes over the thread and hands the outer one back when it closes.
    */
   public <T> T asOneDelivery(Target target, Supplier<T> routes) {
-    if (delivery.get() != null) {
+    var outer = delivery.get();
+    if (outer != null && outer.target.equals(target)) {
       return routes.get();
     }
     var scope = new Delivery(target);
@@ -223,7 +229,11 @@ public final class GitHubLostWrites {
     try {
       return routes.get();
     } finally {
-      delivery.remove();
+      if (outer == null) {
+        delivery.remove();
+      } else {
+        delivery.set(outer);
+      }
       if (scope.refused && !scope.landed) {
         remember(target);
       }
