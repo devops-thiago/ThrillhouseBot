@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -42,6 +43,25 @@ public final class GitHubApiError {
 
   /** How much of a response body is kept for the log. GitHub's error bodies are far shorter. */
   static final int MAX_BODY_CHARS = 512;
+
+  /**
+   * How much of a response body the throttle classification reads (#732, #747).
+   *
+   * <p>Sixteen times the log cap, because the two jobs the body does have nothing to do with each
+   * other. The log line is capped so one failure cannot flood a log file, and that cap is about the
+   * operator's screen; classification is a yes/no about whether a completed generation gets another
+   * attempt, and reading it off the same 512 characters made it depend on where GitHub put its
+   * message. #740 then bounded the input to redaction at {@code MAX_BODY_CHARS * 2}, which closed
+   * the one path — redaction compressing a long credential-shaped prefix away — by which deeper
+   * wording still reached the classified string at all.
+   *
+   * <p>A bound is still wanted, because the entity is read with no size limit of its own and the
+   * point of #731 was to keep the cost of explaining a failed write off the review's carrier
+   * thread. Both patterns are flat literal alternations with no backtracking, so a pass over this
+   * many characters is a linear scan measured in microseconds — the quadratic shape #731 found is
+   * in the credential redaction, which still sees only its own bound.
+   */
+  static final int MAX_CLASSIFIED_CHARS = 8 * 1024;
 
   /** Replacement for anything in a response body shaped like a credential. */
   static final String REDACTED = "***";
@@ -208,7 +228,7 @@ public final class GitHubApiError {
   private final String rateLimitRemaining;
   private final String rateLimitReset;
   private final String rateLimitResource;
-  private final String body;
+  private final Body body;
 
   private GitHubApiError(
       int status,
@@ -216,13 +236,35 @@ public final class GitHubApiError {
       String rateLimitRemaining,
       String rateLimitReset,
       String rateLimitResource,
-      String body) {
+      Body body) {
     this.status = status;
     this.retryAfter = retryAfter;
     this.rateLimitRemaining = rateLimitRemaining;
     this.rateLimitReset = rateLimitReset;
     this.rateLimitResource = rateLimitResource;
     this.body = body;
+  }
+
+  /**
+   * The two readings of one response body, kept apart because the two callers want opposite things
+   * (#732, #747).
+   *
+   * @param logged the line an operator reads: collapsed, bounded, redacted, capped at {@link
+   *     #MAX_BODY_CHARS}, and marked with an ellipsis when anything was dropped
+   * @param classified what {@link #isThrottled()} and {@link #blocksContentCreation()} match
+   *     against: the collapsed body bounded at {@link #MAX_CLASSIFIED_CHARS} and nothing else.
+   *     Reading the logged form instead made the retry decision turn on where in the body GitHub
+   *     happened to put its message — wording past the cap, or behind enough credential-shaped
+   *     material to fill the redaction bound, classified as "not a throttle" and the write was not
+   *     repeated at all. It is deliberately the <em>unredacted</em> text: masking runs before
+   *     classification would read it, and a mask that swallowed the word {@code blocked} turned a
+   *     content-creation block into a permission refusal. Nothing in here is ever logged or
+   *     returned — the two patterns answer yes or no and the string is dropped.
+   */
+  private record Body(String logged, String classified) {
+
+    /** A body that could not be read at all — no line to log, nothing to classify. */
+    private static final Body UNREADABLE = new Body("", "");
   }
 
   /** Reads the status, the throttling headers and the (redacted) body off a failed response. */
@@ -250,6 +292,11 @@ public final class GitHubApiError {
    * between "post it again in a moment" and "this will never work". 429 says so outright; a 403
    * says so only through a {@code Retry-After}, an exhausted {@code x-ratelimit-remaining}, or the
    * rate-limit wording in the body. A permission 403 carries none of the three and so fails fast.
+   *
+   * <p>The wording is looked for in {@link Body#classified}, not in the line that goes to the log:
+   * the log's cap and the redaction bound are about what an operator should be shown, and letting
+   * them decide whether a completed generation is repeated turned this into a question about where
+   * GitHub put its message (#732, #747).
    */
   public boolean isThrottled() {
     if (status == 429) {
@@ -260,7 +307,7 @@ public final class GitHubApiError {
     }
     return retryAfterSeconds().isPresent()
         || "0".equals(rateLimitRemaining)
-        || THROTTLE_WORDING.matcher(body).find();
+        || THROTTLE_WORDING.matcher(body.classified()).find();
   }
 
   /**
@@ -321,17 +368,39 @@ public final class GitHubApiError {
    * throttle still slows down.
    */
   private Duration derivedDelay(int attempt, Instant now) {
-    return parseLong(rateLimitReset)
-        .map(reset -> atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset))))
+    return rateLimitResetInstant()
+        .map(reset -> atLeastZero(Duration.between(now, reset)))
         .orElseGet(() -> FALLBACK_DELAY.multipliedBy(attempt));
   }
 
   /**
+   * The instant {@code x-ratelimit-reset} names, or empty when it does not name one.
+   *
+   * <p>{@code Long.parseLong} accepts values {@link Instant#ofEpochSecond(long)} rejects: past ±31
+   * 556 889 864 403 199 seconds it throws {@link DateTimeException}, which is neither the {@link
+   * WebApplicationException} the whole write path is built around nor anything {@link
+   * GitHubWriteRetry#call} converts. It escaped that loop past every {@code catch
+   * (WebApplicationException)} between here and the caller, so {@link GitHubLostWrites} did not
+   * record the write as lost either — the write and the record of its loss went together, over a
+   * header from an intermediary. A value that cannot be an instant says nothing about when the
+   * window reopens, which is exactly what a non-numeric header already means here, so it gets the
+   * same answer: unspecified, and the linear fallback takes over.
+   */
+  private Optional<Instant> rateLimitResetInstant() {
+    try {
+      return parseLong(rateLimitReset).map(Instant::ofEpochSecond);
+    } catch (DateTimeException _) {
+      return Optional.empty();
+    }
+  }
+
+  /**
    * Whether GitHub is blocking content creation rather than throttling in some milder way — the
-   * failure whose measured width the budget is sized against (#722).
+   * failure whose measured width the budget is sized against (#722). Read off {@link
+   * Body#classified} for the reasons {@link #isThrottled()} gives.
    */
   private boolean blocksContentCreation() {
-    return CONTENT_CREATION_BLOCK.matcher(body).find();
+    return CONTENT_CREATION_BLOCK.matcher(body.classified()).find();
   }
 
   /**
@@ -344,7 +413,8 @@ public final class GitHubApiError {
     append(text, "x-ratelimit-remaining", rateLimitRemaining);
     append(text, "x-ratelimit-reset", rateLimitReset);
     append(text, "x-ratelimit-resource", rateLimitResource);
-    return text.append(" body=").append(body.isEmpty() ? "<unavailable>" : body).toString();
+    var logged = body.logged();
+    return text.append(" body=").append(logged.isEmpty() ? "<unavailable>" : logged).toString();
   }
 
   private static void append(StringBuilder text, String name, String value) {
@@ -432,12 +502,13 @@ public final class GitHubApiError {
   }
 
   /**
-   * The response body as loggable text. An inbound response is buffered first so reading it here
-   * does not consume it for the caller that later inspects the same exception; a response built
-   * in-process holds its entity as an object instead, and one that is closed or has no readable
-   * entity yields an empty body rather than breaking the failure path it exists to explain.
+   * The response body, in both of the readings {@link Body} names. An inbound response is buffered
+   * first so reading it here does not consume it for the caller that later inspects the same
+   * exception; a response built in-process holds its entity as an object instead, and one that is
+   * closed or has no readable entity yields {@link Body#UNREADABLE} rather than breaking the
+   * failure path it exists to explain.
    */
-  private static String readBody(Response response) {
+  private static Body readBody(Response response) {
     try {
       if (response.getEntity() instanceof String text) {
         return clean(text);
@@ -445,13 +516,25 @@ public final class GitHubApiError {
       response.bufferEntity();
       return clean(response.readEntity(String.class));
     } catch (RuntimeException _) {
-      return "";
+      return Body.UNREADABLE;
     }
   }
 
   /**
-   * A response body as one line of loggable text: collapsed, bounded, redacted, then capped at
-   * {@link #MAX_BODY_CHARS}.
+   * A response body read both ways: as one line of loggable text — collapsed, bounded, redacted,
+   * then capped at {@link #MAX_BODY_CHARS} — and as the wider, unredacted window the throttle
+   * classification matches against.
+   *
+   * <p>One collapse pass feeds both, and the two readings diverge after it. Everything the log line
+   * has done to it from that point on is for the log's sake: the bound is #731's cost control on a
+   * quadratic redaction, the cap is so one failure cannot flood a log file, and the mask is because
+   * a body is untrusted text on its way to an operator's screen. None of those is a statement about
+   * whether GitHub is throttling, and every one of them used to be able to decide it (#732, #747).
+   *
+   * <p>Ordering is the whole of it, so it is worth naming what each cut can still do. The
+   * classified window is cut once, from the collapsed body, so nothing between the two ever
+   * shortens it. The logged line keeps the {@code bounded → redacted → capped} order #740
+   * established, and the ellipsis still marks either cut.
    *
    * <p>The bound before the redaction is the point (#731). {@code readBody} reads the entity with
    * no size limit of its own, and redaction used to run over all of it, so the cost of explaining a
@@ -472,17 +555,19 @@ public final class GitHubApiError {
    * run that is being masked out. The ellipsis marks either cut, so a body shortened here is never
    * mistaken for a body GitHub sent whole.
    */
-  private static String clean(String raw) {
+  private static Body clean(String raw) {
     if (raw == null) {
-      return "";
+      return Body.UNREADABLE;
     }
     var collapsed = WHITESPACE.matcher(raw).replaceAll(" ").strip();
     var bounded = cutTo(collapsed, MAX_BODY_CHARS * 2);
     var redacted = redactCredentials(bounded);
     var capped = cutTo(redacted, MAX_BODY_CHARS);
-    return capped.length() < redacted.length() || bounded.length() < collapsed.length()
-        ? capped + "…"
-        : capped;
+    var logged =
+        capped.length() < redacted.length() || bounded.length() < collapsed.length()
+            ? capped + "…"
+            : capped;
+    return new Body(logged, cutTo(collapsed, MAX_CLASSIFIED_CHARS));
   }
 
   /**

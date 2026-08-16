@@ -138,6 +138,102 @@ class GitHubApiErrorTest {
     }
   }
 
+  /**
+   * #732 and #747. The body does two unrelated jobs — it is a line an operator reads, and it is the
+   * evidence on which a completed generation is either repeated or thrown away. Every narrowing the
+   * first job asks for used to narrow the second: the 512-character cap (#732), and then the
+   * 1024-character bound on the redaction input (#747), which closed the one path by which deeper
+   * wording still reached the classifier. The consequence is not a shorter wait but no retry at all
+   * — the retry returns empty on {@code !isThrottled()} and rethrows on the first attempt, which is
+   * the pre-#495 behaviour this area exists to prevent.
+   */
+  @Nested
+  class ThrottleWordingGitHubDidNotPutFirst {
+
+    private static final Instant NOW = Instant.ofEpochSecond(1_800_000_000L);
+
+    @Test
+    void isStillReadWhenItSitsPastTheLengthCapTheLogLineUses() {
+      // #732. Nothing here is credential-shaped and nothing is long enough to be bounded — the cap
+      // alone hid it. GitHub puts the message first, but a body with a long documentation_url or a
+      // set of echoed headers ahead of it does not.
+      var body =
+          "{\"documentation_url\":\""
+              + "x".repeat(600)
+              + "\",\"message\":\"You have exceeded a secondary rate limit and have been temporarily"
+              + " blocked from content creation.\"}";
+
+      var error = GitHubApiError.from(outbound(403, body));
+
+      assertTrue(error.isThrottled(), "body=" + loggedBody(outbound(403, body)));
+      assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+    }
+
+    @Test
+    void isStillReadWhenMoreCredentialShapedMaterialPrecedesItThanTheRedactionBoundHolds() {
+      // #747. v0.6.3 redacted the whole collapsed body first, so a prefix like this compressed to
+      // "***" and carried the wording forward into the classified string; bounding the redaction
+      // input at 1024 dropped it before the mask could. The audit's sweep puts the threshold
+      // between 900 characters of prefix (still classified) and 1010 (no longer).
+      var body = "Bearer " + "a".repeat(1_100) + " " + CONTENT_CREATION_BLOCK_BODY;
+
+      var error = GitHubApiError.from(outbound(403, body));
+
+      assertTrue(error.isThrottled(), "body=" + loggedBody(outbound(403, body)));
+      assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+    }
+
+    @Test
+    void isNotSomethingTheCredentialMaskCanDeleteBeforeItIsRead() {
+      // The classified window is the collapsed body, taken before redaction, so the retry decision
+      // can no longer be changed by a mask: a JWT-shaped run whose tail happens to be the word
+      // "blocked" used to swallow it and turn this block into a permission refusal.
+      var body = "{\"message\":\"prefix eyJabcdefgh.blocked from content creation\"}";
+
+      var error = GitHubApiError.from(outbound(403, body));
+
+      assertTrue(error.isThrottled(), "body=" + loggedBody(outbound(403, body)));
+      assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+    }
+
+    /** Control: the log line keeps its own cap, whatever the classifier is allowed to see. */
+    @Test
+    void doesNotWidenWhatReachesTheLog() {
+      var logged = loggedBody(outbound(403, "y".repeat(600) + " blocked from content creation"));
+
+      assertEquals(513, logged.length(), logged);
+      assertTrue(logged.endsWith("…"), logged);
+    }
+
+    /**
+     * Control, and the honest edge of the fix: the window is wide, not unbounded. The entity is
+     * read with no size limit of its own, and #731 is about not letting the configured host set the
+     * cost of explaining a failed write, so classification gets a fixed prefix — several times any
+     * body GitHub sends, and orders of magnitude past where the cap and the redaction bound used to
+     * stop it.
+     */
+    @Test
+    void isReadFromABoundedWindowRatherThanFromAnUnboundedBody() {
+      var withinTheWindow = "z".repeat(4_000) + " blocked from content creation";
+      var pastTheWindow = "z".repeat(64_000) + " blocked from content creation";
+
+      assertTrue(GitHubApiError.from(outbound(403, withinTheWindow)).isThrottled());
+      assertFalse(GitHubApiError.from(outbound(403, pastTheWindow)).isThrottled());
+    }
+
+    /** Control: a body carrying none of the wording is still a refusal, however deep it is read. */
+    @Test
+    void doesNotMakeAPermissionRefusalLookLikeAThrottle() {
+      var body =
+          "{\"documentation_url\":\""
+              + "x".repeat(4_000)
+              + "\",\"message\":\"Resource not"
+              + " accessible by integration\"}";
+
+      assertFalse(GitHubApiError.from(outbound(403, body)).isThrottled());
+    }
+  }
+
   @Nested
   class Severity {
 
@@ -194,6 +290,47 @@ class GitHubApiErrorTest {
                   "x-ratelimit-reset",
                   String.valueOf(NOW.getEpochSecond() - 90)));
       assertEquals(Duration.ZERO, error.retryDelay(1, NOW));
+    }
+
+    /**
+     * #732's second half. {@code Long.parseLong} accepts values {@code Instant.ofEpochSecond}
+     * rejects, and the {@link java.time.DateTimeException} it throws is not the {@code
+     * WebApplicationException} the write path is built around: it escaped {@code
+     * GitHubWriteRetry.call} past every catch between here and the caller, losing the write and the
+     * record of its loss together. A header that cannot name an instant says nothing about when the
+     * window reopens, which is what a non-numeric header already means here.
+     */
+    @Test
+    void aRateLimitResetTooLargeToBeAnInstantIsTreatedAsUnspecified() {
+      var error =
+          GitHubApiError.from(
+              outbound(
+                  403,
+                  SECONDARY_LIMIT_BODY,
+                  "x-ratelimit-remaining",
+                  "0",
+                  "x-ratelimit-reset",
+                  String.valueOf(Long.MAX_VALUE)));
+
+      assertTrue(error.isThrottled());
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
+      assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
+    /** The same at the other end of the range: an intermediary's negative overflow. */
+    @Test
+    void aRateLimitResetTooSmallToBeAnInstantIsTreatedAsUnspecified() {
+      var error =
+          GitHubApiError.from(
+              outbound(
+                  403,
+                  SECONDARY_LIMIT_BODY,
+                  "x-ratelimit-remaining",
+                  "0",
+                  "x-ratelimit-reset",
+                  String.valueOf(Long.MIN_VALUE)));
+
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
     }
 
     @Test
