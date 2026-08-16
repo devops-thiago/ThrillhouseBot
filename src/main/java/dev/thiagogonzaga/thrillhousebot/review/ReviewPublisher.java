@@ -696,8 +696,24 @@ public class ReviewPublisher {
    * line-number failure. A file-level thread is a second, independent chance at the one thing the
    * finding cannot afford to lose, and it is also the honest answer for a line that genuinely is
    * outside the diff.
+   *
+   * <p>All of a finding's routes are one delivery ({@link GitHubReviewClient#asOneComment}). The
+   * dropped-post notice counts content the pull request never received, and a finding rescued here
+   * was received — announcing it as lost told the maintainer to re-run a command whose output was
+   * sitting on the pull request already, and said it twice when a suggestion block earned the
+   * line-anchored route a second attempt (#729).
    */
   private boolean postFindingComment(
+      CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
+    return GitHubReviewClient.asOneComment(
+        target.owner(),
+        target.repo(),
+        target.prNumber(),
+        () -> postFindingCommentRoutes(target, finding, findingId, lineResolver));
+  }
+
+  /** The routes themselves, in preference order. See {@link #postFindingComment}. */
+  private boolean postFindingCommentRoutes(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {

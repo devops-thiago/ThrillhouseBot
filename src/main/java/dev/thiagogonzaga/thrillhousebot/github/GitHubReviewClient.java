@@ -21,6 +21,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
@@ -227,6 +228,10 @@ public interface GitHubReviewClient {
    * inline comment is anchored to a diff line, so it is a poor place to announce an unrelated
    * dropped post and does not carry a notice — but losing one is still a loss the pull request
    * should hear about, so it leaves a notice for the next comment to carry (#578).
+   *
+   * <p>A caller with more than one route to the same piece of content wraps them in {@link
+   * #asOneComment}, which is what keeps a comment a later route delivered from being announced as
+   * lost (#729).
    */
   default PullRequestCommentResponse createPullRequestComment(
       String auth,
@@ -244,6 +249,25 @@ public interface GitHubReviewClient {
                 credential ->
                     createPullRequestCommentOnce(
                         credential, accept, owner, repo, pullNumber, request)));
+  }
+
+  /**
+   * Runs {@code routes} — several {@link #createPullRequestComment} calls that are alternative ways
+   * of getting the <em>same</em> content onto the pull request — as one delivery, so a throttle
+   * that costs one route its turn is only announced to the pull request if no route delivered the
+   * content at all (#729).
+   *
+   * <p>Without this the accounting counts refused HTTP calls rather than lost content: #721's
+   * file-level fallback lands the finding and the review body published moments later still leads
+   * with "an earlier reply on this pull request was never posted … run the command again", twice
+   * over for a finding whose suggestion block earned the line-anchored route a second attempt.
+   *
+   * <p>Lives here rather than at the call site because the notice registry is this package's, and
+   * the call it groups is {@link #createPullRequestComment} on this interface.
+   */
+  static <T> T asOneComment(String owner, String repo, int pullNumber, Supplier<T> routes) {
+    return GitHubLostWrites.SHARED.asOneDelivery(
+        new GitHubLostWrites.Target(owner, repo, pullNumber), routes);
   }
 
   /** One HTTP attempt at a thread reply. Callers want {@link #replyToReviewComment} instead. */
