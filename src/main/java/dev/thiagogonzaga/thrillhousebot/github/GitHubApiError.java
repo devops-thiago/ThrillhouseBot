@@ -93,15 +93,17 @@ public final class GitHubApiError {
       Pattern.compile("(?i)(gh[pousr]_\\w{4,})|(github_pat_\\w{4,})");
 
   /**
-   * The bearer and JWT shapes — the value half of {@link #CREDENTIAL_SHAPED_PREFIX}'s union, tried
-   * second on a position tie exactly as the one-alternation form tried its alternatives in order.
+   * The bearer shape, and with {@link #JWT_SHAPED_VALUE} below it the value half of {@link
+   * #CREDENTIAL_SHAPED_PREFIX}'s union — tried after the prefixes on a position tie, exactly as the
+   * one-alternation form tried its alternatives in order. The reasoning behind both values lives
+   * here, since neither shape's choices make sense without the other's.
    *
-   * <p>Everything after the first dot is optional in both length and count, so a token the bound
-   * below cut anywhere past that dot is masked whole — including a cut landing in the first few
-   * payload characters, which a {@code {8,}} on each segment would have let through. Requiring all
-   * three segments made redaction depend on where the cut happened to land: a token whose second
-   * dot fell past the bound went through unmasked, and its header and the payload characters that
-   * fit reached the log.
+   * <p>In the JWT shape, everything after the first dot is optional in both length and count, so a
+   * token the bound below cut anywhere past that dot is masked whole — including a cut landing in
+   * the first few payload characters, which a {@code {8,}} on each segment would have let through.
+   * Requiring all three segments made redaction depend on where the cut happened to land: a token
+   * whose second dot fell past the bound went through unmasked, and its header and the payload
+   * characters that fit reached the log.
    *
    * <p>The first dot stays mandatory, so the one shape still not masked is a cut before it: the
    * {@code eyJ} header prefix alone, which carries the algorithm and type claims and no secret.
@@ -112,13 +114,15 @@ public final class GitHubApiError {
    * whole alternation and the header was unanchored: any {@code eyj} in any case, anywhere inside a
    * longer run, followed by a dot at any distance. {@code eyjafjallajokull.internal.example.com}
    * came out as {@code ***.com} and a base64 blob with a filename after it came out as {@code ***}.
-   * So the case-insensitivity is scoped here, to the bearer shape. {@link #JWT_SHAPED_VALUE} is
-   * case-sensitive instead, because its {@code eyJ} is not a spelling but arithmetic: base64url of
-   * a header opening {@code &#123;"} gives {@code ey} plus a third character fixed by the first
-   * key's leading byte, which is {@code J} for every key beginning with a letter. RFC 7515 requires
-   * {@code alg}, so a real header encodes to {@code eyJ}; a nonstandard first key that is a digit
-   * or empty encodes to {@code eyI} and is deliberately not matched, since widening the anchor
-   * would mask ordinary prose beginning {@code ey} for a shape no issuer emits.
+   * So the case-insensitivity is confined to this pattern, as a compile flag rather than an inline
+   * group — {@link Pattern#CASE_INSENSITIVE} alone is ASCII-only, which is what the shape wants.
+   * {@link #JWT_SHAPED_VALUE} is case-sensitive instead, because its {@code eyJ} is not a spelling
+   * but arithmetic: base64url of a header opening {@code &#123;"} gives {@code ey} plus a third
+   * character fixed by the first key's leading byte, which is {@code J} for every key beginning
+   * with a letter. RFC 7515 requires {@code alg}, so a real header encodes to {@code eyJ}; a
+   * nonstandard first key that is a digit or empty encodes to {@code eyI} and is deliberately not
+   * matched, since widening the anchor would mask ordinary prose beginning {@code ey} for a shape
+   * no issuer emits.
    *
    * <p>The value takes the same four-character floor as {@link #CREDENTIAL_SHAPED_PREFIX}, for the
    * same reason: the {@code Bearer } that precedes it is the discriminator, and ten characters only
@@ -131,7 +135,7 @@ public final class GitHubApiError {
    * leftmost-match design above exists to swallow.
    */
   private static final Pattern BEARER_SHAPED_VALUE =
-      Pattern.compile("(?i:bearer\\s+[\\w.~+/=-]{4,})");
+      Pattern.compile("bearer\\s+[\\w.~+/=-]{4,}", Pattern.CASE_INSENSITIVE);
 
   /**
    * The JWT shape, kept apart from {@link #BEARER_SHAPED_VALUE} rather than alternated with it: one
