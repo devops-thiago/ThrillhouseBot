@@ -418,6 +418,24 @@ class GitHubApiErrorTest {
   class BodyHandling {
 
     @Test
+    void masksAJwtTheBoundCutMidPayload() {
+      // #731 follow-up: bounding before redaction must not narrow what redaction covers. A token
+      // whose second dot falls past the bound used to go through unmasked, and the cap then logged
+      // its header and the payload chars that fit — the bound's own doing, on the body of a
+      // credential the redaction exists to remove.
+      var prefix = "x".repeat(100);
+      var header = "a".repeat(50);
+      var payload = "P".repeat(1200);
+      var body = prefix + " eyJ" + header + "." + payload + "." + "s".repeat(50);
+
+      var cleaned = loggedBody(outbound(403, body));
+
+      assertFalse(cleaned.contains("PPPPPPPP"), cleaned);
+      assertFalse(cleaned.contains(header), cleaned);
+      assertTrue(cleaned.contains("***"), cleaned);
+    }
+
+    @Test
     void readsAnInboundResponseWithoutConsumingItForTheCaller() {
       var response = inbound(403, SECONDARY_LIMIT_BODY, "Retry-After", "60");
 

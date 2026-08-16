@@ -67,10 +67,17 @@ public final class GitHubApiError {
   /**
    * The bearer and JWT shapes — the value half of {@link #CREDENTIAL_SHAPED_PREFIX}'s union, tried
    * second on a position tie exactly as the one-alternation form tried its alternatives in order.
+   *
+   * <p>The JWT's third segment is optional, so a token the bound below cut mid-payload is still
+   * masked. Requiring all three made redaction depend on where the cut happened to land: a token
+   * whose second dot fell past the bound went through unmasked, and its header and the payload
+   * characters that fit reached the log. The first dot stays mandatory: a run of word characters
+   * carrying no dot at all is not a JWT, and matching one would mask any long unbroken run,
+   * blanking the very body this line exists to explain.
    */
   private static final Pattern CREDENTIAL_SHAPED_VALUE =
       Pattern.compile(
-          "(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}\\.[\\w-]{8,}\\.[\\w-]{8,})");
+          "(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}(?:\\.[\\w-]{8,}){1,2})");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -422,11 +429,12 @@ public final class GitHubApiError {
    * decision it feeds is even reached. GitHub's real error bodies are ~300 characters; a GHES or
    * reverse-proxy error page, a misconfigured base URL or a compromised endpoint is not.
    *
-   * <p>Cutting first bounds every regex pass at a constant. The cut is twice {@link
-   * #MAX_BODY_CHARS} so that redaction, which only ever shortens, still has material to fill the
-   * cap with; past that the output was going to be truncated anyway, and what a wider window would
-   * pull into view is more of the token-shaped run that is being masked out. The ellipsis marks
-   * either cut, so a body shortened here is never mistaken for a body GitHub sent whole.
+   * <p>The collapse above is one linear pass over the whole body; cutting first bounds the
+   * redaction pass at a constant. The cut is twice {@link #MAX_BODY_CHARS} so that redaction, which
+   * only ever shortens, still has material to fill the cap with; past that the output was going to
+   * be truncated anyway, and what a wider window would pull into view is more of the token-shaped
+   * run that is being masked out. The ellipsis marks either cut, so a body shortened here is never
+   * mistaken for a body GitHub sent whole.
    */
   private static String clean(String raw) {
     if (raw == null) {
