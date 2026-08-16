@@ -313,6 +313,63 @@ class GitHubWriteRetryTest {
     assertEquals(List.of(Duration.ofSeconds(21)), slept);
   }
 
+  /**
+   * #732. Every caller of this loop — {@link GitHubLostWrites} included — catches {@code
+   * WebApplicationException}, because that is the failure a GitHub write produces. An {@code
+   * x-ratelimit-reset} outside the range of an {@code Instant} used to replace it with a {@code
+   * DateTimeException} thrown from inside the delay derivation, which no catch on the way out
+   * matched: the write was lost and the record of its loss went with it. Only an intermediary sends
+   * a header like this, and only the one header is needed.
+   */
+  @Test
+  void anOutOfRangeResetHeaderStillFailsAsTheExceptionEveryCallerCatches() {
+    var calls = new AtomicInteger();
+    var throttle =
+        throttled(
+            "x-ratelimit-remaining", "0", "x-ratelimit-reset", String.valueOf(Long.MAX_VALUE));
+
+    var thrown =
+        assertThrows(
+            WebApplicationException.class,
+            () ->
+                retry.call(
+                    "a comment on o/r #7",
+                    () -> {
+                      calls.incrementAndGet();
+                      throw throttle;
+                    }));
+
+    // Unusable is unspecified: the linear fallback takes over and the budget runs its course, so
+    // the caller sees the same rejection it would have seen from any other spent throttle.
+    assertSame(throttle, thrown);
+    assertEquals(4, calls.get());
+    assertEquals(
+        List.of(Duration.ofSeconds(5), Duration.ofSeconds(10), Duration.ofSeconds(15)), slept);
+  }
+
+  /** The same header at the other end of the range, on a throttle that clears on the repeat. */
+  @Test
+  void anOutOfRangeResetHeaderOnAThrottleFallsBackToTheLinearWait() {
+    var calls = new AtomicInteger();
+
+    var result =
+        retry.call(
+            "a comment on o/r #7",
+            () -> {
+              if (calls.incrementAndGet() == 1) {
+                throw throttled(
+                    "x-ratelimit-remaining",
+                    "0",
+                    "x-ratelimit-reset",
+                    String.valueOf(Long.MIN_VALUE));
+              }
+              return "posted";
+            });
+
+    assertEquals("posted", result);
+    assertEquals(List.of(Duration.ofSeconds(5)), slept);
+  }
+
   @Test
   void everyAttemptWaitsForItsPacingSlotIncludingTheRepeats() {
     var paced = new ArrayList<Duration>();
