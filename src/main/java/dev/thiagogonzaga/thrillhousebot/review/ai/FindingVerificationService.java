@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -728,6 +729,9 @@ public class FindingVerificationService {
    * an id outside the 1-based candidate range; counting only the ids in range keeps the log honest
    * about what stayed unverified.
    *
+   * <p>Duplicate ids are collapsed through {@link #byCandidateId} before any label is read, so the
+   * verdict counted for an id is exactly the one {@link #apply} acted on (#735).
+   *
    * <p>An id alone is not coverage. A verdict whose decision label is absent, blank or not one of
    * {@link #ACTED_ON_DECISIONS} falls into {@link #apply}'s fail-open default, where the candidate
    * posts exactly as the reviewer raised it — the same state a candidate with no verdict at all
@@ -753,12 +757,38 @@ public class FindingVerificationService {
    */
   private static long candidatesCovered(
       List<VerificationResponse.Verdict> salvaged, int candidates) {
-    return salvaged.stream()
-        .filter(verdict -> ACTED_ON_DECISIONS.contains(decisionOf(verdict)))
-        .mapToInt(VerificationResponse.Verdict::id)
-        .filter(id -> id >= 1 && id <= candidates)
-        .distinct()
+    return byCandidateId(salvaged).entrySet().stream()
+        .filter(entry -> entry.getKey() >= 1 && entry.getKey() <= candidates)
+        .filter(entry -> ACTED_ON_DECISIONS.contains(decisionOf(entry.getValue())))
         .count();
+  }
+
+  /**
+   * The one verdict per candidate id, first element wins — the single collapse both {@link #apply}
+   * and {@link #candidatesCovered} resolve duplicates through, so neither can read a verdict the
+   * other ignored (#735).
+   *
+   * <p>Sharing {@link #decisionOf} was only half of what #710 needs. The two readers also have to
+   * agree on <em>which</em> verdict an id's decision is read from, and they did not: {@code apply}
+   * collapsed duplicates first and read the label from the survivor, while the count filtered by
+   * label first and de-duplicated the ids that were left. An id carrying an undecidable element
+   * followed by a decidable one therefore landed in {@code apply}'s fail-open default — the finding
+   * posts exactly as the reviewer raised it — while the count called that candidate screened, which
+   * is the published-set-reads-as-fully-screened harm #623 exists to prevent, reached by a narrower
+   * route. The drift is one-directional (the reverse order already agreed), so it only ever
+   * over-counted, i.e. exclusively toward the dangerous side.
+   *
+   * <p>Duplicates are model output, not a hypothetical: the collapse predates this fix, first-wins
+   * is the behaviour the audit already applies, and the count now inherits it rather than inventing
+   * a second resolution.
+   */
+  private static Map<Integer, VerificationResponse.Verdict> byCandidateId(
+      List<VerificationResponse.Verdict> verdicts) {
+    var byId = new HashMap<Integer, VerificationResponse.Verdict>();
+    for (VerificationResponse.Verdict verdict : verdicts) {
+      byId.putIfAbsent(verdict.id(), verdict);
+    }
+    return byId;
   }
 
   /**
@@ -766,11 +796,16 @@ public class FindingVerificationService {
    * #candidatesCovered} read it; the empty string for a candidate with no verdict and for a verdict
    * carrying no label. One reader so the two cannot disagree about what counts as a decision — the
    * drift #710 was filed on.
+   *
+   * <p>Stripped, so the strictness genuinely matches {@link #strictRisk}/{@link #strictConfidence}
+   * as documented: {@code "rejected "} was unreadable as a decision while {@code "high "} was a
+   * readable rating, an asymmetry nothing intended (#735). Both readers take the same value, so
+   * this never drove a drift — it only cost an over-cautious keep and an under-count.
    */
   private static String decisionOf(VerificationResponse.Verdict verdict) {
     return verdict == null || verdict.verdict() == null
         ? ""
-        : verdict.verdict().toLowerCase(Locale.ROOT);
+        : verdict.verdict().strip().toLowerCase(Locale.ROOT);
   }
 
   /**
@@ -1181,11 +1216,7 @@ public class FindingVerificationService {
   }
 
   ReviewResponse apply(ReviewResponse response, VerificationResponse verification) {
-    var byId = new HashMap<Integer, VerificationResponse.Verdict>();
-    for (VerificationResponse.Verdict verdict : verification.verdicts()) {
-      byId.putIfAbsent(verdict.id(), verdict);
-    }
-
+    var byId = byCandidateId(verification.verdicts());
     var kept = new ArrayList<ReviewResponse.Finding>();
     var rejected = 0;
     var downgraded = 0;

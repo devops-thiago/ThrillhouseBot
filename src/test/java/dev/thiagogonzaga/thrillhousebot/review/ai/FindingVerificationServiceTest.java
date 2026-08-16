@@ -777,6 +777,84 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void doesNotCountADuplicateIdWhoseFirstVerdictTheAuditCannotRead() {
+    // #735: a complete, well-formed body carrying two verdicts for the same id, the first of them
+    // undecidable. apply() collapses duplicates first-wins and lands in its fail-open default, so
+    // the finding posts exactly as the reviewer raised it; the count has to read that same first
+    // verdict rather than the decidable duplicate behind it, or the published set claims a second
+    // stage ruled on a finding it never ruled on — #710's harm on an uncut body.
+    ReviewResponse original =
+        response(finding("critical", "high", "Undecided"), finding("high", "high", "Ruled on"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "reason": "still weighing this one"},
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 2, "verdict": "confirmed", "reason": "real"}]}"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(2, result.findings().size());
+    assertEquals("Undecided", result.findings().get(0).title());
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+    assertEquals(VerificationCoverage.Outcome.PARTIAL, reported.get(0).outcome());
+    assertTrue(reported.get(0).disclosed());
+  }
+
+  @Test
+  void countsADuplicateIdWhoseFirstVerdictTheAuditActedOn() {
+    // The control for the case above: the same duplicate in the other order. apply() rejects on the
+    // first element, so the count must include the id — the two readers agreed here already, and
+    // collapsing the duplicate in the count must not turn that agreement into an under-count.
+    ReviewResponse original =
+        response(finding("critical", "high", "Ruled on"), finding("high", "high", "Also"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected", "reason": "framework idiom"},
+              {"id": 1, "reason": "still weighing this one"},
+              {"id": 2, "verdict": "confirmed", "reason": "real"}]}"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("Also", result.findings().get(0).title());
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+    assertFalse(reported.get(0).disclosed());
+  }
+
+  @Test
+  void readsADecisionLabelPaddedWithWhitespace() {
+    // #735: decisionOf did not strip while strictRisk/strictConfidence do, so "rejected " was
+    // unreadable as a decision even though "high " is a readable rating — an asymmetry against a
+    // javadoc claiming the strictness matches. Both readers take the same value, so the finding is
+    // acted on and counted together.
+    ReviewResponse original =
+        response(finding("critical", "high", "Padded"), finding("high", "high", "Kept"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+            {"verdicts": [
+              {"id": 1, "verdict": "rejected\\n", "reason": "framework idiom"},
+              {"id": 2, "verdict": " CONFIRMED ", "reason": "real"}]}"""));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("Kept", result.findings().get(0).title());
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+    assertFalse(reported.get(0).disclosed());
+  }
+
+  @Test
   void reportsZeroCoverageWhenTheCutLeavesNoCompleteVerdict() {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
