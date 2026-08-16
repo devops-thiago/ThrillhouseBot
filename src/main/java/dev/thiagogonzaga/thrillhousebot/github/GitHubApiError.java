@@ -20,6 +20,7 @@ import jakarta.ws.rs.core.Response;
 import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -71,15 +72,15 @@ public final class GitHubApiError {
    * an error body, but a body is untrusted text on its way to a log file, so a token-shaped run of
    * characters is masked rather than trusted to be harmless.
    *
-   * <p>Deliberately ONE alternation, read as a union across this pattern and {@link
-   * #CREDENTIAL_SHAPED_VALUE}, rather than one masking pass per shape: the shapes overlap, and a
-   * single pass masks each overlap as the leftmost match, whereas masking in passes decides the
-   * overlap by pass order and leaves material the one-pass form masks. Whichever order is chosen,
-   * {@code "…ghp_<7 chars>Bearer <20 chars>"} keeps its token prefix unmasked if the bearer pass
-   * runs first, and {@code "Bearer ghp_<10 chars>.<tail>"} keeps the tail of the bearer value if
-   * the token pass does. So {@link #redactCredentials} still scans once, taking the leftmost match
-   * across both patterns — split in two, prefixes here and value shapes there, only because one
-   * alternation of all four shapes is more than the regex complexity budget allows.
+   * <p>Deliberately read as a union across this pattern, {@link #BEARER_SHAPED_VALUE} and {@link
+   * #JWT_SHAPED_VALUE}, rather than one masking pass per shape: the shapes overlap, and a single
+   * pass masks each overlap as the leftmost match, whereas masking in passes decides the overlap by
+   * pass order and leaves material the one-pass form masks. Whichever order is chosen, {@code
+   * "…ghp_<7 chars>Bearer <20 chars>"} keeps its token prefix unmasked if the bearer pass runs
+   * first, and {@code "Bearer ghp_<10 chars>.<tail>"} keeps the tail of the bearer value if the
+   * token pass does. So {@link #redactCredentials} still scans once, taking the leftmost match
+   * across every pattern — split apart, prefixes here and the value shapes beside it, only because
+   * one alternation of all four shapes is more than the regex complexity budget allows.
    *
    * <p>Four value characters, not ten (#746). The sigil is the whole discriminator here — {@code
    * ghp_} and {@code github_pat_} do not occur in prose, so the length floor was buying nothing the
@@ -111,18 +112,35 @@ public final class GitHubApiError {
    * whole alternation and the header was unanchored: any {@code eyj} in any case, anywhere inside a
    * longer run, followed by a dot at any distance. {@code eyjafjallajokull.internal.example.com}
    * came out as {@code ***.com} and a base64 blob with a filename after it came out as {@code ***}.
-   * So the case-insensitivity is scoped to the bearer half — a JWT header is base64url of {@code
-   * &#123;"}, which is always literally {@code eyJ} — and {@code (?<![\w-])} pins the header to the
-   * start of a token, leaving the cut-token property #740 added intact: a cut anywhere past the
-   * first dot still masks the whole run.
+   * So the case-insensitivity is scoped here, to the bearer shape. {@link #JWT_SHAPED_VALUE} is
+   * case-sensitive instead, because its {@code eyJ} is not a spelling but arithmetic: base64url of
+   * a header opening {@code &#123;"} gives {@code ey} plus a third character fixed by the first
+   * key's leading byte, which is {@code J} for every key beginning with a letter. RFC 7515 requires
+   * {@code alg}, so a real header encodes to {@code eyJ}; a nonstandard first key that is a digit
+   * or empty encodes to {@code eyI} and is deliberately not matched, since widening the anchor
+   * would mask ordinary prose beginning {@code ey} for a shape no issuer emits.
    *
-   * <p>The bearer value takes the same four-character floor as {@link #CREDENTIAL_SHAPED_PREFIX},
-   * for the same reason: {@code Bearer } is the discriminator, and ten characters only meant the
-   * bound could sever a header value into something that no longer looked like one.
+   * <p>The value takes the same four-character floor as {@link #CREDENTIAL_SHAPED_PREFIX}, for the
+   * same reason: the {@code Bearer } that precedes it is the discriminator, and ten characters only
+   * meant the bound could sever a header value into something that no longer looked like one.
+   *
+   * <p>The word {@code bearer} is consumed with the value rather than left in the line, which does
+   * mask the noun in prose such as {@code missing bearer token}. Masking only the value was tried
+   * and is worse: the match then starts after {@code bearer }, so on {@code Bearer ghp_….tail} the
+   * token shape wins the tie at that position and the tail escapes — the overlap that the one-pass,
+   * leftmost-match design above exists to swallow.
    */
-  private static final Pattern CREDENTIAL_SHAPED_VALUE =
-      Pattern.compile(
-          "(?i:bearer\\s+[\\w.~+/=-]{4,})" + "|((?<![\\w-])eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2})");
+  private static final Pattern BEARER_SHAPED_VALUE =
+      Pattern.compile("(?i:bearer\\s+[\\w.~+/=-]{4,})");
+
+  /**
+   * The JWT shape, kept apart from {@link #BEARER_SHAPED_VALUE} rather than alternated with it: one
+   * pattern carrying both ran past the regex-complexity budget, and {@link #redactCredentials}
+   * already scans any number of shapes in one pass, taking the leftmost match and preferring the
+   * earlier shape on a tie — the order these are declared in.
+   */
+  private static final Pattern JWT_SHAPED_VALUE =
+      Pattern.compile("(?<![\\w-])eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2}");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -452,9 +470,12 @@ public final class GitHubApiError {
    */
   private static String redactCredentials(String text) {
     Matcher[] shapes = {
-      CREDENTIAL_SHAPED_PREFIX.matcher(text), CREDENTIAL_SHAPED_VALUE.matcher(text)
+      CREDENTIAL_SHAPED_PREFIX.matcher(text),
+      BEARER_SHAPED_VALUE.matcher(text),
+      JWT_SHAPED_VALUE.matcher(text)
     };
-    var starts = new int[] {-1, -1};
+    var starts = new int[shapes.length];
+    Arrays.fill(starts, -1);
     var ends = new int[shapes.length];
     var out = new StringBuilder(text.length());
     var from = 0;
@@ -539,14 +560,14 @@ public final class GitHubApiError {
    * <p>The bound before the redaction is the point (#731). {@code readBody} reads the entity with
    * no size limit of its own, and redaction used to run over all of it, so the cost of explaining a
    * failed write was set by whatever the configured API host chose to send. {@link
-   * #CREDENTIAL_SHAPED_VALUE}'s JWT alternative is quadratic on a body of repeated {@code eyJ} —
-   * {@code [\w-]} excludes {@code .}, so each greedy run consumes to end-of-input, fails to find
-   * its separator and backtracks a character at a time, from one in every three positions.
-   * Measured: 20 000 chars cost 331 ms, 40 000 cost 1 213 ms, 80 000 cost 4 843 ms, 160 000 cost 19
-   * 404 ms, and a 1.2 MB body cost about eighteen minutes of CPU — spent on the review's own
-   * carrier thread, inside the failure path that exists to explain a failed write, before the retry
-   * decision it feeds is even reached. GitHub's real error bodies are ~300 characters; a GHES or
-   * reverse-proxy error page, a misconfigured base URL or a compromised endpoint is not.
+   * #JWT_SHAPED_VALUE} is quadratic on a body of repeated {@code eyJ} — {@code [\w-]} excludes
+   * {@code .}, so each greedy run consumes to end-of-input, fails to find its separator and
+   * backtracks a character at a time, from one in every three positions. Measured: 20 000 chars
+   * cost 331 ms, 40 000 cost 1 213 ms, 80 000 cost 4 843 ms, 160 000 cost 19 404 ms, and a 1.2 MB
+   * body cost about eighteen minutes of CPU — spent on the review's own carrier thread, inside the
+   * failure path that exists to explain a failed write, before the retry decision it feeds is even
+   * reached. GitHub's real error bodies are ~300 characters; a GHES or reverse-proxy error page, a
+   * misconfigured base URL or a compromised endpoint is not.
    *
    * <p>The collapse above is one linear pass over the whole body; cutting first bounds the
    * redaction pass at a constant. The cut is twice {@link #MAX_BODY_CHARS} so that redaction, which
