@@ -52,6 +52,17 @@ import org.slf4j.LoggerFactory;
  * <p>The wording deliberately does not name the command. This layer sees a comment on a pull
  * request, not the {@code /describe} or {@code /improve} that produced it, and an honest "if you
  * were waiting on an answer, re-run it" is more useful than a guess.
+ *
+ * <h2>What counts as one loss</h2>
+ *
+ * A loss is a piece of content the pull request never received, not an HTTP call GitHub refused.
+ * The two stopped being the same thing in #721, which gave a finding a second and third route to
+ * the pull request: a refused line-anchored comment is now followed by a thread on the file, and
+ * the finding is only lost when every route fails. Counting refusals would tell the maintainer
+ * their content was thrown away while it sits on the PR above the notice — and count it twice over
+ * when the finding carries a suggestion, because that route is tried with and without it (#729).
+ * {@link #asOneDelivery} is how a caller says "these calls are one piece of content": inside it
+ * nothing is remembered until every route has had its turn, and then only if none of them landed.
  */
 public final class GitHubLostWrites {
 
@@ -105,12 +116,38 @@ public final class GitHubLostWrites {
    */
   private static final Loss NOTHING = new Loss(0, 0, 0, Instant.EPOCH);
 
+  /**
+   * One piece of content and the alternative routes being tried for it, while they are being tried.
+   * {@code refused} is set by a throttled route, {@code landed} by a route that got through; a
+   * delivery that ends refused and not landed is the one loss the whole group is worth.
+   */
+  private static final class Delivery {
+    private final Target target;
+    private boolean landed;
+    private boolean refused;
+
+    private Delivery(Target target) {
+      this.target = target;
+    }
+  }
+
   /** The process-wide registry: a loss recorded on one code path is announced by any other. */
   static final GitHubLostWrites SHARED =
       new GitHubLostWrites(Instant::now, DEFAULT_MAX_TARGETS, DEFAULT_TTL);
 
   private final Map<Target, Loss> pending = new ConcurrentHashMap<>();
   private final AtomicLong ids = new AtomicLong();
+
+  /**
+   * The delivery whose routes are being tried on this thread, if any. Thread confinement is what
+   * the routes already have — a finding's attempts run one after another on the thread publishing
+   * that review — so it is also the cheapest way to reach {@link #recording} from {@link
+   * #asOneDelivery} without threading a handle through the REST client interface that sits between
+   * them. Held per instance, not per class, so a test's registry cannot see {@link #SHARED}'s
+   * deliveries or vice versa.
+   */
+  private final ThreadLocal<Delivery> delivery = new ThreadLocal<>();
+
   private final Supplier<Instant> clock;
   private final int maxTargets;
   private final Duration ttl;
@@ -140,16 +177,67 @@ public final class GitHubLostWrites {
    * but can still leave one behind when GitHub throttles it away.
    */
   public <T> T recording(Target target, Supplier<T> send) {
+    var scope = deliveryFor(target);
     try {
-      return send.get();
+      var result = send.get();
+      if (scope != null) {
+        scope.landed = true;
+      }
+      return result;
     } catch (WebApplicationException e) {
       // Only a throttle: a permission refusal or a 422 is a defect to fix, not a post to re-run,
       // and announcing it on the PR would be noise on every single comment.
       if (GitHubApiError.of(e).filter(GitHubApiError::isThrottled).isPresent()) {
-        remember(target);
+        if (scope == null) {
+          remember(target);
+        } else {
+          // Held, not remembered: a later route may still deliver this content (#729).
+          scope.refused = true;
+        }
       }
       throw e;
     }
+  }
+
+  /**
+   * Runs several content-creating calls that are alternative routes to the pull request for one
+   * piece of content — a finding's line-anchored comment, the same comment without its suggestion
+   * block, and the thread on the file (#721) — so the pull request hears about at most one loss,
+   * and only when no route delivered it.
+   *
+   * <p>Routes that fail for anything but a throttle are as invisible here as they are to {@link
+   * #recording}: a 422 about the payload is a defect to fix rather than a post worth re-running. A
+   * group in which some route was throttled and none landed is remembered exactly once, so a
+   * finding that really is lost still announces itself — and announces itself once rather than once
+   * per attempt.
+   *
+   * <p>Nesting reuses the outer group rather than opening a second one, so a caller cannot lose
+   * another caller's routes by grouping its own.
+   */
+  public <T> T asOneDelivery(Target target, Supplier<T> routes) {
+    if (delivery.get() != null) {
+      return routes.get();
+    }
+    var scope = new Delivery(target);
+    delivery.set(scope);
+    try {
+      return routes.get();
+    } finally {
+      delivery.remove();
+      if (scope.refused && !scope.landed) {
+        remember(target);
+      }
+    }
+  }
+
+  /**
+   * The delivery this call is a route of, or {@code null} when it is a post of its own. A delivery
+   * for some other pull request is not this call's: the group's accounting only ever speaks for the
+   * pull request it was opened on.
+   */
+  private Delivery deliveryFor(Target target) {
+    var scope = delivery.get();
+    return scope != null && scope.target.equals(target) ? scope : null;
   }
 
   /** The notice text for {@code lost} dropped posts, or empty when there is nothing pending. */

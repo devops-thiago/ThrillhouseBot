@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -341,6 +342,121 @@ class GitHubLostWritesTest {
   @Test
   void aTargetNamesThePullRequestItLostThePostOn() {
     assertEquals("owner/repo #7", PR.toString());
+  }
+
+  /**
+   * #729. Two routes to the same finding: GitHub throttles the line-anchored comment away and the
+   * file-level thread lands. The content is on the pull request, so there is nothing to announce
+   * and nothing to re-run.
+   */
+  @Test
+  void contentARouteDeliveredIsNotAnnouncedAsLost() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          return lost.recording(PR, () -> "posted");
+        });
+    post(PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () ->
+            "the finding was delivered by its second route, but the next comment still told the"
+                + " maintainer to run the command again: \""
+                + carried.getLast()
+                + "\"");
+  }
+
+  /**
+   * #729's other half: three refused routes are one lost finding, not three — and were counted as
+   * two even when the finding was rescued, because a suggestion block earns the line-anchored route
+   * a second attempt.
+   */
+  @Test
+  void contentNoRouteDeliveredIsAnnouncedExactlyOnce() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          for (var route = 0; route < 3; route++) {
+            assertThrows(
+                WebApplicationException.class,
+                () -> lost.recording(PR, () -> throwIt(throttled())));
+          }
+          return "no route landed";
+        });
+    post(PR, carried, null);
+
+    assertTrue(carried.getLast().contains("An earlier reply"), carried.getLast());
+    assertFalse(
+        carried.getLast().contains("earlier replies"),
+        () -> "one lost finding was counted once per refused route: " + carried.getLast());
+  }
+
+  /** A delivery no throttle touched is not a loss, however its routes failed. */
+  @Test
+  void aDeliveryThatWasRefusedRatherThanThrottledAnnouncesNothing() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(refusal())));
+          return "no route landed";
+        });
+    post(PR, carried, null);
+
+    assertEquals("", carried.getLast());
+  }
+
+  /**
+   * The group speaks for the pull request it was opened on and no other: a post that lands on a
+   * different pull request cannot rescue this one's finding, and one thrown away there is still
+   * that pull request's own loss.
+   */
+  @Test
+  void aCallForAnotherPullRequestIsNotOneOfThisDeliverysRoutes() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          assertThrows(
+              WebApplicationException.class,
+              () -> lost.recording(OTHER_PR, () -> throwIt(throttled())));
+          return lost.recording(OTHER_PR, () -> "posted on the other pull request");
+        });
+    post(PR, carried, null);
+    post(OTHER_PR, carried, null);
+
+    assertTrue(carried.get(0).contains("An earlier reply"), carried.get(0));
+    assertTrue(carried.get(1).contains("An earlier reply"), carried.get(1));
+  }
+
+  /** A group inside a group is the same delivery, so the outer one's routes are not lost. */
+  @Test
+  void aDeliveryNestedInsideAnotherIsOneDelivery() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          return lost.asOneDelivery(PR, () -> lost.recording(PR, () -> "posted"));
+        });
+    post(PR, carried, null);
+
+    assertEquals("", carried.getLast(), carried.getLast());
   }
 
   private static String throwIt(WebApplicationException failure) {
