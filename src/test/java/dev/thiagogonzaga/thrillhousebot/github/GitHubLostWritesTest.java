@@ -533,6 +533,199 @@ class GitHubLostWritesTest {
                 + carried.get(1));
   }
 
+  /**
+   * #756. A route of the outer delivery can run while a group for another pull request is open —
+   * the inner group is nested inside the outer one, it does not end it. The route lands, so the
+   * outer delivery was delivered and must not be announced as lost.
+   */
+  @Test
+  void aRouteThatLandsInsideAGroupForAnotherPullRequestStillSettlesItsOwnDelivery() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          return lost.asOneDelivery(OTHER_PR, () -> lost.recording(PR, () -> "posted"));
+        });
+    post(PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () ->
+            "a route of the outer delivery landed while a group for the other pull request was"
+                + " open, and the content it delivered was announced as lost: "
+                + carried.getLast());
+  }
+
+  /**
+   * #756, the same mechanism a level deeper. A group for this pull request nested inside a group
+   * for another one, itself nested inside a group for this pull request, is one delivery and not
+   * two: the innermost group is a route of the outermost, so its landing settles the whole thing.
+   */
+  @Test
+  void aDeliveryNestedInsideAnotherPullRequestsGroupRejoinsItsOwnDelivery() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          return lost.asOneDelivery(
+              OTHER_PR, () -> lost.asOneDelivery(PR, () -> lost.recording(PR, () -> "posted")));
+        });
+    post(PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () ->
+            "one pull request's delivery was split in two by the group nested between its halves,"
+                + " so the half that landed settled nothing: "
+                + carried.getLast());
+  }
+
+  /**
+   * #756. An exception out of a group that rejoined an already-open delivery leaves that delivery
+   * open and still holding its refused route: the throw ends the routes, not the delivery they
+   * belong to, and a later route of it settles them.
+   */
+  @Test
+  void anExceptionOutOfARejoinedGroupLeavesTheDeliveryItRejoinedOpen() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          lost.asOneDelivery(
+              OTHER_PR,
+              () -> {
+                assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                        lost.asOneDelivery(
+                            PR,
+                            () -> {
+                              assertThrows(
+                                  WebApplicationException.class,
+                                  () -> lost.recording(PR, () -> throwIt(throttled())));
+                              throw new IllegalStateException("the routes gave up");
+                            }));
+                return "the other pull request lost nothing";
+              });
+          return lost.recording(PR, () -> "posted");
+        });
+    post(PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () ->
+            "the throw closed a delivery of its own rather than leaving the open one alone, so a"
+                + " route held by it was remembered even though a later route landed: "
+                + carried.getLast());
+  }
+
+  /**
+   * #756, the same on the other exit path: an {@link Error} out of a group that rejoined an
+   * already-open delivery must leave that delivery exactly as it found it.
+   */
+  @Test
+  void anErrorOutOfARejoinedGroupLeavesTheDeliveryItRejoinedOpen() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          lost.asOneDelivery(
+              OTHER_PR,
+              () -> {
+                assertThrows(
+                    StackOverflowError.class,
+                    () ->
+                        lost.asOneDelivery(
+                            PR,
+                            () -> {
+                              assertThrows(
+                                  WebApplicationException.class,
+                                  () -> lost.recording(PR, () -> throwIt(throttled())));
+                              throw new StackOverflowError("simulated");
+                            }));
+                return "the other pull request lost nothing";
+              });
+          return lost.recording(PR, () -> "posted");
+        });
+    post(PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () ->
+            "the error closed a delivery of its own rather than leaving the open one alone, so a"
+                + " route held by it was remembered even though a later route landed: "
+                + carried.getLast());
+  }
+
+  /**
+   * Control (green before and after #756): a group of its own leaves nothing behind on the thread
+   * when an {@link Error} unwinds through it, so the next post on the same thread is accounted for
+   * on its own rather than swallowed by a group nobody closed.
+   */
+  @Test
+  void anErrorOutOfAGroupOfItsOwnLeavesNoDeliveryBehindOnTheThread() {
+    var carried = new ArrayList<String>();
+
+    assertThrows(
+        StackOverflowError.class,
+        () ->
+            lost.asOneDelivery(
+                PR,
+                () -> {
+                  throw new StackOverflowError("simulated");
+                }));
+    assertThrows(
+        WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+    post(PR, carried, null);
+
+    assertTrue(
+        carried.getLast().contains("An earlier reply"),
+        () -> "a delivery left open by the error swallowed a genuine loss: " + carried.getLast());
+  }
+
+  /**
+   * Control (green before and after #756): an exception out of a nested group for another pull
+   * request hands the outer group back, so a route of it that lands afterwards still settles it.
+   */
+  @Test
+  void anExceptionOutOfANestedGroupHandsTheOuterOneBack() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  lost.asOneDelivery(
+                      OTHER_PR,
+                      () -> {
+                        throw new IllegalStateException("the routes gave up");
+                      }));
+          return lost.recording(PR, () -> "posted");
+        });
+    post(PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () -> "the outer delivery was not handed back after the throw: " + carried.getLast());
+  }
+
   private static String throwIt(WebApplicationException failure) {
     throw failure;
   }
