@@ -623,6 +623,88 @@ class GitHubApiErrorTest {
 
       assertEquals("***…", body);
     }
+
+    /**
+     * #746. The bound before redaction is the only cut that can sever a token — the cap runs after
+     * the mask — and a shape with a ten-character floor stops matching once it has been severed
+     * below it. A run of credential-shaped material ahead of the token compresses to {@code ***},
+     * so what the bound left of the secret survives the cap and reaches the warn line whole.
+     */
+    @Nested
+    class ACredentialTheBoundCutJustShortOfItsLengthFloor {
+
+      /** Enough credential-shaped material to redact to {@code ***} and clear the cap for us. */
+      private static final String COMPRESSIBLE = "Bearer " + "a".repeat(900);
+
+      /** A body whose {@code sigil} lands so that the 1024-char bound leaves nine value chars. */
+      private static String cutAfterNineCharactersOf(String sigil, String value) {
+        var padding = 1_024 - sigil.length() - 9 - COMPRESSIBLE.length();
+        return COMPRESSIBLE + ",".repeat(padding) + sigil + value;
+      }
+
+      @Test
+      void isStillMaskedForATokenPrefix() {
+        var logged =
+            loggedBody(outbound(403, cutAfterNineCharactersOf("ghp_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertFalse(logged.contains("ghp_A1b2C3d4E"), logged);
+      }
+
+      @Test
+      void isStillMaskedForAFineGrainedPersonalAccessToken() {
+        var logged =
+            loggedBody(
+                outbound(403, cutAfterNineCharactersOf("github_pat_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertFalse(logged.contains("github_pat_A1b2C3d4E"), logged);
+      }
+
+      @Test
+      void isStillMaskedForABearerValue() {
+        var logged =
+            loggedBody(outbound(403, cutAfterNineCharactersOf("Bearer ", "S3cr3tV4lu3W1thM0re")));
+
+        assertFalse(logged.contains("Bearer S3cr3tV4l"), logged);
+      }
+    }
+
+    /**
+     * #746. The JWT header is base64url of {@code &#123;"} and is therefore always literally {@code
+     * eyJ}. Reading it case-insensitively made an Icelandic volcano a credential and blanked the
+     * hostname the operator needed — the exact outcome the shape's own javadoc says it was narrowed
+     * to avoid.
+     */
+    @Test
+    void doesNotMaskOrdinaryTextThatMerelyBeginsLikeAJwtHeaderInSomeOtherCase() {
+      var body = "{\"message\":\"cannot resolve host eyjafjallajokull.internal.example.com\"}";
+
+      assertEquals(body, loggedBody(outbound(502, body)));
+    }
+
+    /**
+     * #746. Nor is the header a credential when it turns up in the middle of a longer run: an
+     * unanchored {@code eyJ} let one request id blank four hundred characters of the body around
+     * it. A JWT starts at a token boundary, so the shape is pinned to one.
+     */
+    @Test
+    void doesNotMaskAJwtHeaderFoundInsideALongerRunOfWordCharacters() {
+      var body = "{\"message\":\"request id 7f3aeyJQm9keVRleHRIZXJl.log not found\"}";
+
+      assertEquals(body, loggedBody(outbound(404, body)));
+    }
+
+    /**
+     * Control, not proof — green before the fix as well. It pins the half of the {@code (?i)} that
+     * has to survive being scoped to one alternative: GitHub sends {@code Bearer}, but the header
+     * name is case-insensitive by RFC 7235 and an echoed one may arrive in any case.
+     */
+    @Test
+    void masksABearerHeaderWhateverCaseItArrivedIn() {
+      assertEquals(
+          "*** and more", loggedBody(outbound(401, "BEARER abcdefghij0123456789 and more")));
+      assertEquals(
+          "*** and more", loggedBody(outbound(401, "bearer abcdefghij0123456789 and more")));
+    }
   }
 
   @Nested

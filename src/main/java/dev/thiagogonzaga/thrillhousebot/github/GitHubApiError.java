@@ -60,9 +60,16 @@ public final class GitHubApiError {
    * the token pass does. So {@link #redactCredentials} still scans once, taking the leftmost match
    * across both patterns — split in two, prefixes here and value shapes there, only because one
    * alternation of all four shapes is more than the regex complexity budget allows.
+   *
+   * <p>Four value characters, not ten (#746). The sigil is the whole discriminator here — {@code
+   * ghp_} and {@code github_pat_} do not occur in prose, so the length floor was buying nothing the
+   * sigil did not already buy, while costing the one thing that matters: a token the bound before
+   * redaction severs below the floor stops matching and reaches the log with its first nine
+   * characters intact. This is the same reasoning #740 applied to the JWT alternative below and did
+   * not carry across to the shapes that still needed it.
    */
   private static final Pattern CREDENTIAL_SHAPED_PREFIX =
-      Pattern.compile("(?i)(gh[pousr]_\\w{10,})|(github_pat_\\w{10,})");
+      Pattern.compile("(?i)(gh[pousr]_\\w{4,})|(github_pat_\\w{4,})");
 
   /**
    * The bearer and JWT shapes — the value half of {@link #CREDENTIAL_SHAPED_PREFIX}'s union, tried
@@ -79,9 +86,23 @@ public final class GitHubApiError {
    * {@code eyJ} header prefix alone, which carries the algorithm and type claims and no secret.
    * Matching a dotless run instead would mask every long unbroken run of word characters and blank
    * the very body this line exists to explain.
+   *
+   * <p>Which is what the widened tail did anyway until #746, because the {@code (?i)} covered the
+   * whole alternation and the header was unanchored: any {@code eyj} in any case, anywhere inside a
+   * longer run, followed by a dot at any distance. {@code eyjafjallajokull.internal.example.com}
+   * came out as {@code ***.com} and a base64 blob with a filename after it came out as {@code ***}.
+   * So the case-insensitivity is scoped to the bearer half — a JWT header is base64url of {@code
+   * &#123;"}, which is always literally {@code eyJ} — and {@code (?<![\w-])} pins the header to the
+   * start of a token, leaving the cut-token property #740 added intact: a cut anywhere past the
+   * first dot still masks the whole run.
+   *
+   * <p>The bearer value takes the same four-character floor as {@link #CREDENTIAL_SHAPED_PREFIX},
+   * for the same reason: {@code Bearer } is the discriminator, and ten characters only meant the
+   * bound could sever a header value into something that no longer looked like one.
    */
   private static final Pattern CREDENTIAL_SHAPED_VALUE =
-      Pattern.compile("(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2})");
+      Pattern.compile(
+          "(?i:bearer\\s+[\\w.~+/=-]{4,})" + "|((?<![\\w-])eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2})");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -113,6 +134,16 @@ public final class GitHubApiError {
    *
    * <p>{@code \p{IsCc}} is the Unicode general category rather than POSIX {@code \p{Cntrl}}, so it
    * reaches the C1 controls (U+0080–U+009F, NEL among them) as well as C0 and DEL.
+   *
+   * <p>{@code \p{IsCf}} is here for the same harm rather than for line integrity: bidi overrides
+   * and isolates (RLO, LRM, LRI) reorder what an operator reads, and the invisible joiners and
+   * spaces (ZWJ, ZWNJ, ZWSP, the BOM, the soft hyphen) let two different bodies render identically
+   * — both forge a record's meaning as surely as a forged boundary forges its extent. The accepted
+   * cost is that an echoed user string loses its grapheme clusters: an emoji ZWJ sequence or an
+   * Indic conjunct is split apart. A {@code body=} field is a diagnostic identity rather than a
+   * rendering surface, and which characters arrived is the question it exists to answer. Replacing
+   * with a space rather than deleting is part of the same bargain — deletion would let {@code
+   * admin<ZWSP>istrator} close up into a different real word, a space cannot.
    */
   private static final Pattern WHITESPACE =
       Pattern.compile("[\\s\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
