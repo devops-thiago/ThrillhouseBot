@@ -418,6 +418,40 @@ class GitHubApiErrorTest {
   class BodyHandling {
 
     @Test
+    void masksAJwtTheBoundCutWithinTheFirstPayloadCharacters() {
+      // The narrow sibling of the case below: when the cut leaves fewer than a segment's worth of
+      // payload visible, a per-segment length floor would let the token through. A masked bearer
+      // run ahead of it shortens the redacted text, so the cap no longer drops the tail and the
+      // leak lands inside the logged line rather than past its end.
+      var body =
+          "Bearer "
+              + "a".repeat(500)
+              + "x".repeat(455)
+              + " eyJ"
+              + "h".repeat(50)
+              + "."
+              + "p".repeat(7)
+              + "P".repeat(200)
+              + "."
+              + "s".repeat(50);
+
+      var cleaned = loggedBody(outbound(403, body));
+
+      assertFalse(cleaned.contains("h".repeat(50)), cleaned);
+      assertFalse(cleaned.contains("ppppppp"), cleaned);
+    }
+
+    @Test
+    void collapsesBidiOverridesThatCouldReorderTheLoggedLine() {
+      // Cf format controls are not Cc: a right-to-left override reaching a terminal that honours
+      // the bidi algorithm reorders what an operator reads, which is the same family of harm as
+      // the record-splitting this collapse exists to stop.
+      var cleaned = loggedBody(outbound(500, "before\u202Eafter\u2066isolated"));
+
+      assertEquals("before after isolated", cleaned);
+    }
+
+    @Test
     void masksAJwtTheBoundCutMidPayload() {
       // #731 follow-up: bounding before redaction must not narrow what redaction covers. A token
       // whose second dot falls past the bound used to go through unmasked, and the cap then logged

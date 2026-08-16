@@ -68,16 +68,20 @@ public final class GitHubApiError {
    * The bearer and JWT shapes — the value half of {@link #CREDENTIAL_SHAPED_PREFIX}'s union, tried
    * second on a position tie exactly as the one-alternation form tried its alternatives in order.
    *
-   * <p>The JWT's third segment is optional, so a token the bound below cut mid-payload is still
-   * masked. Requiring all three made redaction depend on where the cut happened to land: a token
-   * whose second dot fell past the bound went through unmasked, and its header and the payload
-   * characters that fit reached the log. The first dot stays mandatory: a run of word characters
-   * carrying no dot at all is not a JWT, and matching one would mask any long unbroken run,
-   * blanking the very body this line exists to explain.
+   * <p>Everything after the first dot is optional in both length and count, so a token the bound
+   * below cut anywhere past that dot is masked whole — including a cut landing in the first few
+   * payload characters, which a {@code {8,}} on each segment would have let through. Requiring all
+   * three segments made redaction depend on where the cut happened to land: a token whose second
+   * dot fell past the bound went through unmasked, and its header and the payload characters that
+   * fit reached the log.
+   *
+   * <p>The first dot stays mandatory, so the one shape still not masked is a cut before it: the
+   * {@code eyJ} header prefix alone, which carries the algorithm and type claims and no secret.
+   * Matching a dotless run instead would mask every long unbroken run of word characters and blank
+   * the very body this line exists to explain.
    */
   private static final Pattern CREDENTIAL_SHAPED_VALUE =
-      Pattern.compile(
-          "(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}(?:\\.[\\w-]{8,}){1,2})");
+      Pattern.compile("(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2})");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -110,7 +114,8 @@ public final class GitHubApiError {
    * <p>{@code \p{IsCc}} is the Unicode general category rather than POSIX {@code \p{Cntrl}}, so it
    * reaches the C1 controls (U+0080–U+009F, NEL among them) as well as C0 and DEL.
    */
-  private static final Pattern WHITESPACE = Pattern.compile("[\\s\\p{IsCc}\\u2028\\u2029]+");
+  private static final Pattern WHITESPACE =
+      Pattern.compile("[\\s\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
 
   /** Backoff used when GitHub throttles without saying for how long. */
   static final Duration FALLBACK_DELAY = Duration.ofSeconds(5);
