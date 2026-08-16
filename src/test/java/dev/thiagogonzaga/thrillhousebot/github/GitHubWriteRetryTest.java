@@ -633,6 +633,70 @@ class GitHubWriteRetryTest {
     /** The window measured in #722, which the budget has to outlast to be worth having. */
     private static final Duration OBSERVED_BLOCK = Duration.ofSeconds(72);
 
+    /** The body measured in #722, verbatim: the generic wording AND the clause naming the block. */
+    private static final String BLOCK_BODY =
+        "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
+            + " from content creation. Please retry your request again later.\"}";
+
+    /**
+     * The block, driven end to end on a clock the recorded waits advance: GitHub keeps refusing
+     * until as much simulated time has passed as the measured window lasted, so what is pinned is
+     * the wall clock the budget actually spans rather than how many attempts it took to get there.
+     *
+     * @param headers what GitHub sends alongside the block body
+     */
+    private void spansTheBlock(String... headers) {
+      var calls = new AtomicInteger();
+      var elapsed = new AtomicLong();
+      var start = Instant.ofEpochSecond(1_800_000_000L);
+      var backoff =
+          new GitHubWriteRetry(
+              wait -> elapsed.addAndGet(wait.toSeconds()), () -> start.plusSeconds(elapsed.get()));
+
+      var result =
+          backoff.call(
+              "an inline comment on o/r #7",
+              () -> {
+                calls.incrementAndGet();
+                if (elapsed.get() < OBSERVED_BLOCK.toSeconds()) {
+                  throw failure(403, BLOCK_BODY, headers);
+                }
+                return "posted";
+              });
+
+      assertEquals("posted", result, "the write GitHub was blocking has to land in the end");
+      assertTrue(
+          elapsed.get() >= OBSERVED_BLOCK.toSeconds(),
+          "the budget has to span the block, not expire inside it — waited only "
+              + elapsed.get()
+              + "s");
+    }
+
+    /**
+     * #730, the branch that was still broken: GitHub names a deadline of its own, and it is far
+     * shorter than the block. Before the floor covered this branch, three waits of five seconds
+     * gave up 15 seconds into a 72-second block — half of what the linear fallback #722 replaced
+     * would have spread.
+     */
+    @Test
+    void aBlockIsOutlastedEvenWhenGitHubNamesAShortDeadline() {
+      spansTheBlock("Retry-After", "5");
+    }
+
+    /**
+     * #722's own shape, kept as the control on the other branch: no {@code Retry-After}, primary
+     * quota nowhere near exhausted, and a reset instant that belongs to that untouched primary
+     * window and so is already in the past. This one passed before #730 and has to keep passing.
+     */
+    @Test
+    void aBlockIsOutlastedWhenGitHubNamesNoDeadlineAtAll() {
+      spansTheBlock(
+          "x-ratelimit-remaining",
+          "4771",
+          "x-ratelimit-reset",
+          String.valueOf(Instant.ofEpochSecond(1_800_000_000L).getEpochSecond() - 90));
+    }
+
     @Test
     void aBlockAsLongAsTheMeasuredOneIsOutlasted() {
       var calls = new AtomicInteger();
