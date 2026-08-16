@@ -67,10 +67,21 @@ public final class GitHubApiError {
   /**
    * The bearer and JWT shapes — the value half of {@link #CREDENTIAL_SHAPED_PREFIX}'s union, tried
    * second on a position tie exactly as the one-alternation form tried its alternatives in order.
+   *
+   * <p>Everything after the first dot is optional in both length and count, so a token the bound
+   * below cut anywhere past that dot is masked whole — including a cut landing in the first few
+   * payload characters, which a {@code {8,}} on each segment would have let through. Requiring all
+   * three segments made redaction depend on where the cut happened to land: a token whose second
+   * dot fell past the bound went through unmasked, and its header and the payload characters that
+   * fit reached the log.
+   *
+   * <p>The first dot stays mandatory, so the one shape still not masked is a cut before it: the
+   * {@code eyJ} header prefix alone, which carries the algorithm and type claims and no secret.
+   * Matching a dotless run instead would mask every long unbroken run of word characters and blank
+   * the very body this line exists to explain.
    */
   private static final Pattern CREDENTIAL_SHAPED_VALUE =
-      Pattern.compile(
-          "(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}\\.[\\w-]{8,}\\.[\\w-]{8,})");
+      Pattern.compile("(?i)(bearer\\s+[\\w.~+/=-]{10,})" + "|(eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2})");
 
   /**
    * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
@@ -88,8 +99,23 @@ public final class GitHubApiError {
           "(?i)secondary rate limit|abuse detection|rate limit exceeded"
               + "|blocked from (?:content creation|creating content)");
 
-  /** Collapses the whitespace of a body so one failure stays on one log line. */
-  private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+  /**
+   * Collapses the whitespace of a body so one failure stays on one log line.
+   *
+   * <p>Wider than {@code \s}, which java.util.regex reads as the ASCII six ({@code [
+   * \t\n\x0B\f\r]}) unless the pattern asks for Unicode character classes. CR and LF being
+   * collapsed closes the classic forged-record vector, but NEL (U+0085), LINE SEPARATOR (U+2028),
+   * PARAGRAPH SEPARATOR (U+2029), NUL and the ANSI escape all survived it (#731) — and a log
+   * viewer, a terminal, or a JSON/ECS shipper may treat any of them as a record boundary or as a
+   * screen-control sequence. This class documents a body as attacker-influenced text on its way to
+   * a log file and already pays for a collapse pass on that basis; this is that pass covering what
+   * it claims to.
+   *
+   * <p>{@code \p{IsCc}} is the Unicode general category rather than POSIX {@code \p{Cntrl}}, so it
+   * reaches the C1 controls (U+0080–U+009F, NEL among them) as well as C0 and DEL.
+   */
+  private static final Pattern WHITESPACE =
+      Pattern.compile("[\\s\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
 
   /** Backoff used when GitHub throttles without saying for how long. */
   static final Duration FALLBACK_DELAY = Duration.ofSeconds(5);
@@ -392,20 +418,50 @@ public final class GitHubApiError {
     }
   }
 
+  /**
+   * A response body as one line of loggable text: collapsed, bounded, redacted, then capped at
+   * {@link #MAX_BODY_CHARS}.
+   *
+   * <p>The bound before the redaction is the point (#731). {@code readBody} reads the entity with
+   * no size limit of its own, and redaction used to run over all of it, so the cost of explaining a
+   * failed write was set by whatever the configured API host chose to send. {@link
+   * #CREDENTIAL_SHAPED_VALUE}'s JWT alternative is quadratic on a body of repeated {@code eyJ} —
+   * {@code [\w-]} excludes {@code .}, so each greedy run consumes to end-of-input, fails to find
+   * its separator and backtracks a character at a time, from one in every three positions.
+   * Measured: 20 000 chars cost 331 ms, 40 000 cost 1 213 ms, 80 000 cost 4 843 ms, 160 000 cost 19
+   * 404 ms, and a 1.2 MB body cost about eighteen minutes of CPU — spent on the review's own
+   * carrier thread, inside the failure path that exists to explain a failed write, before the retry
+   * decision it feeds is even reached. GitHub's real error bodies are ~300 characters; a GHES or
+   * reverse-proxy error page, a misconfigured base URL or a compromised endpoint is not.
+   *
+   * <p>The collapse above is one linear pass over the whole body; cutting first bounds the
+   * redaction pass at a constant. The cut is twice {@link #MAX_BODY_CHARS} so that redaction, which
+   * only ever shortens, still has material to fill the cap with; past that the output was going to
+   * be truncated anyway, and what a wider window would pull into view is more of the token-shaped
+   * run that is being masked out. The ellipsis marks either cut, so a body shortened here is never
+   * mistaken for a body GitHub sent whole.
+   */
   private static String clean(String raw) {
     if (raw == null) {
       return "";
     }
-    var collapsed = WHITESPACE.matcher(raw.strip()).replaceAll(" ");
-    var redacted = redactCredentials(collapsed);
-    if (redacted.length() <= MAX_BODY_CHARS) {
-      return redacted;
+    var collapsed = WHITESPACE.matcher(raw).replaceAll(" ").strip();
+    var bounded = cutTo(collapsed, MAX_BODY_CHARS * 2);
+    var redacted = redactCredentials(bounded);
+    var capped = cutTo(redacted, MAX_BODY_CHARS);
+    return capped.length() < redacted.length() || bounded.length() < collapsed.length()
+        ? capped + "…"
+        : capped;
+  }
+
+  /**
+   * {@code text} cut to at most {@code limit} characters, never through a surrogate pair — a
+   * dangling high surrogate at the cut point would corrupt a code point.
+   */
+  private static String cutTo(String text, int limit) {
+    if (text.length() <= limit) {
+      return text;
     }
-    // Never leave a dangling high surrogate at the cut point — that would corrupt a code point.
-    int keep =
-        Character.isHighSurrogate(redacted.charAt(MAX_BODY_CHARS - 1))
-            ? MAX_BODY_CHARS - 1
-            : MAX_BODY_CHARS;
-    return redacted.substring(0, keep) + "…";
+    return text.substring(0, Character.isHighSurrogate(text.charAt(limit - 1)) ? limit - 1 : limit);
   }
 }

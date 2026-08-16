@@ -418,6 +418,58 @@ class GitHubApiErrorTest {
   class BodyHandling {
 
     @Test
+    void masksAJwtTheBoundCutWithinTheFirstPayloadCharacters() {
+      // The narrow sibling of the case below: when the cut leaves fewer than a segment's worth of
+      // payload visible, a per-segment length floor would let the token through. A masked bearer
+      // run ahead of it shortens the redacted text, so the cap no longer drops the tail and the
+      // leak lands inside the logged line rather than past its end.
+      var body =
+          "Bearer "
+              + "a".repeat(500)
+              + "x".repeat(455)
+              + " eyJ"
+              + "h".repeat(50)
+              + "."
+              + "p".repeat(7)
+              + "P".repeat(200)
+              + "."
+              + "s".repeat(50);
+
+      var cleaned = loggedBody(outbound(403, body));
+
+      assertFalse(cleaned.contains("h".repeat(50)), cleaned);
+      assertFalse(cleaned.contains("ppppppp"), cleaned);
+    }
+
+    @Test
+    void collapsesBidiOverridesThatCouldReorderTheLoggedLine() {
+      // Cf format controls are not Cc: a right-to-left override reaching a terminal that honours
+      // the bidi algorithm reorders what an operator reads, which is the same family of harm as
+      // the record-splitting this collapse exists to stop.
+      var cleaned = loggedBody(outbound(500, "before\u202Eafter\u2066isolated"));
+
+      assertEquals("before after isolated", cleaned);
+    }
+
+    @Test
+    void masksAJwtTheBoundCutMidPayload() {
+      // #731 follow-up: bounding before redaction must not narrow what redaction covers. A token
+      // whose second dot falls past the bound used to go through unmasked, and the cap then logged
+      // its header and the payload chars that fit — the bound's own doing, on the body of a
+      // credential the redaction exists to remove.
+      var prefix = "x".repeat(100);
+      var header = "a".repeat(50);
+      var payload = "P".repeat(1200);
+      var body = prefix + " eyJ" + header + "." + payload + "." + "s".repeat(50);
+
+      var cleaned = loggedBody(outbound(403, body));
+
+      assertFalse(cleaned.contains("PPPPPPPP"), cleaned);
+      assertFalse(cleaned.contains(header), cleaned);
+      assertTrue(cleaned.contains("***"), cleaned);
+    }
+
+    @Test
     void readsAnInboundResponseWithoutConsumingItForTheCaller() {
       var response = inbound(403, SECONDARY_LIMIT_BODY, "Retry-After", "60");
 
@@ -516,6 +568,60 @@ class GitHubApiErrorTest {
       assertEquals(511, body.length() - 1);
       assertTrue(body.endsWith("…"));
       assertEquals(-1, body.indexOf('\uD834'), "no dangling high surrogate");
+    }
+
+    /**
+     * #731. Redaction used to run over the whole body and the cap only afterwards, so the cost of
+     * explaining one failed write was set by whatever the configured host chose to send: the JWT
+     * shape backtracks from one position in three, which is quadratic, and the measured curve ran
+     * 20 000 chars → 331 ms, 40 000 → 1 213 ms, 80 000 → 4 843 ms, 160 000 → 19 404 ms. The bound
+     * below is enormously slack against the ~1 ms this costs once the body is cut first; it is
+     * sized to fail only on the quadratic, not on a slow machine.
+     */
+    @Test
+    void doesNotScanAWholeOversizedBodyLookingForCredentials() {
+      var body = "eyJ".repeat(66_666); // ~200 KB, as a proxy's error page could be
+
+      var start = System.nanoTime();
+      var logged = loggedBody(outbound(403, body));
+      var millis = (System.nanoTime() - start) / 1_000_000;
+
+      assertTrue(millis < 2_000, "cleaning a 200 KB body took " + millis + "ms");
+      assertEquals(513, logged.length(), logged);
+    }
+
+    /**
+     * #731. {@code \s} is the ASCII six in java.util.regex, so the collapse caught CR and LF and
+     * let every other record separator through — enough for an attacker-influenced body to forge
+     * what reads as a second log line, or to carry an ANSI sequence into an operator's terminal.
+     */
+    @Test
+    void collapsesTheLineTerminatorsAndControlsThatAreNotAsciiWhitespace() {
+      var body =
+          "a\u0085WARN forged-by-NEL \u2028WARN forged-by-LS \u2029WARN forged-by-PS"
+              + " \u0000NUL \u001b[2J ansi";
+
+      var logged = loggedBody(outbound(403, body));
+
+      assertEquals("a WARN forged-by-NEL WARN forged-by-LS WARN forged-by-PS NUL [2J ansi", logged);
+    }
+
+    /** The same collapse must not leave a terminator at either end behind as a stray space. */
+    @Test
+    void stripsALineTerminatorAtEitherEndRatherThanLeavingASpace() {
+      assertEquals("boom", loggedBody(outbound(500, "\u2028 boom \u0085")));
+    }
+
+    /**
+     * A body cut before redaction still says it was cut, even when the mask leaves the result well
+     * under the cap — otherwise a heavily redacted 200 KB page would read as something GitHub sent
+     * whole.
+     */
+    @Test
+    void marksABodyCutBeforeRedactionAsTruncatedEvenWhenTheMaskFitsUnderTheCap() {
+      var body = loggedBody(outbound(401, "Bearer " + "a".repeat(4_000)));
+
+      assertEquals("***…", body);
     }
   }
 
