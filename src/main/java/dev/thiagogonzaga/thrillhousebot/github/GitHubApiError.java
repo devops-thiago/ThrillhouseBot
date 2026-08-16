@@ -130,10 +130,19 @@ public final class GitHubApiError {
    *
    * <p>Neither number is GitHub speaking about this block. The reset instant belongs to the
    * <em>primary</em> window, which a secondary limit leaves alone — the run behind #722 is exactly
-   * that, a content-creation block carrying {@code x-ratelimit-remaining=4771}. So a delay that was
-   * derived rather than given is floored here, which is what makes {@link
-   * GitHubWriteRetry#TOTAL_BUDGET} a floor for this failure instead of only a ceiling. An explicit
-   * {@code Retry-After} still wins outright: there GitHub is naming its own deadline.
+   * that, a content-creation block carrying {@code x-ratelimit-remaining=4771}. So the delay is
+   * floored here, which is what makes {@link GitHubWriteRetry#TOTAL_BUDGET} a floor for this
+   * failure instead of only a ceiling.
+   *
+   * <p>The floor applies however the delay was arrived at, an explicit {@code Retry-After} included
+   * (#730). An earlier revision floored only a <em>derived</em> delay, on the reading that a {@code
+   * Retry-After} is GitHub naming its own deadline — but that header names a deadline for <em>this
+   * request</em>, not the width of the block. A {@code Retry-After: 5} on the measured body left
+   * four attempts spread over 15 seconds against a 72-second block: the whole budget spent inside
+   * the window, and less waiting than the linear fallback this floor replaced. So the invariant
+   * held on one branch of the derivation only. Longer is still GitHub's to ask for: a {@code
+   * Retry-After} past the floor wins outright, clamped by {@link
+   * GitHubWriteRetry#MAX_DELAY_PER_ATTEMPT} exactly as before.
    */
   static final Duration CONTENT_CREATION_BLOCK_MIN_DELAY = Duration.ofSeconds(30);
 
@@ -224,10 +233,11 @@ public final class GitHubApiError {
    * so a silent throttle still slows down. Never negative — for everything but the block below, a
    * reset already in the past means the window has reopened and the call can go straight back out.
    *
-   * <p>One exception, added in #722: when GitHub is blocking content creation and named no deadline
-   * of its own, a derived delay is floored at {@link #CONTENT_CREATION_BLOCK_MIN_DELAY}. Both
-   * derivations undershoot that block badly — the linear fallback by design, a stale reset instant
-   * by returning nothing at all.
+   * <p>One exception, added in #722 and widened in #730: when GitHub is blocking content creation,
+   * a wait shorter than {@link #CONTENT_CREATION_BLOCK_MIN_DELAY} is lifted to it. Every way of
+   * arriving at a wait undershoots that block badly — the linear fallback by design, a stale reset
+   * instant by returning nothing at all, and a short {@code Retry-After} by pacing one call rather
+   * than describing the block.
    *
    * <p>The floor applies to <em>every</em> rate-limit header on such a block, including {@code
    * x-ratelimit-remaining: 0}. Those headers describe the <em>primary</em> window, which a
@@ -235,21 +245,28 @@ public final class GitHubApiError {
    * about when creation reopens: a block carrying {@code remaining=0} and a reset ten seconds out
    * would otherwise wait ten seconds a time and spend the whole budget inside the 72-second window
    * this is sized against. An earlier revision carved that case out and reintroduced exactly the
-   * failure the floor exists to prevent.
+   * failure the floor exists to prevent; a second one carved out {@code Retry-After} and reopened
+   * it again, since three waits of five seconds is a smaller budget still.
    */
   public Duration retryDelay(int attempt, Instant now) {
-    var fromHeader = retryAfterSeconds();
-    if (fromHeader.isPresent()) {
-      return atLeastZero(Duration.ofSeconds(fromHeader.get()));
-    }
-    var reset = parseLong(rateLimitReset);
-    var derived =
-        reset.isPresent()
-            ? atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset.get())))
-            : FALLBACK_DELAY.multipliedBy(attempt);
-    return blocksContentCreation() && derived.compareTo(CONTENT_CREATION_BLOCK_MIN_DELAY) < 0
+    var delay =
+        retryAfterSeconds()
+            .map(seconds -> atLeastZero(Duration.ofSeconds(seconds)))
+            .orElseGet(() -> derivedDelay(attempt, now));
+    return blocksContentCreation() && delay.compareTo(CONTENT_CREATION_BLOCK_MIN_DELAY) < 0
         ? CONTENT_CREATION_BLOCK_MIN_DELAY
-        : derived;
+        : delay;
+  }
+
+  /**
+   * The wait GitHub implied rather than named: the reset instant of the exhausted rate-limit window
+   * when one was sent, and otherwise a linear backoff off {@link #FALLBACK_DELAY} so a silent
+   * throttle still slows down.
+   */
+  private Duration derivedDelay(int attempt, Instant now) {
+    return parseLong(rateLimitReset)
+        .map(reset -> atLeastZero(Duration.between(now, Instant.ofEpochSecond(reset))))
+        .orElseGet(() -> FALLBACK_DELAY.multipliedBy(attempt));
   }
 
   /**

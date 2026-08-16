@@ -334,11 +334,31 @@ class GitHubApiErrorTest {
       }
 
       @Test
-      void stillYieldsToADeadlineGitHubNamed() {
-        // An explicit Retry-After is GitHub speaking about this block, so the floor must not
-        // override it — not even upwards.
+      void isFlooredEvenWhenGitHubNamedAShorterDeadline() {
+        // #730. A Retry-After names a deadline for THIS request; it does not describe how wide the
+        // block is. Taken literally, three seconds a time spends all four attempts in nine seconds
+        // against a block measured at 72 — a smaller budget than the linear fallback this floor
+        // replaced, which is the #722 failure with a header on it.
         var error =
             GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY, "Retry-After", "3"));
+        assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void stillYieldsToALongerDeadlineGitHubNamed() {
+        // The floor lifts a wait that undershoots; it must not shorten one. A Retry-After past the
+        // floor is GitHub asking for longer, and it stays — the retry's own ceiling clamps it.
+        var error =
+            GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY, "Retry-After", "60"));
+        assertEquals(Duration.ofSeconds(60), error.retryDelay(1, NOW));
+      }
+
+      @Test
+      void doesNotFloorARetryAfterOnAThrottleThatIsNotThisBlock() {
+        // The floor is sized against this block alone. A milder throttle that names a short
+        // deadline
+        // keeps it, or every secondary limit would hold a PR's dispatcher slot for 30 seconds.
+        var error = GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY, "Retry-After", "3"));
         assertEquals(Duration.ofSeconds(3), error.retryDelay(1, NOW));
       }
     }
