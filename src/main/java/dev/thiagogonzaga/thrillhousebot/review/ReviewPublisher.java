@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
@@ -767,7 +768,7 @@ public class ReviewPublisher {
     }
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
-        MarkdownSafe.oneLine(finding.file()), finding.line(), reason);
+        LogSafe.oneLine(finding.file()), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
   }
 
@@ -829,7 +830,7 @@ public class ReviewPublisher {
     } catch (RuntimeException e) {
       Log.warnf(
           "GitHub rejected the file-level thread for %s (%s) — the finding keeps no thread at all",
-          MarkdownSafe.oneLine(finding.file()), rejectionReason(e));
+          LogSafe.oneLine(finding.file()), rejectionReason(e));
       return false;
     }
   }

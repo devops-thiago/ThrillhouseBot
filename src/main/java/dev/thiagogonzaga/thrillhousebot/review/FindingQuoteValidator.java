@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -82,8 +83,8 @@ public class FindingQuoteValidator {
       }
       Log.infof(
           "Finding '%s' (%s:%d) %s" + DEMOTION_SUFFIX,
-          finding.title(),
-          finding.file(),
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file()),
           finding.line(),
           reason);
       kept.add(withoutSuggestion(finding));

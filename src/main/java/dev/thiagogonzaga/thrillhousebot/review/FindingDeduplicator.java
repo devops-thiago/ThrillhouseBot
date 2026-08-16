@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -54,7 +55,10 @@ public class FindingDeduplicator {
       if (cluster.size() > 1) {
         Log.infof(
             "Merging %d duplicate findings at %s:%d ('%s')",
-            cluster.size(), cluster.get(0).file(), cluster.get(0).line(), cluster.get(0).title());
+            cluster.size(),
+            LogSafe.oneLine(cluster.get(0).file()),
+            cluster.get(0).line(),
+            LogSafe.oneLine(cluster.get(0).title()));
       }
       merged.add(merge(cluster));
     }

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -75,7 +76,7 @@ public class FrameworkFalsePositiveFilter {
             "Dropping finding '%s' (%s:%d) — it claims a missing no-arg constructor but the diff"
                 + " shows an injection-annotated constructor; constructor injection needs no no-arg"
                 + " constructor in CDI/Spring",
-            finding.title(), finding.file(), finding.line());
+            LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
         changed = true;
         continue;
       }
