@@ -94,7 +94,7 @@ public final class GitHubApiError {
    * did not carry across to the shapes that still needed it.
    */
   private static final Pattern CREDENTIAL_SHAPED_PREFIX =
-      Pattern.compile("(?i)(gh[pousr]_\\w{1,})|(github_pat_\\w{1,})");
+      Pattern.compile("(?i)(gh[pousr]_\\w+)|(github_pat_\\w+)");
 
   /**
    * The bearer shape, and with {@link #JWT_SHAPED_VALUE} below it the value half of {@link
@@ -139,7 +139,7 @@ public final class GitHubApiError {
    * leftmost-match design above exists to swallow.
    */
   private static final Pattern BEARER_SHAPED_VALUE =
-      Pattern.compile("bearer\\s+[\\w.~+/=-]{1,}", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("bearer\\s+[\\w.~+/=-]+", Pattern.CASE_INSENSITIVE);
 
   /**
    * The JWT shape, kept apart from {@link #BEARER_SHAPED_VALUE} rather than alternated with it: one
