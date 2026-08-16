@@ -58,10 +58,21 @@ class RescuedFindingLostWriteTest {
   private static final String FILE_LEVEL_THREAD = "the finding, filed on its file";
   private static final String REVIEW_BODY = "the review body";
 
-  /** The response measured in #722, which is what sends a route round the backoff to exhaustion. */
-  private static final String BLOCK_BODY =
-      "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
-          + " from content creation. Please retry your request again later.\"}";
+  /**
+   * A secondary rate limit, which is what sends a route round the backoff to exhaustion.
+   *
+   * <p>Not the content-creation wording measured in #722, deliberately (#749). The seam under test
+   * is the accounting, not the backoff: what these tests need from the throttle is that {@link
+   * dev.thiagogonzaga.thrillhousebot.github.GitHubApiError#isThrottled} says yes and that the route
+   * exhausts {@code GitHubWriteRetry.MAX_ATTEMPTS}, both of which a plain secondary limit does. A
+   * content-creation block additionally lifts every wait to {@code
+   * CONTENT_CREATION_BLOCK_MIN_DELAY} — 30 seconds — however the delay was derived, {@code
+   * Retry-After} included since #738. The {@code Retry-After: 0} below used to mean "no sleep" and
+   * stopped meaning it in the same release, at a cost of 461 s for this class and 94 s for a single
+   * test. Nothing here asserts on the block wording, so the cheaper body pins the same behaviour.
+   */
+  private static final String THROTTLE_BODY =
+      "{\"message\":\"You have exceeded a secondary rate limit.\"}";
 
   /**
    * The registry the client writes to is process-wide, so each test takes a pull request of its own
@@ -101,7 +112,7 @@ class RescuedFindingLostWriteTest {
   }
 
   /**
-   * The production sequence: GitHub is in a content-creation block, the line-anchored comment burns
+   * The production sequence: GitHub is refusing comment creation, the line-anchored comment burns
    * its whole retry budget, the file-level thread lands on the far side of the window, and the
    * review body goes out moments later. The finding has a working thread, so the body must not open
    * with "an earlier reply on this pull request was never posted … run the command again".
@@ -140,10 +151,10 @@ class RescuedFindingLostWriteTest {
   }
 
   /**
-   * The other direction, which the fix must not cost: when the block outlasts every route the
+   * The other direction, which the fix must not cost: when the throttle outlasts every route the
    * finding really is gone, and the maintainer does have to run the command again. Said once, for
    * one finding, rather than once per refused route — the over-count is not confined to the rescued
-   * case, and a review that lost three findings to a wide block should say three, not nine.
+   * case, and a review that lost three findings to a wide window should say three, not nine.
    */
   @Test
   void aFindingNoRouteCouldDeliverIsStillAnnouncedAsLost() {
@@ -275,10 +286,10 @@ class RescuedFindingLostWriteTest {
       return new ReviewResponse(1L, request.body(), request.event(), request.commitId(), null);
     }
 
-    /** GitHub's content-creation block, naming a deadline of "now" so the test does not sleep. */
+    /** GitHub throttling the post, naming a deadline of "now" so the test does not sleep. */
     private static WebApplicationException blocked() {
       return new WebApplicationException(
-          Response.status(403).header("Retry-After", "0").entity(BLOCK_BODY).build());
+          Response.status(403).header("Retry-After", "0").entity(THROTTLE_BODY).build());
     }
 
     @Override

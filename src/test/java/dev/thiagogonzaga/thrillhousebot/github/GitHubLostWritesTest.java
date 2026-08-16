@@ -459,6 +459,80 @@ class GitHubLostWritesTest {
     assertEquals("", carried.getLast(), carried.getLast());
   }
 
+  /**
+   * #748. A group inside a group for a <em>different</em> pull request is a group of its own: the
+   * outer delivery speaks only for its own pull request, so reusing it would leave the inner routes
+   * with no accounting at all and announce content the inner group delivered as lost.
+   */
+  @Test
+  void aDeliveryNestedInsideOneForAnotherPullRequestIsGroupedOnItsOwn() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () ->
+            lost.asOneDelivery(
+                OTHER_PR,
+                () -> {
+                  assertThrows(
+                      WebApplicationException.class,
+                      () -> lost.recording(OTHER_PR, () -> throwIt(throttled())));
+                  return lost.recording(OTHER_PR, () -> "posted");
+                }));
+    post(OTHER_PR, carried, null);
+
+    assertEquals(
+        "",
+        carried.getLast(),
+        () ->
+            "the inner delivery was not grouped, so content its second route delivered was"
+                + " announced as lost: "
+                + carried.getLast());
+  }
+
+  /**
+   * The other direction of the same nesting, and the outer delivery on the far side of it: the
+   * inner group really is lost and is announced exactly once, while the outer group is handed back
+   * intact — a route it lost before the inner group ran is still only held, not remembered, and a
+   * later route of its own settles it.
+   */
+  @Test
+  void aNestedDeliveryIsAnnouncedOnceAndHandsTheOuterOneBack() {
+    var carried = new ArrayList<String>();
+
+    lost.asOneDelivery(
+        PR,
+        () -> {
+          assertThrows(
+              WebApplicationException.class, () -> lost.recording(PR, () -> throwIt(throttled())));
+          lost.asOneDelivery(
+              OTHER_PR,
+              () -> {
+                for (var route = 0; route < 2; route++) {
+                  assertThrows(
+                      WebApplicationException.class,
+                      () -> lost.recording(OTHER_PR, () -> throwIt(throttled())));
+                }
+                return "no route landed";
+              });
+          return lost.recording(PR, () -> "posted");
+        });
+    post(OTHER_PR, carried, null);
+    post(PR, carried, null);
+
+    assertTrue(carried.get(0).contains("An earlier reply"), carried.get(0));
+    assertFalse(
+        carried.get(0).contains("earlier replies"),
+        () -> "one lost nested delivery was counted once per refused route: " + carried.get(0));
+    assertEquals(
+        "",
+        carried.get(1),
+        () ->
+            "the outer delivery lost its scope to the nested one, so a route it landed itself no"
+                + " longer settled it: "
+                + carried.get(1));
+  }
+
   private static String throwIt(WebApplicationException failure) {
     throw failure;
   }
