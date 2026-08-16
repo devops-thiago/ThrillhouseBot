@@ -138,6 +138,102 @@ class GitHubApiErrorTest {
     }
   }
 
+  /**
+   * #732 and #747. The body does two unrelated jobs — it is a line an operator reads, and it is the
+   * evidence on which a completed generation is either repeated or thrown away. Every narrowing the
+   * first job asks for used to narrow the second: the 512-character cap (#732), and then the
+   * 1024-character bound on the redaction input (#747), which closed the one path by which deeper
+   * wording still reached the classifier. The consequence is not a shorter wait but no retry at all
+   * — the retry returns empty on {@code !isThrottled()} and rethrows on the first attempt, which is
+   * the pre-#495 behaviour this area exists to prevent.
+   */
+  @Nested
+  class ThrottleWordingGitHubDidNotPutFirst {
+
+    private static final Instant NOW = Instant.ofEpochSecond(1_800_000_000L);
+
+    @Test
+    void isStillReadWhenItSitsPastTheLengthCapTheLogLineUses() {
+      // #732. Nothing here is credential-shaped and nothing is long enough to be bounded — the cap
+      // alone hid it. GitHub puts the message first, but a body with a long documentation_url or a
+      // set of echoed headers ahead of it does not.
+      var body =
+          "{\"documentation_url\":\""
+              + "x".repeat(600)
+              + "\",\"message\":\"You have exceeded a secondary rate limit and have been temporarily"
+              + " blocked from content creation.\"}";
+
+      var error = GitHubApiError.from(outbound(403, body));
+
+      assertTrue(error.isThrottled(), "body=" + loggedBody(outbound(403, body)));
+      assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+    }
+
+    @Test
+    void isStillReadWhenMoreCredentialShapedMaterialPrecedesItThanTheRedactionBoundHolds() {
+      // #747. v0.6.3 redacted the whole collapsed body first, so a prefix like this compressed to
+      // "***" and carried the wording forward into the classified string; bounding the redaction
+      // input at 1024 dropped it before the mask could. The audit's sweep puts the threshold
+      // between 900 characters of prefix (still classified) and 1010 (no longer).
+      var body = "Bearer " + "a".repeat(1_100) + " " + CONTENT_CREATION_BLOCK_BODY;
+
+      var error = GitHubApiError.from(outbound(403, body));
+
+      assertTrue(error.isThrottled(), "body=" + loggedBody(outbound(403, body)));
+      assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+    }
+
+    @Test
+    void isNotSomethingTheCredentialMaskCanDeleteBeforeItIsRead() {
+      // The classified window is the collapsed body, taken before redaction, so the retry decision
+      // can no longer be changed by a mask: a JWT-shaped run whose tail happens to be the word
+      // "blocked" used to swallow it and turn this block into a permission refusal.
+      var body = "{\"message\":\"prefix eyJabcdefgh.blocked from content creation\"}";
+
+      var error = GitHubApiError.from(outbound(403, body));
+
+      assertTrue(error.isThrottled(), "body=" + loggedBody(outbound(403, body)));
+      assertEquals(Duration.ofSeconds(30), error.retryDelay(1, NOW));
+    }
+
+    /** Control: the log line keeps its own cap, whatever the classifier is allowed to see. */
+    @Test
+    void doesNotWidenWhatReachesTheLog() {
+      var logged = loggedBody(outbound(403, "y".repeat(600) + " blocked from content creation"));
+
+      assertEquals(513, logged.length(), logged);
+      assertTrue(logged.endsWith("…"), logged);
+    }
+
+    /**
+     * Control, and the honest edge of the fix: the window is wide, not unbounded. The entity is
+     * read with no size limit of its own, and #731 is about not letting the configured host set the
+     * cost of explaining a failed write, so classification gets a fixed prefix — several times any
+     * body GitHub sends, and orders of magnitude past where the cap and the redaction bound used to
+     * stop it.
+     */
+    @Test
+    void isReadFromABoundedWindowRatherThanFromAnUnboundedBody() {
+      var withinTheWindow = "z".repeat(4_000) + " blocked from content creation";
+      var pastTheWindow = "z".repeat(64_000) + " blocked from content creation";
+
+      assertTrue(GitHubApiError.from(outbound(403, withinTheWindow)).isThrottled());
+      assertFalse(GitHubApiError.from(outbound(403, pastTheWindow)).isThrottled());
+    }
+
+    /** Control: a body carrying none of the wording is still a refusal, however deep it is read. */
+    @Test
+    void doesNotMakeAPermissionRefusalLookLikeAThrottle() {
+      var body =
+          "{\"documentation_url\":\""
+              + "x".repeat(4_000)
+              + "\",\"message\":\"Resource not"
+              + " accessible by integration\"}";
+
+      assertFalse(GitHubApiError.from(outbound(403, body)).isThrottled());
+    }
+  }
+
   @Nested
   class Severity {
 
@@ -194,6 +290,47 @@ class GitHubApiErrorTest {
                   "x-ratelimit-reset",
                   String.valueOf(NOW.getEpochSecond() - 90)));
       assertEquals(Duration.ZERO, error.retryDelay(1, NOW));
+    }
+
+    /**
+     * #732's second half. {@code Long.parseLong} accepts values {@code Instant.ofEpochSecond}
+     * rejects, and the {@link java.time.DateTimeException} it throws is not the {@code
+     * WebApplicationException} the write path is built around: it escaped {@code
+     * GitHubWriteRetry.call} past every catch between here and the caller, losing the write and the
+     * record of its loss together. A header that cannot name an instant says nothing about when the
+     * window reopens, which is what a non-numeric header already means here.
+     */
+    @Test
+    void aRateLimitResetTooLargeToBeAnInstantIsTreatedAsUnspecified() {
+      var error =
+          GitHubApiError.from(
+              outbound(
+                  403,
+                  SECONDARY_LIMIT_BODY,
+                  "x-ratelimit-remaining",
+                  "0",
+                  "x-ratelimit-reset",
+                  String.valueOf(Long.MAX_VALUE)));
+
+      assertTrue(error.isThrottled());
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
+      assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
+    /** The same at the other end of the range: an intermediary's negative overflow. */
+    @Test
+    void aRateLimitResetTooSmallToBeAnInstantIsTreatedAsUnspecified() {
+      var error =
+          GitHubApiError.from(
+              outbound(
+                  403,
+                  SECONDARY_LIMIT_BODY,
+                  "x-ratelimit-remaining",
+                  "0",
+                  "x-ratelimit-reset",
+                  String.valueOf(Long.MIN_VALUE)));
+
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
     }
 
     @Test
@@ -622,6 +759,88 @@ class GitHubApiErrorTest {
       var body = loggedBody(outbound(401, "Bearer " + "a".repeat(4_000)));
 
       assertEquals("***…", body);
+    }
+
+    /**
+     * #746. The bound before redaction is the only cut that can sever a token — the cap runs after
+     * the mask — and a shape with a ten-character floor stops matching once it has been severed
+     * below it. A run of credential-shaped material ahead of the token compresses to {@code ***},
+     * so what the bound left of the secret survives the cap and reaches the warn line whole.
+     */
+    @Nested
+    class ACredentialTheBoundCutJustShortOfItsLengthFloor {
+
+      /** Enough credential-shaped material to redact to {@code ***} and clear the cap for us. */
+      private static final String COMPRESSIBLE = "Bearer " + "a".repeat(900);
+
+      /** A body whose {@code sigil} lands so that the 1024-char bound leaves nine value chars. */
+      private static String cutAfterNineCharactersOf(String sigil, String value) {
+        var padding = 1_024 - sigil.length() - 9 - COMPRESSIBLE.length();
+        return COMPRESSIBLE + ",".repeat(padding) + sigil + value;
+      }
+
+      @Test
+      void isStillMaskedForATokenPrefix() {
+        var logged =
+            loggedBody(outbound(403, cutAfterNineCharactersOf("ghp_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertFalse(logged.contains("ghp_A1b2C3d4E"), logged);
+      }
+
+      @Test
+      void isStillMaskedForAFineGrainedPersonalAccessToken() {
+        var logged =
+            loggedBody(
+                outbound(403, cutAfterNineCharactersOf("github_pat_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertFalse(logged.contains("github_pat_A1b2C3d4E"), logged);
+      }
+
+      @Test
+      void isStillMaskedForABearerValue() {
+        var logged =
+            loggedBody(outbound(403, cutAfterNineCharactersOf("Bearer ", "S3cr3tV4lu3W1thM0re")));
+
+        assertFalse(logged.contains("Bearer S3cr3tV4l"), logged);
+      }
+    }
+
+    /**
+     * #746. The JWT header is base64url of {@code &#123;"} and is therefore always literally {@code
+     * eyJ}. Reading it case-insensitively made an Icelandic volcano a credential and blanked the
+     * hostname the operator needed — the exact outcome the shape's own javadoc says it was narrowed
+     * to avoid.
+     */
+    @Test
+    void doesNotMaskOrdinaryTextThatMerelyBeginsLikeAJwtHeaderInSomeOtherCase() {
+      var body = "{\"message\":\"cannot resolve host eyjafjallajokull.internal.example.com\"}";
+
+      assertEquals(body, loggedBody(outbound(502, body)));
+    }
+
+    /**
+     * #746. Nor is the header a credential when it turns up in the middle of a longer run: an
+     * unanchored {@code eyJ} let one request id blank four hundred characters of the body around
+     * it. A JWT starts at a token boundary, so the shape is pinned to one.
+     */
+    @Test
+    void doesNotMaskAJwtHeaderFoundInsideALongerRunOfWordCharacters() {
+      var body = "{\"message\":\"request id 7f3aeyJQm9keVRleHRIZXJl.log not found\"}";
+
+      assertEquals(body, loggedBody(outbound(404, body)));
+    }
+
+    /**
+     * Control, not proof — green before the fix as well. It pins the half of the {@code (?i)} that
+     * has to survive being scoped to one alternative: GitHub sends {@code Bearer}, but the header
+     * name is case-insensitive by RFC 7235 and an echoed one may arrive in any case.
+     */
+    @Test
+    void masksABearerHeaderWhateverCaseItArrivedIn() {
+      assertEquals(
+          "*** and more", loggedBody(outbound(401, "BEARER abcdefghij0123456789 and more")));
+      assertEquals(
+          "*** and more", loggedBody(outbound(401, "bearer abcdefghij0123456789 and more")));
     }
   }
 
