@@ -82,15 +82,19 @@ public final class GitHubApiError {
    * across every pattern — split apart, prefixes here and the value shapes beside it, only because
    * one alternation of all four shapes is more than the regex complexity budget allows.
    *
-   * <p>Four value characters, not ten (#746). The sigil is the whole discriminator here — {@code
-   * ghp_} and {@code github_pat_} do not occur in prose, so the length floor was buying nothing the
-   * sigil did not already buy, while costing the one thing that matters: a token the bound before
-   * redaction severs below the floor stops matching and reaches the log with its first nine
-   * characters intact. This is the same reasoning #740 applied to the JWT alternative below and did
-   * not carry across to the shapes that still needed it.
+   * <p>One value character, not ten (#746, #757). The sigil is the whole discriminator here —
+   * {@code ghp_} and {@code github_pat_} do not occur in prose, so the length floor was buying
+   * nothing the sigil did not already buy, while costing the one thing that matters: a token the
+   * bound before redaction severs below the floor stops matching and reaches the log with whatever
+   * the cut left of it intact. #746 made that argument and then stopped at four, which leaves the
+   * same window three characters wide instead of closing it: a cut leaving one, two or three value
+   * characters is still under the floor and still reaches the warn line. One is where the argument
+   * ends, because a cut that leaves no value characters at all strands the sigil by itself, and a
+   * sigil is not secret. This is the same reasoning #740 applied to the JWT alternative below and
+   * did not carry across to the shapes that still needed it.
    */
   private static final Pattern CREDENTIAL_SHAPED_PREFIX =
-      Pattern.compile("(?i)(gh[pousr]_\\w{4,})|(github_pat_\\w{4,})");
+      Pattern.compile("(?i)(gh[pousr]_\\w{1,})|(github_pat_\\w{1,})");
 
   /**
    * The bearer shape, and with {@link #JWT_SHAPED_VALUE} below it the value half of {@link
@@ -124,9 +128,9 @@ public final class GitHubApiError {
    * matched, since widening the anchor would mask ordinary prose beginning {@code ey} for a shape
    * no issuer emits.
    *
-   * <p>The value takes the same four-character floor as {@link #CREDENTIAL_SHAPED_PREFIX}, for the
-   * same reason: the {@code Bearer } that precedes it is the discriminator, and ten characters only
-   * meant the bound could sever a header value into something that no longer looked like one.
+   * <p>The value takes the same one-character floor as {@link #CREDENTIAL_SHAPED_PREFIX}, for the
+   * same reason: the {@code Bearer } that precedes it is the discriminator, and any floor above one
+   * only meant the bound could sever a header value into something that no longer looked like one.
    *
    * <p>The word {@code bearer} is consumed with the value rather than left in the line, which does
    * mask the noun in prose such as {@code missing bearer token}. Masking only the value was tried
@@ -135,7 +139,7 @@ public final class GitHubApiError {
    * leftmost-match design above exists to swallow.
    */
   private static final Pattern BEARER_SHAPED_VALUE =
-      Pattern.compile("bearer\\s+[\\w.~+/=-]{4,}", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("bearer\\s+[\\w.~+/=-]{1,}", Pattern.CASE_INSENSITIVE);
 
   /**
    * The JWT shape, kept apart from {@link #BEARER_SHAPED_VALUE} rather than alternated with it: one
