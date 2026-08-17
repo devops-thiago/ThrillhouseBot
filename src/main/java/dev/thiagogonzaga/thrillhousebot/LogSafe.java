@@ -47,6 +47,16 @@ public final class LogSafe {
    * <p>{@code \p{IsCc}} is the Unicode general category rather than POSIX {@code \p{Cntrl}}, so it
    * reaches the C1 controls (U+0080–U+009F, NEL among them) as well as C0 and DEL.
    *
+   * <p>{@code \p{IsZs}} covers the space separators {@code \s} leaves behind — NBSP (U+00A0), the
+   * EM/EN and figure spaces (U+2000–U+200A), the narrow NBSP (U+202F), the medium mathematical
+   * space (U+205F) and the ideographic space (U+3000). Without it the class contradicted the
+   * contract this method's javadoc states, and inconsistently: {@code String.strip()} reads {@code
+   * Character.isWhitespace}, which is true for U+2003 and U+3000 but false for U+00A0, U+2007 and
+   * U+202F, so the first pair were trimmed at the ends yet never collapsed inside, and the second
+   * three survived at every position. They forge no boundary, which is why this is the cheapest of
+   * the four classes to justify; they are here because two values differing only by one of them
+   * render identically in a log, which is the same harm as the invisible characters below.
+   *
    * <p>{@code \p{IsCf}} is here for the same harm rather than for line integrity: bidi overrides
    * and isolates (RLO, LRM, LRI) reorder what an operator reads, and the invisible joiners and
    * spaces (ZWJ, ZWNJ, ZWSP, the BOM, the soft hyphen) let two different values render identically
@@ -58,7 +68,7 @@ public final class LogSafe {
    * admin<ZWSP>istrator} close up into a different real word, a space cannot.
    */
   private static final Pattern WHITESPACE =
-      Pattern.compile("[\\s\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
+      Pattern.compile("[\\s\\p{IsZs}\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
 
   private LogSafe() {}
 

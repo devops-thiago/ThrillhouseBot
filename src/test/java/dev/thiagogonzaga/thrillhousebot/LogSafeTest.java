@@ -86,6 +86,38 @@ class LogSafeTest {
     assertEquals("admin istrator", LogSafe.oneLine("admin" + (char) 0x200B + "istrator"));
   }
 
+  /**
+   * The space separators a bare {@code \s} also leaves behind. None of these forges a boundary, so
+   * they are the cheapest of the four classes to justify; they are here because two values
+   * differing only by one of them render identically in a log line.
+   */
+  private static Stream<Arguments> spaceSeparatorsThatRenderLikeASpace() {
+    return Stream.of(
+        arguments("NO-BREAK SPACE (U+00A0)", between(0x00A0)),
+        arguments("EN QUAD (U+2000)", between(0x2000)),
+        arguments("EM SPACE (U+2003)", between(0x2003)),
+        arguments("FIGURE SPACE (U+2007)", between(0x2007)),
+        arguments("NARROW NO-BREAK SPACE (U+202F)", between(0x202F)),
+        arguments("MEDIUM MATHEMATICAL SPACE (U+205F)", between(0x205F)),
+        arguments("IDEOGRAPHIC SPACE (U+3000)", between(0x3000)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("spaceSeparatorsThatRenderLikeASpace")
+  void flattensEverySpaceSeparatorThatRendersLikeAnOrdinarySpace(String name, String value) {
+    assertEquals("a b", LogSafe.oneLine(value), name);
+  }
+
+  /**
+   * The trim is no backstop for these: it reads {@code Character.isWhitespace}, which is false for
+   * U+00A0, U+2007 and U+202F, so a value bounded by them kept them at every position until the
+   * class covered {@code \p{IsZs}}.
+   */
+  @Test
+  void trimsASpaceSeparatorTheWhitespaceTestDoesNotRecognise() {
+    assertEquals("boom", LogSafe.oneLine((char) 0x00A0 + "boom" + (char) 0x202F));
+  }
+
   @Test
   void leavesAnOrdinaryValueAlone() {
     assertEquals("src/main/java/App.java", LogSafe.oneLine("src/main/java/App.java"));
