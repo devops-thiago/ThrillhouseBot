@@ -18,6 +18,8 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -139,14 +141,25 @@ public final class GitHubLostWrites {
   private final AtomicLong ids = new AtomicLong();
 
   /**
-   * The delivery whose routes are being tried on this thread, if any. Thread confinement is what
-   * the routes already have — a finding's attempts run one after another on the thread publishing
-   * that review — so it is also the cheapest way to reach {@link #recording} from {@link
-   * #asOneDelivery} without threading a handle through the REST client interface that sits between
-   * them. Held per instance, not per class, so a test's registry cannot see {@link #SHARED}'s
-   * deliveries or vice versa.
+   * The deliveries open on this thread, innermost first. Thread confinement is what the routes
+   * already have — a finding's attempts run one after another on the thread publishing that review
+   * — so it is also the cheapest way to reach {@link #recording} from {@link #asOneDelivery}
+   * without threading a handle through the REST client interface that sits between them. Held per
+   * instance, not per class, so a test's registry cannot see {@link #SHARED}'s deliveries or vice
+   * versa.
+   *
+   * <p>A stack rather than a single slot because a group nested inside another does not end the one
+   * it is nested in (#756). The outer group's own routes go on running while the inner one is open
+   * — one of them may be what opened it — and a single slot made the outer group unreachable for
+   * exactly as long as that lasted: a route of it that <em>landed</em> settled nothing, so the
+   * group closed as never delivered and announced as lost content the pull request had received.
+   * Keeping every open group reachable is what lets {@link #deliveryFor} hand each call the group
+   * it belongs to rather than only the one that happens to be on top.
+   *
+   * <p>Absent rather than empty while nothing is open, so a thread that only ever posts ungrouped
+   * carries no deque of its own.
    */
-  private final ThreadLocal<Delivery> delivery = new ThreadLocal<>();
+  private final ThreadLocal<Deque<Delivery>> open = new ThreadLocal<>();
 
   private final Supplier<Instant> clock;
   private final int maxTargets;
@@ -211,28 +224,38 @@ public final class GitHubLostWrites {
    * finding that really is lost still announces itself — and announces itself once rather than once
    * per attempt.
    *
-   * <p>Nesting for the <em>same</em> pull request reuses the outer group rather than opening a
-   * second one, so a caller cannot lose another caller's routes by grouping its own. Nesting for a
-   * different pull request cannot reuse it: a group speaks only for the pull request it was opened
-   * on ({@link #deliveryFor}), so handing the inner routes the outer group would leave them with no
-   * accounting at all and remember each of them separately — the per-route over-count #729 removed,
-   * reintroduced for the nested caller and silently, with no log and no exception (#748). The inner
-   * group therefore takes over the thread and hands the outer one back when it closes.
+   * <p>Nesting for the <em>same</em> pull request rejoins the group already open for it rather than
+   * opening a second one, so a caller cannot lose another caller's routes by grouping its own. It
+   * rejoins that group wherever it sits on the stack, not only when it is the immediately enclosing
+   * one: an {@code A → B → A} nesting is still one delivery for {@code A}, because the group in the
+   * middle is something {@code A}'s routes ran inside rather than the end of {@code A}'s delivery
+   * (#756). Rejoining opens nothing, so the routes simply run and an exception or an error out of
+   * them leaves the group they rejoined exactly as they found it.
+   *
+   * <p>Nesting for a different pull request cannot rejoin: a group speaks only for the pull request
+   * it was opened on ({@link #deliveryFor}), so handing the inner routes the outer group would
+   * leave them with no accounting at all and remember each of them separately — the per-route
+   * over-count #729 removed, reintroduced for the nested caller and silently, with no log and no
+   * exception (#748). The inner group therefore goes on the stack above the outer one rather than
+   * in place of it, and is taken off again when it closes, on every exit path.
    */
   public <T> T asOneDelivery(Target target, Supplier<T> routes) {
-    var outer = delivery.get();
-    if (outer != null && outer.target.equals(target)) {
+    if (deliveryFor(target) != null) {
       return routes.get();
     }
+    var stack = open.get();
+    if (stack == null) {
+      stack = new ArrayDeque<>();
+      open.set(stack);
+    }
     var scope = new Delivery(target);
-    delivery.set(scope);
+    stack.push(scope);
     try {
       return routes.get();
     } finally {
-      if (outer == null) {
-        delivery.remove();
-      } else {
-        delivery.set(outer);
+      stack.pop();
+      if (stack.isEmpty()) {
+        open.remove();
       }
       if (scope.refused && !scope.landed) {
         remember(target);
@@ -241,13 +264,23 @@ public final class GitHubLostWrites {
   }
 
   /**
-   * The delivery this call is a route of, or {@code null} when it is a post of its own. A delivery
-   * for some other pull request is not this call's: the group's accounting only ever speaks for the
-   * pull request it was opened on.
+   * The delivery this call is a route of — the innermost open one whose pull request is this call's
+   * — or {@code null} when it is a post of its own. A delivery for some other pull request is not
+   * this call's: the group's accounting only ever speaks for the pull request it was opened on.
+   * Looking past such a group instead of stopping at it is what keeps an outer delivery reachable
+   * while one for another pull request is open inside it (#756).
    */
   private Delivery deliveryFor(Target target) {
-    var scope = delivery.get();
-    return scope != null && scope.target.equals(target) ? scope : null;
+    var stack = open.get();
+    if (stack == null) {
+      return null;
+    }
+    for (var scope : stack) {
+      if (scope.target.equals(target)) {
+        return scope;
+      }
+    }
+    return null;
   }
 
   /** The notice text for {@code lost} dropped posts, or empty when there is nothing pending. */
