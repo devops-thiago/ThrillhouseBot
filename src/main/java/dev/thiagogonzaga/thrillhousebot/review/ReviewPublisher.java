@@ -720,7 +720,7 @@ public class ReviewPublisher {
     if (line.isEmpty()) {
       Log.debugf(
           "Line for %s:%d is outside the PR diff — filing the finding on the file instead",
-          finding.file(), finding.line());
+          LogSafe.oneLine(finding.file()), finding.line());
       return postFileLevelComment(target, finding, findingId);
     }
 
@@ -728,7 +728,7 @@ public class ReviewPublisher {
     if (resolvedLine != finding.line()) {
       Log.debugf(
           "Adjusted inline comment line for %s from %d to %d",
-          finding.file(), finding.line(), resolvedLine);
+          LogSafe.oneLine(finding.file()), finding.line(), resolvedLine);
     }
 
     // A GitHub suggestion overwrites the whole commented range, so multi-line old code needs a
@@ -877,7 +877,7 @@ public class ReviewPublisher {
       Log.debugf(
           e,
           "Inline comment rejected for %s:%d (suggestion=%s): %s",
-          finding.file(),
+          LogSafe.oneLine(finding.file()),
           endLine,
           includeSuggestion,
           reason);
