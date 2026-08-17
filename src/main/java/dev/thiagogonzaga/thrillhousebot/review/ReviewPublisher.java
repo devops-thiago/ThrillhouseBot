@@ -787,9 +787,11 @@ public class ReviewPublisher {
    */
   private static String rejectionReason(RuntimeException e) {
     if (e instanceof WebApplicationException w) {
-      return GitHubApiError.of(w).map(GitHubApiError::diagnostics).orElseGet(e::toString);
+      return GitHubApiError.of(w)
+          .map(GitHubApiError::diagnostics)
+          .orElseGet(() -> LogSafe.oneLine(e.toString()));
     }
-    return e.toString();
+    return LogSafe.oneLine(e.toString());
   }
 
   /**

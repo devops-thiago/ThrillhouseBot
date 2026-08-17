@@ -405,6 +405,12 @@ public final class GitHubApiError {
   /**
    * One line naming everything that separates one GitHub failure from another: the status, the
    * throttling headers when present, and the body. This is the line that was missing in #568.
+   *
+   * <p>The headers go through {@link LogSafe} in {@link #append} for the reason the body already
+   * does. A header is response data from the configured API host, so on the hosts this class's
+   * threat model names — a GHES or reverse-proxy error page, a misconfigured base URL, a
+   * compromised endpoint — it is as attacker-influenced as the body beside it, and it was reaching
+   * this line verbatim while the body was being collapsed one field away.
    */
   public String diagnostics() {
     var text = new StringBuilder("status=").append(status);
@@ -418,7 +424,7 @@ public final class GitHubApiError {
 
   private static void append(StringBuilder text, String name, String value) {
     if (value != null && !value.isBlank()) {
-      text.append(' ').append(name).append('=').append(value);
+      text.append(' ').append(name).append('=').append(LogSafe.oneLine(value));
     }
   }
 
