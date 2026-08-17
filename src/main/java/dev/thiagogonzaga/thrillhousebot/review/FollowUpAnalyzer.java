@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -633,7 +634,10 @@ public class FollowUpAnalyzer {
       Log.infof(
           "Dropping re-raised finding '%s' (%s:%d) — a maintainer already replied to the prior"
               + " finding '%s' at the same location",
-          finding.title(), finding.file(), finding.line(), duplicateOf.title());
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file()),
+          finding.line(),
+          LogSafe.oneLine(duplicateOf.title()));
     }
     if (!dropped) {
       return response;

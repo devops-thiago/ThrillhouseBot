@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -1369,7 +1370,7 @@ public class FindingPipeline {
         if (fallback != null && !fallback.isBlank()) {
           Log.infof(
               "Populating missing content anchor for finding '%s' (%s:%d)",
-              finding.title(), finding.file(), finding.line());
+              LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
           adjusted.add(
               new ReviewResponse.Finding(
                   finding.risk(),
