@@ -450,6 +450,15 @@ public class FindingPipeline {
     refined =
         followUpAnalyzer.dropRepliedDuplicates(
             refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
+    // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
+    // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
+    refined =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            refined,
+            ctx.priorAiResponses(),
+            ctx.inlineComments(),
+            ctx.conversationComments(),
+            botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
 
     if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
@@ -1351,6 +1360,15 @@ public class FindingPipeline {
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
             aiResponse, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
+    // #726: a novel lower-confidence hypothesis on an anchor the maintainer has already
+    // dispositioned twice is a re-roll of the dice, not a finding to disposition again.
+    aiResponse =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            aiResponse,
+            ctx.priorAiResponses(),
+            ctx.inlineComments(),
+            ctx.conversationComments(),
+            botIdentity);
     aiResponse = populateMissingAnchors(aiResponse, lineResolver);
     persistAiResponse(session, aiResponse);
     return aiResponse;

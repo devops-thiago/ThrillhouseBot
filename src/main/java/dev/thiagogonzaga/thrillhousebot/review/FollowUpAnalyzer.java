@@ -682,6 +682,138 @@ public class FollowUpAnalyzer {
     return null;
   }
 
+  /**
+   * How many distinct findings on one anchor a maintainer must have dispositioned before a further
+   * lower-confidence finding on that same anchor stops being raised (#726).
+   *
+   * <p>Two, not one: the first decline settles one hypothesis, and a second look at the same lines
+   * is ordinary review. It is the third and later ones that stop being review and start being a
+   * fresh roll of the dice — the observed run was five rounds over essentially unchanged code, each
+   * minting a brand-new lower-confidence item on the same ~30 lines, each contradicting the last,
+   * and each costing the maintainer a manual disposition.
+   */
+  static final int LITIGATED_ANCHOR_LIMIT = 2;
+
+  /**
+   * Deterministic convergence for an anchor the maintainer has already litigated: withholds a new
+   * <em>lower-confidence</em> finding whose location has already carried {@link
+   * #LITIGATED_ANCHOR_LIMIT} distinct maintainer-dispositioned findings on this pull request
+   * (#726).
+   *
+   * <p>{@link #dropRepliedDuplicates} already stops a prior finding from being re-raised, but it
+   * matches on the defect: a new title with a new premise on the same lines is not the same
+   * finding, so it passes. That is exactly what re-review of an unchanged diff produces — each
+   * round invents a novel speculative hypothesis against the same lines, previous-findings tracking
+   * never converges because nothing is repeated, and the maintainer disposes of a new item every
+   * round. This pass matches on the <em>anchor</em> instead, which is the thing the rounds actually
+   * have in common.
+   *
+   * <p>Three properties keep it from suppressing real review:
+   *
+   * <ul>
+   *   <li>only findings that never post inline are eligible — {@link Finding#postsInline} routes
+   *       low-confidence findings below high risk to the summary's "Things to double-check", and
+   *       that is the whole reported class. A high-confidence finding, and any critical/high-risk
+   *       one, is untouched however often its anchor has been argued over;
+   *   <li>the count is of <em>distinct</em> dispositioned findings ({@link #isSameFinding}), so one
+   *       finding carried across rounds cannot reach the limit on its own;
+   *   <li>a disposition means a maintainer acted — a reply on the finding's thread, or an {@code
+   *       @thrillhousebot resolved} comment naming it on the PR conversation, which is the only
+   *       hatch a threadless finding has (#548). The bot's own rounds never raise the count.
+   * </ul>
+   *
+   * <p>The trade it accepts: if the code under a twice-litigated anchor genuinely changes, a new
+   * lower-confidence observation there is withheld too. That is the cheap direction — the same
+   * defect surfacing at high confidence or at critical/high risk is exempt, and the withheld class
+   * is by construction the one the review already declines to put on the diff.
+   *
+   * @param priorRounds every completed prior round's parsed response, newest first
+   */
+  public static ReviewResponse withoutPreviouslyLitigated(
+      ReviewResponse response,
+      List<ReviewResponse> priorRounds,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity) {
+    if (response.findings().isEmpty() || priorRounds.isEmpty()) {
+      return response;
+    }
+    var dispositioned =
+        dispositionedFindings(priorRounds, inlineComments, conversationComments, botIdentity);
+    if (dispositioned.isEmpty()) {
+      return response;
+    }
+    var kept = new ArrayList<ReviewResponse.Finding>();
+    var withheld = false;
+    for (ReviewResponse.Finding finding : response.findings()) {
+      var litigated =
+          Finding.fromAiResponse(finding).postsInline() ? 0 : litigating(finding, dispositioned);
+      if (litigated < LITIGATED_ANCHOR_LIMIT) {
+        kept.add(finding);
+        continue;
+      }
+      withheld = true;
+      Log.infof(
+          "Withholding lower-confidence finding '%s' (%s:%d) — %d finding(s) on that anchor were"
+              + " already dispositioned by a maintainer on this pull request",
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file()),
+          finding.line(),
+          litigated);
+    }
+    if (!withheld) {
+      return response;
+    }
+    return new ReviewResponse(
+        kept,
+        response.previousFindingsStatus(),
+        FindingVerificationService.recount(response.summary(), kept));
+  }
+
+  /**
+   * Every prior finding a maintainer answered on its thread or cleared from the PR conversation.
+   * Rounds carry no nulls ({@code ReviewContext} copies its list), so none is filtered here.
+   */
+  private static List<ReviewResponse.Finding> dispositionedFindings(
+      List<ReviewResponse> priorRounds,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity) {
+    var dispositioned = new ArrayList<ReviewResponse.Finding>();
+    for (var round : priorRounds) {
+      for (var prior : round.findings()) {
+        if (answeredRootComment(prior, inlineComments, botIdentity) != null
+            || clearedInConversation(prior, conversationComments, botIdentity)) {
+          dispositioned.add(prior);
+        }
+      }
+    }
+    return dispositioned;
+  }
+
+  /**
+   * How many <em>distinct</em> dispositioned findings share {@code finding}'s anchor. A prior the
+   * count already covers by {@link #isSameFinding} is the same defect argued once, however many
+   * rounds carried it, so it is counted once.
+   */
+  private static int litigating(
+      ReviewResponse.Finding finding, List<ReviewResponse.Finding> dispositioned) {
+    var counted = new ArrayList<ReviewResponse.Finding>();
+    for (var prior : dispositioned) {
+      if (sameAnchor(finding, prior)
+          && counted.stream().noneMatch(seen -> isSameFinding(prior, seen))) {
+        counted.add(prior);
+      }
+    }
+    return counted.size();
+  }
+
+  /** Whether two findings sit at the same location, within the drift a revision may introduce. */
+  private static boolean sameAnchor(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
+    return FilePaths.same(finding.file(), prior.file())
+        && Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE;
+  }
+
   private static boolean isSameFinding(
       ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
     if (finding.file() == null || !FilePaths.same(finding.file(), prior.file())) {

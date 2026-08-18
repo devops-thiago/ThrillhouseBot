@@ -297,6 +297,132 @@ class FindingPipelineTest {
     assertEquals(List.of(prContext, prContext), sent.getAllValues());
   }
 
+  /** A finding the review routes to "Things to double-check": low confidence, risk below high. */
+  private static ReviewResponse.Finding doubleCheckFinding(String file, int line, String title) {
+    return new ReviewResponse.Finding("medium", "low", file, line, title, title, null, null);
+  }
+
+  /** A prior round that raised exactly {@code finding}. */
+  private static ReviewResponse round(ReviewResponse.Finding finding) {
+    return new ReviewResponse(List.of(finding), List.of(), null);
+  }
+
+  /** A write-capable maintainer's "@thrillhousebot resolved" comment on the PR conversation. */
+  private static dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment
+      maintainerClears(long id, String locator, String title) {
+    return new dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment(
+        id,
+        "@thrillhousebot resolved `" + locator + "` — " + title,
+        new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse.User(
+            "maintainer"),
+        "MEMBER");
+  }
+
+  /** Review context carrying prior rounds and the PR conversation that dispositioned them. */
+  private static ReviewContextLoader.ReviewContext litigatedContext(
+      List<ReviewResponse> priorRounds,
+      List<dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment>
+          conversationComments) {
+    return new ReviewContextLoader.ReviewContext(
+        List.of(),
+        "raw legacy diff",
+        "",
+        0,
+        List.of(),
+        List.of(),
+        priorRounds,
+        false,
+        true,
+        null,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        List.of(new FileDiff("a.java", "modified", 3, 0, 3, "")),
+        () -> new DiffLineResolver(Map.of()),
+        null,
+        conversationComments);
+  }
+
+  @Test
+  void aThirdSpeculativeItemOnATwiceDispositionedAnchorIsWithheld() {
+    // #726: re-reviews of an unchanged diff mint a brand-new lower-confidence "Things to
+    // double-check" item on the same lines every round — novel by title and anchor each time, so
+    // previous-findings tracking never converges — and the maintainer disposes of a fresh one per
+    // round. Two dispositioned findings on the anchor is the evidence that the anchor has been
+    // litigated; the third speculative item must not become another open finding.
+    var session = persistedSession();
+    var firstRound = doubleCheckFinding("src/A.java", 10, "Wording rules match only the noun");
+    var secondRound = doubleCheckFinding("src/A.java", 11, "The pattern over-matches instead");
+    var ctx =
+        litigatedContext(
+            List.of(round(secondRound), round(firstRound)),
+            List.of(
+                maintainerClears(901L, "src/A.java:10", firstRound.title()),
+                maintainerClears(902L, "src/A.java:11", secondRound.title())));
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(
+                    doubleCheckFinding("src/A.java", 12, "Reworded message drops the 30s floor"),
+                    finding("src/B.java", "Unrelated defect elsewhere")),
+                List.of(),
+                new ReviewResponse.Summary(2, 0, 0, 2, 0, "ok", "does things", List.of())));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+    assertEquals(
+        List.of("Unrelated defect elsewhere"),
+        result.findings().stream().map(ReviewResponse.Finding::title).toList(),
+        "a third lower-confidence item on the twice-dispositioned anchor must not be raised");
+  }
+
+  @Test
+  void aHighConfidenceFindingOnATwiceDispositionedAnchorStillPosts() {
+    // Control for the convergence rule: it passes before and after, and pins the boundary the rule
+    // must never cross. Only the class the review already keeps off the diff is eligible — a
+    // finding that posts inline is untouched however often its anchor has been argued over.
+    var session = persistedSession();
+    var firstRound = doubleCheckFinding("src/A.java", 10, "Wording rules match only the noun");
+    var secondRound = doubleCheckFinding("src/A.java", 11, "The pattern over-matches instead");
+    var ctx =
+        litigatedContext(
+            List.of(round(secondRound), round(firstRound)),
+            List.of(
+                maintainerClears(901L, "src/A.java:10", firstRound.title()),
+                maintainerClears(902L, "src/A.java:11", secondRound.title())));
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    var confident =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "src/A.java",
+            12,
+            "Reworded message drops the 30s floor",
+            "d",
+            null,
+            null);
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(confident),
+                List.of(),
+                new ReviewResponse.Summary(1, 1, 0, 0, 0, "ok", "does things", List.of())));
+
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertEquals(
+        List.of("Reworded message drops the 30s floor"),
+        result.findings().stream().map(ReviewResponse.Finding::title).toList());
+  }
+
   @Test
   void multiCallDoesNotRetryABatchTruncatedAtTheModelsLengthCap() {
     // #492: a length stop is deterministic — re-sending the identical prompt against the identical
