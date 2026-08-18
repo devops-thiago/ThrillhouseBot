@@ -103,6 +103,12 @@ public class PrSummaryGenerator {
    * finding that states the same thing. The claim still reaches the reader at its most specific
    * surface, so it is not repeated here — but the check plainly ran, and saying so is what keeps a
    * collapsed section from reading exactly like a skipped one (#637).
+   *
+   * <p>"Reported as a finding below" is load-bearing, and the deduplicator holds it up: it
+   * collapses a gap only onto a finding that posts inline, so a gap whose every match was demoted
+   * into the collapsed double-check block survives as a bullet and this body is never reached for
+   * it (#718). Reaching it means at least one gap collapsed onto a finding published as a finding
+   * proper.
    */
   static final String GAPS_ALL_REPORTED_AS_FINDINGS =
       "Every mismatch found between the description and the change is reported as a finding below,"
@@ -458,10 +464,10 @@ public class PrSummaryGenerator {
    * meaning no summary came back at all, which the summary-degradation banners already disclose.
    *
    * <p>The states are: gaps survived, so they are listed; the model reported gaps but every one of
-   * them restated a finding and #588 collapsed them all away, which used to delete the whole
-   * section along with them (the sharpest measured case — the review found the contradicted bug and
-   * still said nothing about the description); and the model reported none, which is now stated
-   * rather than implied by an absent heading.
+   * them restated an inline finding and #588 collapsed them all away, which used to delete the
+   * whole section along with them (the sharpest measured case — the review found the contradicted
+   * bug and still said nothing about the description); and the model reported none, which is now
+   * stated rather than implied by an absent heading.
    *
    * <p>A PR with an empty body reaches the last state too, since the model reports no gaps for a
    * description it never received and the renderer cannot tell the two apart from the response

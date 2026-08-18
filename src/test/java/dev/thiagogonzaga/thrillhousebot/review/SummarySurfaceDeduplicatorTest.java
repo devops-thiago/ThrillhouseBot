@@ -36,6 +36,73 @@ class SummarySurfaceDeduplicatorTest {
     return new Finding(RiskLevel.HIGH, "src/A.java", 1, title, "desc", null, null);
   }
 
+  /** A medium-risk, low-confidence finding: routed out of the inline threads by the verifier. */
+  private static Finding demoted(String title) {
+    return new Finding(
+        RiskLevel.MEDIUM, Confidence.LOW, "src/A.java", 1, title, "desc", null, null);
+  }
+
+  private static final String DISPATCH_GAP =
+      "The PR description says the docs deploy now fails loudly instead of a silent miss, but the"
+          + " publish-docs job exits 0 as soon as `gh workflow run` accepts the dispatch, so a"
+          + " deploy-stage failure in the dispatched docs.yml run leaves release.yml green with no"
+          + " signal.";
+
+  private static final String DISPATCH_TITLE =
+      "publish-docs exits 0 once the dispatch is accepted, so a failure in the dispatched docs.yml"
+          + " run leaves release.yml green";
+
+  @Test
+  void keepsAGapWhoseEveryMatchingFindingWasDemotedOutOfTheInlineSurface() {
+    // The verifier demoted the one finding the gap restates, so it is published only as a hedged
+    // bullet inside the collapsed double-check block. Collapsing onto that leaves the ⚠️ section
+    // asserting a mismatch that nothing below states outright (#718).
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(DISPATCH_GAP), Map.of(), List.of(demoted(DISPATCH_TITLE)));
+
+    assertEquals(List.of(DISPATCH_GAP), surfaces.descriptionGaps());
+  }
+
+  @Test
+  void collapsesThatSameGapOntoTheFindingWhenItPostsInline() {
+    // Control for the test above: the pair matches, so demotion is the only thing that changed.
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(DISPATCH_GAP), Map.of(), List.of(finding(DISPATCH_TITLE)));
+
+    assertEquals(List.of(), surfaces.descriptionGaps());
+  }
+
+  @Test
+  void collapsesAGapThatAlsoRestatesAnInlineFindingAlongsideTheDemotedOne() {
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(DISPATCH_GAP),
+            Map.of(),
+            List.of(demoted(DISPATCH_TITLE), finding(DISPATCH_TITLE)));
+
+    assertEquals(List.of(), surfaces.descriptionGaps());
+  }
+
+  @Test
+  void aDemotedFindingStillTrimsAWalkthroughClauseThatRestatesIt() {
+    // A demoted finding outranks a walkthrough clause even though it no longer outranks a gap: the
+    // double-check bullet prints the claim's own wording and its path:line, the clause does not.
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(),
+            Map.of(
+                "src/A.java",
+                "Added HTTP client for worker registry; returns only the first page of workers"
+                    + " (pagination not walked); also adds a retry budget"),
+            List.of(demoted("Worker registry pagination not followed; only first page returned")));
+
+    assertEquals(
+        "Added HTTP client for worker registry; also adds a retry budget",
+        surfaces.fileSummaries().get("src/A.java"));
+  }
+
   @ParameterizedTest(name = "{0}")
   @MethodSource("gapsNoFindingRestates")
   void keepsAGapNoFindingRestates(String label, String gap, String findingTitle) {
