@@ -221,6 +221,83 @@ class FindingPipelineTest {
   }
 
   @Test
+  void anAuthorSizedDescriptionIsBoundedBeforeItReachesTheVerifier() {
+    // #736: the verification call does no budget arithmetic, and the PR description reaching it is
+    // bounded nowhere — GitHub accepts 65,536 characters of it. Sent whole, on top of a diff
+    // already sized to fill the budget, it pushes the request past the model's context window; that
+    // fails open, so the author of a pull request can switch verification off for their own pull
+    // request by writing a long enough description. The block must arrive within its share of the
+    // per-call budget, with the cut disclosed to the model.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    // GitHub's maximum description length, as ordinary prose.
+    var description = "The author's stated intent for this change. ".repeat(1525);
+    assertTrue(description.length() >= 65_536, "the description is GitHub-maximum sized");
+    var prContext = PromptTemplateEscaper.fence(PromptSections.prContext("Big PR", description));
+    var template =
+        new AiReviewService.PromptInputs("d", prContext, "base", "stack", "tests", "", "");
+    // The shipped per-call budget: 48000 * 0.9 - 8192.
+    when(budgetPlanner.perCallInputBudget()).thenReturn(35_008);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    var sent = ArgumentCaptor.forClass(String.class);
+    verify(findingVerificationService, times(2))
+        .verify(anyLong(), any(), sent.capture(), any(), any(), any(), any());
+    var counter = new TokenCounter();
+    for (var block : sent.getAllValues()) {
+      assertTrue(
+          counter.estimateTokens(block) <= 3500,
+          () ->
+              "PR context reached the verifier at "
+                  + counter.estimateTokens(block)
+                  + " tokens, over its 3500-token share of the 35008-token per-call budget");
+      assertTrue(
+          block.contains("truncated to fit this call's token budget"),
+          "the cut is disclosed to the model");
+    }
+    // The untrusted fence survives the cut, with the disclosure outside it so it reads as
+    // instruction rather than as more author-supplied data.
+    var fenceLine = prContext.substring(0, prContext.indexOf('\n'));
+    var bounded = sent.getAllValues().get(0);
+    assertTrue(bounded.startsWith(fenceLine + "\n"), "the fence still opens the block");
+    assertTrue(
+        bounded.contains("\n" + fenceLine + "\n("), "the fence closes before the disclosure");
+    assertEquals(2, bounded.split(java.util.regex.Pattern.quote(fenceLine), -1).length - 1);
+  }
+
+  @Test
+  void aDescriptionInsideItsShareReachesTheVerifierByteExact() {
+    // Control for the bound above: it must bite only on the accumulation it exists to stop, so an
+    // ordinary description reaches the verifier untouched — same instance, no disclosure.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var prContext =
+        PromptTemplateEscaper.fence(
+            PromptSections.prContext("Big PR", "Fixes the parser. ".repeat(50)));
+    var template =
+        new AiReviewService.PromptInputs("d", prContext, "base", "stack", "tests", "", "");
+    when(budgetPlanner.perCallInputBudget()).thenReturn(35_008);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    pipeline.run(session, template, ctx, multiBatchPlan(), new DiffLineResolver(Map.of()));
+
+    var sent = ArgumentCaptor.forClass(String.class);
+    verify(findingVerificationService, times(2))
+        .verify(anyLong(), any(), sent.capture(), any(), any(), any(), any());
+    assertEquals(List.of(prContext, prContext), sent.getAllValues());
+  }
+
+  @Test
   void multiCallDoesNotRetryABatchTruncatedAtTheModelsLengthCap() {
     // #492: a length stop is deterministic — re-sending the identical prompt against the identical
     // cap is cut at the identical point. The generic soft-fail path retries once before giving up,

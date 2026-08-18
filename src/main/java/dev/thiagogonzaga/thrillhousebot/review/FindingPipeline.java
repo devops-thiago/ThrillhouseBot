@@ -690,11 +690,14 @@ public class FindingPipeline {
       BatchRun run) {
     var validated = quoteValidator.validate(batchResponse, batch.text());
     validated = frameworkFilter.filter(validated, batch.text());
+    // #736: the verification call is the one review-path call that does no budget arithmetic of
+    // its own, so the section the author alone sizes is bounded here before it is sent.
     var verified =
         findingVerificationService.verify(
             ledgerSessionId(run.session()),
             validated,
-            batchInputs.prContext(),
+            PrContextBudget.bound(
+                batchInputs.prContext(), budgetPlanner.perCallInputBudget(), tokenCounter),
             batchInputs.diff(),
             batchInputs.projectStack(),
             batchInputs.previousFindings(),
@@ -1333,11 +1336,14 @@ public class FindingPipeline {
     aiResponse = quoteValidator.validate(aiResponse, diff);
     aiResponse = frameworkFilter.filter(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
+    // #736: the verification call is the one review-path call that does no budget arithmetic of
+    // its own, so the section the author alone sizes is bounded here before it is sent.
     aiResponse =
         findingVerificationService.verify(
             ledgerSessionId(session),
             aiResponse,
-            promptInputs.prContext(),
+            PrContextBudget.bound(
+                promptInputs.prContext(), budgetPlanner.perCallInputBudget(), tokenCounter),
             promptInputs.diff(),
             promptInputs.projectStack(),
             promptInputs.previousFindings(),
