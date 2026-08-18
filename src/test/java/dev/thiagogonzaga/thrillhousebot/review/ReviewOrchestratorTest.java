@@ -572,6 +572,235 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void closedFindingIsNamedOnTheBodyOfARoundThatAlsoPostsFindings() {
+      // #737: the surfaces #714 added — the opt-in delta comment and a reply on the closed
+      // finding's thread — leave a default install with nothing naming what a round closed, and a
+      // threadless finding (#712) has no thread to reply on at all. The review body is behind no
+      // flag, so it names the closure next to the round's other previous-finding disclosures.
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Main.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "cleared")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(fileDiffWithLine("src/Main.java", 10)),
+              false,
+              List.of(
+                  new ReviewResponse.Finding(
+                      "high", "src/Retry.java", 42, "Unbounded retry", "d", null, null))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("ThrillhouseBot closed 1 previous finding(s) this round:"), body);
+      assertTrue(body.contains("- `src/Retry.java:42` — Unbounded retry"), body);
+    }
+
+    @Test
+    void closedFindingIsNamedWhenNoFindingCouldBeAnchoredAndStaysAboveTheCoverageBanner() {
+      // The other with-findings branch: nothing landed inline, so the body already lists the
+      // findings GitHub took no thread for. The closure names ride below that list — the body's
+      // first line has to stay the findings section — and above the partial-coverage banner, which
+      // stays outermost (#737).
+      doThrow(new RuntimeException("422"))
+          .when(reviewClient)
+          .createPullRequestComment(
+              anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      var result =
+          new ReviewResult(
+              List.of(new Finding(RiskLevel.MEDIUM, "src/Gone.java", 10, "t", "d", null, null)),
+              0,
+              0,
+              1,
+              0,
+              RiskLevel.MEDIUM,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "cleared")),
+              List.of(),
+              7);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(),
+              false,
+              List.of(
+                  new ReviewResponse.Finding(
+                      "high", "src/Retry.java", 42, "Unbounded retry", "d", null, null))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("- `src/Retry.java:42` — Unbounded retry"), body);
+      assertTrue(
+          body.indexOf("GitHub accepted no review thread for")
+              < body.indexOf("ThrillhouseBot closed"),
+          body);
+      assertTrue(body.indexOf("ThrillhouseBot closed") < body.indexOf("partial review"), body);
+    }
+
+    @Test
+    void closedFindingIsNamedBelowTheUnresolvedSentenceOnANoNewFindingsBody() {
+      // A round can close one previous finding and leave another open. The no-new-findings body
+      // states both: the unresolved sentence first, then what actually closed, then the coverage
+      // banner (#737).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "resolved", "cleared"),
+                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "still")),
+              List.of(),
+              7);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(),
+              false,
+              List.of(
+                  new ReviewResponse.Finding(
+                      "high", "src/Retry.java", 42, "Unbounded retry", "d", null, null),
+                  new ReviewResponse.Finding(
+                      "medium", "src/Open.java", 7, "Still open", "d", null, null))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains("- `src/Retry.java:42` — Unbounded retry"), body);
+      assertFalse(body.contains("src/Open.java"), body);
+      assertTrue(body.indexOf("remain unresolved") < body.indexOf("ThrillhouseBot closed"), body);
+      assertTrue(body.indexOf("ThrillhouseBot closed") < body.indexOf("partial review"), body);
+    }
+
+    @Test
+    void closureNamesAreTheWholeBodyWhenTheRoundHasNothingElseToReport() {
+      // Nothing held the verdict back but the round still closed something: the names are all the
+      // body carries, so it opens with them (#737).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "cleared")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(),
+              false,
+              List.of(
+                  new ReviewResponse.Finding(
+                      "high", "src/Retry.java", 42, "Unbounded retry", "d", null, null))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertTrue(
+          captor
+              .getValue()
+              .body()
+              .startsWith("ThrillhouseBot closed 1 previous finding(s) this round:"),
+          captor.getValue().body());
+    }
+
+    @Test
+    void summaryOnlyReRunStillPostsTheReviewThatNamesWhatClosed() {
+      // The clean summary-only re-run skip has to let this round through: a re-posted summary says
+      // nothing about closures, so skipping the review would put the names on no surface at all —
+      // the same default-install gap as before (#737).
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.APPROVE,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "cleared")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(),
+              true,
+              List.of(
+                  new ReviewResponse.Finding(
+                      "high", "src/Retry.java", 42, "Unbounded retry", "d", null, null))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertEquals("APPROVE", captor.getValue().event());
+      assertTrue(body.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), body);
+      assertTrue(body.contains("- `src/Retry.java:42` — Unbounded retry"), body);
+    }
+
+    @Test
     void findingsBodyOmitsNotesThatAreNotReopenedDeclines() {
       // The with-findings surface applies the same filter as the no-findings one: a plain
       // unresolved note and a resolved finding's note are both left out, so a COMMENT round whose
@@ -5549,7 +5778,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -5574,7 +5803,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -5591,7 +5820,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -5619,7 +5848,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -5687,7 +5916,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -5712,7 +5941,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -5737,7 +5966,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -5754,7 +5983,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)
@@ -5770,7 +5999,7 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true));
+              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
 
       var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
       verify(reviewClient)

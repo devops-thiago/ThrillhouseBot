@@ -2074,9 +2074,12 @@ public class FollowUpAnalyzer {
    * every round (#455). The bot must never treat its own output as its input.
    *
    * <p>Recognition is by the body's first non-blank line against the producers' own constants — the
-   * unresolved-previous status sentence, the clean-review message, the two CI-hold notices, and the
-   * partial-review banner — so the check cannot drift from the text it recognizes. A body a human
-   * (or an older, findings-carrying review) wrote starts with none of them and is preserved.
+   * unresolved-previous status sentence, the closed-findings section (#737), the clean-review
+   * message, the two CI-hold notices, and the partial-review banner — so the check cannot drift
+   * from the text it recognizes. The closed-findings section is the sharpest case of the rule: it
+   * names findings the round has just <em>closed</em>, so feeding it back as prior findings would
+   * re-open every one of them. A body a human (or an older, findings-carrying review) wrote starts
+   * with none of them and is preserved.
    */
   static boolean isSelfAuthoredStatusBody(String body) {
     var first = body.lines().map(String::strip).filter(line -> !line.isEmpty()).findFirst();
@@ -2085,6 +2088,7 @@ public class FollowUpAnalyzer {
     }
     var line = first.get();
     return ReviewResult.isUnresolvedPreviousMessage(line)
+        || line.startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)
         || line.startsWith(ReviewResult.TRUNCATION_NOTICE_LEAD_IN)

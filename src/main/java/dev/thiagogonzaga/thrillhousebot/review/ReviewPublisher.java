@@ -301,6 +301,8 @@ public class ReviewPublisher {
    *     ({@code publishSummary} returned {@code true}) — never assumed from {@code isFirstReview}
    *     or {@code forceSummary} alone, so a failed or skipped summary post can never suppress the
    *     review too and leave the run with no visible outcome at all.
+   * @param previousFindings the previous round's findings, in prompt-id order, so the body can name
+   *     the ones this round closed instead of leaving the closure unattributed (#737)
    */
   record PostReviewRequest(
       String auth,
@@ -310,11 +312,13 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver,
-      boolean summaryPosted) {}
+      boolean summaryPosted,
+      List<ReviewResponse.Finding> previousFindings) {}
 
   /**
    * Back-compat convenience for tests and callers with no summary outcome to report. Defaults
-   * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire.
+   * {@code summaryPosted} to {@code false}, so no review-suppressing skip can fire, and carries no
+   * previous round, so nothing is named as closed.
    */
   void postReview(
       String auth,
@@ -325,7 +329,8 @@ public class ReviewPublisher {
       ReviewResult result,
       DiffLineResolver lineResolver) {
     postReview(
-        new PostReviewRequest(auth, owner, repo, prNumber, commitSha, result, lineResolver, false));
+        new PostReviewRequest(
+            auth, owner, repo, prNumber, commitSha, result, lineResolver, false, List.of()));
   }
 
   void postReview(PostReviewRequest post) {
@@ -339,9 +344,13 @@ public class ReviewPublisher {
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first
       // review, unresolved previous, and truncation still post.
+      // resolvedPreviousCount is part of the skip test because this body is now the surface that
+      // names what the round closed (#737): a re-posted summary states no closure at all, so
+      // skipping the review here would leave the closure unattributed on every install again.
       if (post.summaryPosted()
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
+          && result.resolvedPreviousCount() == 0
           && !result.truncated()) {
         Log.infof(
             "Skipping the no-issues review for %s/%s #%d — summary-only re-run on an"
@@ -349,7 +358,15 @@ public class ReviewPublisher {
             owner, repo, prNumber);
         return;
       }
-      postNoIssuesReview(auth, owner, repo, prNumber, commitSha, result, post.summaryPosted());
+      postNoIssuesReview(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          result,
+          post.summaryPosted(),
+          post.previousFindings());
       return;
     }
 
@@ -371,6 +388,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
       }
       var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
+      appendClosedFindingNames(fallbackParts, result, post.previousFindings());
       fallbackParts.addAll(reopenedDeclineNotes(result));
       appendTruncationNotice(fallbackParts, result);
       createReviewWithFallback(
@@ -388,6 +406,7 @@ public class ReviewPublisher {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
     bodyParts.addAll(skippedFindingsBodyParts(inline));
+    appendClosedFindingNames(bodyParts, result, post.previousFindings());
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendTruncationNotice(bodyParts, result);
     if (!bodyParts.isEmpty()) {
@@ -411,6 +430,30 @@ public class ReviewPublisher {
   private static void appendTruncationNotice(List<String> bodyParts, ReviewResult result) {
     if (result.truncated()) {
       bodyParts.add(result.truncationNotice().strip());
+    }
+  }
+
+  /**
+   * Adds the section naming the previous findings this round closed, when there are any to name.
+   *
+   * <p>The names used to render only on the follow-up delta comment, which is opt-in and off by
+   * default, and on a reply to the closed finding's own review thread — a surface a finding
+   * published with no thread (#712) does not have, which is precisely the finding a clearing
+   * directive is the only way to close (#709). So on a default install the one case #714 called
+   * worst still closed with nothing naming what closed (#737). This body is behind no flag and
+   * already carries the round's other previous-finding disclosures — the unresolved count and the
+   * overturned-decline notes — so the names ride it too.
+   *
+   * <p>Placed below the findings sections on purpose: {@code
+   * FollowUpAnalyzer.isSelfAuthoredStatusBody} classifies a body by its first line, and this
+   * section must lead only a body that carries nothing but the bot's own status prose. It stays
+   * above the partial-coverage banner, keeping the coverage caveat outermost.
+   */
+  private static void appendClosedFindingNames(
+      List<String> bodyParts, ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
+    var section = ClosedFindingNames.reviewBodySection(result, previousFindings);
+    if (!section.isEmpty()) {
+      bodyParts.add(section.strip());
     }
   }
 
@@ -511,14 +554,19 @@ public class ReviewPublisher {
       int prNumber,
       String commitSha,
       ReviewResult result,
-      boolean summaryPosted) {
+      boolean summaryPosted,
+      List<ReviewResponse.Finding> previousFindings) {
     if (result.reviewState() == ReviewState.APPROVE) {
+      // The round that closes the last open finding approves, so this is the body a cleared
+      // finding most often lands on — it has to name what it closed (#737).
+      var approveParts = new ArrayList<String>();
+      if (!result.isFirstReview()) {
+        approveParts.add(PrSummaryGenerator.ZERO_ISSUES_MESSAGE);
+      }
+      appendClosedFindingNames(approveParts, result, previousFindings);
       var req =
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha,
-              result.isFirstReview() ? "" : PrSummaryGenerator.ZERO_ISSUES_MESSAGE,
-              EVENT_APPROVE,
-              List.of());
+              commitSha, String.join("\n\n", approveParts), EVENT_APPROVE, List.of());
       createReviewWithFallback(auth, owner, repo, prNumber, req);
       return;
     }
@@ -532,7 +580,7 @@ public class ReviewPublisher {
     var req =
         new GitHubReviewClient.CreateReviewRequest(
             commitSha,
-            noIssuesBody(result),
+            noIssuesBody(result, previousFindings),
             result.reviewState() == ReviewState.REQUEST_CHANGES
                 ? EVENT_REQUEST_CHANGES
                 : EVENT_COMMENT,
@@ -547,7 +595,7 @@ public class ReviewPublisher {
    * "0 … unresolved"), and truncation is disclosed here on follow-up reviews, which post no summary
    * comment to carry the first-review banner.
    */
-  private String noIssuesBody(ReviewResult result) {
+  private String noIssuesBody(ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
     long unresolved = result.unresolvedPreviousCount();
     var sb = new StringBuilder();
     boolean ciHeld = false;
@@ -567,6 +615,13 @@ public class ReviewPublisher {
       sb.append(ciHeld ? "\nAdditionally, " : "")
           .append(ReviewResult.unresolvedPreviousMessage(unresolved));
       appendReopenedDeclineNotes(sb, result);
+    }
+    var closed = ClosedFindingNames.reviewBodySection(result, previousFindings);
+    if (!closed.isEmpty()) {
+      if (!sb.isEmpty()) {
+        sb.append("\n\n");
+      }
+      sb.append(closed.strip());
     }
     if (result.truncated()) {
       if (!sb.isEmpty()) {
