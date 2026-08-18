@@ -3556,4 +3556,29 @@ class FollowUpAnalyzerTest {
     var body = "ThrillhouseBot requested changes — see inline.\n\n- src/A.java:10 — a finding";
     assertEquals(body, FollowUpAnalyzer.withoutClosedFindingNames(body));
   }
+
+  /**
+   * The section ends at its own bullets. A list that merely follows it, past the separating blank,
+   * belongs to the review — swallowing it would drop real prior findings out of the context.
+   */
+  @Test
+  void keepsABulletParagraphThatMerelyFollowsTheClosedFindingsSection() {
+    var body =
+        """
+        ThrillhouseBot requested changes — see inline.
+
+        ThrillhouseBot closed 1 previous finding(s) this round:
+
+        - src/A.java:10 — Missing null check
+
+        - src/C.java:30 — Unbounded retry loop
+        - src/D.java:40 — Missing timeout""";
+
+    var kept = FollowUpAnalyzer.withoutClosedFindingNames(body);
+
+    assertFalse(kept.contains("Missing null check"), kept);
+    assertTrue(
+        kept.contains("Unbounded retry loop"), "a following bullet list was swallowed: " + kept);
+    assertTrue(kept.contains("Missing timeout"), kept);
+  }
 }

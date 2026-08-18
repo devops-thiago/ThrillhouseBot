@@ -358,15 +358,7 @@ public class ReviewPublisher {
             owner, repo, prNumber);
         return;
       }
-      postNoIssuesReview(
-          auth,
-          owner,
-          repo,
-          prNumber,
-          commitSha,
-          result,
-          post.summaryPosted(),
-          post.previousFindings());
+      postNoIssuesReview(post);
       return;
     }
 
@@ -547,15 +539,15 @@ public class ReviewPublisher {
    * a second surface with identical copy is pure noise (#334). When the summary post failed or was
    * skipped, the COMMENT review is the round's only visible signal and always posts.
    */
-  private void postNoIssuesReview(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String commitSha,
-      ReviewResult result,
-      boolean summaryPosted,
-      List<ReviewResponse.Finding> previousFindings) {
+  private void postNoIssuesReview(PostReviewRequest post) {
+    var auth = post.auth();
+    var owner = post.owner();
+    var repo = post.repo();
+    var prNumber = post.prNumber();
+    var commitSha = post.commitSha();
+    var result = post.result();
+    var summaryPosted = post.summaryPosted();
+    var previousFindings = post.previousFindings();
     if (result.reviewState() == ReviewState.APPROVE) {
       // The round that closes the last open finding approves, so this is the body a cleared
       // finding most often lands on — it has to name what it closed (#737).
@@ -616,20 +608,22 @@ public class ReviewPublisher {
           .append(ReviewResult.unresolvedPreviousMessage(unresolved));
       appendReopenedDeclineNotes(sb, result);
     }
-    var closed = ClosedFindingNames.reviewBodySection(result, previousFindings);
-    if (!closed.isEmpty()) {
-      if (!sb.isEmpty()) {
-        sb.append("\n\n");
-      }
-      sb.append(closed.strip());
-    }
-    if (result.truncated()) {
-      if (!sb.isEmpty()) {
-        sb.append("\n\n");
-      }
-      sb.append(result.truncationNotice().strip());
-    }
+    appendSection(sb, ClosedFindingNames.reviewBodySection(result, previousFindings));
+    appendSection(sb, result.truncated() ? result.truncationNotice() : "");
     return sb.toString();
+  }
+
+  /**
+   * Appends {@code section} as its own paragraph, blank-line separated from whatever precedes it.
+   */
+  private static void appendSection(StringBuilder sb, String section) {
+    if (section.isBlank()) {
+      return;
+    }
+    if (!sb.isEmpty()) {
+      sb.append("\n\n");
+    }
+    sb.append(section.strip());
   }
 
   /**

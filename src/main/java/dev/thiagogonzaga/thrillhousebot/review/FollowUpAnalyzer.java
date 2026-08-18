@@ -2076,10 +2076,22 @@ public class FollowUpAnalyzer {
    * unresolved. That re-opens every one of them, which is #455's failure mode arriving one section
    * lower than the leading-line check looks.
    *
-   * <p>The section is the lead-in line plus the contiguous run of bullets and blanks under it. A
-   * blank line is put back when content follows, so removing it cannot join two paragraphs that
-   * were separate.
+   * <p>The section's own shape is consumed in order — the lead-in, the blank under it, its
+   * contiguous bullets, and the blank after them — rather than any run of blanks and bullets. The
+   * looser form ate an unrelated bullet paragraph that merely followed the section, because it
+   * crossed the separating blank and carried on through the next list. A blank line is put back
+   * when content follows, so removing the section cannot join two paragraphs that were separate.
    */
+  /** {@code index} advanced past the run of lines from it that satisfy {@code matching}. */
+  private static int skipWhile(
+      List<String> lines, int index, java.util.function.Predicate<String> matching) {
+    var at = index;
+    while (at < lines.size() && matching.test(lines.get(at))) {
+      at++;
+    }
+    return at;
+  }
+
   static String withoutClosedFindingNames(String body) {
     var lines = body.lines().toList();
     var out = new ArrayList<String>(lines.size());
@@ -2091,10 +2103,9 @@ public class FollowUpAnalyzer {
         continue;
       }
       index++;
-      while (index < lines.size()
-          && (lines.get(index).isBlank() || lines.get(index).strip().startsWith("- "))) {
-        index++;
-      }
+      index = skipWhile(lines, index, String::isBlank);
+      index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
+      index = skipWhile(lines, index, String::isBlank);
       if (!out.isEmpty() && index < lines.size()) {
         out.add("");
       }
