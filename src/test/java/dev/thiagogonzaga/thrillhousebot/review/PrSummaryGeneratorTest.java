@@ -1560,6 +1560,60 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void descriptionGapsSectionListsTheGapWhenEveryFindingItRestatesWasDemoted() {
+    // #717: the model reported one description gap, #588 collapsed it onto the one finding that
+    // states the same claim, and the verifier then demoted that finding into the collapsed
+    // double-check block. The ⚠️ heading was left promising a mismatch "reported as a finding
+    // below" while the only thing below was a hedged maybe behind a toggle (#718).
+    var gap =
+        "The PR description says the docs deploy now fails loudly instead of a silent miss, but"
+            + " the publish-docs job exits 0 as soon as `gh workflow run` accepts the dispatch, so"
+            + " a deploy-stage failure in the dispatched docs.yml run leaves release.yml green"
+            + " with no signal.";
+    var findings =
+        List.of(
+            new Finding(
+                RiskLevel.MEDIUM,
+                Confidence.LOW,
+                ".github/workflows/release.yml",
+                88,
+                "publish-docs exits 0 once the dispatch is accepted, so a failure in the dispatched"
+                    + " docs.yml run leaves release.yml green",
+                "desc",
+                null,
+                null));
+    var aiSummary =
+        new ReviewResponse.Summary(
+            1, 0, 0, 1, 0, "ok", null, List.of(gap), List.of(), List.of(), null);
+    var result =
+        new ReviewResult(
+            findings,
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(1, 10, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### ⚠️ Description vs. Implementation"), summary);
+    // The unhedged statement of the mismatch reaches the reader instead of being deleted in
+    // favour of the hedged double-check bullet, which is the weaker surface of the two.
+    assertTrue(summary.contains(gap), summary);
+    assertFalse(
+        summary.contains(
+            "Every mismatch found between the description and the change is reported as a finding"
+                + " below, so it is not repeated here."),
+        summary);
+  }
+
+  @Test
   void descriptionGapsSectionStatesTheCheckFoundNothingWhenTheModelReportedNoGap() {
     var aiSummary =
         new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "Adds a cache wrapper.", List.of());

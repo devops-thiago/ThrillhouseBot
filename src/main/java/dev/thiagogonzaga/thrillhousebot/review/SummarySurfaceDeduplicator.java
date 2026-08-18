@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
  * <p>Precedence is inline finding &gt; description-gap bullet &gt; walkthrough row, so:
  *
  * <ul>
- *   <li>a description gap that restates a finding (or an earlier gap) is dropped;
+ *   <li>a description gap that restates a finding published inline (or an earlier gap) is dropped;
  *   <li>a walkthrough row keeps its <em>first</em> clause always — a row summarising a file that
  *       also carries an inline finding is normal and useful — and drops only the clauses appended
  *       after it that restate an already-published claim.
@@ -189,12 +189,23 @@ final class SummarySurfaceDeduplicator {
   /**
    * Collapses {@code descriptionGaps} and {@code fileSummaries} against the findings already
    * published as their own items, and against each other in precedence order.
+   *
+   * <p>Only findings that {@linkplain Finding#postsInline post inline} outrank a gap bullet. A
+   * finding the verifier demoted is published as a hedged bullet inside the collapsed "Things to
+   * double-check" block and opens no review thread, so it is a <em>weaker</em> surface than the gap
+   * — hedged, folded away by default, never on the diff — and collapsing onto it leaves the ⚠️
+   * heading asserting a mismatch that nothing below states outright (#718). The gap was stated
+   * without hedging, so when every finding it matches was demoted it stays a bullet and reaches the
+   * reader that way. Demoted findings still outrank a walkthrough clause, which carries neither the
+   * claim's own wording nor the {@code path:line} the double-check bullet prints, so they keep
+   * trimming those.
    */
   static Surfaces collapse(
       List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> findings) {
     var claims = new ArrayList<Claim>(2 * findings.size() + descriptionGaps.size());
+    var demoted = new ArrayList<Claim>(2 * findings.size());
     for (Finding finding : findings) {
-      claims.addAll(claimsOf(finding));
+      (finding.postsInline() ? claims : demoted).addAll(claimsOf(finding));
     }
     var keptGaps = new ArrayList<String>(descriptionGaps.size());
     for (String gap : descriptionGaps) {
@@ -204,6 +215,7 @@ final class SummarySurfaceDeduplicator {
         claims.add(candidate);
       }
     }
+    claims.addAll(demoted);
     var trimmed = HashMap.<String, String>newHashMap(fileSummaries.size());
     for (var entry : fileSummaries.entrySet()) {
       trimmed.put(entry.getKey(), trimRestatedClauses(entry.getValue(), claims));
