@@ -330,7 +330,8 @@ public class ReviewOrchestrator {
               req.commitSha(),
               result,
               lineResolver,
-              summaryPosted));
+              summaryPosted,
+              previousFindings));
 
       resultSurfaced = true;
       final var doneReq = req;

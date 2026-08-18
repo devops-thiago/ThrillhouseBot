@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -35,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -46,6 +48,10 @@ class ReviewPublisherTest {
 
   private final GitHubCommentClient commentClient = mock(GitHubCommentClient.class);
 
+  private final GitHubReviewClient reviewClient = mock(GitHubReviewClient.class);
+
+  private final ReviewThreadService reviewThreadService = mock(ReviewThreadService.class);
+
   private final ThrillhouseConfig config = mock(ThrillhouseConfig.class);
 
   private final ThrillhouseConfig.ReviewConfig reviewConfig =
@@ -56,9 +62,9 @@ class ReviewPublisherTest {
 
   private final ReviewPublisher publisher =
       new ReviewPublisher(
-          mock(GitHubReviewClient.class),
+          reviewClient,
           commentClient,
-          mock(ReviewThreadService.class),
+          reviewThreadService,
           mock(SuggestionFormatter.class),
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
@@ -270,5 +276,83 @@ class ReviewPublisherTest {
         publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, true, List.of()));
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  /**
+   * The threadless finding of #712: raised in an earlier round, published with no inline thread of
+   * its own, and closed this round by an {@code @thrillhousebot resolved} directive.
+   */
+  private static final ReviewResponse.Finding THREADLESS_PREVIOUS =
+      new ReviewResponse.Finding(
+          "high", "src/main/java/A.java", 42, "Unbounded retry", "d", null, null);
+
+  @Test
+  void clearedThreadlessFindingIsNamedOnTheReviewBodyADefaultInstallPosts() {
+    // #737: #714 shipped two naming surfaces and a default install reaches neither for the case it
+    // called worst. The delta comment that names closures is opt-in and defaults off, and the other
+    // surface is a reply on the closed finding's thread — which a threadless finding (#712) does
+    // not have, and that is exactly the finding a clearing directive is the only way to close
+    // (#709). So the round closed it and nothing anywhere said what closed. The review body is
+    // behind no flag and posts on this round regardless, so it carries the names.
+    followUpSummaryEnabled(false);
+    var req =
+        new ReviewOrchestrator.ReviewRequest(
+            "o", "r", 1, "sha", "t", "", "base", "main", 9L, false);
+    // A thread exists on the PR, just not for this finding — so the reply surface is skipped for
+    // being unmatched, not for the PR having no inline comments at all.
+    var otherThread =
+        List.of(
+            new GitHubReviewClient.PullRequestComment(
+                5L,
+                null,
+                "src/main/java/B.java",
+                "unrelated",
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot")));
+
+    var delta =
+        publisher.publishFollowUpDelta(
+            "auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false, List.of(THREADLESS_PREVIOUS));
+    publisher.resolveAddressedThreads(
+        "auth",
+        req,
+        List.of(THREADLESS_PREVIOUS),
+        otherThread,
+        RESOLVED_FOLLOW_UP.previousStatuses());
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha",
+            RESOLVED_FOLLOW_UP,
+            new DiffLineResolver(Map.of()),
+            false,
+            List.of(THREADLESS_PREVIOUS)));
+
+    // Neither of #714's surfaces reaches this maintainer: no delta comment, no thread reply.
+    assertFalse(delta);
+    verify(commentClient, never())
+        .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    verify(reviewClient, never())
+        .replyToReviewComment(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong(), any());
+    var review = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+    verify(reviewClient)
+        .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), review.capture());
+    var body = review.getValue().body();
+    assertTrue(body.contains("ThrillhouseBot closed 1 previous finding(s) this round:"), body);
+    assertTrue(body.contains("- `src/main/java/A.java:42` — Unbounded retry"), body);
+  }
+
+  @Test
+  void reviewBodyNamingClosuresIsNotReadBackAsAPreviousFinding() {
+    // The section names findings the round just closed, so a later round that falls back to the
+    // last bot review body for its previous-findings context must not hand them to the model as
+    // issues "flagged in the previous review" and re-open every one of them (#455).
+    var body =
+        ClosedFindingNames.reviewBodySection(RESOLVED_FOLLOW_UP, List.of(THREADLESS_PREVIOUS));
+
+    assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(body), body);
   }
 }

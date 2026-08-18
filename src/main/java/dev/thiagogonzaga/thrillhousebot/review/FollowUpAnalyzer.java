@@ -2215,7 +2215,54 @@ public class FollowUpAnalyzer {
     if (body == null || isSelfAuthoredStatusBody(body)) {
       return "";
     }
-    return body;
+    return withoutClosedFindingNames(body);
+  }
+
+  /**
+   * The body with its closed-findings section removed, wherever that section sits.
+   *
+   * <p>{@link #isSelfAuthoredStatusBody} only recognizes a body the section <em>leads</em>, which
+   * is the no-new-findings shape. A body that also carries findings opens with those instead, so it
+   * is offered to the model as prior review content — and the section rides along inside it, naming
+   * findings this round just <em>closed</em> under a prompt that asks which prior issues are still
+   * unresolved. That re-opens every one of them, which is #455's failure mode arriving one section
+   * lower than the leading-line check looks.
+   *
+   * <p>The section's own shape is consumed in order — the lead-in, the blank under it, its
+   * contiguous bullets, and the blank after them — rather than any run of blanks and bullets. The
+   * looser form ate an unrelated bullet paragraph that merely followed the section, because it
+   * crossed the separating blank and carried on through the next list. A blank line is put back
+   * when content follows, so removing the section cannot join two paragraphs that were separate.
+   */
+  /** {@code index} advanced past the run of lines from it that satisfy {@code matching}. */
+  private static int skipWhile(
+      List<String> lines, int index, java.util.function.Predicate<String> matching) {
+    var at = index;
+    while (at < lines.size() && matching.test(lines.get(at))) {
+      at++;
+    }
+    return at;
+  }
+
+  static String withoutClosedFindingNames(String body) {
+    var lines = body.lines().toList();
+    var out = new ArrayList<String>(lines.size());
+    var index = 0;
+    while (index < lines.size()) {
+      if (!lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+        out.add(lines.get(index));
+        index++;
+        continue;
+      }
+      index++;
+      index = skipWhile(lines, index, String::isBlank);
+      index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
+      index = skipWhile(lines, index, String::isBlank);
+      if (!out.isEmpty() && index < lines.size()) {
+        out.add("");
+      }
+    }
+    return String.join("\n", out).strip();
   }
 
   /**
@@ -2226,9 +2273,12 @@ public class FollowUpAnalyzer {
    * every round (#455). The bot must never treat its own output as its input.
    *
    * <p>Recognition is by the body's first non-blank line against the producers' own constants — the
-   * unresolved-previous status sentence, the clean-review message, the two CI-hold notices, and the
-   * partial-review banner — so the check cannot drift from the text it recognizes. A body a human
-   * (or an older, findings-carrying review) wrote starts with none of them and is preserved.
+   * unresolved-previous status sentence, the closed-findings section (#737), the clean-review
+   * message, the two CI-hold notices, and the partial-review banner — so the check cannot drift
+   * from the text it recognizes. The closed-findings section is the sharpest case of the rule: it
+   * names findings the round has just <em>closed</em>, so feeding it back as prior findings would
+   * re-open every one of them. A body a human (or an older, findings-carrying review) wrote starts
+   * with none of them and is preserved.
    */
   static boolean isSelfAuthoredStatusBody(String body) {
     var first = body.lines().map(String::strip).filter(line -> !line.isEmpty()).findFirst();
@@ -2237,6 +2287,7 @@ public class FollowUpAnalyzer {
     }
     var line = first.get();
     return ReviewResult.isUnresolvedPreviousMessage(line)
+        || line.startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)
         || line.startsWith(ReviewResult.TRUNCATION_NOTICE_LEAD_IN)
