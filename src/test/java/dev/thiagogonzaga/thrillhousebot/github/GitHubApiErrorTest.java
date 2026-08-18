@@ -762,10 +762,14 @@ class GitHubApiErrorTest {
     }
 
     /**
-     * #746. The bound before redaction is the only cut that can sever a token — the cap runs after
-     * the mask — and a shape with a ten-character floor stops matching once it has been severed
+     * #746, #757. The bound before redaction is the only cut that can sever a token — the cap runs
+     * after the mask — and a shape with a length floor stops matching once it has been severed
      * below it. A run of credential-shaped material ahead of the token compresses to {@code ***},
      * so what the bound left of the secret survives the cap and reaches the warn line whole.
+     *
+     * <p>Each shape is pinned at nine surviving value characters and at one, because a floor is
+     * only closed at its own boundary: #746's {@code {4,}} masks nine and still strands one, two or
+     * three.
      */
     @Nested
     class ACredentialTheBoundCutJustShortOfItsLengthFloor {
@@ -773,16 +777,17 @@ class GitHubApiErrorTest {
       /** Enough credential-shaped material to redact to {@code ***} and clear the cap for us. */
       private static final String COMPRESSIBLE = "Bearer " + "a".repeat(900);
 
-      /** A body whose {@code sigil} lands so that the 1024-char bound leaves nine value chars. */
-      private static String cutAfterNineCharactersOf(String sigil, String value) {
-        var padding = 1_024 - sigil.length() - 9 - COMPRESSIBLE.length();
+      /**
+       * A body whose {@code sigil} lands so the 1024-char bound leaves {@code visible} value chars.
+       */
+      private static String cutLeaving(int visible, String sigil, String value) {
+        var padding = 1_024 - sigil.length() - visible - COMPRESSIBLE.length();
         return COMPRESSIBLE + ",".repeat(padding) + sigil + value;
       }
 
       @Test
       void isStillMaskedForATokenPrefix() {
-        var logged =
-            loggedBody(outbound(403, cutAfterNineCharactersOf("ghp_", "A1b2C3d4E5f6G7h8I9j0K1")));
+        var logged = loggedBody(outbound(403, cutLeaving(9, "ghp_", "A1b2C3d4E5f6G7h8I9j0K1")));
 
         assertFalse(logged.contains("ghp_A1b2C3d4E"), logged);
       }
@@ -790,18 +795,50 @@ class GitHubApiErrorTest {
       @Test
       void isStillMaskedForAFineGrainedPersonalAccessToken() {
         var logged =
-            loggedBody(
-                outbound(403, cutAfterNineCharactersOf("github_pat_", "A1b2C3d4E5f6G7h8I9j0K1")));
+            loggedBody(outbound(403, cutLeaving(9, "github_pat_", "A1b2C3d4E5f6G7h8I9j0K1")));
 
         assertFalse(logged.contains("github_pat_A1b2C3d4E"), logged);
       }
 
       @Test
       void isStillMaskedForABearerValue() {
-        var logged =
-            loggedBody(outbound(403, cutAfterNineCharactersOf("Bearer ", "S3cr3tV4lu3W1thM0re")));
+        var logged = loggedBody(outbound(403, cutLeaving(9, "Bearer ", "S3cr3tV4lu3W1thM0re")));
 
         assertFalse(logged.contains("Bearer S3cr3tV4l"), logged);
+      }
+
+      @Test
+      void isStillMaskedForATokenPrefixCutToASingleCharacter() {
+        var logged = loggedBody(outbound(403, cutLeaving(1, "ghp_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertFalse(logged.contains("ghp_A"), logged);
+      }
+
+      @Test
+      void isStillMaskedForAFineGrainedPersonalAccessTokenCutToASingleCharacter() {
+        var logged =
+            loggedBody(outbound(403, cutLeaving(1, "github_pat_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertFalse(logged.contains("github_pat_A"), logged);
+      }
+
+      @Test
+      void isStillMaskedForABearerValueCutToASingleCharacter() {
+        var logged = loggedBody(outbound(403, cutLeaving(1, "Bearer ", "S3cr3tV4lu3W1thM0re")));
+
+        assertFalse(logged.contains("Bearer S"), logged);
+      }
+
+      /**
+       * The floor cannot go below one, so this is the residual the javadoc names rather than a
+       * proof of the fix: a cut leaving no value characters at all strands the sigil, which carries
+       * no secret. Green before and after — it pins the boundary, it does not demonstrate it moved.
+       */
+      @Test
+      void leavesTheBareSigilBehindWhenTheCutLandsBeforeTheFirstValueCharacter() {
+        var logged = loggedBody(outbound(403, cutLeaving(0, "ghp_", "A1b2C3d4E5f6G7h8I9j0K1")));
+
+        assertTrue(logged.endsWith("ghp_…"), logged);
       }
     }
 

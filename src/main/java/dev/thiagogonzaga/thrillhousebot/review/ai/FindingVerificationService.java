@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.service.Result;
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
@@ -1228,7 +1229,10 @@ public class FindingVerificationService {
           rejected++;
           Log.infof(
               "Verifier rejected finding '%s' (%s:%d): %s",
-              finding.title(), finding.file(), finding.line(), verdict.reason());
+              LogSafe.oneLine(finding.title()),
+              LogSafe.oneLine(finding.file()),
+              finding.line(),
+              LogSafe.oneLine(verdict.reason()));
         }
         case "downgraded" -> {
           downgraded++;

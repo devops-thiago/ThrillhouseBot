@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
@@ -719,7 +720,7 @@ public class ReviewPublisher {
     if (line.isEmpty()) {
       Log.debugf(
           "Line for %s:%d is outside the PR diff — filing the finding on the file instead",
-          finding.file(), finding.line());
+          LogSafe.oneLine(finding.file()), finding.line());
       return postFileLevelComment(target, finding, findingId);
     }
 
@@ -727,7 +728,7 @@ public class ReviewPublisher {
     if (resolvedLine != finding.line()) {
       Log.debugf(
           "Adjusted inline comment line for %s from %d to %d",
-          finding.file(), finding.line(), resolvedLine);
+          LogSafe.oneLine(finding.file()), finding.line(), resolvedLine);
     }
 
     // A GitHub suggestion overwrites the whole commented range, so multi-line old code needs a
@@ -767,7 +768,7 @@ public class ReviewPublisher {
     }
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
-        MarkdownSafe.oneLine(finding.file()), finding.line(), reason);
+        LogSafe.oneLine(finding.file()), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
   }
 
@@ -786,9 +787,11 @@ public class ReviewPublisher {
    */
   private static String rejectionReason(RuntimeException e) {
     if (e instanceof WebApplicationException w) {
-      return GitHubApiError.of(w).map(GitHubApiError::diagnostics).orElseGet(e::toString);
+      return GitHubApiError.of(w)
+          .map(GitHubApiError::diagnostics)
+          .orElseGet(() -> LogSafe.oneLine(e.toString()));
     }
-    return e.toString();
+    return LogSafe.oneLine(e.toString());
   }
 
   /**
@@ -829,7 +832,7 @@ public class ReviewPublisher {
     } catch (RuntimeException e) {
       Log.warnf(
           "GitHub rejected the file-level thread for %s (%s) — the finding keeps no thread at all",
-          MarkdownSafe.oneLine(finding.file()), rejectionReason(e));
+          LogSafe.oneLine(finding.file()), rejectionReason(e));
       return false;
     }
   }
@@ -876,7 +879,7 @@ public class ReviewPublisher {
       Log.debugf(
           e,
           "Inline comment rejected for %s:%d (suggestion=%s): %s",
-          finding.file(),
+          LogSafe.oneLine(finding.file()),
           endLine,
           includeSuggestion,
           reason);

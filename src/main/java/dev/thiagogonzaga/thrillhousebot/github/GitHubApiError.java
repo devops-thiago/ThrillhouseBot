@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.github;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.DateTimeException;
@@ -82,15 +83,19 @@ public final class GitHubApiError {
    * across every pattern — split apart, prefixes here and the value shapes beside it, only because
    * one alternation of all four shapes is more than the regex complexity budget allows.
    *
-   * <p>Four value characters, not ten (#746). The sigil is the whole discriminator here — {@code
-   * ghp_} and {@code github_pat_} do not occur in prose, so the length floor was buying nothing the
-   * sigil did not already buy, while costing the one thing that matters: a token the bound before
-   * redaction severs below the floor stops matching and reaches the log with its first nine
-   * characters intact. This is the same reasoning #740 applied to the JWT alternative below and did
-   * not carry across to the shapes that still needed it.
+   * <p>One value character, not ten (#746, #757). The sigil is the whole discriminator here —
+   * {@code ghp_} and {@code github_pat_} do not occur in prose, so the length floor was buying
+   * nothing the sigil did not already buy, while costing the one thing that matters: a token the
+   * bound before redaction severs below the floor stops matching and reaches the log with whatever
+   * the cut left of it intact. #746 made that argument and then stopped at four, which leaves the
+   * same window three characters wide instead of closing it: a cut leaving one, two or three value
+   * characters is still under the floor and still reaches the warn line. One is where the argument
+   * ends, because a cut that leaves no value characters at all strands the sigil by itself, and a
+   * sigil is not secret. This is the same reasoning #740 applied to the JWT alternative below and
+   * did not carry across to the shapes that still needed it.
    */
   private static final Pattern CREDENTIAL_SHAPED_PREFIX =
-      Pattern.compile("(?i)(gh[pousr]_\\w{4,})|(github_pat_\\w{4,})");
+      Pattern.compile("(?i)(gh[pousr]_\\w+)|(github_pat_\\w+)");
 
   /**
    * The bearer shape, and with {@link #JWT_SHAPED_VALUE} below it the value half of {@link
@@ -124,9 +129,9 @@ public final class GitHubApiError {
    * matched, since widening the anchor would mask ordinary prose beginning {@code ey} for a shape
    * no issuer emits.
    *
-   * <p>The value takes the same four-character floor as {@link #CREDENTIAL_SHAPED_PREFIX}, for the
-   * same reason: the {@code Bearer } that precedes it is the discriminator, and ten characters only
-   * meant the bound could sever a header value into something that no longer looked like one.
+   * <p>The value takes the same one-character floor as {@link #CREDENTIAL_SHAPED_PREFIX}, for the
+   * same reason: the {@code Bearer } that precedes it is the discriminator, and any floor above one
+   * only meant the bound could sever a header value into something that no longer looked like one.
    *
    * <p>The word {@code bearer} is consumed with the value rather than left in the line, which does
    * mask the noun in prose such as {@code missing bearer token}. Masking only the value was tried
@@ -135,7 +140,7 @@ public final class GitHubApiError {
    * leftmost-match design above exists to swallow.
    */
   private static final Pattern BEARER_SHAPED_VALUE =
-      Pattern.compile("bearer\\s+[\\w.~+/=-]{4,}", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("bearer\\s+[\\w.~+/=-]+", Pattern.CASE_INSENSITIVE);
 
   /**
    * The JWT shape, kept apart from {@link #BEARER_SHAPED_VALUE} rather than alternated with it: one
@@ -161,34 +166,6 @@ public final class GitHubApiError {
       Pattern.compile(
           "(?i)secondary rate limit|abuse detection|rate limit exceeded"
               + "|blocked from (?:content creation|creating content)");
-
-  /**
-   * Collapses the whitespace of a body so one failure stays on one log line.
-   *
-   * <p>Wider than {@code \s}, which java.util.regex reads as the ASCII six ({@code [
-   * \t\n\x0B\f\r]}) unless the pattern asks for Unicode character classes. CR and LF being
-   * collapsed closes the classic forged-record vector, but NEL (U+0085), LINE SEPARATOR (U+2028),
-   * PARAGRAPH SEPARATOR (U+2029), NUL and the ANSI escape all survived it (#731) — and a log
-   * viewer, a terminal, or a JSON/ECS shipper may treat any of them as a record boundary or as a
-   * screen-control sequence. This class documents a body as attacker-influenced text on its way to
-   * a log file and already pays for a collapse pass on that basis; this is that pass covering what
-   * it claims to.
-   *
-   * <p>{@code \p{IsCc}} is the Unicode general category rather than POSIX {@code \p{Cntrl}}, so it
-   * reaches the C1 controls (U+0080–U+009F, NEL among them) as well as C0 and DEL.
-   *
-   * <p>{@code \p{IsCf}} is here for the same harm rather than for line integrity: bidi overrides
-   * and isolates (RLO, LRM, LRI) reorder what an operator reads, and the invisible joiners and
-   * spaces (ZWJ, ZWNJ, ZWSP, the BOM, the soft hyphen) let two different bodies render identically
-   * — both forge a record's meaning as surely as a forged boundary forges its extent. The accepted
-   * cost is that an echoed user string loses its grapheme clusters: an emoji ZWJ sequence or an
-   * Indic conjunct is split apart. A {@code body=} field is a diagnostic identity rather than a
-   * rendering surface, and which characters arrived is the question it exists to answer. Replacing
-   * with a space rather than deleting is part of the same bargain — deletion would let {@code
-   * admin<ZWSP>istrator} close up into a different real word, a space cannot.
-   */
-  private static final Pattern WHITESPACE =
-      Pattern.compile("[\\s\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
 
   /** Backoff used when GitHub throttles without saying for how long. */
   static final Duration FALLBACK_DELAY = Duration.ofSeconds(5);
@@ -428,6 +405,12 @@ public final class GitHubApiError {
   /**
    * One line naming everything that separates one GitHub failure from another: the status, the
    * throttling headers when present, and the body. This is the line that was missing in #568.
+   *
+   * <p>The headers go through {@link LogSafe} in {@link #append} for the reason the body already
+   * does. A header is response data from the configured API host, so on the hosts this class's
+   * threat model names — a GHES or reverse-proxy error page, a misconfigured base URL, a
+   * compromised endpoint — it is as attacker-influenced as the body beside it, and it was reaching
+   * this line verbatim while the body was being collapsed one field away.
    */
   public String diagnostics() {
     var text = new StringBuilder("status=").append(status);
@@ -441,7 +424,7 @@ public final class GitHubApiError {
 
   private static void append(StringBuilder text, String name, String value) {
     if (value != null && !value.isBlank()) {
-      text.append(' ').append(name).append('=').append(value);
+      text.append(' ').append(name).append('=').append(LogSafe.oneLine(value));
     }
   }
 
@@ -584,7 +567,7 @@ public final class GitHubApiError {
     if (raw == null) {
       return Body.UNREADABLE;
     }
-    var collapsed = WHITESPACE.matcher(raw).replaceAll(" ").strip();
+    var collapsed = LogSafe.oneLine(raw);
     var bounded = cutTo(collapsed, MAX_BODY_CHARS * 2);
     var redacted = redactCredentials(bounded);
     var capped = cutTo(redacted, MAX_BODY_CHARS);
