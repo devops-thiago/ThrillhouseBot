@@ -3476,4 +3476,84 @@ class FollowUpAnalyzerTest {
         FollowUpAnalyzer.namesOnlyAmbiguousRanges("@thrillhousebot resolved `src/A.java:1-3`"),
         "an adjacent range is a continued token, which no title spelling produces");
   }
+
+  /**
+   * The section names findings this round closed. A with-findings body does not lead with it, so
+   * {@code isSelfAuthoredStatusBody} keeps the body — and the section inside it would then be
+   * offered to the model as prior issues to account for, re-opening what was just closed (#455).
+   */
+  @Test
+  void closedFindingNamesAreStrippedFromAWithFindingsBodyBeforeItBecomesPriorContext() {
+    var body =
+        """
+        ThrillhouseBot requested changes — see inline.
+
+        ThrillhouseBot closed 2 previous finding(s) this round:
+
+        - src/A.java:10 — Missing null check
+        - src/B.java:20 — Unclosed resource
+
+        > [!WARNING]
+        > Some files were not reviewed.""";
+
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            List.of(
+                new GitHubReviewClient.ReviewResponse(
+                    1L,
+                    body,
+                    "CHANGES_REQUESTED",
+                    "sha",
+                    new GitHubReviewClient.ReviewResponse.User(BOT))),
+            BOT_ID);
+
+    assertFalse(
+        context.contains("Missing null check"),
+        "a finding this round closed was handed back as prior review content:\n" + context);
+    assertFalse(context.contains("ThrillhouseBot closed"), context);
+    assertTrue(
+        context.contains("requested changes"), "real review content must survive: " + context);
+    assertTrue(
+        context.contains("not reviewed"), "content after the section must survive: " + context);
+  }
+
+  /** The section is the last thing in the body, so nothing follows it to separate. */
+  @Test
+  void stripsAClosedFindingsSectionThatRunsToTheEndOfTheBody() {
+    var body =
+        """
+        ThrillhouseBot requested changes — see inline.
+
+        ThrillhouseBot closed 1 previous finding(s) this round:
+
+        - src/A.java:10 — Missing null check""";
+
+    assertEquals(
+        "ThrillhouseBot requested changes — see inline.",
+        FollowUpAnalyzer.withoutClosedFindingNames(body));
+  }
+
+  /** The section leads the body, so there is no earlier content to keep a blank line after. */
+  @Test
+  void stripsAClosedFindingsSectionThatLeadsTheBody() {
+    var body =
+        """
+        ThrillhouseBot closed 1 previous finding(s) this round:
+
+        - src/A.java:10 — Missing null check
+
+        > [!WARNING]
+        > Some files were not reviewed.""";
+
+    assertEquals(
+        "> [!WARNING]\n> Some files were not reviewed.",
+        FollowUpAnalyzer.withoutClosedFindingNames(body));
+  }
+
+  /** A control: a body carrying no such section is returned unchanged. */
+  @Test
+  void leavesABodyWithNoClosedFindingsSectionAlone() {
+    var body = "ThrillhouseBot requested changes — see inline.\n\n- src/A.java:10 — a finding";
+    assertEquals(body, FollowUpAnalyzer.withoutClosedFindingNames(body));
+  }
 }

@@ -2063,7 +2063,43 @@ public class FollowUpAnalyzer {
     if (body == null || isSelfAuthoredStatusBody(body)) {
       return "";
     }
-    return body;
+    return withoutClosedFindingNames(body);
+  }
+
+  /**
+   * The body with its closed-findings section removed, wherever that section sits.
+   *
+   * <p>{@link #isSelfAuthoredStatusBody} only recognizes a body the section <em>leads</em>, which
+   * is the no-new-findings shape. A body that also carries findings opens with those instead, so it
+   * is offered to the model as prior review content — and the section rides along inside it, naming
+   * findings this round just <em>closed</em> under a prompt that asks which prior issues are still
+   * unresolved. That re-opens every one of them, which is #455's failure mode arriving one section
+   * lower than the leading-line check looks.
+   *
+   * <p>The section is the lead-in line plus the contiguous run of bullets and blanks under it. A
+   * blank line is put back when content follows, so removing it cannot join two paragraphs that
+   * were separate.
+   */
+  static String withoutClosedFindingNames(String body) {
+    var lines = body.lines().toList();
+    var out = new ArrayList<String>(lines.size());
+    var index = 0;
+    while (index < lines.size()) {
+      if (!lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+        out.add(lines.get(index));
+        index++;
+        continue;
+      }
+      index++;
+      while (index < lines.size()
+          && (lines.get(index).isBlank() || lines.get(index).strip().startsWith("- "))) {
+        index++;
+      }
+      if (!out.isEmpty() && index < lines.size()) {
+        out.add("");
+      }
+    }
+    return String.join("\n", out).strip();
   }
 
   /**
