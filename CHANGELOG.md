@@ -10,8 +10,8 @@ The audit of 0.6.4 and a fix round on what it found. Most of the release is
 the write path and what a review says about its own work: a credential the
 bound severs is masked whole, a throttle is recognised from the body rather
 than from the line the log gets, and a review stops arguing with a decline
-the maintainer has already made twice. No configuration changes; upgrading is
-a redeploy.
+the maintainer has already made twice. The Quarkus platform moves up a patch
+to clear a Netty advisory. No configuration changes; upgrading is a redeploy.
 
 ### Fixed
 
@@ -23,6 +23,10 @@ a redeploy.
 - **A throttle is recognised from the body, not from the line the log gets** (#732, #747): the retry decision read the same 512-character redacted string the log line uses, so whether a completed generation was retried depended on where GitHub put its message, and credential redaction could compress the wording away entirely. The log line keeps its cap; classification now reads the collapsed body bounded at 8 KB. The rate-limit headers that share that line are collapsed too, since they come from the same response
 - **A review body its fallback rescued is no longer announced as lost** (#748, #756): the review body has the same shape #729 fixed for a finding — one piece of content with more than one route to the pull request — and was left ungrouped, so a throttled review post recorded a loss and the comment that then delivered the same body opened by saying it had never been posted. Its routes are now one delivery. A delivery opened for another pull request no longer hides the one enclosing it, so a route that lands still settles the delivery it belongs to
 - **A credential the bound severs is masked, and ordinary text is not** (#746, #757): the body is cut before it is scanned, and the token shapes required ten value characters, so a token straddling the cut fell below every quantifier and reached the log with its first characters intact. The sigil is the discriminator, so the floors are gone. The JWT shape had been widened far enough to mask ordinary text — a hostname beginning `eyj` came out as `***.com` — and is now anchored to a token boundary and matched case-sensitively
+
+### Dependencies
+
+- Bumped the Quarkus platform from 3.38.1 to 3.38.2, which takes `netty-codec-http` from 4.1.136.Final to 4.1.137.Final and clears GHSA-8c42-7qj2-3j46 / CVE-2026-59903 (#769): Netty's CORS handler overwrote the `Vary` header instead of appending to it, so a shared cache in front of the service could key a response without the origin that produced it and serve it to another. The platform bump was taken in preference to a `netty-bom` override, which would have closed the advisory equally but left a pin to remove once the platform caught up
 
 ## [0.6.4] — 2026-08-16
 
