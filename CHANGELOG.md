@@ -4,6 +4,30 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-08-18
+
+The audit of 0.6.4 and a fix round on what it found. Most of the release is
+the write path and what a review says about its own work: a credential the
+bound severs is masked whole, a throttle is recognised from the body rather
+than from the line the log gets, and a review stops arguing with a decline
+the maintainer has already made twice. The Quarkus platform moves up a patch
+to clear a Netty advisory. No configuration changes; upgrading is a redeploy.
+
+### Fixed
+
+- **A re-review converges on an anchor the maintainer has already settled** (#726): five rounds over essentially unchanged code each raised a brand-new lower-confidence item against the same thirty lines, and the rounds contradicted each other — one asked for wording rules to be widened, the next asked for them to be narrowed. Every item was novel by title and anchor, so previous-findings tracking never matched them and each cost the maintainer a manual disposition. Once two distinct findings on one `path:line` have been dispositioned, a further lower-confidence finding on that anchor is withheld and logged. A finding that posts inline is never withheld, so a high-confidence or critical claim on a litigated line still reaches the review
+- **A description mismatch is stated outright rather than left hedged** (#718): a description gap collapsed onto a finding that the verifier then downgraded left the summary asserting a mismatch under a warning heading, while the only thing below it was a "verify before acting" item folded into a collapsed block and never posted inline. The model's own unhedged statement had been deleted in favour of a weaker surface. A gap now collapses only onto a finding published inline; when every finding it restates was downgraded, the gap stays a bullet. A downgraded finding still trims a walkthrough clause that restates it
+- **A round names the findings it closed on a surface a default install posts** (#737): the names rendered only on the follow-up delta comment, which is off by default, and the other route was a reply on the resolved thread — which a finding that never got a thread does not have. Clearing such a finding therefore showed a bare count. The names now render on the review body, which is behind no flag. The bot does not read that section back as prior findings on the next round
+- **An author-sized description cannot switch off verification of their own PR** (#736): the PR description reached the finding verifier with no length bound, and that call does no budget arithmetic. A description at GitHub's 65,536-character maximum measures about a third of the per-call budget as ordinary prose and over the whole of it as dense text, so an author could exhaust the call and have their own PR go unverified every round. The description now takes a tenth of the per-call budget, cut on a code-point boundary, with the truncation disclosed to the verifier so text it cannot see is not read as absent from the description
+- **A crafted finding path cannot forge a log record** (#742, #755): model-supplied paths and titles reached warn and info lines uncollapsed, so a path carrying a line terminator could open what reads as a second log entry. The first fix collapsed with the ASCII six, which leaves NEL, the line and paragraph separators, NUL and the ANSI escape intact. Every log-destined value now goes through one collapse that covers the control and format categories and the space separators, so two values that differ only by an invisible character can no longer print identically
+- **A throttle is recognised from the body, not from the line the log gets** (#732, #747): the retry decision read the same 512-character redacted string the log line uses, so whether a completed generation was retried depended on where GitHub put its message, and credential redaction could compress the wording away entirely. The log line keeps its cap; classification now reads the collapsed body bounded at 8 KB. The rate-limit headers that share that line are collapsed too, since they come from the same response
+- **A review body its fallback rescued is no longer announced as lost** (#748, #756): the review body has the same shape #729 fixed for a finding — one piece of content with more than one route to the pull request — and was left ungrouped, so a throttled review post recorded a loss and the comment that then delivered the same body opened by saying it had never been posted. Its routes are now one delivery. A delivery opened for another pull request no longer hides the one enclosing it, so a route that lands still settles the delivery it belongs to
+- **A credential the bound severs is masked, and ordinary text is not** (#746, #757): the body is cut before it is scanned, and the token shapes required ten value characters, so a token straddling the cut fell below every quantifier and reached the log with its first characters intact. The sigil is the discriminator, so the floors are gone. The JWT shape had been widened far enough to mask ordinary text — a hostname beginning `eyj` came out as `***.com` — and is now anchored to a token boundary and matched case-sensitively
+
+### Dependencies
+
+- Bumped the Quarkus platform from 3.38.1 to 3.38.2, which takes `netty-codec-http` from 4.1.136.Final to 4.1.137.Final and clears GHSA-8c42-7qj2-3j46 / CVE-2026-59903 (#769): Netty's CORS handler overwrote the `Vary` header instead of appending to it, so a shared cache in front of the service could key a response without the origin that produced it and serve it to another. The platform bump was taken in preference to a `netty-bom` override, which would have closed the advisory equally but left a pin to remove once the platform caught up
+
 ## [0.6.4] — 2026-08-16
 
 Four defects the audit of 0.6.3 turned up, three of them in the write path
