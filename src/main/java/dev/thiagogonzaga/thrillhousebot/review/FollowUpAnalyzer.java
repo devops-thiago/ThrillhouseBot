@@ -739,7 +739,8 @@ public class FollowUpAnalyzer {
       return response;
     }
     var dispositioned =
-        dispositionedFindings(priorRounds, inlineComments, conversationComments, botIdentity);
+        distinct(
+            dispositionedFindings(priorRounds, inlineComments, conversationComments, botIdentity));
     if (dispositioned.isEmpty()) {
       return response;
     }
@@ -797,15 +798,34 @@ public class FollowUpAnalyzer {
    * rounds carried it, so it is counted once.
    */
   private static int litigating(
-      ReviewResponse.Finding finding, List<ReviewResponse.Finding> dispositioned) {
-    var counted = new ArrayList<ReviewResponse.Finding>();
-    for (var prior : dispositioned) {
-      if (sameAnchor(finding, prior)
-          && counted.stream().noneMatch(seen -> isSameFinding(prior, seen))) {
-        counted.add(prior);
+      ReviewResponse.Finding finding, List<ReviewResponse.Finding> distinctDispositioned) {
+    var count = 0;
+    for (var prior : distinctDispositioned) {
+      if (sameAnchor(finding, prior)) {
+        count++;
       }
     }
-    return counted.size();
+    return count;
+  }
+
+  /**
+   * {@code dispositioned} with findings that are the same defect collapsed to one, so a defect the
+   * maintainer dispositioned once and the model then re-raised across rounds counts once toward the
+   * limit rather than once per round.
+   *
+   * <p>Collapsed here, once per call, rather than inside {@link #litigating}: that runs per finding
+   * in the response, and folding the same list again for each of them repeated the whole comparison
+   * for no new answer. {@link #isSameFinding} already requires the same file and a line within
+   * tolerance, so collapsing across the list and collapsing within one anchor give the same groups.
+   */
+  private static List<ReviewResponse.Finding> distinct(List<ReviewResponse.Finding> dispositioned) {
+    var distinct = new ArrayList<ReviewResponse.Finding>(dispositioned.size());
+    for (var prior : dispositioned) {
+      if (distinct.stream().noneMatch(seen -> isSameFinding(prior, seen))) {
+        distinct.add(prior);
+      }
+    }
+    return distinct;
   }
 
   /** Whether two findings sit at the same location, within the drift a revision may introduce. */
