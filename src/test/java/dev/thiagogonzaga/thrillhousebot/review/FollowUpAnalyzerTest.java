@@ -3581,4 +3581,184 @@ class FollowUpAnalyzerTest {
         kept.contains("Unbounded retry loop"), "a following bullet list was swallowed: " + kept);
     assertTrue(kept.contains("Missing timeout"), kept);
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // #726 — an anchor the maintainer has already litigated twice stops attracting fresh speculative
+  // items. Only the class that never posts inline is eligible, and only distinct dispositioned
+  // findings count.
+  // ---------------------------------------------------------------------------------------------
+
+  /** A finding routed to "Things to double-check": low confidence, risk below high. */
+  private static ReviewResponse.Finding speculative(String file, int line, String title) {
+    return new ReviewResponse.Finding("medium", "low", file, line, title, title, null, null);
+  }
+
+  private static ReviewResponse roundOf(ReviewResponse.Finding... findings) {
+    return new ReviewResponse(List.of(findings), List.of(), null);
+  }
+
+  private static GitHubCommentClient.IssueComment clears(ReviewResponse.Finding finding, long id) {
+    return new GitHubCommentClient.IssueComment(
+        id,
+        "@thrillhousebot resolved `"
+            + finding.file()
+            + ":"
+            + finding.line()
+            + "` — "
+            + finding.title(),
+        new GitHubReviewClient.ReviewResponse.User("maintainer"),
+        "MEMBER");
+  }
+
+  private static final ReviewResponse.Finding LITIGATED_ONE =
+      speculative("src/A.java", 10, "Wording rules match only the exact noun phrase");
+
+  private static final ReviewResponse.Finding LITIGATED_TWO =
+      speculative("src/A.java", 11, "The block pattern over-matches the generic wording");
+
+  /** The two prior rounds, newest first, whose findings the maintainer cleared. */
+  private static List<ReviewResponse> twiceLitigatedRounds() {
+    return List.of(roundOf(LITIGATED_TWO), roundOf(LITIGATED_ONE));
+  }
+
+  private static List<GitHubCommentClient.IssueComment> bothCleared() {
+    return List.of(clears(LITIGATED_ONE, 901L), clears(LITIGATED_TWO, 902L));
+  }
+
+  private static ReviewResponse withCurrent(ReviewResponse.Finding... findings) {
+    return new ReviewResponse(
+        List.of(findings),
+        List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+        new ReviewResponse.Summary(findings.length, 0, 0, findings.length, 0, "a", "p", List.of()));
+  }
+
+  private static List<String> titlesOf(ReviewResponse response) {
+    return response.findings().stream().map(ReviewResponse.Finding::title).toList();
+  }
+
+  @Test
+  void withholdsAThirdSpeculativeItemOnATwiceClearedAnchor() {
+    var current =
+        withCurrent(
+            speculative("src/A.java", 12, "A reworded block message drops the 30s floor"),
+            speculative("src/Other.java", 4, "Unrelated, on an anchor nobody litigated"));
+
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            current, twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID);
+
+    assertEquals(List.of("Unrelated, on an anchor nobody litigated"), titlesOf(pruned));
+    assertEquals(
+        current.previousFindingsStatus(),
+        pruned.previousFindingsStatus(),
+        "previous-findings accounting is untouched");
+    assertEquals(1, pruned.summary().totalFindings(), "the summary counts are recounted");
+  }
+
+  @Test
+  void countsAMaintainerReplyOnTheFindingsThreadAsADisposition() {
+    // The other half of a disposition: a finding that did post inline was answered on its thread.
+    var replies =
+        List.of(
+            comment(100L, null, "src/A.java", "**MEDIUM — " + LITIGATED_ONE.title() + "**", BOT),
+            comment(101L, 100L, "src/A.java", "Deliberate — see the issue history", "maintainer"),
+            comment(200L, null, "src/A.java", "**MEDIUM — " + LITIGATED_TWO.title() + "**", BOT),
+            comment(201L, 200L, "src/A.java", "Also deliberate", "maintainer"));
+
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            withCurrent(speculative("src/A.java", 12, "A third hypothesis on the same lines")),
+            twiceLitigatedRounds(),
+            replies,
+            List.of(),
+            BOT_ID);
+
+    assertEquals(List.of(), titlesOf(pruned));
+  }
+
+  @Test
+  void keepsAFindingThatPostsInlineHoweverOftenTheAnchorWasLitigated() {
+    var confident =
+        new ReviewResponse.Finding(
+            "high", "high", "src/A.java", 12, "The floor is dropped outright", "d", null, null);
+
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            withCurrent(confident), twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID);
+
+    assertEquals(List.of("The floor is dropped outright"), titlesOf(pruned));
+  }
+
+  @Test
+  void keepsASecondSpeculativeItemAfterOnlyOneDisposition() {
+    // One decline settles one hypothesis; a second look at the same lines is ordinary review.
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            withCurrent(speculative("src/A.java", 12, "A second hypothesis on the same lines")),
+            twiceLitigatedRounds(),
+            List.of(),
+            List.of(clears(LITIGATED_ONE, 901L)),
+            BOT_ID);
+
+    assertEquals(List.of("A second hypothesis on the same lines"), titlesOf(pruned));
+  }
+
+  @Test
+  void countsOneDefectArguedTwiceAsOneLitigation() {
+    // The same finding carried across rounds and cleared in each is one argument, not two.
+    var repeated = speculative("src/A.java", 10, LITIGATED_ONE.title());
+
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            withCurrent(speculative("src/A.java", 12, "A second hypothesis on the same lines")),
+            List.of(roundOf(repeated), roundOf(LITIGATED_ONE)),
+            List.of(),
+            List.of(clears(LITIGATED_ONE, 901L), clears(repeated, 902L)),
+            BOT_ID);
+
+    assertEquals(List.of("A second hypothesis on the same lines"), titlesOf(pruned));
+  }
+
+  @Test
+  void leavesOtherAnchorsAlone() {
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            withCurrent(
+                speculative("src/B.java", 12, "Same lines, another file"),
+                speculative("src/A.java", 40, "Same file, far from the litigated lines")),
+            twiceLitigatedRounds(),
+            List.of(),
+            bothCleared(),
+            BOT_ID);
+
+    assertEquals(
+        List.of("Same lines, another file", "Same file, far from the litigated lines"),
+        titlesOf(pruned));
+  }
+
+  @Test
+  void keepsEverythingWhenNoPriorFindingWasDispositioned() {
+    var untouched = withCurrent(speculative("src/A.java", 12, "A third hypothesis"));
+
+    assertSame(
+        untouched,
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            untouched, twiceLitigatedRounds(), List.of(), List.of(), BOT_ID),
+        "no maintainer acted, so nothing has been litigated");
+  }
+
+  @Test
+  void keepsEverythingWithNothingToCompareAgainst() {
+    var empty = new ReviewResponse(List.of(), List.of(), null);
+    assertSame(
+        empty,
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            empty, twiceLitigatedRounds(), List.of(), bothCleared(), BOT_ID));
+
+    var firstRound = withCurrent(speculative("src/A.java", 12, "A first hypothesis"));
+    assertSame(
+        firstRound,
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            firstRound, List.of(), List.of(), bothCleared(), BOT_ID));
+  }
 }
