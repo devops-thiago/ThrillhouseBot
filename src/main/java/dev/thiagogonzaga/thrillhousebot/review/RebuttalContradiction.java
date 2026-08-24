@@ -212,8 +212,15 @@ final class RebuttalContradiction {
    * The reviewed patch reduced to the code the revision actually runs: removed ({@code -}) lines
    * are dropped and line comments are stripped, so a dispatch construct that was deleted or only
    * mentioned in a comment cannot pose as live evidence. Added ({@code +}) and context lines are
-   * kept verbatim (including their leading marker, which {@link #clip} removes when quoting),
-   * across every file in the patch — cross-file evidence is intentional.
+   * kept across every file in the patch — cross-file evidence is intentional — with the leading
+   * {@code +} marker dropped: the marker exists for display, not for matching, and a construct
+   * whose argument wraps onto a following added line otherwise carries a {@code \n+} in the middle
+   * of its argument gap. That broke the serial-pool exclusion of {@link #CONCURRENT_DISPATCHES} —
+   * {@code newFixedThreadPool(} with the {@code 1)} on the next added line read as concurrent
+   * dispatch, because the {@code +} is neither whitespace nor a comment and hid the count from the
+   * lookahead — precisely on the code a pull request introduces (#761). Only the one marker column
+   * is dropped; the line's own text (indentation included) stays verbatim, and {@link #clip} still
+   * tolerates a marker when quoting.
    */
   private static String rightSideCode(String reviewedCode) {
     var kept = new ArrayList<String>();
@@ -221,6 +228,10 @@ final class RebuttalContradiction {
       // A unified-diff removed line (and the "---" old-file header) starts with '-'.
       if (line.startsWith("-")) {
         continue;
+      }
+      // An added line (and the "+++" new-file header) starts with '+'; drop the marker column.
+      if (line.startsWith("+")) {
+        line = line.substring(1);
       }
       kept.add(stripLineComment(line));
     }
