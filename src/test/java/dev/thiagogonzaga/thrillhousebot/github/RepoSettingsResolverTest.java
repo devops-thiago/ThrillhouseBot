@@ -868,6 +868,54 @@ class RepoSettingsResolverTest {
       assertEquals(java.util.List.of("from-yaml/**"), settings.ignoredFiles());
     }
 
+    /**
+     * A file that was read but parsed to nothing is an answer, not a miss, and is cached on the
+     * ordinary TTL — the chain stops at the first candidate and GitHub is not re-asked on the next
+     * review. Reviewed as a doc/code contradiction on #790 on the reading that the found branch
+     * returns before any cache write; it does not, the write is inside the loop. Pinned here so the
+     * {@code Fetched} javadoc's "cacheable" is a tested property rather than a claim.
+     */
+    @Test
+    void aReadableButUnusableConfigIsCachedLikeAnyOtherAnswer() {
+      stubFile(YML, "review:\n  ignored-files: 17\n");
+      var resolver = resolver();
+
+      assertEquals(
+          RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+      assertEquals(1, resolver.cache.size(), "a parsed-but-empty config is a real answer");
+
+      assertEquals(
+          RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+      verify(prClient, times(1))
+          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, never())
+          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YAML, DEFAULT_BRANCH);
+    }
+
+    /**
+     * And it is held for the full {@link RepoSettingsResolver#CACHE_TTL_MS}, not the shorter
+     * negative TTL: the repository answered, so fixing broken YAML takes effect on exactly the same
+     * schedule as fixing YAML that already parsed.
+     */
+    @Test
+    void aReadableButUnusableConfigIsHeldForTheFullTtlNotTheNegativeOne() {
+      stubFile(YML, "review:\n  ignored-files: 17\n");
+      var resolver = resolver();
+
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+      currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(prClient, times(1))
+          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+
+      currentTimeMs.addAndGet(RepoSettingsResolver.CACHE_TTL_MS + 1);
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(prClient, times(2))
+          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+    }
+
     @Test
     void aRealNotFoundIsStillCachedAsNoConfig() {
       stubMissing(YML);

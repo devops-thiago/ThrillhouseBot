@@ -89,9 +89,8 @@ public class ReviewDiffFormatter {
      * #LOG}, pinned to the enclosing class, so the operator-facing category is unchanged by this
      * method living here.
      *
-     * <p>A declaration compiles whole or not at all: if any of its {@link #gitignoreForms forms} is
-     * unusable the whole pattern is dropped, so a half-compiled declaration can never exclude a
-     * different set of files than the one the maintainer wrote.
+     * <p>Each declaration is judged on its own by {@link #compileDeclaration}, so one unusable
+     * pattern costs only itself and never the rest of the list.
      */
     private static List<GlobMatcher> compileGlobMatchers(List<String> patterns) {
       if (patterns == null || patterns.isEmpty()) {
@@ -99,36 +98,52 @@ public class ReviewDiffFormatter {
       }
       var matchers = new ArrayList<GlobMatcher>();
       for (String raw : patterns) {
-        if (raw == null || raw.isBlank()) {
-          continue;
-        }
-        var pattern = raw.trim();
-        if (pattern.startsWith("!")) {
-          // gitignore's re-include, which this model cannot honor: the effective set is global ∪
-          // per-repo and nothing may put back a file the union excludes. Compiling it would build a
-          // matcher for a file literally named "!…" — the silent nonsense #481 is about.
-          LOG.warnf(
-              "Ignoring negated ignore glob: re-includes are not supported, the effective ignore"
-                  + " set is only ever added to: %s",
-              pattern);
-          continue;
-        }
-        var forms = gitignoreForms(pattern);
-        if (forms.isEmpty()) {
-          LOG.warnf("Ignoring ignore glob that names no path: %s", pattern);
-          continue;
-        }
-        try {
-          var compiled = new ArrayList<GlobMatcher>(forms.size());
-          for (String form : forms) {
-            compiled.add(compileForm(form));
-          }
-          matchers.addAll(compiled);
-        } catch (InvalidPathException | PatternSyntaxException e) {
-          LOG.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
-        }
+        matchers.addAll(compileDeclaration(raw));
       }
       return List.copyOf(matchers);
+    }
+
+    /**
+     * The matchers one declaration contributes — empty when it contributes none, which is every way
+     * a pattern can be unusable: blank, negated, naming no path, or failing to compile. Kept apart
+     * from the loop above so each of those verdicts is reached by returning where it is decided,
+     * rather than by four exits out of a single body.
+     *
+     * <p>The whole-or-nothing rule lives here too: every form is compiled into a local list before
+     * any of it is handed back, so a declaration whose later form is invalid contributes nothing at
+     * all instead of a partial matcher set that would exclude a different set of files than the one
+     * the maintainer wrote.
+     */
+    private static List<GlobMatcher> compileDeclaration(String raw) {
+      if (raw == null || raw.isBlank()) {
+        return List.of();
+      }
+      var pattern = raw.trim();
+      if (pattern.startsWith("!")) {
+        // gitignore's re-include, which this model cannot honor: the effective set is global ∪
+        // per-repo and nothing may put back a file the union excludes. Compiling it would build a
+        // matcher for a file literally named "!…" — the silent nonsense #481 is about.
+        LOG.warnf(
+            "Ignoring negated ignore glob: re-includes are not supported, the effective ignore"
+                + " set is only ever added to: %s",
+            pattern);
+        return List.of();
+      }
+      var forms = gitignoreForms(pattern);
+      if (forms.isEmpty()) {
+        LOG.warnf("Ignoring ignore glob that names no path: %s", pattern);
+        return List.of();
+      }
+      try {
+        var compiled = new ArrayList<GlobMatcher>(forms.size());
+        for (String form : forms) {
+          compiled.add(compileForm(form));
+        }
+        return compiled;
+      } catch (InvalidPathException | PatternSyntaxException e) {
+        LOG.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
+        return List.of();
+      }
     }
 
     /**
