@@ -1160,7 +1160,10 @@ public class FollowUpAnalyzer {
         Log.infof(
             "Clearing previous finding '%s' (%s) — a maintainer named it in an"
                 + " @thrillhousebot resolved comment on the PR conversation",
-            finding.title(), locator);
+            LogSafe.oneLine(finding.title()),
+            // The locator is composed from the finding's own file, so it is model-supplied in the
+            // same way the title is; the matching above reads the unsanitized value (#764).
+            LogSafe.oneLine(locator));
         return true;
       }
     }

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
@@ -429,13 +430,13 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
     if (resolved.isEmpty() || (!multiLine && resolved.getAsInt() != doc.line())) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — declaration line is not in the diff",
-          doc.file(), doc.line());
+          LogSafe.oneLine(doc.file()), doc.line());
       return DocPostResult.SKIPPED;
     }
     if (!preservesExistingCode(doc)) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — replacement would not keep the existing line",
-          doc.file(), doc.line());
+          LogSafe.oneLine(doc.file()), doc.line());
       return DocPostResult.SKIPPED;
     }
     // A multi-line suggestion must overwrite the whole declaration span, not just doc.line() —
