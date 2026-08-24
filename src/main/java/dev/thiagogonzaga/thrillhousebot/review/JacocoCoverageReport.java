@@ -218,7 +218,8 @@ final class JacocoCoverageReport {
    * a JaCoCo report is merged, so a multi-module artifact carrying one report per module
    * contributes all of them rather than only the first. {@link #EMPTY} when the bytes are not a
    * readable zip, hold no such entry, or hold nothing this parser understands. The merged size is
-   * bounded by {@link #MAX_SOURCE_FILES} (and each file by {@link #MAX_LINES_PER_FILE}).
+   * bounded by {@link #MAX_SOURCE_FILES} (and each file by {@link #MAX_LINES_PER_FILE}); a path two
+   * reports both describe keeps only what they agree on, for the reasons on {@link #mergeInto}.
    *
    * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
    * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
@@ -264,29 +265,43 @@ final class JacocoCoverageReport {
     } catch (IOException | RuntimeException e) {
       Log.debugf(e, "Could not read the coverage artifact archive");
     }
+    // An intersection that emptied out says every report disagreed about that file, which is not
+    // coverage data; the rest of the class may assume a present path has at least one line.
+    merged.values().removeIf(NavigableSet::isEmpty);
     return merged.isEmpty() ? EMPTY : new JacocoCoverageReport(merged);
   }
 
   /**
-   * Unions one report's uncovered lines into the accumulator, bounded by {@link #MAX_SOURCE_FILES}
-   * source files and {@link #MAX_LINES_PER_FILE} lines each so a pathological multi-module artifact
-   * cannot grow the merged map without limit. A report path shared by two modules (itself a
-   * same-named collision the {@link #uncoveredLinesByPath} guard later drops) unions rather than
-   * overwrites, so no module's lines are silently lost before that guard runs.
+   * Adds one report's uncovered lines to the accumulator, bounded by {@link #MAX_SOURCE_FILES} so a
+   * pathological multi-module artifact cannot grow the merged map without limit — each file's line
+   * list is already capped at {@link #MAX_LINES_PER_FILE} by the parse that produced it.
+   *
+   * <p>A report path <em>two</em> reports both describe keeps only the lines every one of them
+   * recorded as missed, never their union. Two reports claim one path when a same-named class
+   * exists in two modules, and when one class is measured twice — a per-module report sitting next
+   * to an aggregate report of the same build, which the {@code **}{@code /jacoco.xml} upload this
+   * merge exists for collects together. Unioning is wrong for both: it charges one module's misses
+   * to the other module's file, and it reports a line as never executed that the aggregate run did
+   * execute. Neither is something {@link #uncoveredLinesByPath} can catch afterwards — it sees one
+   * merged entry with one repository file matching it — so the disagreement has to be resolved
+   * here, at the only point that still knows two reports claimed the same path. Intersecting is
+   * sound whichever file the entry later matches: a line every report recorded as missed is missed
+   * in that file's own report too.
    */
   private static void mergeInto(
       Map<String, NavigableSet<Integer>> merged, Map<String, NavigableSet<Integer>> one) {
     for (var entry : one.entrySet()) {
-      if (!merged.containsKey(entry.getKey()) && merged.size() >= MAX_SOURCE_FILES) {
+      var already = merged.get(entry.getKey());
+      if (already != null) {
+        Log.debugf(
+            "Two coverage reports describe %s; keeping only what they agree on", entry.getKey());
+        already.retainAll(entry.getValue());
         continue;
       }
-      var target = merged.computeIfAbsent(entry.getKey(), unused -> new TreeSet<>());
-      for (var line : entry.getValue()) {
-        if (target.size() >= MAX_LINES_PER_FILE) {
-          break;
-        }
-        target.add(line);
+      if (merged.size() >= MAX_SOURCE_FILES) {
+        continue;
       }
+      merged.put(entry.getKey(), entry.getValue());
     }
   }
 

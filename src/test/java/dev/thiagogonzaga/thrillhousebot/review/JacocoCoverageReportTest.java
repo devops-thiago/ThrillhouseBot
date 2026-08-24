@@ -487,35 +487,79 @@ class JacocoCoverageReportTest {
     }
 
     @Test
-    void capsTheLinesOneSourceFileMergesAcrossReports() throws IOException {
-      var first =
-          new StringBuilder(
-              "<report name=\"a\"><package name=\"a\"><sourcefile name=\"Huge.java\">");
-      for (var nr = 1; nr <= JacocoCoverageReport.MAX_LINES_PER_FILE; nr++) {
-        first.append("<line nr=\"").append(nr).append("\" mi=\"1\" ci=\"0\"/>");
-      }
-      first.append("</sourcefile></package></report>");
+    void keepsOnlyWhatTwoReportsOfTheSamePathAgreeOn() throws IOException {
+      // Two reports in one artifact both claiming com/example/Foo.java, which is what a
+      // **/jacoco.xml upload collects when a class exists in two modules, or when a per-module
+      // report sits next to an aggregate report of the same build. Unioning their misses charges
+      // one build's misses to the other's file — and the by-path ambiguity guard cannot catch it
+      // afterwards, because the merge has collapsed the two into one entry that exactly one
+      // repository file matches.
       var entries = new LinkedHashMap<String, String>();
-      entries.put("module-a/jacoco.xml", first.toString());
+      entries.put(
+          "module-a/jacoco.xml",
+          """
+          <report name="a">
+            <package name="com/example">
+              <sourcefile name="Foo.java">
+                <line nr="1" mi="1" ci="0"/>
+                <line nr="2" mi="1" ci="0"/>
+              </sourcefile>
+            </package>
+          </report>
+          """);
       entries.put(
           "module-b/jacoco.xml",
           """
           <report name="b">
-            <package name="a">
-              <sourcefile name="Huge.java"><line nr="99999" mi="1" ci="0"/></sourcefile>
+            <package name="com/example">
+              <sourcefile name="Foo.java">
+                <line nr="2" mi="1" ci="0"/>
+                <line nr="3" mi="1" ci="0"/>
+              </sourcefile>
+              <sourcefile name="Bar.java"><line nr="7" mi="1" ci="0"/></sourcefile>
             </package>
           </report>
           """);
 
-      var lines =
-          JacocoCoverageReport.fromArtifactZip(zipOf(entries)).uncoveredLines("mod/a/Huge.java");
+      var report = JacocoCoverageReport.fromArtifactZip(zipOf(entries));
 
       assertEquals(
-          JacocoCoverageReport.MAX_LINES_PER_FILE,
-          lines.size(),
-          "the merge is bounded per file, not only per report");
-      assertFalse(
-          lines.contains(99_999), "a second report cannot push one file's line list past the cap");
+          List.of(2),
+          List.copyOf(report.uncoveredLines("module-a/src/main/java/com/example/Foo.java")),
+          "only a line every report recorded as missed may be reported; a line one of them saw"
+              + " executed was executed");
+      assertEquals(
+          List.of(7),
+          List.copyOf(report.uncoveredLines("module-b/src/main/java/com/example/Bar.java")),
+          "a path only one report describes is untouched by that intersection");
+    }
+
+    @Test
+    void dropsAPathTwoReportsAgreeOnNothingAbout() throws IOException {
+      var entries = new LinkedHashMap<String, String>();
+      entries.put(
+          "module-a/jacoco.xml",
+          """
+          <report name="a">
+            <package name="com/example">
+              <sourcefile name="Foo.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="com/example">
+              <sourcefile name="Foo.java"><line nr="2" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(zipOf(entries)).isEmpty(),
+          "two reports that agree on nothing leave no coverage behind, not an empty entry the"
+              + " rest of the reader would have to special-case");
     }
 
     @Test
