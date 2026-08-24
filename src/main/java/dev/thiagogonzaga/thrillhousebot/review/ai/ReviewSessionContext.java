@@ -38,10 +38,31 @@ final class ReviewSessionContext {
    */
   record Binding(long sessionId, int attempt, long callId) {}
 
+  /**
+   * Registers a new stream invocation for {@code sessionId} and binds it to the calling thread.
+   *
+   * <p>The registration is one {@code compute} rather than a lookup followed by an add, because the
+   * add has to happen under the same per-bin lock the lookup did (#763). Split in two, a sibling
+   * stream finishing in between unmapped the set the add then wrote to: {@link #invalidate(long,
+   * long)} returns null once the set empties, which drops the mapping, and {@link
+   * #invalidate(long)} drops it outright. The add landed on an orphan, {@link #isActiveCall} read
+   * the session's absent mapping, and a live stream's usage callback was discarded as stale — so
+   * its tokens never reached {@code ReviewTokenLedger}, and the per-review spend ceiling (#509)
+   * under-counted the review it is there to cap. Reviews run their batches on virtual threads, so
+   * concurrent bind and invalidate for one session is the ordinary case here rather than a corner.
+   * The mirror window in {@code invalidate} was closed with {@code computeIfPresent}; this is the
+   * half that was missed.
+   */
   static void bind(long sessionId, int attempt) {
     var callId = NEXT_CALL_ID.incrementAndGet();
     BINDING.set(new Binding(sessionId, attempt, callId));
-    ACTIVE_CALLS.computeIfAbsent(sessionId, id -> ConcurrentHashMap.newKeySet()).add(callId);
+    ACTIVE_CALLS.compute(
+        sessionId,
+        (id, calls) -> {
+          var active = calls != null ? calls : ConcurrentHashMap.<Long>newKeySet();
+          active.add(callId);
+          return active;
+        });
   }
 
   static void clear() {
