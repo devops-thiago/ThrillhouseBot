@@ -2218,6 +2218,16 @@ public class FollowUpAnalyzer {
     return withoutClosedFindingNames(body);
   }
 
+  /** {@code index} advanced past the run of lines from it that satisfy {@code matching}. */
+  private static int skipWhile(
+      List<String> lines, int index, java.util.function.Predicate<String> matching) {
+    var at = index;
+    while (at < lines.size() && matching.test(lines.get(at))) {
+      at++;
+    }
+    return at;
+  }
+
   /**
    * The body with its closed-findings section removed, wherever that section sits.
    *
@@ -2234,16 +2244,6 @@ public class FollowUpAnalyzer {
    * crossed the separating blank and carried on through the next list. A blank line is put back
    * when content follows, so removing the section cannot join two paragraphs that were separate.
    */
-  /** {@code index} advanced past the run of lines from it that satisfy {@code matching}. */
-  private static int skipWhile(
-      List<String> lines, int index, java.util.function.Predicate<String> matching) {
-    var at = index;
-    while (at < lines.size() && matching.test(lines.get(at))) {
-      at++;
-    }
-    return at;
-  }
-
   static String withoutClosedFindingNames(String body) {
     var lines = body.lines().toList();
     var out = new ArrayList<String>(lines.size());
