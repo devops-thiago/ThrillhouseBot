@@ -234,6 +234,7 @@ final class JacocoCoverageReport {
       return EMPTY;
     }
     var merged = new HashMap<String, NavigableSet<Integer>>();
+    var aborted = false;
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
       var seen = 0;
       var inflatedTotal = 0L;
@@ -245,12 +246,23 @@ final class JacocoCoverageReport {
           Log.debugf(
               "Coverage artifact inflates past the %d-byte aggregate cap; refusing it as a zip bomb",
               MAX_TOTAL_INFLATED_BYTES);
+          aborted = true;
           break;
         }
         inflatedTotal += read;
       }
     } catch (IOException | RuntimeException e) {
       Log.debugf(e, "Could not read the coverage artifact archive");
+      aborted = true;
+    }
+    // A walk that gave up carries no partial answer out. Whatever merged before the abort is a
+    // prefix chosen by the archive, not by the build: an attacker who appends a bomb entry after a
+    // benign report would otherwise decide which reports the merge sees, and the truncated result
+    // reads as complete coverage — lines the rest of the artifact covers come back "uncovered".
+    // The same holds for an IOException mid-walk, where the prefix is chosen by where the stream
+    // broke. This is what the class javadoc means by every failure yielding EMPTY.
+    if (aborted) {
+      return EMPTY;
     }
     // An intersection that emptied out says every report disagreed about that file, which is not
     // coverage data; the rest of the class may assume a present path has at least one line.

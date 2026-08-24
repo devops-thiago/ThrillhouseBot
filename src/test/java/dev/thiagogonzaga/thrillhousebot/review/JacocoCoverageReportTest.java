@@ -435,6 +435,35 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void carriesNoPartialAnswerOutOfAnArchiveItRefused() throws IOException {
+      // The report sits BEFORE the bomb this time, so the walk has merged real coverage by the
+      // moment it gives up. Returning that prefix would let whoever built the archive choose which
+      // reports the merge sees: append a bomb after a benign report and the truncated result reads
+      // as complete coverage, so every line the rest of the artifact covers comes back uncovered.
+      var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        var zeros = new byte[64 * 1024];
+        var inflated = 0L;
+        for (var i = 0; inflated <= JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".bin"));
+          for (var written = 0; written < perEntry; written += zeros.length) {
+            zip.write(zeros);
+          }
+          zip.closeEntry();
+          inflated += perEntry;
+        }
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "a refused archive yields EMPTY, not the reports that happened to precede the bomb");
+    }
+
+    @Test
     void drainsButCollectsNothingFromAnEntryPastThePerEntryCeiling() throws IOException {
       var sink = new ByteArrayOutputStream();
       try (var zip =
