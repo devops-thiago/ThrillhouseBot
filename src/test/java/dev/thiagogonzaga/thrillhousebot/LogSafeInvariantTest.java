@@ -42,11 +42,32 @@ import org.junit.jupiter.api.Test;
  * <p>So this test states the invariant rather than a list of sites. It derives the untrusted
  * accessor names from the AI response records themselves — every {@code String}-typed component of
  * every record reachable from a {@code *Response} class in {@code review.ai}, read reflectively —
- * and then reads every log call in {@code src/main/java} and fails on any that interpolates one of
- * them without {@link LogSafe}. Both halves extend themselves: a field added to {@code
- * ReviewResponse.Finding} is covered the moment it exists, and a log line added anywhere in main is
- * scanned the moment it is written. Nothing here has to be kept in sync by hand, which is the
- * property the five previous rounds lacked.
+ * and then reads every log call in {@code src/main/java} and fails on two shapes: an untrusted
+ * accessor called inside the log call's own argument text, and a same-file local whose initializer
+ * calls one. Both halves extend themselves: a field added to {@code ReviewResponse.Finding} is
+ * covered the moment it exists, and a log line added anywhere in main is scanned the moment it is
+ * written. Nothing here has to be kept in sync by hand, which is the property the five previous
+ * rounds lacked.
+ *
+ * <p>Those two shapes are the whole reach, and saying so rather than claiming every log call is the
+ * point: this test exists to end a defect class whose shape is a documented reach exceeding an
+ * actual one, and it is not exempt from it. A value that arrives at the log line through a method
+ * parameter, a field or a return value is invisible here, because the accessor that read it is in
+ * another method and what the scan sees is a bare identifier — {@link
+ * #theScannerDoesNotSeeAValueThatCrossedAMethodBoundary()} pins that miss so it stays a known limit
+ * rather than a surprise. Wrapping the value where the accessor is read keeps it inside the reach,
+ * and that is the habit this check is asking for.
+ *
+ * <p>Tracking it instead would need a call graph, which is exactly what reading source text does
+ * not have. The one join available without type resolution is to match callers to callees by name
+ * and argument position, and that was tried and measured before this paragraph was written: over
+ * main it taints 203 parameters and produces 31 further reports, and the sampled ones are name
+ * collisions rather than findings — {@code req} in {@code ReviewDispatcher}, which is a record
+ * whose {@code owner()} is what actually reaches the line, and {@code line} in {@code
+ * DocGenerationService}, which is an {@code int} at a {@code %d} beside an already-wrapped path.
+ * Neither is a value {@code LogSafe.oneLine} even accepts, so the report's own prescribed fix would
+ * not compile. A check that asks for impossible fixes is one a reader learns to skip, which costs
+ * more than the shapes it would have caught (#764).
  *
  * <p>Reading source text rather than bytecode is unusual for a unit test, and it is a deliberate
  * trade. A textual scan cannot resolve types, so it decides by accessor name and errs towards
@@ -72,9 +93,18 @@ class LogSafeInvariantTest {
   private static final Pattern LOG_CALL =
       Pattern.compile("\\b(?:Log|log)\\.(debug|info|warn|error|trace|fatal)(f?)\\s*\\(");
 
-  /** A {@code java.util.Formatter} conversion; group 1 is the conversion character. */
+  /**
+   * A {@code java.util.Formatter} conversion; group 1 is the conversion character.
+   *
+   * <p>The quantifiers are possessive because the flag class and the width overlap on {@code 0},
+   * which is both the zero-pad flag and a digit: a run of zeros splits every way between the two,
+   * and a run that never reaches a conversion character makes the match try each split. Measured on
+   * a {@code %} followed by 24 000 zeros, that cost 7 030 ms; possessive, 2 ms. No match is lost —
+   * a width may not begin with {@code 0}, since a leading one is the flag, so the greedy split is
+   * the only correct one anyway.
+   */
   private static final Pattern CONVERSION =
-      Pattern.compile("%(?:\\d+\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?([a-zA-Z%])");
+      Pattern.compile("%(?:\\d++\\$)?[-#+ 0,(]*+\\d*+(?:\\.\\d++)?([a-zA-Z%])");
 
   private static final Pattern NO_ARG_CALL = Pattern.compile("\\.(\\w+)\\s*\\(\\s*\\)");
 
@@ -82,11 +112,21 @@ class LogSafeInvariantTest {
    * A local holding untrusted text: the shape {@code FollowUpAnalyzer}'s {@code locator} had, where
    * the value logged was {@code file() + ":" + line()} composed a few lines earlier, so a check
    * that only read the log call's own accessors saw a bare identifier and passed it (#764).
+   *
+   * <p>Possessive around the {@code =} for the reason {@link #CONVERSION} is: {@code \s} and {@code
+   * [^;]} both match whitespace, so the run after the {@code =} splits every way between them, and
+   * an initializer this scan reaches with no {@code ;} beyond it makes the match try each split.
+   * Measured on 24 000 spaces, 2 494 ms; possessive, under 1 ms. A differential run over 400 000
+   * random inputs found no input the two forms answer differently.
    */
   private static final Pattern LOCAL_DECLARATION =
-      Pattern.compile("\\b(?:final\\s+)?(?:String|var)\\s+(\\w+)\\s*=\\s*([^;]+);", Pattern.DOTALL);
+      Pattern.compile(
+          "\\b(?:final\\s+)?(?:String|var)\\s++(\\w+)\\s*+=\\s*+([^;]++);", Pattern.DOTALL);
 
   private static final Pattern IDENTIFIER = Pattern.compile("\\b\\w+\\b");
+
+  /** Collapses a reported argument onto one report line; compiled out of the per-call loop. */
+  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
 
   private static final Pattern STRING_LITERAL =
       Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"", Pattern.DOTALL);
@@ -170,6 +210,41 @@ class LogSafeInvariantTest {
         List.of(),
         scanned("Log.infof(\"finding %s\", LogSafe.oneLine(shorten(finding.title())));", untrusted),
         "a nested call inside the sanitized span does not end it early");
+    assertEquals(
+        1,
+        scanned("Log.infof(\"%,08d|%s\", finding.title(), finding.file());", untrusted).size(),
+        "a flagged, zero-padded, width-bearing conversion still binds to its own argument: misread"
+            + " it and the numeric exemption slides onto the wrong one and both get reported");
+  }
+
+  /**
+   * The miss the reach above admits to, kept executable so it cannot quietly drift: {@code file}
+   * reaches the log line as a parameter, the accessor that produced it is in the caller, and the
+   * scan sees an identifier no declaration in this file marks tainted.
+   *
+   * <p>Asserting a miss looks like asserting a bug, and it is here on purpose. If the scan is ever
+   * given a dataflow step this test fails, and the failure lands on the two javadocs — this class's
+   * and {@link LogSafe}'s — that have to be widened with it. That is the coupling the five earlier
+   * rounds lacked: the reach and the sentence describing it move together or not at all.
+   */
+  @Test
+  void theScannerDoesNotSeeAValueThatCrossedAMethodBoundary() {
+    assertEquals(
+        List.of(),
+        violationsIn(
+            """
+            class Sample {
+              void logPath(String file) {
+                Log.warnf("rule file %s", file);
+              }
+              void run(Finding finding) {
+                logPath(finding.file());
+              }
+            }
+            """,
+            "Sample.java", Set.of("title", "file", "reason")),
+        "the scan cannot follow a value across a method boundary; wrap it where the accessor is"
+            + " read, and widen both javadocs before this stops being true");
   }
 
   private static List<String> scanned(String body, Set<String> untrusted) {
@@ -259,7 +334,7 @@ class LogSafeInvariantTest {
                   + " logs "
                   + reached
                   + " raw in argument `"
-                  + argument.replaceAll("\\s+", " ")
+                  + WHITESPACE_RUN.matcher(argument).replaceAll(" ")
                   + "` — wrap it in LogSafe.oneLine");
         }
       }
