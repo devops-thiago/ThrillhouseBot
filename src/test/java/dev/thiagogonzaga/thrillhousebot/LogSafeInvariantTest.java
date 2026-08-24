@@ -151,6 +151,25 @@ class LogSafeInvariantTest {
             "var title = finding.title();\nLog.infof(\"no title survived the batches\");",
             untrusted),
         "a message whose prose names a tainted local does not log it");
+    assertEquals(
+        1,
+        scanned(
+                "Log.infof(\"path %s\", LogSafe.oneLine(finding.title()) + finding.file());",
+                untrusted)
+            .size(),
+        "one wrapped value is not proof the rest of the argument is sanitized");
+    assertEquals(
+        1,
+        scanned(
+                "var at = LogSafe.oneLine(finding.title()) + finding.file();\n"
+                    + "Log.infof(\"at %s\", at);",
+                untrusted)
+            .size(),
+        "a local composed from a wrapped value and a raw one is still tainted");
+    assertEquals(
+        List.of(),
+        scanned("Log.infof(\"finding %s\", LogSafe.oneLine(shorten(finding.title())));", untrusted),
+        "a nested call inside the sanitized span does not end it early");
   }
 
   private static List<String> scanned(String body, Set<String> untrusted) {
@@ -215,10 +234,7 @@ class LogSafeInvariantTest {
         if (conversion != null && Character.toLowerCase(conversion) != 's') {
           continue;
         }
-        var argument = arguments.get(index);
-        if (argument.contains("LogSafe.")) {
-          continue;
-        }
+        var argument = withoutSanitizedCalls(arguments.get(index));
         // A literal is text the bot chose, and its words are not identifiers: without this, a
         // message naming a tainted local ("no candidate survived") reads as logging it.
         var expression = withoutLiterals(argument);
@@ -256,10 +272,7 @@ class LogSafeInvariantTest {
     var tainted = new TreeSet<String>();
     var declarations = LOCAL_DECLARATION.matcher(source);
     while (declarations.find()) {
-      var initializer = withoutLiterals(declarations.group(2));
-      if (declarations.group(2).contains("LogSafe.")) {
-        continue;
-      }
+      var initializer = withoutLiterals(withoutSanitizedCalls(declarations.group(2)));
       var accessors = NO_ARG_CALL.matcher(initializer);
       while (accessors.find()) {
         if (untrusted.contains(accessors.group(1))) {
@@ -421,5 +434,51 @@ class LogSafeInvariantTest {
       index++;
     }
     return scrubbed.toString();
+  }
+
+  /**
+   * The expression with every {@code LogSafe.…(…)} call and its arguments removed, so what remains
+   * is only the part that reached the log line unsanitized.
+   *
+   * <p>Skipping the whole expression when it mentions {@code LogSafe.} anywhere — which is what
+   * this did first — reads one wrapped value as proof the rest is safe. {@code
+   * LogSafe.oneLine(finding.title()) + finding.file()} passed the scan with the path interpolated
+   * raw at its own {@code %s}, which is the shape a partial fix produces: someone wraps the value a
+   * finding names and leaves the one beside it. Removing the sanitized spans and scanning the
+   * remainder cannot be satisfied that way.
+   *
+   * <p>Spans are matched by balancing parentheses rather than to the first {@code )}, so a nested
+   * call inside the argument does not end the span early.
+   */
+  private static String withoutSanitizedCalls(String expression) {
+    var out = new StringBuilder(expression.length());
+    var at = 0;
+    while (at < expression.length()) {
+      var call = expression.indexOf("LogSafe.", at);
+      if (call < 0) {
+        out.append(expression, at, expression.length());
+        break;
+      }
+      out.append(expression, at, call);
+      var open = expression.indexOf('(', call);
+      if (open < 0) {
+        // Not a call: a bare mention cannot sanitize anything, so keep it for the scan.
+        out.append(expression, call, expression.length());
+        break;
+      }
+      var depth = 0;
+      var scan = open;
+      while (scan < expression.length()) {
+        var c = expression.charAt(scan);
+        if (c == '(') {
+          depth++;
+        } else if (c == ')' && --depth == 0) {
+          break;
+        }
+        scan++;
+      }
+      at = scan < expression.length() ? scan + 1 : expression.length();
+    }
+    return out.toString();
   }
 }
