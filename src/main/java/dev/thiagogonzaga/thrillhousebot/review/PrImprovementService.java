@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
@@ -323,7 +324,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
     if (resolved.isEmpty() || (!multiLine && resolved.getAsInt() != improvement.line())) {
       Log.debugf(
           "/improve cannot anchor %s:%d — the line is not in the diff",
-          improvement.file(), improvement.line());
+          LogSafe.oneLine(improvement.file()), improvement.line());
       return false;
     }
     Optional<DiffLineResolver.LineRange> range =
@@ -333,13 +334,13 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
     if (multiLine && range.isEmpty()) {
       Log.debugf(
           "/improve cannot anchor the multi-line replacement at %s:%d",
-          improvement.file(), improvement.line());
+          LogSafe.oneLine(improvement.file()), improvement.line());
       return false;
     }
     if (!multiLine && !quotesCurrentLine(lineResolver, improvement)) {
       Log.debugf(
           "/improve skipped %s:%d — the quoted code does not match the line in the diff",
-          improvement.file(), improvement.line());
+          LogSafe.oneLine(improvement.file()), improvement.line());
       return false;
     }
     Integer startLine = range.map(DiffLineResolver.LineRange::startLine).orElse(null);
@@ -368,7 +369,11 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
               startLine != null ? "RIGHT" : null));
       return true;
     } catch (RuntimeException e) {
-      Log.debugf(e, "GitHub rejected the /improve comment for %s:%d", improvement.file(), endLine);
+      Log.debugf(
+          e,
+          "GitHub rejected the /improve comment for %s:%d",
+          LogSafe.oneLine(improvement.file()),
+          endLine);
       return false;
     }
   }
