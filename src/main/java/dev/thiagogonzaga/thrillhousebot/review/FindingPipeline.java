@@ -73,6 +73,13 @@ public class FindingPipeline {
   /** Withheld paths named in the review call's notice before the rest is rolled up by count. */
   private static final int MAX_WITHHELD_PATHS = 20;
 
+  /**
+   * Per-file summary-overview note for a file GitHub returned no patch text for (#628): the honest
+   * reason, so the summary model never blames the review budget for it.
+   */
+  private static final String PATCHLESS_OVERVIEW_NOTE =
+      " (not analyzed — GitHub provided no diff content: binary, or too large to display)\n";
+
   private record BatchOutcome(
       int index,
       List<ReviewResponse.Finding> findings,
@@ -1220,10 +1227,7 @@ public class FindingPipeline {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
     }
     for (var name : plan.patchlessFiles()) {
-      sb.append(name)
-          .append(
-              " (not analyzed — GitHub provided no diff content: binary, or too large to"
-                  + " display)\n");
+      sb.append(name).append(PATCHLESS_OVERVIEW_NOTE);
     }
     // A file skipped at the spend ceiling is recorded as runtime-uncovered too (it holds approval
     // like any uncovered file), but its cause is a deliberate stop, not a call that failed. The

@@ -378,6 +378,9 @@ class ReviewResultTest {
     var disclosure = ReviewResult.truncationDisclosure(1, detail);
 
     assertTrue(detail.hasFileGaps(), "a patchless file is a real per-file coverage gap");
+    assertFalse(
+        detail.isEmpty(),
+        "isEmpty() delegates to hasFileGaps(), so a patchless-only detail must not read as empty");
     assertTrue(disclosure.contains("partial coverage"), disclosure);
     assertTrue(disclosure.contains("a.png"), disclosure);
     assertFalse(disclosure.contains("budget"), disclosure);
