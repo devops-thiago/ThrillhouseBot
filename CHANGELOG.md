@@ -4,6 +4,31 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-08-24
+
+Round-8 dogfooding drove this one. Three defects had the reviewer overruling a maintainer who was
+right, or publishing an entry that argues against itself, and `/improve` shipped two suggestions that
+break the code once applied. No configuration changes; upgrading is a redeploy.
+
+### Fixed
+
+- **`/improve` no longer proposes a change that fails to build** (#779): round-8 scoring caught two committable suggestions that break the code when committed. One inlined a mutated local into a Java lambda, which does not compile, because the local was the author's workaround for the effectively-final rule; the other replaced a C literal count with `sizeof(table)/sizeof(table[0])` on a fixed-capacity array, which compiles and then silently rejects every custom unit. The command now carries the buildability constraints `/generate-tests` was given in #590: a suggestion has to build and behave the same after commit, an element count is never derived from a fixed-capacity array's declared size, and a suggestion that deletes a local, guard or check has to say in its rationale why the deletion is safe
+- **Quoted text no longer counts as evidence of concurrent dispatch** (#780): `stripLineComment` became quote-aware in #647, so a `//` inside a string literal stopped truncating the line and hiding the dispatch after it. The literal's own contents still reached the dispatch scan, so a log message, an error string or a test fixture that merely mentions `.submit(` or `.execute(` read as proof of live concurrency and overruled a maintainer whose "it runs serially" decline was correct
+- **A serial pool whose count wraps onto the next line reads as serial again** (#781): added lines were scanned with their leading `+` diff marker intact, so a `newFixedThreadPool(1)` split across two lines arrived as `newFixedThreadPool(` followed by `+        1)`. The marker is neither whitespace nor a comment, the serial-pool exemption never saw the `1`, and a single-threaded pool registered as concurrent dispatch, overruling a correct decline for the second reason in this release
+- **Entries that argue there is no defect are dropped** (#635, #782): the review prompt's self-check now states that a candidate which survives investigation as *not* a defect is discarded, since "I considered this and it is fine" is reasoning and not a reportable outcome. A deterministic backstop drops such an entry before the verifier call, which also keeps it out of the published review on the runs where verification fails open (#623). The backstop stays conservative: it reads only the description's concluding clause and requires an anchored shape, so a scoped denial ("no defect in the fast path") or an attributed one keeps the finding, and anything it misses still reaches the verifier
+- **A file GitHub returned no content for is disclosed under its own reason** (#628, #783): a reviewable file with real additions and deletions but no patch text, which is what GitHub returns for a binary file and for a text diff too large to display, was folded into the budget-omitted list. The review then told the maintainer the file "exceeded the review budget", pointing at a knob that would have changed nothing. It is now named as its own class, with its own wording. This covers the budgeted path; a deployment that disables budgeting entirely is tracked in #785
+
+### Security
+
+- **CVE-2026-14456 is ignored in Trivy scans with the reasoning recorded** (#778): the advisory covers unbounded memory growth in OpenSSL's QUIC **server** listener, which exists only from OpenSSL 3.5. The base image ships the 3.0.x branch, which carries no QUIC server code, Debian has published no fixed package, and the bot runs no QUIC listener in any configuration
+
+### Dependencies
+
+- Bumped `jackson-bom` from 2.22.1 to 2.22.2, and Spotless from 3.9.0 to 3.10.0 with `google-java-format` 1.27.0 to 1.33.0 (#774)
+- Bumped the website docs group: `astro` 7.2.0 to 7.2.2 and `starlight-links-validator` (#775)
+- Bumped the frontend npm group: `next` 16.3.0 to 16.3.1 and `@testing-library/user-event` 14.6.3 to 14.6.5 (#776)
+- Bumped the actions group: `github/codeql-action` v4.37.6 to v4.37.7 and `docker/setup-buildx-action` v4.2.0 to v4.3.0 (#777)
+
 ## [0.6.5] — 2026-08-18
 
 The audit of 0.6.4 and a fix round on what it found. Most of the release is

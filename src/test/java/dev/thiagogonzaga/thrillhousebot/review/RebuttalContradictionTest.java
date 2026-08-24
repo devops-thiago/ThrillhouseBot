@@ -564,8 +564,10 @@ class RebuttalContradictionTest {
   @Test
   void shouldTreatABacktickRunSpanningTwoLineEndingsAsLiteralText() {
     var rebuttal =
-        "See the note` about pooling.\n\nSeparately, the handler is single-threaded so there is"
-            + " no race here, per the runbook`.";
+        """
+        See the note` about pooling.
+
+        Separately, the handler is single-threaded so there is no race here, per the runbook`.""";
 
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, rebuttal, DISPATCHING_CODE).isPresent(),

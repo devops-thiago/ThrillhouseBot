@@ -548,8 +548,8 @@ final class RebuttalContradiction {
   private static int closingRunStart(String text, int from, int delimiter) {
     var newlines = 0;
     var i = from;
-    // +1 so a body of exactly SPAN_BODY_BOUND characters still closes, matching the {0,1000}
-    // bound of the regex passes this scanner replaced.
+    // +1 so a body of exactly SPAN_BODY_BOUND characters still closes, matching the upper bound
+    // carried by the regex passes this scanner replaced.
     var bound = Math.min(text.length(), from + SPAN_BODY_BOUND + 1);
     while (i < bound) {
       var c = text.charAt(i);
