@@ -435,6 +435,27 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void walksPastDirectoriesWithoutSpendingTheEntryCap() throws IOException {
+      // A coverage artifact is usually a whole target/ tree, so its directory entries can outnumber
+      // its reports several times over. Charging them to the cap refuses the multi-module shape the
+      // merge exists for, with the report sitting readable near the front.
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        for (var i = 0; i <= JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
+          zip.putNextEntry(new ZipEntry("module" + i + "/target/classes/"));
+          zip.closeEntry();
+        }
+      }
+
+      assertFalse(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "directories carry no report, so nesting must not cost the archive its coverage");
+    }
+
+    @Test
     void refusesAnArchiveWithMoreEntriesThanItWalks() throws IOException {
       // Same prefix-choosing power as the bomb abort, reached by padding instead: the report is
       // read, the cap is hit, and the merge that fit would otherwise be returned as this build's
