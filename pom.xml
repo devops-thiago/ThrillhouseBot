@@ -8,7 +8,7 @@
 
     <groupId>dev.thiagogonzaga.thrillhousebot</groupId>
     <artifactId>thrillhousebot</artifactId>
-    <version>0.6.6</version>
+    <version>0.6.7-SNAPSHOT</version>
 
     <properties>
         <compiler-plugin.version>3.15.0</compiler-plugin.version>
