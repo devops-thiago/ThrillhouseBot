@@ -273,8 +273,10 @@ public class PatchCoverageResolver {
             reviewableFiles.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
     var result = new ArrayList<UncoveredFile>();
     for (var file : reviewableFiles) {
+      // Absent means either the report says nothing about this file or the attribution was
+      // ambiguous and was dropped; a present entry always carries at least one uncovered line.
       var reportedUncovered = uncoveredByPath.get(file.filename());
-      if (reportedUncovered == null || reportedUncovered.isEmpty()) {
+      if (reportedUncovered == null) {
         continue;
       }
       var uncoveredAdditions = new TreeSet<Integer>();
