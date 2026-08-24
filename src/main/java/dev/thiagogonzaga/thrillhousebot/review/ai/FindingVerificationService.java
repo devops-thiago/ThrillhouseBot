@@ -1006,7 +1006,7 @@ public class FindingVerificationService {
       if (isBlockingEligible(finding) && containsHedging(finding)) {
         Log.infof(
             "Demoting hedged %s finding '%s' to medium confidence",
-            finding.risk(), finding.title());
+            LogSafe.oneLine(finding.risk()), LogSafe.oneLine(finding.title()));
         adjusted.add(
             new ReviewResponse.Finding(
                 finding.risk(),
@@ -1071,7 +1071,10 @@ public class FindingVerificationService {
       }
       Log.infof(
           "Raising unmitigated-injection-sink finding '%s' from %s to %s risk; confidence stays %s",
-          finding.title(), finding.risk(), HIGH_LABEL, finding.confidence());
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.risk()),
+          HIGH_LABEL,
+          LogSafe.oneLine(finding.confidence()));
       adjusted.add(
           new ReviewResponse.Finding(
               HIGH_LABEL,
