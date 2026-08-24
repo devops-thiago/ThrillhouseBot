@@ -162,19 +162,7 @@ final class JacocoCoverageReport {
     // Distinct paths, so the same file listed twice cannot make an entry look like it matches two
     // repository files and drop coverage that is in fact unambiguous.
     for (var repositoryPath : new LinkedHashSet<>(repositoryPaths)) {
-      if (repositoryPath == null || repositoryPath.isBlank()) {
-        continue;
-      }
-      var candidates = byFileName.get(fileName(repositoryPath));
-      if (candidates == null) {
-        continue;
-      }
-      var matched = new ArrayList<SourceFile>();
-      for (var candidate : candidates) {
-        if (isSuffixPath(repositoryPath, candidate.path())) {
-          matched.add(candidate);
-        }
-      }
+      var matched = suffixMatches(repositoryPath);
       if (matched.isEmpty()) {
         continue;
       }
@@ -185,21 +173,60 @@ final class JacocoCoverageReport {
     }
     var result = new LinkedHashMap<String, NavigableSet<Integer>>();
     for (var entry : matchesByPath.entrySet()) {
-      var matched = entry.getValue();
-      if (matched.size() != 1) {
-        Log.debugf("Ambiguous coverage entries for %s; ignoring them", entry.getKey());
-        continue;
+      var sourceFile = unambiguousEntry(entry.getKey(), entry.getValue(), pathsPerEntry);
+      if (sourceFile != null) {
+        result.put(entry.getKey(), sourceFile.uncoveredLines());
       }
-      var sourceFile = matched.get(0);
-      if (pathsPerEntry.get(sourceFile) != 1) {
-        Log.debugf(
-            "Coverage entry %s matches more than one repository file; ignoring it",
-            sourceFile.path());
-        continue;
-      }
-      result.put(entry.getKey(), sourceFile.uncoveredLines());
     }
     return result;
+  }
+
+  /**
+   * Every report entry whose path is a whole-segment suffix of {@code repositoryPath}, in the order
+   * the reports listed them; empty for a null, blank, or unmentioned path. Deliberately says
+   * nothing about ambiguity: whether more than one match must be refused, and whether the single
+   * match is also claimed by another repository path, are decisions only {@link
+   * #uncoveredLinesByPath} can make, because they depend on the rest of the requested paths.
+   */
+  private List<SourceFile> suffixMatches(String repositoryPath) {
+    if (repositoryPath == null || repositoryPath.isBlank()) {
+      return List.of();
+    }
+    var candidates = byFileName.get(fileName(repositoryPath));
+    if (candidates == null) {
+      return List.of();
+    }
+    var matched = new ArrayList<SourceFile>();
+    for (var candidate : candidates) {
+      if (isSuffixPath(repositoryPath, candidate.path())) {
+        matched.add(candidate);
+      }
+    }
+    return matched;
+  }
+
+  /**
+   * The one report entry {@code repositoryPath} may take its lines from, or {@code null} when the
+   * attribution is ambiguous from either side: several entries suffix-match this path, or the
+   * single entry that does is also suffix-matched by another path in the same request ({@code
+   * pathsPerEntry} holds that count, built over all of them). Both directions are refused rather
+   * than guessed at, for the reason on {@link #uncoveredLinesByPath} — another module's coverage
+   * charged to this file is a wrong finding, where no attribution is merely no finding.
+   */
+  private static SourceFile unambiguousEntry(
+      String repositoryPath, List<SourceFile> matched, Map<SourceFile, Integer> pathsPerEntry) {
+    if (matched.size() != 1) {
+      Log.debugf("Ambiguous coverage entries for %s; ignoring them", repositoryPath);
+      return null;
+    }
+    var sourceFile = matched.get(0);
+    if (pathsPerEntry.get(sourceFile) != 1) {
+      Log.debugf(
+          "Coverage entry %s matches more than one repository file; ignoring it",
+          sourceFile.path());
+      return null;
+    }
+    return sourceFile;
   }
 
   /** Whether {@code suffix} is {@code path} itself or a whole-segment tail of it. */
@@ -334,12 +361,12 @@ final class JacocoCoverageReport {
         Log.debugf(
             "Two coverage reports describe %s; keeping only what they agree on", entry.getKey());
         already.retainAll(entry.getValue());
-        continue;
+      } else if (merged.size() < MAX_SOURCE_FILES) {
+        // The cap bounds only how many NEW paths the accumulator takes on; a path already in it is
+        // always intersected above, so reaching the cap can never turn a disagreement into a
+        // union.
+        merged.put(entry.getKey(), entry.getValue());
       }
-      if (merged.size() >= MAX_SOURCE_FILES) {
-        continue;
-      }
-      merged.put(entry.getKey(), entry.getValue());
     }
   }
 
