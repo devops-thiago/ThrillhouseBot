@@ -32,6 +32,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.TreeSet;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import javax.xml.XMLConstants;
 import javax.xml.stream.XMLInputFactory;
@@ -239,14 +240,7 @@ final class JacocoCoverageReport {
       for (var entry = zip.getNextEntry();
           entry != null && seen < MAX_ZIP_ENTRIES;
           entry = zip.getNextEntry(), seen++) {
-        var budgetLeft = MAX_TOTAL_INFLATED_BYTES - inflatedTotal;
-        var isReport =
-            !entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
-        // Every entry is drained through the counting copy — a report to collect, anything else to
-        // discard — because leaving an entry partly read would hand the implicit inflation back to
-        // the next getNextEntry(). Only the aggregate budget can stop the drain.
-        var sink = isReport ? new ByteArrayOutputStream() : null;
-        var read = inflateEntry(zip, budgetLeft, MAX_ENTRY_BYTES, sink);
+        var read = readEntryInto(zip, entry, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, merged);
         if (read < 0) {
           Log.debugf(
               "Coverage artifact inflates past the %d-byte aggregate cap; refusing it as a zip bomb",
@@ -254,13 +248,6 @@ final class JacocoCoverageReport {
           break;
         }
         inflatedTotal += read;
-        if (sink != null && sink.size() > 0) {
-          var one = parseToMap(new ByteArrayInputStream(sink.toByteArray()));
-          if (!one.isEmpty()) {
-            Log.infof("Read patch coverage from artifact entry %s", entry.getName());
-            mergeInto(merged, one);
-          }
-        }
       }
     } catch (IOException | RuntimeException e) {
       Log.debugf(e, "Could not read the coverage artifact archive");
@@ -269,6 +256,36 @@ final class JacocoCoverageReport {
     // coverage data; the rest of the class may assume a present path has at least one line.
     merged.values().removeIf(NavigableSet::isEmpty);
     return merged.isEmpty() ? EMPTY : new JacocoCoverageReport(merged);
+  }
+
+  /**
+   * Inflates one archive entry within {@code budgetLeft} and merges it into {@code merged} when it
+   * turns out to be a JaCoCo report, answering how many bytes it cost — or {@code -1} when the
+   * aggregate budget is gone and the archive must be abandoned.
+   *
+   * <p>Every entry is drained through the counting copy, a report to collect and anything else to
+   * discard, because leaving an entry partly read hands the implicit inflation back to the next
+   * {@code getNextEntry()}. Only the aggregate budget stops the drain.
+   */
+  private static long readEntryInto(
+      ZipInputStream zip,
+      ZipEntry entry,
+      long budgetLeft,
+      Map<String, NavigableSet<Integer>> merged)
+      throws IOException {
+    var isReport =
+        !entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
+    var sink = isReport ? new ByteArrayOutputStream() : null;
+    var read = inflateEntry(zip, budgetLeft, MAX_ENTRY_BYTES, sink);
+    if (read < 0 || sink == null || sink.size() == 0) {
+      return read;
+    }
+    var one = parseToMap(new ByteArrayInputStream(sink.toByteArray()));
+    if (!one.isEmpty()) {
+      Log.infof("Read patch coverage from artifact entry %s", entry.getName());
+      mergeInto(merged, one);
+    }
+    return read;
   }
 
   /**
