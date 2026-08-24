@@ -6,3 +6,10 @@
 # (The earlier libcap CVE-2026-4878 is dropped: the 9.8 base above no longer ships it.)
 CVE-2026-54369
 CVE-2026-54371
+
+# libssl3 3.0.20-1~deb12u2 in the debian12-based images (CVE-2026-14456): unbounded memory
+# growth in the OpenSSL QUIC *server* listener. Per the upstream advisory the issue exists only
+# since OpenSSL 3.5, where the QUIC server was added — the 3.0.x branch Debian 12 ships has no
+# QUIC server code, and ThrillhouseBot runs no QUIC listener regardless. Debian has published no
+# fixed package. Remove when Debian ships a libssl3 update that clears the tracker entry.
+CVE-2026-14456
