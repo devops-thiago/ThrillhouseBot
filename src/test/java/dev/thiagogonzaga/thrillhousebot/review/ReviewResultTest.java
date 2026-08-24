@@ -263,6 +263,127 @@ class ReviewResultTest {
   }
 
   @Test
+  void truncationDetailToleratesANullPatchlessList() {
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY);
+
+    assertEquals(List.of(), detail.patchlessFileNames());
+    assertFalse(detail.hasFileGaps());
+  }
+
+  @Test
+  void coverageGapClauseNamesPatchlessFilesWithoutBlamingTheBudget() {
+    // #628: a file GitHub returned no patch text for was never over any budget — there was
+    // nothing to review. The clause must say so, not tell the reader the review ran out of room.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY);
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertFalse(clause.contains("review budget"), clause);
+    assertFalse(clause.contains("size budget"), clause);
+    assertTrue(
+        clause.contains(
+            "1 file(s) could not be reviewed because GitHub provided no diff content for them"
+                + " — binary files, or text diffs too large to display (assets/logo.png)"),
+        clause);
+  }
+
+  @Test
+  void coverageGapClauseKeepsTheBudgetWordingForTrueOmissionsAlongsidePatchlessFiles() {
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("big.java"),
+            List.of(),
+            List.of("blob.bin"),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY);
+
+    var clause = ReviewResult.coverageGapClause(2, detail);
+
+    assertTrue(
+        clause.contains(
+            "1 file(s) were omitted entirely (big.java) because the diff exceeded the review"
+                + " budget"),
+        clause);
+    assertTrue(clause.contains("no diff content for them"), clause);
+    assertTrue(clause.contains("(blob.bin)"), clause);
+  }
+
+  @Test
+  void coverageGapBriefCountsPatchlessFilesUnderTheirOwnLabel() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            2,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of(),
+                List.of(),
+                List.of("a.png", "b.bin"),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.NONE,
+                VerificationCoverage.EMPTY));
+
+    var brief = result.coverageGapBrief();
+
+    assertEquals("2 file(s) without diff content from GitHub", brief);
+  }
+
+  @Test
+  void truncationDisclosureRendersForAPatchlessOnlyDetail() {
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of("a.png"),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY);
+
+    var disclosure = ReviewResult.truncationDisclosure(1, detail);
+
+    assertTrue(detail.hasFileGaps(), "a patchless file is a real per-file coverage gap");
+    assertTrue(disclosure.contains("partial coverage"), disclosure);
+    assertTrue(disclosure.contains("a.png"), disclosure);
+    assertFalse(disclosure.contains("budget"), disclosure);
+  }
+
+  @Test
   void coverageGapClauseNamesTheSpendCeilingSeparatelyFromTheBudgetOmissions() {
     // #499: files skipped because the review's token spend ceiling was reached have a different
     // cause — and a different operator fix — than files the diff budget dropped, so the rendered

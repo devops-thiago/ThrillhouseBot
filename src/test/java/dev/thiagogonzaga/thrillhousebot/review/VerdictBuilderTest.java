@@ -166,6 +166,74 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void aPatchlessFileHoldsApprovalAndIsDisclosedAsMissingContentNotAsOverBudget() {
+    // #628: a file GitHub returned no patch for was never a candidate for the budget. It must
+    // still hold APPROVE and be disclosed by name, but under its own reason — telling the reader
+    // the review ran out of room points them at raising a budget that would change nothing.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(1, result.omittedFiles());
+    assertTrue(result.truncated());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(List.of(), result.truncation().omittedFileNames());
+    assertEquals(List.of("assets/logo.png"), result.truncation().patchlessFileNames());
+    var summary = result.summaryMarkdown();
+    assertTrue(
+        summary.contains(
+            "1 file(s) could not be reviewed because GitHub provided no diff content for them"
+                + " — binary files, or text diffs too large to display (assets/logo.png)"),
+        summary);
+    assertFalse(summary.contains("review budget"), summary);
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(checkSummary.contains("1 file(s) without diff content from GitHub"), checkSummary);
+  }
+
+  @Test
+  void aBudgetOmissionAndAPatchlessFileAreDisclosedUnderTheirOwnReasons() {
+    // The two classes coexist in one review: the true budget omission keeps the budget wording,
+    // the patchless file gets its own clause, and neither claims the other's file.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(),
+            List.of("big.java"),
+            List.of(),
+            List.of("assets/logo.png"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(2, result.omittedFiles());
+    var summary = result.summaryMarkdown();
+    assertTrue(
+        summary.contains(
+            "1 file(s) were omitted entirely (big.java) because the diff exceeded the review"
+                + " budget"),
+        summary);
+    assertTrue(summary.contains("no diff content for them"), summary);
+    assertTrue(summary.contains("(assets/logo.png)"), summary);
+  }
+
+  @Test
   void aFailedBatchsRuntimeUncoveredFilesHoldApprovalAndAreDisclosedAsCallFailures() {
     // Lead#3 + #655: a batch that failed all its retries records its files on the shared plan. The
     // verdict reads that same instance and must gate approval on them exactly like a planned

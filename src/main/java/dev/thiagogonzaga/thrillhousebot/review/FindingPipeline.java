@@ -253,7 +253,9 @@ public class FindingPipeline {
     if (plan.multiCall()) {
       return runMultiCall(session, promptInputs, ctx, plan, lineResolver);
     }
-    if (plan.budgeted() && plan.batches().isEmpty() && !plan.omittedFiles().isEmpty()) {
+    if (plan.budgeted()
+        && plan.batches().isEmpty()
+        && (!plan.omittedFiles().isEmpty() || !plan.patchlessFiles().isEmpty())) {
       return summarizeWithoutReview(session, promptInputs, ctx, plan);
     }
     var singleInputs = promptInputs;
@@ -785,8 +787,9 @@ public class FindingPipeline {
       ReviewContextLoader.ReviewContext ctx,
       DiffBudgetPlanner.BudgetPlan plan) {
     Log.warnf(
-        "No reviewable file fits the per-call token budget (%d omitted); skipping the review call",
-        plan.omittedFiles().size());
+        "No reviewable file could be sent (%d over the per-call token budget, %d with no patch"
+            + " text); skipping the review call",
+        plan.omittedFiles().size(), plan.patchlessFiles().size());
     var summaryInputs =
         new AiReviewService.SummaryInputs(
             promptInputs.prContext(),
@@ -1076,6 +1079,11 @@ public class FindingPipeline {
     for (var name : plan.omittedFiles()) {
       rows.add(name + " (exceeded the review call budget)");
     }
+    // Patchless files are withheld for a fourth reason (#628): GitHub returned no patch text for
+    // them, so there was never any content to send — not a budget problem.
+    for (var name : plan.patchlessFiles()) {
+      rows.add(name + " (no diff content from GitHub — binary, or too large to display)");
+    }
     if (rows.isEmpty()) {
       return "";
     }
@@ -1183,6 +1191,7 @@ public class FindingPipeline {
     header.append(changeScopeSummary(ctx));
     var sb = new StringBuilder();
     var omitted = Set.copyOf(plan.omittedFiles());
+    var patchless = Set.copyOf(plan.patchlessFiles());
     var uncovered = Set.copyOf(plan.runtimeUncoveredFiles());
     // effectiveClippedFiles drops any clipped file a failed batch left wholly uncovered, so it is
     // disclosed once, as uncovered, not also marked "partially analyzed".
@@ -1193,6 +1202,7 @@ public class FindingPipeline {
     var responseCut = Set.copyOf(plan.responseCutFiles());
     for (var file : ctx.reviewableFiles()) {
       if (ReviewDiffFormatter.namesContain(omitted, file.filename())
+          || ReviewDiffFormatter.namesContain(patchless, file.filename())
           || ReviewDiffFormatter.namesContain(uncovered, file.filename())) {
         continue;
       }
@@ -1208,6 +1218,12 @@ public class FindingPipeline {
     }
     for (var name : plan.omittedFiles()) {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");
+    }
+    for (var name : plan.patchlessFiles()) {
+      sb.append(name)
+          .append(
+              " (not analyzed — GitHub provided no diff content: binary, or too large to"
+                  + " display)\n");
     }
     // A file skipped at the spend ceiling is recorded as runtime-uncovered too (it holds approval
     // like any uncovered file), but its cause is a deliberate stop, not a call that failed. The

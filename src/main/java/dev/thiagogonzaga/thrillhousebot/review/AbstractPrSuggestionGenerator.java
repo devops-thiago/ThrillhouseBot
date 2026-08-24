@@ -256,22 +256,26 @@ public abstract class AbstractPrSuggestionGenerator {
 
   /**
    * The partial-coverage disclosure for a run, sourced from the token-budget plan: files that did
-   * not fit any batch and files clipped to fit one. Both are named, so a large PR says which parts
-   * of the change set the command did not cover rather than only how many — and coverage is now
-   * bounded by {@code max-ai-calls}, never by the diff render's line cap.
+   * not fit any batch, files clipped to fit one, and files GitHub returned no patch text for
+   * (#628). All are named, so a large PR says which parts of the change set the command did not
+   * cover rather than only how many — and coverage is now bounded by {@code max-ai-calls}, never by
+   * the diff render's line cap.
    */
   protected static String disclosure(DiffBudgetPlanner.BudgetPlan plan) {
     if (!plan.truncated()) {
       return "";
     }
     return ReviewResult.truncationDisclosure(
-        plan.omittedFiles().size() + plan.clippedFiles().size(),
+        plan.omittedFiles().size() + plan.clippedFiles().size() + plan.patchlessFiles().size(),
         new ReviewResult.TruncationDetail(
             plan.omittedFiles(),
             plan.clippedFiles(),
+            plan.patchlessFiles(),
             List.of(),
             List.of(),
-            SummaryDegradation.NONE));
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY));
   }
 
   /**

@@ -141,6 +141,9 @@ public class VerdictBuilder {
                 withoutNames(
                     withoutNames(plan.effectiveOmittedFiles(), ceilingSkipped), callFailed),
                 clipped,
+                // Patchless files are their own class (#628): they hold approval like an omission,
+                // but the disclosure must say GitHub returned no content, not blame the budget.
+                plan.patchlessFiles(),
                 ceilingSkipped,
                 responseCut,
                 callFailed,
@@ -156,7 +159,10 @@ public class VerdictBuilder {
                 verificationCoverage);
     var omitted =
         plan.budgeted()
-            ? plan.effectiveOmittedFiles().size() + clipped.size() + responseCut.size()
+            ? plan.effectiveOmittedFiles().size()
+                + clipped.size()
+                + responseCut.size()
+                + plan.patchlessFiles().size()
             : ctx.omittedFiles();
     // GitHub PR-level totals when available; ignore-glob drops can undercount diff-derived stats.
     // Pure renames are excluded from reviewableFiles for AI budget (#386) but still belong in the
@@ -169,6 +175,7 @@ public class VerdictBuilder {
     // skips (the detail keeps them separate only so the disclosure names the ceiling) — while
     // clipped and response-cut files keep theirs: those were partially reviewed.
     var omittedNames = new HashSet<>(truncation.omittedFileNames());
+    omittedNames.addAll(truncation.patchlessFileNames());
     omittedNames.addAll(truncation.spendCeilingSkippedFileNames());
     omittedNames.addAll(truncation.callFailedFileNames());
     var changedFiles =

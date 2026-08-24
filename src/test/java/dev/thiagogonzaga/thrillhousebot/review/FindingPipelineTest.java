@@ -1114,6 +1114,101 @@ class FindingPipelineTest {
     assertTrue(diff.contains("- vendor/bundle.js (exceeded the review call budget)"), diff);
   }
 
+  /** #628: a patchless file is named as content GitHub withheld, never as a budget overflow. */
+  @Test
+  void withheldNoticeNamesPatchlessFilesWithoutBlamingTheBudget() {
+    var session = ReviewSession.create("owner/repo", 1, "Add an icon", "sha");
+    var app = new FileDiff("src/App.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n");
+    var ctx = reviewContext(List.of(app), List.of(app), null);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("src/App.java")),
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
+
+    var diff = captureBudgetedReviewDiff(session, ctx, plan);
+
+    assertTrue(
+        diff.contains(
+            "- assets/logo.png (no diff content from GitHub — binary, or too large to display)"),
+        diff);
+    assertFalse(diff.contains("exceeded the review call budget"), diff);
+  }
+
+  /** #628: the summary overview gives a patchless file its honest reason and drops its row. */
+  @Test
+  void summaryOverviewNamesPatchlessFilesWithoutBlamingTheBudget() {
+    var session = ReviewSession.create("owner/repo", 1, "Add an icon", "sha");
+    var app = new FileDiff("src/App.java", "modified", 3, 0, 3, "@@ -1 +1 @@\n+x\n");
+    var logo = new FileDiff("assets/logo.png", "added", 9, 0, 9, null);
+    var ctx = reviewContext(List.of(app, logo), List.of(app, logo), null);
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("src/App.java"), batch("src/App.java")),
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    var overview = captor.getValue().changedFiles();
+    assertTrue(
+        overview.contains(
+            "assets/logo.png (not analyzed — GitHub provided no diff content: binary, or too"
+                + " large to display)"),
+        overview);
+    assertFalse(overview.contains("assets/logo.png (added"), overview);
+    assertFalse(overview.contains("exceeded the review call budget"), overview);
+  }
+
+  /** #628: a plan whose only gap is patchless still skips the review call, like all-omitted. */
+  @Test
+  void aPatchlessOnlyPlanSkipsTheReviewCallAndKeepsTheSummary() {
+    var session = persistedSession();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            true,
+            null,
+            null,
+            null,
+            null,
+            null);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var result =
+        pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, never()).reviewBatch(eq(session), any(), anyInt(), anyInt());
+    verify(aiReviewService).summarize(eq(session), any());
+    assertTrue(result.findings().isEmpty());
+  }
+
   /** A rename GitHub reported without a previous path degrades to its current path alone. */
   @Test
   void withheldNoticeFallsBackToTheCurrentPathWhenNoPreviousOneIsReported() {
