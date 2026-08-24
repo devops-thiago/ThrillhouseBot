@@ -266,8 +266,11 @@ class PatchCoverageResolverTest {
     void ignoresCoverageFromARunThatDidNotSucceed() {
       // With the common `if: always()` upload, a run that aborted still attaches the artifact — but
       // its ci=0 regions are the run stopping short, not measured fact. A failed conclusion must be
-      // skipped before its artifacts are even listed.
-      givenRuns(new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "failure"));
+      // skipped before its artifacts are even listed, and so must an absent one: a run GitHub
+      // reports as completed with no conclusion is not a run that said it succeeded.
+      givenRuns(
+          new GitHubActionsClient.WorkflowRun(41L, "ci", HEAD_SHA, "completed", null),
+          new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "failure"));
       when(actionsClient.listRunArtifacts(any(), any(), eq("o"), eq("r"), eq(42L), anyInt()))
           .thenReturn(
               new GitHubActionsClient.RunArtifacts(

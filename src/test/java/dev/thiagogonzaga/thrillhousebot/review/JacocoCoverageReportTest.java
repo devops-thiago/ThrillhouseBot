@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamException;
@@ -325,12 +326,13 @@ class JacocoCoverageReportTest {
     @Test
     void skipsXmlEntriesThatCarryNoCoverage() throws IOException {
       var entries = new LinkedHashMap<String, String>();
+      entries.put("empty.xml", "");
       entries.put("a-surefire-report.xml", "<testsuite name=\"x\"/>");
       entries.put("jacoco.xml", REPORT);
 
       assertFalse(
           JacocoCoverageReport.fromArtifactZip(zipOf(entries)).isEmpty(),
-          "an unrelated XML entry earlier in the archive must not end the search");
+          "an empty or unrelated XML entry earlier in the archive must not end the search");
     }
 
     @Test
@@ -398,21 +400,28 @@ class JacocoCoverageReportTest {
 
     @Test
     void refusesAnArchiveThatInflatesPastTheAggregateCap() throws IOException {
+      // Every bomb entry stays WELL under the per-entry ceiling, so only their running sum can
+      // refuse this archive: a per-entry bound alone — what the reader had before — lets all of it
+      // through. Nothing here is XML either, which is the whole point: the unfixed walk skipped a
+      // non-XML entry without reading it, and the next getNextEntry() then inflated the whole of it
+      // to reach the following header. The real report sits BEHIND the bomb, so a reader that
+      // reaches it is a reader that paid the full inflation cost first.
+      var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
+      assertTrue(
+          perEntry < JacocoCoverageReport.MAX_ENTRY_BYTES,
+          "the bomb must not be refusable by the per-entry ceiling");
       var bytes = new ByteArrayOutputStream();
       try (var zip = new ZipOutputStream(bytes)) {
-        // A maximally-compressible entry whose inflated size alone blows the aggregate budget,
-        // placed BEFORE the real report so reaching the report requires inflating the bomb. On the
-        // unfixed code, skipping this non-XML entry inflates the whole of it to find the next
-        // header, and the report behind it is then read as fact.
-        zip.putNextEntry(new ZipEntry("bomb.bin"));
         var zeros = new byte[64 * 1024];
-        var written = 0L;
-        var target = JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES + zeros.length;
-        while (written <= target) {
-          zip.write(zeros);
-          written += zeros.length;
+        var inflated = 0L;
+        for (var i = 0; inflated <= JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".bin"));
+          for (var written = 0; written < perEntry; written += zeros.length) {
+            zip.write(zeros);
+          }
+          zip.closeEntry();
+          inflated += perEntry;
         }
-        zip.closeEntry();
         zip.putNextEntry(new ZipEntry("jacoco.xml"));
         zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
         zip.closeEntry();
@@ -422,6 +431,91 @@ class JacocoCoverageReportTest {
           JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
           "an archive inflating past the aggregate cap must be refused, not walked to the report"
               + " hidden behind the bomb");
+    }
+
+    @Test
+    void drainsButCollectsNothingFromAnEntryPastThePerEntryCeiling() throws IOException {
+      var sink = new ByteArrayOutputStream();
+      try (var zip =
+          new ZipInputStream(new ByteArrayInputStream(zipOf(Map.of("jacoco.xml", REPORT))))) {
+        zip.getNextEntry();
+
+        var read = JacocoCoverageReport.inflateEntry(zip, Long.MAX_VALUE, 8, sink);
+
+        assertEquals(
+            REPORT.getBytes(StandardCharsets.UTF_8).length,
+            read,
+            "the entry is drained in full even when nothing is kept, so the walk can reach the"
+                + " next header without the implicit inflation");
+        assertEquals(
+            0,
+            sink.size(),
+            "a report past the per-entry ceiling contributes nothing — half a report is not a"
+                + " report");
+      }
+    }
+
+    @Test
+    void capsTheSourceFilesMergedAcrossReports() throws IOException {
+      var first = new StringBuilder("<report name=\"a\"><package name=\"a\">");
+      for (var i = 0; i < JacocoCoverageReport.MAX_SOURCE_FILES; i++) {
+        first
+            .append("<sourcefile name=\"F")
+            .append(i)
+            .append(".java\"><line nr=\"1\" mi=\"1\" ci=\"0\"/></sourcefile>");
+      }
+      first.append("</package></report>");
+      var entries = new LinkedHashMap<String, String>();
+      entries.put("module-a/jacoco.xml", first.toString());
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="b">
+              <sourcefile name="Extra.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      var report = JacocoCoverageReport.fromArtifactZip(zipOf(entries));
+
+      assertFalse(
+          report.uncoveredLines("mod/a/F0.java").isEmpty(), "the first report's files are merged");
+      assertTrue(
+          report.uncoveredLines("mod/b/Extra.java").isEmpty(),
+          "merging a second report cannot grow the map past the source-file cap");
+    }
+
+    @Test
+    void capsTheLinesOneSourceFileMergesAcrossReports() throws IOException {
+      var first =
+          new StringBuilder(
+              "<report name=\"a\"><package name=\"a\"><sourcefile name=\"Huge.java\">");
+      for (var nr = 1; nr <= JacocoCoverageReport.MAX_LINES_PER_FILE; nr++) {
+        first.append("<line nr=\"").append(nr).append("\" mi=\"1\" ci=\"0\"/>");
+      }
+      first.append("</sourcefile></package></report>");
+      var entries = new LinkedHashMap<String, String>();
+      entries.put("module-a/jacoco.xml", first.toString());
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="a">
+              <sourcefile name="Huge.java"><line nr="99999" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      var lines =
+          JacocoCoverageReport.fromArtifactZip(zipOf(entries)).uncoveredLines("mod/a/Huge.java");
+
+      assertEquals(
+          JacocoCoverageReport.MAX_LINES_PER_FILE,
+          lines.size(),
+          "the merge is bounded per file, not only per report");
+      assertFalse(
+          lines.contains(99_999), "a second report cannot push one file's line list past the cap");
     }
 
     @Test
