@@ -408,8 +408,9 @@ class JacocoCoverageReportTest {
       // reaches it is a reader that paid the full inflation cost first.
       var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
       assertTrue(
-          perEntry < JacocoCoverageReport.MAX_ENTRY_BYTES,
-          "the bomb must not be refusable by the per-entry ceiling");
+          perEntry < JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES,
+          "no single entry may blow the budget on its own, or it is not the aggregate bound this"
+              + " archive is refused by");
       var bytes = new ByteArrayOutputStream();
       try (var zip = new ZipOutputStream(bytes)) {
         var zeros = new byte[64 * 1024];
