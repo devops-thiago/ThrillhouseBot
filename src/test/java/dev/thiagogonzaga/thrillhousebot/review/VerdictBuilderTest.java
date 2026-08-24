@@ -1411,6 +1411,81 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
   }
 
+  /**
+   * #481 — a declared ignore glob that matches nothing is disclosed to the maintainer instead of
+   * being silently applied to no file. It shares the review-scope blockquote with the pure-rename
+   * rollup, since both answer what the review did not look at.
+   */
+  @Test
+  void unmatchedIgnoreGlobsAreDisclosedInTheReviewScopeNote() {
+    var ctx = contextWithUnmatchedGlobs(List.of("payments/", "fixtrues/**"));
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 2 ignore globs declared in this repository's"
+                    + " ThrillhouseBot config matched no file in this pull request (`payments/`,"
+                    + " `fixtrues/**`)\n\n"),
+        result.summaryMarkdown());
+  }
+
+  @Test
+  void aReviewWhoseDeclaredGlobsAllMatchedCarriesNoScopeNote() {
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result =
+        realSummaryBuilder.build(
+            contextWithUnmatchedGlobs(List.of()), CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertFalse(result.summaryMarkdown().contains("AI review scope"), result.summaryMarkdown());
+  }
+
+  /** A one-file context carrying {@code unmatched} as the repository's dead ignore globs. */
+  private static ReviewContextLoader.ReviewContext contextWithUnmatchedGlobs(
+      List<String> unmatched) {
+    var changed = new FileDiff("src/Main.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x");
+    return new ReviewContextLoader.ReviewContext(
+        List.of(changed),
+        "diff",
+        "",
+        0,
+        List.of(),
+        List.of(),
+        List.of(),
+        true,
+        false,
+        null,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        List.of(changed),
+        () -> new DiffLineResolver(Map.of()),
+        null,
+        List.of(),
+        unmatched);
+  }
+
   @Test
   void nullPureRenameRollupIsIgnored() {
     try (var formatter = mockStatic(ReviewDiffFormatter.class, CALLS_REAL_METHODS)) {

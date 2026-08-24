@@ -323,7 +323,7 @@ will change per provider:
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per AI streaming attempt; keep it >= `AI_TIMEOUT` so timed-out attempts don't leave orphaned provider streams | `300` |
 | `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repo-relative path of the per-repo instructions file read on each review | `.github/thrillhousebot.md` |
-| `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs excluded from review — lockfiles, generated code, build output. `*` does not cross `/`; use `**` to span directories. Replaces (not extends) the default list, so re-include the defaults you still want | `**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**` |
+| `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs excluded from review — lockfiles, generated code, build output. A pattern with no `/` matches at any depth (`*.lock`, `vendor`); one carrying a `/` is anchored to the repository root (`docs/generated/**`); a trailing `/` means that directory's tree; `*` does not cross `/`, so use `**` to span directories. The value is comma-separated, so write a `{a,b}` alternation as separate patterns. Replaces (not extends) the default list, so re-include the defaults you still want | `**/pom.xml,**/package-lock.json,**/*.lock,**/*.generated.*,**/target/**` |
 | `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Let each repository extend the ignore list with globs of its own, scope review rules to a path, and name its coverage-report artifact, from `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)). Both are additive; set `false` to make the deployment list and the global instructions the only ones that count | `true` |
 | `REVIEW_LABELS_ENABLED` | Opt in to context-aware PR labels (see [PR labels](#pr-labels)) | `false` |
 | `REVIEW_LABELS_APPLY` | When labels are enabled, add them to the PR instead of only suggesting them in a comment | `false` |
@@ -688,8 +688,27 @@ A file is skipped if it matches *either* the deployment-wide
 `thrillhousebot.review.ignored-files` list *or* a glob the repository declared. A
 repository can therefore take more files out of review scope, but never put back a
 file the deployment excludes, and a repository that ships no config file gets the
-global list exactly as before. Globs use the same gitignore-style syntax as the
-global key (`*` does not cross `/`; use `**` to span directories).
+global list exactly as before.
+
+**Globs are gitignore-style**, and mean here exactly what they mean in a root
+`.gitignore` — the same for this key and for the deployment-wide one:
+
+| Pattern | Matches |
+|---|---|
+| `build/` | everything under any directory named `build`, at any depth |
+| `vendor` | a file *or* directory called `vendor` at any depth, and its tree |
+| `*.lock` | every lockfile at any depth |
+| `generated/**` | the repository's own top-level `generated` tree (a pattern carrying a `/` is anchored to the root) |
+| `**/generated/**` | a `generated` tree at any depth |
+| `/Makefile` | only the root `Makefile` |
+| `**/*.{js,ts}` | brace alternation, in the YAML form |
+
+`*` never crosses a `/` — use `**` to span directories. Negation (`!path`) is *not*
+supported and is dropped with a warning: the effective list is a union, so nothing may
+put back a file it excludes. A glob that matched no file in the pull request is named in
+the review summary, so a declaration that quietly does nothing is visible rather than
+silent. The same syntax and the same matcher are used everywhere globs appear in this
+file.
 
 **Precedence: the review rules for a file are the global instructions plus every
 matching path scope.** The prose in `.github/thrillhousebot.md` (or whichever file the
@@ -732,13 +751,17 @@ list is explicitly not evidence that a test covers it. Files the ignore list alr
 excluded are never reported as under-tested.
 
 The file is read from the repository's default branch on each review and cached for
-five minutes. Everything about it fails soft: a missing file, invalid YAML, an
-unexpected shape, an uncompilable glob, or a malformed `path-instructions` entry is
-logged and skipped, leaving the global ignore list and the global instructions in force
-— it never fails a review. A repository may declare at most 25 scopes, each with at most
-4000 characters of rules; the rest is dropped with a warning. Operators who do not want
-repositories adjusting their own review scope or rules can turn the whole mechanism off
-with `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`.
+five minutes. YAML anchors, aliases and merge keys are resolved; a document that is
+oversized, nested absurdly deep, or built on a runaway alias expansion is refused whole.
+Everything else fails soft: a missing file, invalid YAML, an unexpected shape, an
+uncompilable glob, a repeated key (the last value wins), or a malformed
+`path-instructions` entry is logged and skipped, leaving the global ignore list and the
+global instructions in force — it never fails a review. A read that fails for a reason
+other than "no such file" (a 5xx, a rate limit) is not remembered as "this repository has
+no config": the next review asks again. A repository may declare at most 25 scopes, each
+with at most 4000 characters of rules; the rest is dropped with a warning. Operators who
+do not want repositories adjusting their own review scope or rules can turn the whole
+mechanism off with `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED=false`.
 <!-- docs:repository-configuration:end -->
 
 <!-- docs:pr-labels:start -->

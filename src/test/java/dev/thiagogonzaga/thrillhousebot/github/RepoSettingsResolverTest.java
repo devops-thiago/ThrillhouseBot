@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.ProcessingException;
+import jakarta.ws.rs.ServerErrorException;
 import jakarta.ws.rs.core.Response;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -191,6 +192,188 @@ class RepoSettingsResolverTest {
       var settings = resolve();
 
       assertEquals(java.util.List.of("kept/**"), settings.ignoredFiles());
+    }
+
+    /**
+     * #481 — the scalar form is comma-split to match the env-var spelling of the global key, and a
+     * naive split cut {@code **}{@code /*.&#123;js,ts&#125;} in half. Both halves then failed to
+     * compile and were dropped, so a brace glob excluded nothing at all.
+     */
+    @Test
+    void keepsABraceGlobWholeWhenSplittingTheScalarForm() {
+      stubFile(YML, "review:\n  ignored-files: \"**/*.{js,ts}\"\n");
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("**/*.{js,ts}"), settings.ignoredFiles());
+    }
+
+    @Test
+    void splitsAScalarListOnCommasThatAreNotInsideABraceGroup() {
+      stubFile(YML, "review:\n  ignored-files: \"docs/**, **/*.{snap,golden} , build/\"\n");
+
+      var settings = resolve();
+
+      assertEquals(
+          java.util.List.of("docs/**", "**/*.{snap,golden}", "build/"), settings.ignoredFiles());
+    }
+
+    @Test
+    void aStrayClosingBraceDoesNotSwallowTheRestOfTheScalarList() {
+      stubFile(YML, "review:\n  ignored-files: \"weird}name, kept/**\"\n");
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("weird}name", "kept/**"), settings.ignoredFiles());
+    }
+  }
+
+  /**
+   * #481 — a duplicate key used to throw out of the whole parse ({@code
+   * setAllowDuplicateKeys(false)}), discarding every setting in the file over one repeated line.
+   * That is a far wider blast radius than the parser's per-entry "one bad entry costs only itself"
+   * design everywhere else.
+   */
+  @Nested
+  class DuplicateKeys {
+
+    @Test
+    void aDuplicateKeyCostsOnlyItsOwnValueNotTheWholeFile() {
+      stubFile(
+          YML,
+          """
+          review:
+            ignored-files:
+              - "kept/**"
+            coverage-artifact: "first"
+            coverage-artifact: "second"
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("kept/**"), settings.ignoredFiles());
+      assertEquals("second", settings.coverageArtifact(), "the last occurrence wins");
+      assertEquals(YML, settings.source());
+    }
+
+    @Test
+    void aDuplicateKeyElsewhereInTheFileLeavesTheReviewSettingsIntact() {
+      stubFile(
+          YML,
+          """
+          version: 1
+          version: 2
+          review:
+            ignored-files:
+              - "kept/**"
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("kept/**"), settings.ignoredFiles());
+    }
+  }
+
+  /**
+   * #481 — jackson-dataformat-yaml never runs snakeyaml's {@code Composer}, so an alias arrived as
+   * the literal text of its name: {@code *common} became a glob matching a file called {@code
+   * common}, and an aliased scope path became a short literal string that passed every check and
+   * was rendered into the review prompt as the repository's rule for those files.
+   */
+  @Nested
+  class AnchorsAndAliases {
+
+    @Test
+    void resolvesAnAliasedIgnoreList() {
+      stubFile(
+          YML,
+          """
+          shared: &shared
+            - "generated/**"
+            - "**/*.snap"
+          review:
+            ignored-files: *shared
+          """);
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("generated/**", "**/*.snap"), settings.ignoredFiles());
+    }
+
+    @Test
+    void resolvesAnAliasedScopePathRatherThanNamingTheAnchor() {
+      stubFile(
+          YML,
+          """
+          money: &money "payments/**"
+          review:
+            path-instructions:
+              - path: *money
+                instructions: "Money is handled in integer cents."
+          """);
+
+      var settings = resolve();
+
+      assertEquals(1, settings.pathInstructions().size());
+      assertEquals("payments/**", settings.pathInstructions().get(0).path());
+    }
+
+    @Test
+    void resolvesAMergeKeyInsteadOfDroppingTheEntry() {
+      stubFile(
+          YML,
+          """
+          defaults: &defaults
+            instructions: "Generated code: style findings do not apply."
+          review:
+            path-instructions:
+              - <<: *defaults
+                path: "**/generated/**"
+          """);
+
+      var settings = resolve();
+
+      assertEquals(1, settings.pathInstructions().size());
+      assertEquals("**/generated/**", settings.pathInstructions().get(0).path());
+      assertEquals(
+          "Generated code: style findings do not apply.",
+          settings.pathInstructions().get(0).instructions());
+    }
+
+    /**
+     * With aliases actually resolved, {@code setMaxAliasesForCollections} stops being decorative
+     * and becomes the guard its javadoc always claimed: an expansion bomb has to be refused, not
+     * expanded.
+     */
+    @Test
+    void refusesAnAliasExpansionBombInsteadOfExpandingIt() {
+      stubFile(
+          YML,
+          """
+          a: &a ["x","x","x","x","x","x","x","x","x"]
+          b: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]
+          c: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b]
+          review:
+            ignored-files: *c
+          """);
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolverTest.this::resolve));
+    }
+
+    @Test
+    void refusesADocumentNestedDeeperThanTheLimit() {
+      var yaml = new StringBuilder("review:\n  ignored-files:\n    - \"kept/**\"\nnest:\n");
+      var indent = new StringBuilder("  ");
+      for (var i = 0; i < RepoSettingsParser.MAX_NESTING_DEPTH + 5; i++) {
+        yaml.append(indent).append("k").append(i).append(":\n");
+        indent.append("  ");
+      }
+      yaml.append(indent).append("leaf: 1\n");
+      stubFile(YML, yaml.toString());
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolverTest.this::resolve));
     }
   }
 
@@ -521,6 +704,18 @@ class RepoSettingsResolverTest {
       assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolverTest.this::resolve));
     }
 
+    /**
+     * The document-size ceiling is the one loader guard that was always real; #481 moved the read
+     * off jackson-dataformat-yaml, so pin that it still refuses an oversized file.
+     */
+    @Test
+    void anOverSizedConfigFileIsRefusedRatherThanRead() {
+      stubFile(YML, "review:\n  coverage-artifact: \"" + "x".repeat(300_000) + "\"\n");
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolverTest.this::resolve));
+    }
+
     @Test
     void doesNotFetchAnythingWhenTheFeatureIsDisabled() {
       when(reviewConfig.repoConfigEnabled()).thenReturn(false);
@@ -637,6 +832,52 @@ class RepoSettingsResolverTest {
 
       verify(prClient, times(2))
           .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+    }
+
+    /**
+     * #481 — {@code WebApplicationException} is the parent of {@code ServerErrorException}
+     * (500/502/ 503) and {@code ClientErrorException} (the 403 secondary rate limit), so a
+     * transient failure was indistinguishable from a real 404 and got "this repo has no config"
+     * cached for a minute. Every review in that window ran on the deployment ignore list alone.
+     */
+    @Test
+    void aTransientFailureIsNotCachedAsNoConfig() {
+      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+          .thenThrow(new ServerErrorException(Response.status(503).build()));
+      stubMissing(YAML);
+      var resolver = resolver();
+
+      assertEquals(
+          RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+      assertTrue(resolver.cache.isEmpty(), "a failure we cannot read is not an answer to cache");
+
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+      verify(prClient, times(2))
+          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+    }
+
+    @Test
+    void aFailureOnOneCandidateStillLetsTheNextOneInTheChainWin() {
+      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+          .thenThrow(new ServerErrorException(Response.status(502).build()));
+      stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("from-yaml/**"), settings.ignoredFiles());
+    }
+
+    @Test
+    void aRealNotFoundIsStillCachedAsNoConfig() {
+      stubMissing(YML);
+      stubMissing(YAML);
+      var resolver = resolver();
+
+      assertEquals(
+          RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+      assertEquals(1, resolver.cache.size(), "a 404 is a real answer and stays cacheable");
     }
 
     @Test

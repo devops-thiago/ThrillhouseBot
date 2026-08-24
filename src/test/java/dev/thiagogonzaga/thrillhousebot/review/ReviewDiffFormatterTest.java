@@ -881,6 +881,233 @@ class ReviewDiffFormatterTest {
       assertFalse(formatter.isIgnored("outbox/handler.java"));
       assertFalse(formatter.isIgnored("distance.js"));
     }
+
+    /**
+     * #481 pin. The gitignore-style normalization changes what a pattern compiles to, so the
+     * shipped default list has to keep excluding exactly what it excluded before — starting with
+     * its first entry, {@code **}{@code /pom.xml}, whose reach (every pom at every depth, and no
+     * neighbouring file that merely contains the name) was never asserted anywhere.
+     */
+    @Test
+    void shouldExcludeTheSameFilesTheShippedDefaultsAlwaysDid() throws Exception {
+      var formatter = defaultFormatter();
+
+      assertTrue(formatter.isIgnored("pom.xml"), "the root pom is a default exclusion");
+      assertTrue(formatter.isIgnored("module/pom.xml"));
+      assertTrue(formatter.isIgnored("a/b/c/pom.xml"));
+      assertFalse(formatter.isIgnored("docs/pom.xml.md"));
+      assertFalse(formatter.isIgnored("src/main/java/PomXml.java"));
+
+      // The rest of the list, sampled across every class of default entry.
+      assertTrue(formatter.isIgnored("yarn.lock"));
+      assertTrue(formatter.isIgnored("frontend/yarn.lock"));
+      assertTrue(formatter.isIgnored("target/classes/App.class"));
+      assertTrue(formatter.isIgnored("module/target/classes/App.class"));
+      assertTrue(formatter.isIgnored("build/generated/App.java"));
+      assertFalse(formatter.isIgnored("src/main/resources/build.properties"));
+      assertFalse(formatter.isIgnored("src/bindings/Codec.java"));
+      assertFalse(formatter.isIgnored("README.md"));
+    }
+  }
+
+  /**
+   * #481 — patterns written the way a gitignore-literate maintainer writes them. Both the
+   * deployment-wide {@code review.ignored-files} key and a repository's own list compile through
+   * {@link ReviewDiffFormatter.IgnoreGlobs}, so every case here is asserted through the global
+   * constructor and the per-repo union alike: the two keys are documented as the same syntax and
+   * must stay the same syntax.
+   */
+  @Nested
+  class GitignoreStyleGlobs {
+
+    /** Whether {@code pattern} excludes {@code path} when declared as the deployment-wide list. */
+    private boolean globalIgnores(String pattern, String path) {
+      return new ReviewDiffFormatter(List.of(pattern), 5000).isIgnored(path);
+    }
+
+    /** Whether {@code pattern} excludes {@code path} when a repository declares it for itself. */
+    private boolean perRepoIgnores(String pattern, String path) {
+      var formatter = new ReviewDiffFormatter(List.of(), 5000);
+      return formatter
+          .reviewableFiles(
+              List.of(file(path, "modified", 1, 0, "@@ -1 +1 @@\n+x")),
+              formatter.ignoreGlobs(List.of(pattern)))
+          .isEmpty();
+    }
+
+    /** Asserts the two keys agree, and returns what they both answered. */
+    private boolean ignores(String pattern, String path) {
+      var global = globalIgnores(pattern, path);
+      assertEquals(
+          global,
+          perRepoIgnores(pattern, path),
+          "the global and per-repo keys are documented as the same syntax: " + pattern);
+      return global;
+    }
+
+    @Test
+    void trailingSlashExcludesTheDirectoryTree() {
+      assertTrue(ignores("build/", "build/classes/App.class"));
+      assertTrue(ignores("build/", "module/build/classes/App.class"));
+      assertFalse(ignores("build/", "src/Builder.java"));
+      // A trailing slash means "directory" — a file of that name is not a directory.
+      assertFalse(ignores("build/", "build"));
+    }
+
+    @Test
+    void bareDirectoryNameExcludesTheTreeAtEveryDepth() {
+      assertTrue(ignores("vendor", "vendor/pkg/errors.go"));
+      assertTrue(ignores("vendor", "third_party/vendor/pkg/errors.go"));
+      // Without a trailing slash it also matches a plain file of that name, as gitignore does.
+      assertTrue(ignores("vendor", "vendor"));
+      assertFalse(ignores("payments", "src/PaymentService.java"));
+      assertTrue(ignores("payments", "src/payments/Ledger.java"));
+    }
+
+    @Test
+    void bareFileGlobMatchesAtEveryDepthNotOnlyTheRepositoryRoot() {
+      assertTrue(ignores("*.lock", "deps.lock"));
+      assertTrue(ignores("*.lock", "frontend/yarn.lock"));
+      assertTrue(ignores("*.lock", "a/b/c/Cargo.lock"));
+      assertFalse(ignores("*.lock", "src/Lock.java"));
+    }
+
+    /**
+     * gitignore anchors a pattern that carries a slash to the root, and so do we: {@code
+     * generated/**} is the repository's own {@code generated} tree, not every one at any depth.
+     * That is also the only reading under which the documented {@code docs/generated/**} example
+     * keeps meaning what it says.
+     */
+    @Test
+    void aPatternCarryingASlashStaysAnchoredToTheRepositoryRoot() {
+      assertTrue(ignores("generated/**", "generated/Api.ts"));
+      assertTrue(ignores("generated/**", "generated/deep/Api.ts"));
+      assertFalse(ignores("generated/**", "src/generated/Api.ts"));
+      assertTrue(ignores("**/generated/**", "src/generated/Api.ts"));
+      assertTrue(ignores("docs/generated/**", "docs/generated/api.md"));
+      assertFalse(ignores("docs/generated/**", "web/docs/generated/api.md"));
+    }
+
+    @Test
+    void aLeadingSlashAnchorsToTheRepositoryRootAndDoesNotMatchNothing() {
+      assertTrue(ignores("/build/", "build/App.class"));
+      assertFalse(ignores("/build/", "module/build/App.class"));
+      assertTrue(ignores("/Makefile", "Makefile"));
+      assertFalse(ignores("/Makefile", "tools/Makefile"));
+    }
+
+    @Test
+    void aDirectoryPatternExcludesTheWholeTreeUnderIt() {
+      assertTrue(ignores("testdata", "testdata/fixtures/deep/case.json"));
+      assertTrue(ignores("testdata/", "testdata/fixtures/deep/case.json"));
+      assertTrue(ignores("testdata/**", "testdata/fixtures/deep/case.json"));
+    }
+
+    /**
+     * Negation cannot be honored: the effective set is global ∪ per-repo, so nothing may put a file
+     * back. Dropping it with a warning beats compiling it into a glob for a file literally named
+     * {@code !src/Main.java}, which is the silent-nonsense class this issue is about.
+     */
+    @Test
+    void aNegatedPatternIsDroppedRatherThanCompiledAsALiteralBangName() {
+      assertFalse(ignores("!src/Main.java", "!src/Main.java"));
+      assertFalse(ignores("!src/Main.java", "src/Main.java"));
+    }
+
+    @Test
+    void aPatternThatNamesNoPathAtAllIsDroppedRatherThanMatchingEverything() {
+      assertFalse(ignores("/", "src/Main.java"));
+      assertFalse(ignores("///", "src/Main.java"));
+    }
+
+    @Test
+    void repeatedSlashesAreTrimmedInsteadOfBreakingThePattern() {
+      assertTrue(ignores("//build//", "build/App.class"));
+      assertFalse(ignores("//build//", "module/build/App.class"));
+    }
+
+    @Test
+    void anUncompilablePatternIsStillDroppedWholeRatherThanHalfApplied() {
+      assertFalse(ignores("[unclosed", "src/Main.java"));
+      assertFalse(ignores("[unclosed", "[unclosed"));
+    }
+  }
+
+  /**
+   * #481 — the other half of a silently-dead glob: a declaration that compiles but matches nothing
+   * produced no log line at any level, so a maintainer whose pattern does nothing had no way to
+   * find out. The review discloses them instead.
+   */
+  @Nested
+  class UnmatchedIgnoreGlobs {
+
+    private final List<String> files =
+        List.of("src/Main.java", "docs/generated/api.md", "web/app.min.js");
+
+    @Test
+    void reportsOnlyTheDeclaredGlobsThatMatchedNoFile() {
+      var unmatched =
+          ReviewDiffFormatter.unmatchedPatterns(
+              List.of("docs/generated/**", "paymnets/**", "  ", "**/*.snap"), files);
+
+      assertEquals(List.of("paymnets/**", "**/*.snap"), unmatched);
+    }
+
+    @Test
+    void skipsBlankAndNullDeclarationsRatherThanReportingThem() {
+      var declared = new java.util.ArrayList<String>();
+      declared.add("paymnets/**");
+      declared.add(null);
+      declared.add("   ");
+
+      assertEquals(List.of("paymnets/**"), ReviewDiffFormatter.unmatchedPatterns(declared, files));
+    }
+
+    @Test
+    void reportsAnUncompilableGlobToo() {
+      // It excludes nothing either, and its own warning is log-only.
+      assertEquals(
+          List.of("[unclosed"), ReviewDiffFormatter.unmatchedPatterns(List.of("[unclosed"), files));
+    }
+
+    @Test
+    void reportsNothingWhenTheRepositoryDeclaredNothingOrThePrHasNoFiles() {
+      assertEquals(List.of(), ReviewDiffFormatter.unmatchedPatterns(List.of(), files));
+      assertEquals(List.of(), ReviewDiffFormatter.unmatchedPatterns(null, files));
+      assertEquals(List.of(), ReviewDiffFormatter.unmatchedPatterns(List.of("x/**"), List.of()));
+      assertEquals(List.of(), ReviewDiffFormatter.unmatchedPatterns(List.of("x/**"), null));
+    }
+
+    @Test
+    void formatsAOneLineNoteNamingTheGlobsAndCappingTheSample() {
+      var note =
+          ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(
+              List.of("a/**", "b/**", "c/**", "d/**", "e/**", "f/**", "g/**"));
+
+      assertTrue(note.startsWith("7 ignore globs declared"), note);
+      assertTrue(note.contains("matched no file in this pull request"), note);
+      assertTrue(note.contains("`a/**`"), note);
+      assertTrue(note.contains("and 2 more"), note);
+      assertFalse(note.contains("`g/**`"), note);
+      assertFalse(note.contains("\n"), "the note is one line: " + note);
+    }
+
+    @Test
+    void formatsASingularNoteAndNothingAtAllWhenEveryGlobMatched() {
+      assertEquals("", ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(List.of()));
+      assertEquals("", ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(null));
+      assertTrue(
+          ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(List.of("payments/"))
+              .startsWith("1 ignore glob declared"));
+    }
+
+    @Test
+    void neutralizesMarkdownInADeclaredGlobSoItCannotBreakOutOfTheNote() {
+      var note = ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(List.of("a`**`\n# heading"));
+
+      assertFalse(note.contains("`**`"), note);
+      assertFalse(note.contains("\n"), note);
+    }
   }
 
   @Test

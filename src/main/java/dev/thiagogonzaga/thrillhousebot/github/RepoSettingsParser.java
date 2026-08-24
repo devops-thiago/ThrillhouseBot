@@ -18,13 +18,14 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.DuplicateKeyException;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 /**
  * Parses the YAML in a repository's {@code .github/thrillhousebot.yml} into {@link RepoSettings}.
@@ -48,6 +49,16 @@ import org.yaml.snakeyaml.LoaderOptions;
  * instruction blocks a repository may contribute, and returns {@link RepoSettings#EMPTY} for
  * anything it cannot make sense of. It never throws — a malformed config must degrade to "no
  * per-repo settings", never fail a review.
+ *
+ * <p>The document is loaded through snakeyaml's own {@link Yaml} rather than {@code
+ * jackson-dataformat-yaml}, and only then handed to Jackson as a tree (#481). Jackson's YAML module
+ * drives snakeyaml's event parser and never runs its {@code Composer} or {@code Constructor}, which
+ * had two consequences: an alias reached the parser as the literal text of its name ({@code
+ * *common} became a glob for a file called {@code common}, and an aliased scope path became a
+ * string that passed every check and was rendered into the review prompt), and the {@link
+ * LoaderOptions} nesting and alias ceilings below — enforced in those stages — did nothing at all
+ * while their javadoc claimed protection. Loading through {@code Yaml} resolves aliases and merge
+ * keys correctly and makes both guards real, which is why they are fixed together.
  */
 final class RepoSettingsParser {
 
@@ -56,10 +67,17 @@ final class RepoSettingsParser {
   /** Ceiling on the YAML document size, guarding against an oversized or hostile config. */
   private static final int MAX_CODE_POINTS = 256 * 1024;
 
-  /** Ceiling on YAML nesting, guarding against deeply nested documents. */
-  private static final int MAX_NESTING_DEPTH = 20;
+  /**
+   * Ceiling on YAML nesting, guarding against deeply nested documents. Enforced by snakeyaml's
+   * composer, which this parser now runs — the documented shape is four levels deep, so a document
+   * anywhere near this is not a config anyone wrote by hand.
+   */
+  static final int MAX_NESTING_DEPTH = 20;
 
-  /** Ceiling on anchor/alias expansion, guarding against "billion laughs"-style blowups. */
+  /**
+   * Ceiling on anchor/alias expansion, guarding against "billion laughs"-style blowups. Load-
+   * bearing from #481 on: aliases are resolved now, so this is what bounds the expansion.
+   */
   private static final int MAX_ALIASES = 50;
 
   /** Ceiling on how many extra ignore globs one repository may contribute. */
@@ -77,17 +95,22 @@ final class RepoSettingsParser {
   /** Ceiling on the coverage-artifact name; GitHub's own artifact names are far shorter. */
   static final int MAX_ARTIFACT_NAME_LENGTH = 256;
 
-  private static final ObjectMapper YAML_MAPPER = new ObjectMapper(yamlFactory());
+  /** Converts the loaded object graph to a tree; no YAML of its own is parsed through it. */
+  private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private RepoSettingsParser() {}
 
-  private static YAMLFactory yamlFactory() {
+  /**
+   * The loader bounds every read runs under. {@code allowDuplicateKeys} is the one dimension that
+   * varies: see {@link #readDocument}.
+   */
+  private static LoaderOptions loaderOptions(boolean allowDuplicateKeys) {
     var options = new LoaderOptions();
     options.setCodePointLimit(MAX_CODE_POINTS);
     options.setNestingDepthLimit(MAX_NESTING_DEPTH);
     options.setMaxAliasesForCollections(MAX_ALIASES);
-    options.setAllowDuplicateKeys(false);
-    return YAMLFactory.builder().loaderOptions(options).build();
+    options.setAllowDuplicateKeys(allowDuplicateKeys);
+    return options;
   }
 
   /**
@@ -101,7 +124,7 @@ final class RepoSettingsParser {
     try {
       // Pattern match rather than isObject(): one test rejects a scalar or sequence document
       // (which carries no settings) and a null/missing root alike.
-      if (!(YAML_MAPPER.readTree(yaml) instanceof ObjectNode root)) {
+      if (!(readDocument(yaml, source) instanceof ObjectNode root)) {
         log.warn("Repository config {} is not a YAML mapping; ignoring it", source);
         return RepoSettings.EMPTY;
       }
@@ -112,13 +135,49 @@ final class RepoSettingsParser {
       return ignoredFiles.isEmpty() && pathInstructions.isEmpty() && coverageArtifact.isEmpty()
           ? RepoSettings.EMPTY
           : new RepoSettings(ignoredFiles, pathInstructions, coverageArtifact, source);
-    } catch (IOException | RuntimeException e) {
+    } catch (RuntimeException e) {
       log.warn(
           "Could not parse repository config {}; continuing with the global settings only",
           source,
           e);
       return RepoSettings.EMPTY;
     }
+  }
+
+  /**
+   * The document as a Jackson tree, or {@code null} when it carries no node at all (a comment-only
+   * file).
+   *
+   * <p>Duplicate keys are read twice on purpose (#481). A repeated key is a mistake worth naming,
+   * so the strict pass runs first and its rejection is what produces the warning; but refusing the
+   * document over it discarded <em>every</em> setting in the file, which is a far wider blast
+   * radius than the per-entry "one bad entry costs only itself" rule the rest of this parser
+   * follows. The lenient re-read then keeps the file, with YAML's usual last-one-wins reading of
+   * the repeated key. The second parse only ever happens on a file that is already broken.
+   */
+  private static JsonNode readDocument(String yaml, String source) {
+    Object graph;
+    try {
+      graph = firstDocument(yaml, loaderOptions(false));
+    } catch (DuplicateKeyException e) {
+      log.warn(
+          "Repository config {}: duplicate key ({}); reading the file with the last value of each"
+              + " repeated key",
+          source,
+          e.getProblem());
+      graph = firstDocument(yaml, loaderOptions(true));
+    }
+    return graph == null ? null : MAPPER.convertValue(graph, JsonNode.class);
+  }
+
+  /**
+   * The first document in the stream, matching what the previous Jackson-backed read returned for a
+   * multi-document file: the extra documents are ignored rather than making the whole file
+   * unreadable.
+   */
+  private static Object firstDocument(String yaml, LoaderOptions options) {
+    var documents = new Yaml(new SafeConstructor(options)).loadAll(yaml).iterator();
+    return documents.hasNext() ? documents.next() : null;
   }
 
   /**
@@ -133,7 +192,7 @@ final class RepoSettingsParser {
       case MISSING, NULL -> List.of();
       case ARRAY -> sanitize(scalarEntries(node), source);
       // A lone scalar is split on commas, matching how the global key is written as an env var.
-      case STRING -> sanitize(List.of(node.asText().split(",")), source);
+      case STRING -> sanitize(splitPatternList(node.asText()), source);
       default -> {
         log.warn("Repository config {}: review.ignored-files is not a list; ignoring it", source);
         yield List.of();
@@ -249,6 +308,35 @@ final class RepoSettingsParser {
    */
   private static boolean isScalar(JsonNode node) {
     return node.isValueNode() && !node.isNull();
+  }
+
+  /**
+   * Splits the scalar form of {@code ignored-files} on its separators. A glob's own {@code
+   * &#123;a,b&#125;} alternation is not a separator (#481): splitting inside it produced two
+   * fragments, {@code **}{@code /*.&#123;js} and {@code ts&#125;}, of which the first fails to
+   * compile and is dropped and the second silently becomes a matcher for a file named {@code
+   * ts&#125;} — so a brace glob excluded nothing it was written to exclude.
+   */
+  static List<String> splitPatternList(String value) {
+    var parts = new ArrayList<String>();
+    var current = new StringBuilder();
+    var braceDepth = 0;
+    for (var i = 0; i < value.length(); i++) {
+      var c = value.charAt(i);
+      if (c == ',' && braceDepth == 0) {
+        parts.add(current.toString());
+        current.setLength(0);
+        continue;
+      }
+      if (c == '{') {
+        braceDepth++;
+      } else if (c == '}' && braceDepth > 0) {
+        braceDepth--;
+      }
+      current.append(c);
+    }
+    parts.add(current.toString());
+    return parts;
   }
 
   /** The scalar entries of a sequence; a nested mapping or sequence entry is not a glob. */
