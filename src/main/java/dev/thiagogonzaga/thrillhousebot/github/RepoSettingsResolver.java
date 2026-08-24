@@ -156,12 +156,15 @@ public class RepoSettingsResolver {
    *
    * <ul>
    *   <li>{@link #found} — the file was read. A parse that found no usable settings still answers
-   *       {@link RepoSettings#EMPTY} here: that is a real, cacheable answer that ends the chain,
-   *       because the repository has spoken, it just said nothing usable.
+   *       {@link RepoSettings#EMPTY} here, because the repository has spoken, it just said nothing
+   *       usable. That ends the chain, and resolve() caches it inside the loop for the full {@link
+   *       RepoSettingsResolver#CACHE_TTL_MS} exactly like a config that did parse — deliberately,
+   *       so a repository whose YAML is broken is not re-fetched on every single review. The cost
+   *       is that fixing a broken config takes effect on the same TTL as fixing a working one.
    *   <li>{@link #ABSENT} — GitHub said the file is not there (404), or answered without an inline
    *       payload. The caller moves on to the next name in the chain, and "this repository has no
    *       config" is a fact worth caching.
-   *   <li>{@link #UNREADABLE} — the request itself failed (5xx, the 403 secondary rate limit, a
+   *   <li>{@link #READ_FAILED} — the request itself failed (5xx, the 403 secondary rate limit, a
    *       transport error) or the payload could not be decoded. Nothing was learned about the
    *       repository, so the caller must not write that non-answer into the cache (#481).
    * </ul>
@@ -172,7 +175,7 @@ public class RepoSettingsResolver {
   private record Fetched(RepoSettings settings, boolean unreadable) {
 
     static final Fetched ABSENT = new Fetched(null, false);
-    static final Fetched UNREADABLE = new Fetched(null, true);
+    static final Fetched READ_FAILED = new Fetched(null, true);
 
     static Fetched found(RepoSettings settings) {
       return new Fetched(settings, false);
@@ -200,7 +203,7 @@ public class RepoSettingsResolver {
       // 404 pinned "this repo has no config" in the cache for a minute of reviews (#481).
       log.warn(
           "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
-      return Fetched.UNREADABLE;
+      return Fetched.READ_FAILED;
     } catch (RuntimeException e) {
       log.warn(
           "Failed to read repository config {} for {}/{}; continuing with the global settings only",
@@ -208,7 +211,7 @@ public class RepoSettingsResolver {
           owner,
           repo,
           e);
-      return Fetched.UNREADABLE;
+      return Fetched.READ_FAILED;
     }
   }
 
