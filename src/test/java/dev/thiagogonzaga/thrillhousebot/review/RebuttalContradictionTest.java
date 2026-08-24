@@ -1174,6 +1174,10 @@ class RebuttalContradictionTest {
       strings = {
         "+    const m = `, hand work to .submit( here`;\n",
         "+    s = '''; hand work to .submit( here'''\n",
+        // The same shape spanning lines, where nothing on the opener's line can close it:
+        // Python is the only language in the corpus that spells a literal with ''', and it
+        // lets the body follow the opener, so the rule has no premise to stand on there.
+        "+    s = '''; hand work to executor.submit(task)\n+    and more'''\n",
       })
   void shouldNotTreatQuotedTextAsLiveBecauseItsBodyStartsWithATerminator(String code) {
     assertTrue(
