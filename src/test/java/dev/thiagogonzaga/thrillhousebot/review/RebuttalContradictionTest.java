@@ -889,8 +889,12 @@ class RebuttalContradictionTest {
   @ValueSource(
       strings = {
         "+    var n = count; /* executor.submit(() -> run(ctx)); */\n+    run(ctx);\n",
-        "+    /* one dispatch we removed:\n+     * executor.submit(() -> run(ctx));\n"
-            + "+     */\n+    run(ctx);\n",
+        """
+        +    /* one dispatch we removed:
+        +     * executor.submit(() -> run(ctx));
+        +     */
+        +    run(ctx);
+        """,
       })
   void shouldNotTreatDispatchTextInsideABlockCommentAsEvidence(String code) {
     assertTrue(
@@ -916,8 +920,11 @@ class RebuttalContradictionTest {
   @ParameterizedTest
   @ValueSource(
       strings = {
-        "+    var doc = \"\"\"\n+        hand work to executor.submit(task) here\n"
-            + "+        \"\"\";\n",
+        """
+        +    var doc = \"""
+        +        hand work to executor.submit(task) here
+        +        \""";
+        """,
         "+    doc := `\n+      each event calls handler.submit(ctx)\n+    `\n",
         "+    auto sql = R\"sql(\n+      hand work to executor.submit(task)\n+    )sql\";\n",
       })
@@ -1067,12 +1074,14 @@ class RebuttalContradictionTest {
   @Test
   void shouldNotReadATextBlockCloserAtTheTopOfAHunkAsAnOpener() {
     var midLiteral =
-        "diff --git a/ReviewResult.java\n"
-            + "@@ -340,6 +385,10 @@ public record ReviewResult(\n"
-            + " \n"
-            + "       \"\"\";\n"
-            + " \n"
-            + "+    executor.submit(() -> run(ctx));\n";
+        """
+        diff --git a/ReviewResult.java
+        @@ -340,6 +385,10 @@ public record ReviewResult(
+        \s
+               \""";
+        \s
+        +    executor.submit(() -> run(ctx));
+        """;
 
     var contradiction = RebuttalContradiction.find(RACE_FINDING, "It runs serially.", midLiteral);
 
@@ -1085,15 +1094,114 @@ class RebuttalContradictionTest {
     // The other spelling of the same closer: a text block concatenated with what follows it, where
     // the terminator sits a space away from the delimiter.
     var concatenated =
-        "diff --git a/ReviewResult.java\n"
-            + "@@ -340,6 +385,10 @@ public record ReviewResult(\n"
-            + " \n"
-            + "       \"\"\" + SUFFIX;\n"
-            + "+    executor.submit(() -> run(ctx));\n";
+        """
+        diff --git a/ReviewResult.java
+        @@ -340,6 +385,10 @@ public record ReviewResult(
+        \s
+               \""" + SUFFIX;
+        +    executor.submit(() -> run(ctx));
+        """;
 
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", concatenated).isPresent(),
         "a closer whose terminator is a space away still ends a literal rather than starting one");
+  }
+
+  /**
+   * A text block that ends an array initialiser or a subscript is followed by a brace or a bracket,
+   * neither of which was a statement terminator to the closer rule — so the delimiter that ends it
+   * read as an <em>opener</em> and blanked the live code below it, which is the very case the rule
+   * was written to prevent for {@code """;} (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // The last element of an array initialiser: the closer, a brace, a semicolon.
+        "};",
+        // A text block used as a subscript, or the last element of a list literal.
+        "];",
+      })
+  void shouldReadATextBlockCloserFollowedByABraceOrABracketAsACloser(String terminator) {
+    var code =
+        """
+        diff --git a/Fixtures.java
+        @@ -340,6 +385,10 @@ final class Fixtures {
+        \s
+               \"""%s
+        +    executor.submit(() -> run(ctx));
+        """
+            .formatted(terminator);
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the delimiter closes the initialiser's text block, so the dispatch below it is live code: "
+            + terminator);
+    assertEquals("executor.submit(() -> run(ctx));", contradiction.get().evidence());
+  }
+
+  /**
+   * The closer rule holds only where a language forbids a body after the opener (JLS 3.10.6). A Go
+   * raw string and a JavaScript template literal start their body immediately, so a body that opens
+   * with a statement terminator made the scan read the literal's own <em>closing</em> backtick as
+   * an opener, push a region, and blank the real dispatch on the next line — the false-negative
+   * class this scan exists to close (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // Go: a raw string holding a separator, dispatch on the next body line.
+        "+    sep := `;abc`\n+    executor.submit(() -> run(ctx));\n",
+        // Kotlin and Python do let a triple-quoted body follow the opener, so a literal that closes
+        // on its own line opened one however its body starts — the closer rule may not claim it.
+        "+    val sep = \"\"\", \"\"\"\n+    executor.submit(task);\n",
+        "+    tail = '''); END'''\n+    executor.submit(task)\n",
+      })
+  void shouldNotReadALiteralsOwnCloserAsAnOpenerWhenItsBodyStartsWithATerminator(String code) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isPresent(),
+        "the literal closes on its own line, so the dispatch after it is live code: " + code);
+  }
+
+  /**
+   * The mirror of the same misreading: scanned as a closer, the whole line stayed live and the
+   * dispatch words quoted inside the literal were matched as evidence, overruling a decline that
+   * was right — the expensive direction (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    const m = `, hand work to .submit( here`;\n",
+        "+    s = '''; hand work to .submit( here'''\n",
+      })
+  void shouldNotTreatQuotedTextAsLiveBecauseItsBodyStartsWithATerminator(String code) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "the dispatch text sits inside the literal, so it is not live code: " + code);
+  }
+
+  /**
+   * What restricting the rule costs, kept explicit: a hunk that starts inside a Go raw string shows
+   * only its closing backtick, which now reads as an opener and blanks the rest of the hunk. That
+   * is the under-fire direction — a decline that stands is this class's default outcome — and it is
+   * the side every ambiguity here is resolved toward, unlike the reading it replaces, which made a
+   * template literal's own quoted body live code.
+   */
+  @Test
+  void shouldBlankTheHunkWhenOnlyAGoRawStringsClosingBacktickIsVisible() {
+    var code =
+        """
+        diff --git a/worker.go
+        @@ -10,4 +10,6 @@ func run(ctx context.Context) {
+             hand work to executor.submit here
+           `)
+        +  executor.submit(func() { handle(ctx) })
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "a lone backtick has no reading that is safe both ways, so it blanks and keeps the decline");
   }
 
   /**
