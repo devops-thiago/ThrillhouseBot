@@ -182,11 +182,13 @@ final class JacocoCoverageReport {
   }
 
   /**
-   * Every report entry whose path is a whole-segment suffix of {@code repositoryPath}, in the order
-   * the reports listed them; empty for a null, blank, or unmentioned path. Deliberately says
-   * nothing about ambiguity: whether more than one match must be refused, and whether the single
-   * match is also claimed by another repository path, are decisions only {@link
-   * #uncoveredLinesByPath} can make, because they depend on the rest of the requested paths.
+   * Every report entry whose path is a whole-segment suffix of {@code repositoryPath}; empty for a
+   * null, blank, or unmentioned path. The order is unspecified — the index behind it is hashed by
+   * file name — and nothing here depends on it, because a second match makes the attribution
+   * ambiguous whichever one came first. Deliberately says nothing about that ambiguity: whether
+   * more than one match must be refused, and whether the single match is also claimed by another
+   * repository path, are decisions only {@link #uncoveredLinesByPath} can make, because they depend
+   * on the rest of the requested paths.
    */
   private List<SourceFile> suffixMatches(String repositoryPath) {
     if (repositoryPath == null || repositoryPath.isBlank()) {
