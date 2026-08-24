@@ -435,6 +435,49 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void refusesAnArchiveWithMoreEntriesThanItWalks() throws IOException {
+      // Same prefix-choosing power as the bomb abort, reached by padding instead: the report is
+      // read, the cap is hit, and the merge that fit would otherwise be returned as this build's
+      // coverage with every line the unread reports cover reported uncovered.
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        for (var i = 0; i <= JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".txt"));
+          zip.write(new byte[] {'x'});
+          zip.closeEntry();
+        }
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "an archive longer than the entry cap yields EMPTY, not the prefix that fit");
+    }
+
+    @Test
+    void readsAnArchiveThatExactlyFillsTheEntryCap() throws IOException {
+      // The boundary the refusal must not swallow: an archive using every entry it is allowed is
+      // read in full, so the cap refuses only what it cannot walk.
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        for (var i = 0; i < JacocoCoverageReport.MAX_ZIP_ENTRIES - 1; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".txt"));
+          zip.write(new byte[] {'x'});
+          zip.closeEntry();
+        }
+      }
+
+      assertFalse(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "an archive that fits inside the cap is still read");
+    }
+
+    @Test
     void carriesNoPartialAnswerOutOfAnArchiveItRefused() throws IOException {
       // The report sits BEFORE the bomb this time, so the walk has merged real coverage by the
       // moment it gives up. Returning that prefix would let whoever built the archive choose which

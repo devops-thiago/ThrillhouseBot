@@ -282,9 +282,20 @@ final class JacocoCoverageReport {
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
       var seen = 0;
       var inflatedTotal = 0L;
-      for (var entry = zip.getNextEntry();
-          entry != null && seen < MAX_ZIP_ENTRIES;
-          entry = zip.getNextEntry(), seen++) {
+      for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry(), seen++) {
+        if (seen >= MAX_ZIP_ENTRIES) {
+          // Stopping here and keeping the merge would hand the same prefix-choosing power the bomb
+          // abort refuses: pad an archive past the cap and whoever built it decides which reports
+          // the merge saw, while the result still reads as this build's coverage. Lines the unread
+          // reports cover come back uncovered, against a diff the model is told to treat as fact,
+          // so the archive is refused whole for the same reason.
+          Log.debugf(
+              "Coverage artifact carries more than %d entries; refusing it rather than merging the"
+                  + " prefix that fit",
+              MAX_ZIP_ENTRIES);
+          aborted = true;
+          break;
+        }
         var read = readEntryInto(zip, entry, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, merged);
         if (read < 0) {
           Log.debugf(
