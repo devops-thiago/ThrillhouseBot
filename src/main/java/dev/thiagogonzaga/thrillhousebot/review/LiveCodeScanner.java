@@ -93,17 +93,25 @@ final class LiveCodeScanner {
    * {@code '} literals, never inside a backtick one, which is a Go raw string and holds the
    * backslash literally. Honouring it there stepped over the closing backtick of a Windows path
    * ({@code `C:\`}) and let the real comment after it pose as live code (#647).
+   *
+   * <p>The last column marks the delimiters a statement terminator can identify as a
+   * <em>closer</em> rather than an opener ({@link #closesLiteralOpenedAboveTheHunk}). Only the
+   * triple-quote spellings carry it, because only they have a language in the corpus that forbids a
+   * body after the opener. The backtick does not: a Go raw string and a JavaScript template literal
+   * put the body right after the opener, so {@code sep := `;abc`} read its own closing backtick as
+   * an opener and blanked the dispatch on the next line, while {@code `, …`} scanned as live text
+   * and matched dispatch words inside quoted prose (#651).
    */
   private static final List<Delimiter> DELIMITERS =
       List.of(
           // Java text block, Kotlin raw string, Python triple-quoted string.
-          new Delimiter("\"\"\"", "\"\"\"", true, false, true),
-          new Delimiter("'''", "'''", true, false, true),
+          new Delimiter("\"\"\"", "\"\"\"", true, false, true, true),
+          new Delimiter("'''", "'''", true, false, true, true),
           // Go raw string and JavaScript template literal share a delimiter; only the latter
           // interpolates, and reading ${…} as code is the direction that keeps real dispatches.
-          new Delimiter("`", "`", false, true, true),
-          new Delimiter("\"", "\"", true, false, false),
-          new Delimiter("'", "'", true, false, false));
+          new Delimiter("`", "`", false, true, true, false),
+          new Delimiter("\"", "\"", true, false, false, false),
+          new Delimiter("'", "'", true, false, false, false));
 
   /**
    * Schemes whose {@code ://} is a URL rather than a label followed by a comment. A closed list is
@@ -265,7 +273,7 @@ final class LiveCodeScanner {
         continue;
       }
       var body = i + delimiter.open().length();
-      if (delimiter.spansLines() && closesAStatement(line, body)) {
+      if (closesLiteralOpenedAboveTheHunk(line, body, delimiter)) {
         return -1;
       }
       if (!delimiter.spansLines()) {
@@ -283,26 +291,51 @@ final class LiveCodeScanner {
 
   /**
    * Whether the delimiter just scanned is a closer whose opener sits above this hunk, rather than
-   * an opener. It is the one shape that tells them apart when a language spells both the same way:
-   * a text block's opening delimiter must be the last thing on its line (JLS 3.10.6) and a template
-   * literal's opener is followed by its body, so a delimiter with a statement terminator after it —
-   * {@code """;}, {@code """,}, {@code """)}, {@code """.formatted(x)} — ends a literal that began
-   * before the first line the diff shows.
+   * an opener. Three things have to hold at once, because a language that spells opener and closer
+   * the same way leaves nothing else to tell them apart.
    *
-   * <p>Without this, a patch whose hunk starts inside a text block read that closer as an opener
-   * and inverted every literal below it, blanking live code all the way to the next delimiter.
-   * Measured over 80 commits of this repository's own history (32535 right-side Java lines): the
-   * opener reading blanked 57 statement-shaped lines, among them live methods of {@code
+   * <p><b>The delimiter must be one a terminator can identify.</b> A Java text block's opening
+   * delimiter must be the last thing on its line (JLS 3.10.6), so a statement terminator after it —
+   * {@code """;}, {@code """,}, {@code """)}, {@code """.formatted(x)} — belongs to the statement a
+   * <em>closer</em> ends. That rationale is what the table's last column records, and it is why the
+   * backtick is not in it: a Go raw string or a JavaScript template literal begins its body
+   * immediately, so the very same test misread both directions of the shape (#651).
+   *
+   * <p><b>A terminator must follow.</b> The set is the punctuation that can abut a closing
+   * delimiter: the statement enders {@code ;} and {@code ,}, the {@code )} of a call, the closing
+   * brace of an initialiser, the closing bracket of a subscript, and the {@code .} or {@code +} of
+   * a call or a concatenation on the literal. The brace and the bracket were missing, so a text
+   * block that ends an array initialiser — its closing delimiter followed by a brace and a
+   * semicolon — still read as an opener and blanked the live code under it, the mirror of the case
+   * this rule was written for (#651).
+   *
+   * <p><b>No closer may follow on the same line.</b> Kotlin and Python do allow a body right after
+   * the opener, so {@code '''; and more'''} is a whole literal whose body merely starts with a
+   * terminator. A delimiter that finds its own closer further along the line opened that literal;
+   * only one with nothing to close against can be the closer of a literal opened above the hunk.
+   *
+   * <p>Without the rule at all, a patch whose hunk starts inside a text block read that closer as
+   * an opener and inverted every literal below it, blanking live code all the way to the next
+   * delimiter. Measured over 80 commits of this repository's own history (32535 right-side Java
+   * lines): the opener reading blanked 57 statement-shaped lines, among them live methods of {@code
    * ReviewResult}, because the hunks that touch this repository's code so often start under a text
    * block constant. The closer reading leaves 23, every one of them the body of a text block that
    * quotes a diff or a JSON payload — which is exactly the text that must be blanked.
    */
-  private static boolean closesAStatement(String line, int after) {
+  private static boolean closesLiteralOpenedAboveTheHunk(
+      String line, int body, Delimiter delimiter) {
+    return delimiter.terminatorMarksCloser()
+        && startsWithTerminator(line, body)
+        && closerIndex(line, body, delimiter.close()) < 0;
+  }
+
+  /** Whether the first non-whitespace character at or after {@code after} ends a statement. */
+  private static boolean startsWithTerminator(String line, int after) {
     var i = after;
     while (i < line.length() && Character.isWhitespace(line.charAt(i))) {
       i++;
     }
-    return i < line.length() && ";,).+".indexOf(line.charAt(i)) >= 0;
+    return i < line.length() && ";,).+}]".indexOf(line.charAt(i)) >= 0;
   }
 
   /**
@@ -456,10 +489,18 @@ final class LiveCodeScanner {
 
   /**
    * An opener the scanner knows, its closing token, whether a backslash escapes inside it, whether
-   * a {@code ${…}} inside it is live code, and whether it may stay open at the end of a line.
+   * a {@code ${…}} inside it is live code, whether it may stay open at the end of a line, and
+   * whether a statement terminator after it marks it as a closer rather than an opener. The last
+   * flag is meaningful only on a delimiter that spans lines — one that cannot is resolved by
+   * looking ahead for its own closer on the same line.
    */
   private record Delimiter(
-      String open, String close, boolean escapes, boolean interpolates, boolean spansLines) {}
+      String open,
+      String close,
+      boolean escapes,
+      boolean interpolates,
+      boolean spansLines,
+      boolean terminatorMarksCloser) {}
 
   /**
    * A region the scan is currently inside: a quoted run being blanked, or the live code of a
