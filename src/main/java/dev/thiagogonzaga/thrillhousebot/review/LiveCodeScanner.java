@@ -92,21 +92,36 @@ final class LiveCodeScanner {
    * <p>The escape column says where a backslash escapes the next character: inside {@code "} and
    * {@code '} literals, never inside a backtick one, which is a Go raw string and holds the
    * backslash literally. Honouring it there stepped over the closing backtick of a Windows path
-   * ({@code `C:\`}) and let the real comment after it pose as live code (#647).
+   * ({@code `C:\`}) and let the real comment after it pose as live code (#647). A triple quote
+   * keeps it, which is right for a Java text block and a Python triple-quoted string and wrong for
+   * a Kotlin raw string, where a backslash is literal: {@code """C:\Users\"""} steps over the first
+   * quote of its own closer and stays open for the rest of the hunk. That residue is left as it is
+   * because the two readings fail in opposite directions and only one of them is affordable —
+   * dropping the escape blanks the Kotlin case correctly but closes a Java text block at an escaped
+   * {@code \"} run, which hands the quoted text after it to the matcher as live code.
    *
-   * <p>The last column marks the delimiters a statement terminator can identify as a
-   * <em>closer</em> rather than an opener ({@link #closesLiteralOpenedAboveTheHunk}). Only the
-   * triple-quote spellings carry it, because only they have a language in the corpus that forbids a
-   * body after the opener. The backtick does not: a Go raw string and a JavaScript template literal
-   * put the body right after the opener, so {@code sep := `;abc`} read its own closing backtick as
-   * an opener and blanked the dispatch on the next line, while {@code `, …`} scanned as live text
-   * and matched dispatch words inside quoted prose (#651).
+   * <p>The last column marks the delimiter a statement terminator can identify as a <em>closer</em>
+   * rather than an opener ({@link #closesLiteralOpenedAboveTheHunk}). Only {@code """} carries it,
+   * and only because Java is in the corpus: a text block's opener must end its line, and the
+   * measurement below was taken on Java. {@code '''} does not, because Python is the only language
+   * in the corpus that spells a literal that way and Python lets the body follow the opener, so the
+   * rule has no premise to stand on there. Neither does the backtick: a Go raw string and a
+   * JavaScript template literal put the body right after the opener, so {@code sep := `;abc`} read
+   * its own closing backtick as an opener and blanked the dispatch on the next line, while {@code
+   * `, …`} scanned as live text and matched dispatch words inside quoted prose (#651).
+   *
+   * <p>What {@code """} still costs, since Kotlin and Python spell their literals that way too: one
+   * of theirs whose body starts with a terminator <em>and</em> runs past the end of its line is
+   * read as a closer and its body scans as live code. Keeping the column for {@code """} trades
+   * that against the 57 blanked Java statement lines measured in {@link
+   * #closesLiteralOpenedAboveTheHunk}; a language hint off the diff header is what would end the
+   * trade.
    */
   private static final List<Delimiter> DELIMITERS =
       List.of(
           // Java text block, Kotlin raw string, Python triple-quoted string.
           new Delimiter("\"\"\"", "\"\"\"", true, false, true, true),
-          new Delimiter("'''", "'''", true, false, true, true),
+          new Delimiter("'''", "'''", true, false, true, false),
           // Go raw string and JavaScript template literal share a delimiter; only the latter
           // interpolates, and reading ${…} as code is the direction that keeps real dispatches.
           new Delimiter("`", "`", false, true, true, false),
@@ -309,10 +324,12 @@ final class LiveCodeScanner {
    * semicolon — still read as an opener and blanked the live code under it, the mirror of the case
    * this rule was written for (#651).
    *
-   * <p><b>No closer may follow on the same line.</b> Kotlin and Python do allow a body right after
-   * the opener, so {@code '''; and more'''} is a whole literal whose body merely starts with a
+   * <p><b>No closer may follow on the same line.</b> Kotlin does allow a body right after the
+   * opener, so {@code """; and more"""} is a whole literal whose body merely starts with a
    * terminator. A delimiter that finds its own closer further along the line opened that literal;
    * only one with nothing to close against can be the closer of a literal opened above the hunk.
+   * The Kotlin literal that this does not save is the one whose terminator-led body runs past the
+   * end of its line, recorded with the rest of the trade on {@link #DELIMITERS}.
    *
    * <p>Without the rule at all, a patch whose hunk starts inside a text block read that closer as
    * an opener and inverted every literal below it, blanking live code all the way to the next
