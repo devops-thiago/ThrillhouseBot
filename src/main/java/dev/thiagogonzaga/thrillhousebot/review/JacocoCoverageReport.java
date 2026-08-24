@@ -22,9 +22,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -121,26 +123,19 @@ final class JacocoCoverageReport {
    * path (the same class compiled twice into different source roots) is genuine ambiguity: an empty
    * set is returned rather than a guess, because attributing another module's coverage to this file
    * would be the one failure mode that produces a wrong finding instead of no finding.
+   *
+   * <p>The one-path case of {@link #uncoveredLinesByPath}, and deliberately routed through it so
+   * there is a single matching policy to reason about. It can only see the ambiguity one path
+   * exposes; the mirror image — one report entry that matches several repository files — is
+   * invisible from here, which is why the review's intersection resolves its whole file list at
+   * once instead of calling this per file.
    */
   NavigableSet<Integer> uncoveredLines(String repositoryPath) {
-    if (repositoryPath == null || repositoryPath.isBlank()) {
-      return new TreeSet<>();
-    }
-    var candidates = byFileName.get(fileName(repositoryPath));
-    if (candidates == null) {
-      return new TreeSet<>();
-    }
-    SourceFile matched = null;
-    for (var candidate : candidates) {
-      if (isSuffixPath(repositoryPath, candidate.path())) {
-        if (matched != null) {
-          Log.debugf("Ambiguous coverage entries for %s; ignoring them", repositoryPath);
-          return new TreeSet<>();
-        }
-        matched = candidate;
-      }
-    }
-    return matched == null ? new TreeSet<>() : matched.uncoveredLines();
+    // singletonList, not List.of: a null path is a case the by-path resolver already answers, and
+    // List.of would turn it into a NullPointerException out of a best-effort review enrichment.
+    var resolved =
+        uncoveredLinesByPath(Collections.singletonList(repositoryPath)).get(repositoryPath);
+    return resolved == null ? new TreeSet<>() : resolved;
   }
 
   /**
@@ -160,8 +155,12 @@ final class JacocoCoverageReport {
    */
   Map<String, NavigableSet<Integer>> uncoveredLinesByPath(Collection<String> repositoryPaths) {
     var matchesByPath = new LinkedHashMap<String, List<SourceFile>>();
+    // Keyed by identity, not by value: a SourceFile record's hashCode would hash its whole line
+    // set, and the counting below only ever asks whether two paths reached the same entry object.
     var pathsPerEntry = new IdentityHashMap<SourceFile, Integer>();
-    for (var repositoryPath : repositoryPaths) {
+    // Distinct paths, so the same file listed twice cannot make an entry look like it matches two
+    // repository files and drop coverage that is in fact unambiguous.
+    for (var repositoryPath : new LinkedHashSet<>(repositoryPaths)) {
       if (repositoryPath == null || repositoryPath.isBlank()) {
         continue;
       }
@@ -299,8 +298,11 @@ final class JacocoCoverageReport {
    * inflate a remainder. When {@code sink} is non-null, up to {@code collectLimit} bytes are
    * captured into it for parsing; a report larger than that captures nothing — a truncated report
    * is not one — but is still drained so the walk can safely reach the next entry.
+   *
+   * <p>Package-private so a test can drive the two bounds directly: reaching either through {@link
+   * #fromArtifactZip} alone would mean building a 64&nbsp;MB XML entry.
    */
-  private static long inflateEntry(
+  static long inflateEntry(
       ZipInputStream zip, long budgetLeft, int collectLimit, ByteArrayOutputStream sink)
       throws IOException {
     var buffer = new byte[8192];
