@@ -248,7 +248,8 @@ public class VerdictBuilder {
         new SummaryInputs(
             changedFiles,
             ReviewDiffFormatter.formatPureRenameRollup(
-                ReviewDiffFormatter.pureRenameFiles(ctx.files()))),
+                ReviewDiffFormatter.pureRenameFiles(ctx.files())),
+            ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs())),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -499,9 +500,15 @@ public class VerdictBuilder {
         .toList();
   }
 
-  /** Inputs that only shape the summary walkthrough: the file rows and the pure-rename rollup. */
+  /**
+   * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, and the
+   * unmatched-ignore-glob note. The two notes share the review-scope blockquote — both answer "what
+   * did this review not look at, and why".
+   */
   private record SummaryInputs(
-      List<PrSummaryGenerator.ChangedFile> changedFiles, String pureRenameRollup) {}
+      List<PrSummaryGenerator.ChangedFile> changedFiles,
+      String pureRenameRollup,
+      String unmatchedIgnoreGlobs) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -515,7 +522,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, ""),
+        new SummaryInputs(changedFiles, "", ""),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -530,7 +537,6 @@ public class VerdictBuilder {
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
     var changedFiles = summaryInputs.changedFiles();
-    var pureRenameRollup = summaryInputs.pureRenameRollup();
     var offendingCiChecks = ciEvaluation.offendingChecks();
     var ciUnreadable = ciEvaluation.unreadable();
     var requiredContextsKnown = ciEvaluation.requiredContextsKnown();
@@ -592,13 +598,14 @@ public class VerdictBuilder {
                 requiredContextsKnown,
                 diffStats.truncation(),
                 withheldByConfidence));
-    if (pureRenameRollup != null && !pureRenameRollup.isBlank()) {
+    var scopeNote = reviewScopeNote(summaryInputs);
+    if (!scopeNote.isEmpty()) {
       summaryMarkdown =
           summaryMarkdown.replace(
               PrSummaryGenerator.SUMMARY_HEADING + "\n\n",
               PrSummaryGenerator.SUMMARY_HEADING
                   + "\n\n> **AI review scope:** "
-                  + pureRenameRollup.strip()
+                  + scopeNote
                   + "\n\n");
     }
     // Prepended before the coverage banners so those stay outermost: a diff the review never saw
@@ -647,6 +654,25 @@ public class VerdictBuilder {
         requiredContextsKnown,
         diffStats.truncation(),
         withheldByConfidence);
+  }
+
+  /**
+   * The summary's review-scope blockquote: what the review did not look at, and why. Both notes are
+   * optional and either can stand alone; when both apply they are separate paragraphs of one
+   * blockquote, so a reader meets one scope caveat rather than two competing banners.
+   */
+  private static String reviewScopeNote(SummaryInputs summaryInputs) {
+    var notes = new ArrayList<String>(2);
+    addScopeNote(notes, summaryInputs.pureRenameRollup());
+    addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
+    return String.join("\n>\n> ", notes);
+  }
+
+  /** Adds one note if there is one to add; a null or blank formatter result contributes nothing. */
+  private static void addScopeNote(List<String> notes, String note) {
+    if (note != null && !note.isBlank()) {
+      notes.add(note.strip());
+    }
   }
 
   /**

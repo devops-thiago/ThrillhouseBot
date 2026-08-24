@@ -62,6 +62,14 @@ public class ReviewDiffFormatter {
    * <p>{@link PathScopedInstructions} matches path-scoped review rules through the same type (one
    * single-pattern set per declared scope) rather than adding a second matcher, so a scope glob and
    * an ignore glob mean the same thing to a maintainer.
+   *
+   * <p>Patterns are gitignore-style, which both keys have always been documented as (#481). Raw
+   * Java NIO globs are not: under them {@code build/} matched nothing at all, a bare {@code vendor}
+   * matched only a file literally named that, and {@code *.lock} matched only a root-level one.
+   * Those three idioms failed <em>open</em> — files the repository asked to exclude were sent to
+   * the model anyway — and silently, since a pattern that compiles but matches nothing produced no
+   * log line at any level. {@link #gitignoreForms} normalizes a declared pattern into the NIO-glob
+   * forms that reproduce gitignore's reading before anything is compiled.
    */
   record IgnoreGlobs(List<GlobMatcher> matchers) {
 
@@ -77,9 +85,13 @@ public class ReviewDiffFormatter {
     }
 
     /**
-     * Compiles the usable patterns, dropping blank and invalid ones. Warns through {@link #LOG},
-     * pinned to the enclosing class, so the operator-facing category is unchanged by this method
-     * living here.
+     * Compiles the usable patterns, dropping blank, negated and invalid ones. Warns through {@link
+     * #LOG}, pinned to the enclosing class, so the operator-facing category is unchanged by this
+     * method living here.
+     *
+     * <p>A declaration compiles whole or not at all: if any of its {@link #gitignoreForms forms} is
+     * unusable the whole pattern is dropped, so a half-compiled declaration can never exclude a
+     * different set of files than the one the maintainer wrote.
      */
     private static List<GlobMatcher> compileGlobMatchers(List<String> patterns) {
       if (patterns == null || patterns.isEmpty()) {
@@ -91,18 +103,93 @@ public class ReviewDiffFormatter {
           continue;
         }
         var pattern = raw.trim();
+        if (pattern.startsWith("!")) {
+          // gitignore's re-include, which this model cannot honor: the effective set is global ∪
+          // per-repo and nothing may put back a file the union excludes. Compiling it would build a
+          // matcher for a file literally named "!…" — the silent nonsense #481 is about.
+          LOG.warnf(
+              "Ignoring negated ignore glob: re-includes are not supported, the effective ignore"
+                  + " set is only ever added to: %s",
+              pattern);
+          continue;
+        }
+        var forms = gitignoreForms(pattern);
+        if (forms.isEmpty()) {
+          LOG.warnf("Ignoring ignore glob that names no path: %s", pattern);
+          continue;
+        }
         try {
-          var primary = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
-          PathMatcher suffix =
-              pattern.startsWith("**/")
-                  ? FileSystems.getDefault().getPathMatcher("glob:" + pattern.substring(3))
-                  : null;
-          matchers.add(new GlobMatcher(primary, suffix));
+          var compiled = new ArrayList<GlobMatcher>(forms.size());
+          for (String form : forms) {
+            compiled.add(compileForm(form));
+          }
+          matchers.addAll(compiled);
         } catch (InvalidPathException | PatternSyntaxException e) {
           LOG.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
         }
       }
       return List.copyOf(matchers);
+    }
+
+    /**
+     * One NIO glob, plus the {@code **}-prefix fallback: a {@code glob:**}{@code /x} pattern does
+     * not match a root-level {@code x} (nothing is there for the {@code **} to consume), so the
+     * remainder is compiled separately and matched against the file name and every sub-path by
+     * {@link #matchesSuffix}. Every "at any depth" form {@link #gitignoreForms} produces carries
+     * that prefix, so this is what makes an unanchored pattern reach the repository root too.
+     */
+    private static GlobMatcher compileForm(String form) {
+      var primary = FileSystems.getDefault().getPathMatcher("glob:" + form);
+      PathMatcher suffix =
+          form.startsWith("**/")
+              ? FileSystems.getDefault().getPathMatcher("glob:" + form.substring(3))
+              : null;
+      return new GlobMatcher(primary, suffix);
+    }
+
+    /**
+     * The NIO glob forms one gitignore-style declaration expands to — the whole of #481's matcher
+     * fix, kept in one pure function so the semantics can be read (and tested) without a file list.
+     * Four rules, straight out of {@code gitignore(5)}:
+     *
+     * <ul>
+     *   <li>a leading {@code /} anchors to the repository root and is then dropped, rather than
+     *       compiling to an absolute path that matches nothing;
+     *   <li>a pattern carrying a {@code /} anywhere else is likewise anchored — {@code
+     *       generated/**} is <em>this</em> repository's {@code generated} tree, which is also the
+     *       only reading under which the documented {@code docs/generated/**} keeps its meaning;
+     *   <li>anything else matches at every depth, expressed as the {@code **}{@code /} prefix the
+     *       shipped defaults already spell out by hand;
+     *   <li>a trailing {@code /} means "directory", so only the tree under it is produced; without
+     *       one, the pattern names a file <em>or</em> a directory, so both forms are produced.
+     * </ul>
+     *
+     * <p>A declaration already ending in {@code **} is a tree pattern as written and is left alone,
+     * which keeps every shipped default ({@code **}{@code /target/**} and its siblings) compiling
+     * to exactly the one matcher it compiled to before.
+     */
+    static List<String> gitignoreForms(String pattern) {
+      var start = 0;
+      while (start < pattern.length() && pattern.charAt(start) == '/') {
+        start++;
+      }
+      var end = pattern.length();
+      while (end > start && pattern.charAt(end - 1) == '/') {
+        end--;
+      }
+      var core = pattern.substring(start, end);
+      if (core.isEmpty()) {
+        return List.of();
+      }
+      var anchored = start > 0 || core.indexOf('/') >= 0;
+      var directoryOnly = end < pattern.length();
+      var prefix = anchored ? "" : "**/";
+      if (core.endsWith("**")) {
+        return List.of(prefix + core);
+      }
+      return directoryOnly
+          ? List.of(prefix + core + "/**")
+          : List.of(prefix + core, prefix + core + "/**");
     }
 
     /**
@@ -192,6 +279,68 @@ public class ReviewDiffFormatter {
 
   boolean isIgnored(String filename) {
     return globalGlobs.matches(filename);
+  }
+
+  /**
+   * The patterns in {@code declared} that match none of {@code filenames}, in declaration order —
+   * the maintainer-facing half of #481. A glob that excludes nothing is not an error the parser can
+   * see: it compiles, it is applied, and it silently does nothing, which is exactly how a mistyped
+   * or wrongly-shaped declaration used to survive release after release.
+   *
+   * <p>Only a repository's own declarations are worth reporting: the deployment default list is
+   * written for every repository at once, so most of it legitimately matches nothing in any one
+   * pull request. Each pattern is compiled on its own (the shared set short-circuits on the first
+   * match and could not attribute a hit), which is why this runs once per review, off the declared
+   * list only, and never per finding.
+   */
+  static List<String> unmatchedPatterns(List<String> declared, List<String> filenames) {
+    if (declared == null || declared.isEmpty() || filenames == null || filenames.isEmpty()) {
+      return List.of();
+    }
+    var unmatched = new ArrayList<String>();
+    for (String raw : declared) {
+      if (raw == null || raw.isBlank()) {
+        continue;
+      }
+      // An uncompilable pattern compiles to an empty set, which matches nothing — it belongs in
+      // this list too, since its own warning never leaves the log.
+      var globs = IgnoreGlobs.compile(List.of(raw));
+      if (filenames.stream().noneMatch(globs::matches)) {
+        unmatched.add(raw.trim());
+      }
+    }
+    return List.copyOf(unmatched);
+  }
+
+  /**
+   * One-line disclosure for the summary's review-scope note, or {@code ""} when every declared glob
+   * matched something. Names the globs rather than only counting them: the count says something is
+   * wrong, the names say which line to fix. Capped like the pure-rename rollup so a long list
+   * cannot dominate the summary, and each glob is neutralized — it is repository-authored text
+   * being spliced into a rendered comment.
+   */
+  static String formatUnmatchedIgnoreGlobs(List<String> unmatched) {
+    if (unmatched == null || unmatched.isEmpty()) {
+      return "";
+    }
+    final int sampleCap = 5;
+    var samples =
+        unmatched.stream()
+            .limit(sampleCap)
+            .map(glob -> "`" + MarkdownSafe.inlineCode(glob) + "`")
+            .toList();
+    var sb =
+        new StringBuilder()
+            .append(unmatched.size())
+            .append(unmatched.size() == 1 ? " ignore glob" : " ignore globs")
+            .append(" declared in this repository's ThrillhouseBot config matched no file in this")
+            .append(" pull request (")
+            .append(String.join(", ", samples));
+    var more = unmatched.size() - samples.size();
+    if (more > 0) {
+      sb.append(", and ").append(more).append(" more");
+    }
+    return sb.append(')').toString();
   }
 
   /**
