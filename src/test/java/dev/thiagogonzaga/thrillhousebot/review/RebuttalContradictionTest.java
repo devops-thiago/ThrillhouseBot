@@ -179,6 +179,12 @@ class RebuttalContradictionTest {
             + " downstream reconciler depends on is only worth having if exactly one thread"
             + " appends here, so please do not widen this pool without reading that thread"
             + " first */);",
+        // The count wrapped onto a following added line: its leading '+' is a diff marker, not
+        // code, and must not hide the count from the exclusion (#761).
+        "+    var pool = Executors.newFixedThreadPool(\n+        1);",
+        "+    var pool = Executors.newFixedThreadPool(\n+        1, factory);",
+        // The same wrap on context lines was already excluded and must stay so.
+        "     var pool = Executors.newFixedThreadPool(\n         1);",
       })
   void shouldNotTreatASingleThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(
@@ -200,6 +206,8 @@ class RebuttalContradictionTest {
         "+    var pool = Executors.newFixedThreadPool(2 /* two */);",
         "+    var pool = Executors.newFixedThreadPool(1 + 0);",
         "+    var pool = Executors.newFixedThreadPool(2 /* two\n+        threads */);",
+        // A genuinely concurrent count wrapped onto a following added line still registers.
+        "+    var pool = Executors.newFixedThreadPool(\n+        8);",
       })
   void shouldTreatAMultiThreadedFixedPoolAsConcurrentDispatch(String codeLine) {
     assertTrue(
