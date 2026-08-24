@@ -252,6 +252,16 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void aPlanBuiltWithANullPatchlessListExposesAnEmptyOne() {
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), null, true, null, null, null, null, null);
+
+    assertEquals(List.of(), plan.patchlessFiles());
+    assertFalse(plan.truncated());
+  }
+
+  @Test
   void aPatchlessChangedFileIsOmittedByNameNotSilentlyReviewed() {
     // GitHub returns patch == null for binary files and for text diffs too large to display, while
     // still reporting real additions/deletions. Such a file survives isPureRename (non-zero change
@@ -260,7 +270,10 @@ class DiffBudgetPlannerTest {
     var patchless = new FileDiff("src/Huge.java", "modified", 4000, 10, 4010, null);
     var plan = planner.plan(List.of(patchless), 100_000, 3);
 
-    assertEquals(List.of("src/Huge.java"), plan.omittedFiles());
+    assertEquals(List.of("src/Huge.java"), plan.patchlessFiles());
+    assertTrue(
+        plan.omittedFiles().isEmpty(),
+        "a patch-less file is not a budget omission — nothing exceeded the budget (#628)");
     assertTrue(
         plan.truncated(), "an omitted patch-less file makes the review partial (holds APPROVE)");
     assertTrue(
@@ -275,7 +288,8 @@ class DiffBudgetPlannerTest {
     var real = file("src/App.java", 5, patch(5));
     var plan = planner.plan(List.of(blank, real), 100_000, 3);
 
-    assertEquals(List.of("src/Blob.bin"), plan.omittedFiles());
+    assertEquals(List.of("src/Blob.bin"), plan.patchlessFiles());
+    assertTrue(plan.omittedFiles().isEmpty());
     assertEquals(List.of("src/App.java"), coveredFilenames(plan));
     assertTrue(plan.truncated());
   }
@@ -290,6 +304,8 @@ class DiffBudgetPlannerTest {
 
     assertTrue(
         plan.omittedFiles().isEmpty(), "a zero-change patch-less file is not a coverage gap");
+    assertTrue(
+        plan.patchlessFiles().isEmpty(), "a zero-change patch-less file is not a coverage gap");
     assertFalse(plan.truncated(), "a pure rename must not hold APPROVE");
   }
 
@@ -864,7 +880,8 @@ class DiffBudgetPlannerTest {
 
     var plan = planner.plan(files, 10000, 3);
 
-    assertEquals(List.of("(unnamed file)"), plan.omittedFiles());
+    assertEquals(List.of("(unnamed file)"), plan.patchlessFiles());
+    assertTrue(plan.omittedFiles().isEmpty(), plan.omittedFiles().toString());
     assertTrue(plan.clippedFiles().isEmpty(), plan.clippedFiles().toString());
     assertTrue(plan.truncated(), "an unreviewed file must keep withholding approval");
   }
@@ -881,7 +898,8 @@ class DiffBudgetPlannerTest {
     var plan = planner.plan(files, 10_000, 3);
 
     assertEquals(List.of("src/App.java"), coveredFilenames(plan));
-    assertEquals(List.of("(unnamed file)"), plan.omittedFiles(), "the patchless file has no diff");
+    assertEquals(
+        List.of("(unnamed file)"), plan.patchlessFiles(), "the patchless file has no diff");
   }
 
   @Test
@@ -933,7 +951,7 @@ class DiffBudgetPlannerTest {
 
     assertEquals(List.of("src/App.java"), coveredFilenames(plan), "the named file is reviewed");
     assertEquals(
-        List.of("(unnamed file)"), plan.omittedFiles(), "the nameless gap is still counted");
+        List.of("(unnamed file)"), plan.patchlessFiles(), "the nameless gap is still counted");
     assertTrue(plan.truncated(), "an unreviewed file must keep withholding approval");
     assertFalse(
         planner

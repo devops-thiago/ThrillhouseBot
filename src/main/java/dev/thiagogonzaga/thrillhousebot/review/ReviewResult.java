@@ -166,7 +166,10 @@ public record ReviewResult(
   /**
    * Which files the review left uncovered, by name and by reason: {@code omittedFileNames} were
    * never sent because the diff exceeded the token budget, {@code clippedFileNames} were
-   * hunk-clipped and only partially analyzed, {@code spendCeilingSkippedFileNames} had their review
+   * hunk-clipped and only partially analyzed, {@code patchlessFileNames} had no patch text to
+   * review at all — GitHub reports real additions/deletions but returns no content for binary files
+   * and for text diffs too large to display, so no budget could have covered them and the rendered
+   * copy must not blame the budget (#628) — {@code spendCeilingSkippedFileNames} had their review
    * call skipped because the review's token spend ceiling ({@code REVIEW_MAX_TOKENS_PER_REVIEW})
    * was reached — a different reason with a different fix, so the rendered copy names it separately
    * — and {@code responseCutFileNames} were only partially reviewed because the model's response
@@ -191,6 +194,7 @@ public record ReviewResult(
   public record TruncationDetail(
       List<String> omittedFileNames,
       List<String> clippedFileNames,
+      List<String> patchlessFileNames,
       List<String> spendCeilingSkippedFileNames,
       List<String> responseCutFileNames,
       List<String> callFailedFileNames,
@@ -203,8 +207,33 @@ public record ReviewResult(
             List.of(),
             List.of(),
             List.of(),
+            List.of(),
             SummaryDegradation.NONE,
             VerificationCoverage.EMPTY);
+
+    /**
+     * Convenience constructor for details built before the patchless class existed (and tests): no
+     * patchless file was seen, so no such clause is rendered. The production path ({@code
+     * VerdictBuilder}) passes the real list through the canonical constructor.
+     */
+    public TruncationDetail(
+        List<String> omittedFileNames,
+        List<String> clippedFileNames,
+        List<String> spendCeilingSkippedFileNames,
+        List<String> responseCutFileNames,
+        List<String> callFailedFileNames,
+        SummaryDegradation summaryDegradation,
+        VerificationCoverage verification) {
+      this(
+          omittedFileNames,
+          clippedFileNames,
+          List.of(),
+          spendCeilingSkippedFileNames,
+          responseCutFileNames,
+          callFailedFileNames,
+          summaryDegradation,
+          verification);
+    }
 
     /**
      * Convenience constructor for details built before the verification-coverage class existed (and
@@ -251,6 +280,7 @@ public record ReviewResult(
     public TruncationDetail {
       omittedFileNames = omittedFileNames == null ? List.of() : List.copyOf(omittedFileNames);
       clippedFileNames = clippedFileNames == null ? List.of() : List.copyOf(clippedFileNames);
+      patchlessFileNames = patchlessFileNames == null ? List.of() : List.copyOf(patchlessFileNames);
       spendCeilingSkippedFileNames =
           spendCeilingSkippedFileNames == null
               ? List.of()
@@ -271,8 +301,8 @@ public record ReviewResult(
     }
 
     /**
-     * Whether any per-file coverage gap exists — a name in any of the five file classes. False for
-     * a detail whose only content is a summary degradation: the findings then cover the whole diff,
+     * Whether any per-file coverage gap exists — a name in any of the six file classes. False for a
+     * detail whose only content is a summary degradation: the findings then cover the whole diff,
      * so surfaces whose framing is per-file partial coverage (the on-demand disclosure, the delta
      * comment) treat such a detail as empty (#516) while the summary-aware surfaces (banner,
      * coverage clause, check-run brief) still disclose the degradation.
@@ -280,6 +310,7 @@ public record ReviewResult(
     public boolean hasFileGaps() {
       return !omittedFileNames.isEmpty()
           || !clippedFileNames.isEmpty()
+          || !patchlessFileNames.isEmpty()
           || !spendCeilingSkippedFileNames.isEmpty()
           || !responseCutFileNames.isEmpty()
           || !callFailedFileNames.isEmpty();
@@ -570,6 +601,16 @@ public record ReviewResult(
     if (!parts.isEmpty()) {
       clauses.add(String.join(" and ", parts) + " because the diff exceeded the review budget");
     }
+    // Patchless files carry their own reason (#628): GitHub returned no patch text for them —
+    // binary content, or a text diff too large to display — so there was never anything to
+    // review, and the budget wording would point the operator at a knob that changes nothing.
+    if (!detail.patchlessFileNames().isEmpty()) {
+      clauses.add(
+          String.format(
+              "%d file(s) could not be reviewed because GitHub provided no diff content for them"
+                  + " — binary files, or text diffs too large to display (%s)",
+              detail.patchlessFileNames().size(), nameList(detail.patchlessFileNames())));
+    }
     if (!detail.spendCeilingSkippedFileNames().isEmpty()) {
       clauses.add(
           String.format(
@@ -709,6 +750,12 @@ public record ReviewResult(
     if (!truncation.clippedFileNames().isEmpty()) {
       parts.add(
           String.format("%d file(s) partially analyzed", truncation.clippedFileNames().size()));
+    }
+    if (!truncation.patchlessFileNames().isEmpty()) {
+      parts.add(
+          String.format(
+              "%d file(s) without diff content from GitHub",
+              truncation.patchlessFileNames().size()));
     }
     if (!truncation.spendCeilingSkippedFileNames().isEmpty()) {
       parts.add(

@@ -108,11 +108,18 @@ public class DiffBudgetPlanner {
    * but every batch that succeeded keeps its findings. Written only through {@link
    * #recordUncoveredFiles(List)}; its accessor returns a defensive copy so the mutable backing
    * never escapes. The {@code effective*} accessors fold it into the planned omissions.
+   *
+   * <p>{@code patchlessFiles} names the reviewable files GitHub reported with real changes but no
+   * patch text (binary, or a text diff too large to display). They hold APPROVE and are disclosed
+   * exactly like budget omissions, but they were never candidates for a batch — there was nothing
+   * to read — so they are carried as their own class (#628): disclosing them as "exceeded the
+   * review budget" would send the operator at a knob that cannot help.
    */
   public record BudgetPlan(
       List<DiffBatch> batches,
       List<String> omittedFiles,
       List<String> clippedFiles,
+      List<String> patchlessFiles,
       boolean budgeted,
       List<String> runtimeUncoveredFiles,
       List<String> spendCeilingSkippedFiles,
@@ -123,6 +130,7 @@ public class DiffBudgetPlanner {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
       clippedFiles = List.copyOf(clippedFiles);
+      patchlessFiles = patchlessFiles == null ? List.of() : List.copyOf(patchlessFiles);
       // Kept mutable on purpose (not List.copyOf): the review pass records runtime batch failures
       // onto this shared instance after the plan is built.
       runtimeUncoveredFiles =
@@ -140,6 +148,34 @@ public class DiffBudgetPlanner {
           verificationCoverageRef == null
               ? new java.util.concurrent.atomic.AtomicReference<>(VerificationCoverage.EMPTY)
               : verificationCoverageRef;
+    }
+
+    /**
+     * Convenience constructor for plans built before the patchless-files class existed (and tests):
+     * no patchless file was seen, so no such disclosure is rendered. The planner passes the real
+     * list through the canonical constructor.
+     */
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles,
+        List<String> responseCutFiles,
+        java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef,
+        java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          List.of(),
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          responseCutFiles,
+          summaryDegradationRef,
+          verificationCoverageRef);
     }
 
     /**
@@ -298,10 +334,12 @@ public class DiffBudgetPlanner {
     }
 
     public boolean truncated() {
-      // Clipped unseen hunks, files a failed batch never covered, and files whose response was
-      // cut mid-body all withhold coverage like omitted files — each holds APPROVE.
+      // Clipped unseen hunks, files a failed batch never covered, files whose response was cut
+      // mid-body, and files GitHub gave no patch for all withhold coverage like omitted files —
+      // each holds APPROVE.
       return !omittedFiles.isEmpty()
           || !clippedFiles.isEmpty()
+          || !patchlessFiles.isEmpty()
           || !runtimeUncoveredFiles.isEmpty()
           || !responseCutFiles.isEmpty();
     }
@@ -666,7 +704,8 @@ public class DiffBudgetPlanner {
    * Rendered sections plus the files no clipping could fit (omitted by name, never packed) and the
    * files that were clipped to fit (covered, but only partially analyzed).
    */
-  private record Rendered(List<Sized> sized, List<String> unclippable, List<String> clipped) {}
+  private record Rendered(
+      List<Sized> sized, List<String> unclippable, List<String> clipped, List<String> patchless) {}
 
   private Rendered renderAndSize(
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens) {
@@ -684,7 +723,8 @@ public class DiffBudgetPlanner {
                 Comparator.nullsLast(Comparator.naturalOrder())));
 
     var reviewableNames = ReviewDiffFormatter.namesOf(reviewable);
-    var rendered = new Rendered(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+    var rendered =
+        new Rendered(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
     for (var file : ordered) {
       var section = formatter.formatFileSection(file, reviewableNames);
       if (diffBudgetTokens <= 0) {
@@ -713,8 +753,9 @@ public class DiffBudgetPlanner {
       // display, while still reporting real additions/deletions. Its rendered section is a bare
       // header with no ```diff``` body — there is nothing for the model to read — so packing it
       // would count the file as fully reviewed and let an unbacked "resolved" claim through.
-      // Omit it by name like an unclippable file: never packed, holds APPROVE, disclosed.
-      recordName(rendered.unclippable(), file.filename());
+      // Never packed, holds APPROVE, disclosed — but as its own class, not as a budget omission:
+      // the file did not exceed anything, GitHub simply returned no content (#628).
+      recordName(rendered.patchless(), file.filename());
       return;
     }
     var tokens = tokenCounter.estimateTokens(section);
@@ -801,7 +842,8 @@ public class DiffBudgetPlanner {
     // exactly one class or the disclosure would list it twice and the verdict double-count it.
     var omittedSet = new HashSet<>(omitted);
     var clipped = rendered.clipped().stream().filter(n -> !omittedSet.contains(n)).toList();
-    return new BudgetPlan(batches, omitted, clipped, true, null, null, null, null, null);
+    return new BudgetPlan(
+        batches, omitted, clipped, rendered.patchless(), true, null, null, null, null, null);
   }
 
   /** Index of the first open bin with room for {@code tokens}, or -1 if none. */
