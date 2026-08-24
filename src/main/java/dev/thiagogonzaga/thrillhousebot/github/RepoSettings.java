@@ -28,7 +28,8 @@ import java.util.List;
  * one of them must degrade to its {@link #EMPTY} value rather than fail a review.
  *
  * @param ignoredFiles extra ignore globs, unioned with (never replacing) the deployment-wide {@code
- *     thrillhousebot.review.ignored-files} list
+ *     thrillhousebot.review.ignored-files} list, in the same gitignore-style syntax and through the
+ *     same matcher as that key (#481)
  * @param pathInstructions review rules scoped to a path glob, applied in addition to (never instead
  *     of) the repository's global prose instructions
  * @param coverageArtifact name of the workflow artifact holding this repository's JaCoCo XML
@@ -53,7 +54,9 @@ public record RepoSettings(
    * additive: they apply to files under that glob on top of the repository's global instructions,
    * and never to files outside it.
    *
-   * @param path a glob in the same gitignore-style syntax as the ignore lists
+   * @param path a glob in the same gitignore-style syntax as the ignore lists, compiled by the same
+   *     matcher — an unanchored {@code payments} or {@code payments/} scopes the directory tree,
+   *     while {@code payments/**} is anchored to the repository root
    * @param instructions the maintainer prose applied to files matching {@code path}; untrusted
    *     content that reaches the model as data, never as instructions to it
    */

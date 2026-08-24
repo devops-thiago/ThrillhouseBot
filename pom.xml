@@ -126,13 +126,15 @@
             <artifactId>quarkus-rest-client-jackson</artifactId>
         </dependency>
         <!--
-            YAML reading for a repository's own .github/thrillhousebot.yml. Already on the
-            classpath transitively (via quarkus-smallrye-openapi) and version-managed by the
-            jackson-bom import above; declared explicitly because it is now used directly.
+            YAML reading for a repository's own .github/thrillhousebot.yml. snakeyaml's own loader,
+            not jackson-dataformat-yaml's: the Jackson module drives snakeyaml's event parser and
+            never runs its Composer, so aliases arrived unresolved and the nesting/alias ceilings
+            were inert (#481). Already on the classpath transitively and version-managed by the
+            platform BOM above; declared explicitly because it is used directly.
         -->
         <dependency>
-            <groupId>com.fasterxml.jackson.dataformat</groupId>
-            <artifactId>jackson-dataformat-yaml</artifactId>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

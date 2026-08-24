@@ -135,7 +135,8 @@ public class ReviewContextLoader {
       List<GitHubPullRequestClient.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals,
-      List<GitHubCommentClient.IssueComment> conversationComments) {
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      List<String> unmatchedIgnoreGlobs) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -145,6 +146,64 @@ public class ReviewContextLoader {
       repoLabels = List.copyOf(repoLabels);
       reviewableFiles = List.copyOf(reviewableFiles);
       conversationComments = List.copyOf(conversationComments);
+      unmatchedIgnoreGlobs = List.copyOf(unmatchedIgnoreGlobs);
+    }
+
+    /**
+     * Back-compat constructor for callers that carry no unmatched-glob disclosure. Defaults it to
+     * empty, which reads as "every declared ignore glob matched something" — the quiet direction,
+     * since a disclosure nobody computed must never be invented.
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals,
+        List<GitHubCommentClient.IssueComment> conversationComments) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          conversationComments,
+          List.of());
     }
 
     /**
@@ -243,6 +302,14 @@ public class ReviewContextLoader {
     // time per review; a repo that declares nothing resolves straight back to the global set.
     var ignoreGlobs = diffFormatter.ignoreGlobs(repoSettings.ignoredFiles());
     var reviewableFiles = diffFormatter.reviewableFiles(files, ignoreGlobs);
+    // Which of the repository's own globs excluded nothing here — a declaration that quietly does
+    // nothing is disclosed in the summary rather than left to be discovered by a review that
+    // should not have seen the file (#481). Computed against the whole file list, before the
+    // filter, and only when the repository declared something of its own.
+    var unmatchedIgnoreGlobs =
+        ReviewDiffFormatter.unmatchedPatterns(
+            repoSettings.ignoredFiles(),
+            files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
     // Which declared scopes govern which files, resolved once against the post-ignore-filter list:
     // rules never apply to a file the ignore set already took out of review scope, and no later
     // stage re-walks a glob per finding.
@@ -368,7 +435,8 @@ public class ReviewContextLoader {
         reviewableFiles,
         lineResolverSupplier,
         prTotals,
-        conversationComments);
+        conversationComments,
+        unmatchedIgnoreGlobs);
   }
 
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */

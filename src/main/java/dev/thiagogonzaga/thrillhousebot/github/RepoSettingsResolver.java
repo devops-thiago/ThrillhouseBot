@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.ProcessingException;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
@@ -109,8 +110,11 @@ public class RepoSettingsResolver {
 
     var auth = authClient.getAuthHeader(installationId);
 
+    var unreadable = false;
     for (String path : CONFIG_FILE_CHAIN) {
-      var settings = fetchAndParse(auth, owner, repo, defaultBranch, path);
+      var fetched = fetchAndParse(auth, owner, repo, defaultBranch, path);
+      unreadable |= fetched.unreadable();
+      var settings = fetched.settings();
       if (settings == null) {
         continue;
       }
@@ -126,6 +130,17 @@ public class RepoSettingsResolver {
       return settings;
     }
 
+    // A failure we could not read is not an answer, so it must not be cached as one (#481). The
+    // review still runs on the global list — but the next one re-asks GitHub instead of spending
+    // the negative TTL certain this repository has no config.
+    if (unreadable) {
+      log.warn(
+          "Could not read a repository config for {}; running on the global settings for this"
+              + " review only, without caching the result",
+          cacheKey);
+      return RepoSettings.EMPTY;
+    }
+
     // Cache the negative result briefly so an unconfigured repo is not re-fetched every review.
     cache.put(
         cacheKey,
@@ -136,34 +151,59 @@ public class RepoSettingsResolver {
   }
 
   /**
-   * Fetches and parses one candidate path. The two outcomes are deliberately different:
+   * One candidate path's outcome. The three cases decide two different things — whether the chain
+   * continues, and whether the run may be remembered:
    *
    * <ul>
-   *   <li>{@code null} — nothing readable came back at all: the file is absent (404), the request
-   *       failed, or the payload could not be decoded into text. The caller moves on to the next
-   *       name in the chain, because a second candidate may still hold a usable config.
-   *   <li>{@link RepoSettings#EMPTY} — the file was read, and the parse found no usable settings
-   *       (malformed YAML, wrong shape, no {@code review.ignored-files}). That is a real, cacheable
-   *       answer that ends the chain: the repository has spoken, it just said nothing usable.
+   *   <li>{@link #found} — the file was read. A parse that found no usable settings still answers
+   *       {@link RepoSettings#EMPTY} here, because the repository has spoken, it just said nothing
+   *       usable. That ends the chain, and resolve() caches it inside the loop for the full {@link
+   *       RepoSettingsResolver#CACHE_TTL_MS} exactly like a config that did parse — deliberately,
+   *       so a repository whose YAML is broken is not re-fetched on every single review. The cost
+   *       is that fixing a broken config takes effect on the same TTL as fixing a working one.
+   *   <li>{@link #ABSENT} — GitHub said the file is not there (404), or answered without an inline
+   *       payload. The caller moves on to the next name in the chain, and "this repository has no
+   *       config" is a fact worth caching.
+   *   <li>{@link #READ_FAILED} — the request itself failed (5xx, the 403 secondary rate limit, a
+   *       transport error) or the payload could not be decoded. Nothing was learned about the
+   *       repository, so the caller must not write that non-answer into the cache (#481).
    * </ul>
    *
-   * <p>Either way the effective result is the global list, so the distinction only decides how many
-   * candidates are tried — never whether a review proceeds.
+   * <p>Every case runs the review on the global list, so this only decides how many candidates are
+   * tried and what is remembered — never whether a review proceeds.
    */
-  private RepoSettings fetchAndParse(
+  private record Fetched(RepoSettings settings, boolean unreadable) {
+
+    static final Fetched ABSENT = new Fetched(null, false);
+    static final Fetched READ_FAILED = new Fetched(null, true);
+
+    static Fetched found(RepoSettings settings) {
+      return new Fetched(settings, false);
+    }
+  }
+
+  /** Fetches and parses one candidate path; see {@link Fetched} for what each outcome means. */
+  private Fetched fetchAndParse(
       String auth, String owner, String repo, String defaultBranch, String path) {
     try {
       var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
       if (file == null || file.content() == null) {
-        return null;
+        return Fetched.ABSENT;
       }
       // GitHub wraps base64 content in newlines; only the MIME decoder tolerates them.
       var content =
           new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
-      return RepoSettingsParser.parse(content, path);
-    } catch (WebApplicationException | ProcessingException _) {
+      return Fetched.found(RepoSettingsParser.parse(content, path));
+    } catch (NotFoundException _) {
       log.debug("Repository config file not found: {}", path);
-      return null;
+      return Fetched.ABSENT;
+    } catch (WebApplicationException | ProcessingException e) {
+      // NotFoundException's siblings are not "no config": ServerErrorException (500/502/503) and
+      // ClientErrorException (the 403 secondary rate limit) are transient, and treating them as a
+      // 404 pinned "this repo has no config" in the cache for a minute of reviews (#481).
+      log.warn(
+          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
+      return Fetched.READ_FAILED;
     } catch (RuntimeException e) {
       log.warn(
           "Failed to read repository config {} for {}/{}; continuing with the global settings only",
@@ -171,7 +211,7 @@ public class RepoSettingsResolver {
           owner,
           repo,
           e);
-      return null;
+      return Fetched.READ_FAILED;
     }
   }
 
