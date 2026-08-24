@@ -31,7 +31,7 @@
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
         <argLine></argLine>
         <spotless.version>3.10.0</spotless.version>
-        <google-java-format.version>1.27.0</google-java-format.version>
+        <google-java-format.version>1.33.0</google-java-format.version>
 
         <!-- SonarCloud Configuration -->
         <sonar.projectKey>devops-thiago_ThrillhouseBot</sonar.projectKey>
