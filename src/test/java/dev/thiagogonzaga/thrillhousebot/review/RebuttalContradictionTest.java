@@ -243,6 +243,78 @@ class RebuttalContradictionTest {
   }
 
   /**
+   * Dispatch text quoted inside a string literal is prose, not live code. Matching it overruled a
+   * maintainer whose "it runs serially" decline was correct — the over-fire direction, which is the
+   * more expensive one because it argues with a maintainer who is right.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A log or documentation string naming the construct.
+        "+    var m = \"hand work to .submit( here\";",
+        "+    log.info(\"call executor.execute( to enqueue\");",
+        // A single-quoted and a backtick (Go raw) literal.
+        "+    msg := 'use pool.submit( for async work'",
+        "+    doc := `each event calls handler.execute(ctx)`",
+        // Every other construct the matcher knows, quoted rather than run.
+        "+    var s = \"Executors.newCachedThreadPool() would be wrong here\";",
+        "+    var s = \"Executors.newFixedThreadPool(8) was removed\";",
+        "+    var s = \"CompletableFuture.runAsync is not used\";",
+        "+    var s = \"do not add new Thread( calls\";",
+        "+    var s = \"items.parallelStream() is banned in this module\";",
+        // An escaped quote does not close the literal early and expose the dispatch text.
+        "+    var s = \"a\\\".submit(\";",
+        // Two single-quoted strings on one line: the first's closer sits more than a char
+        // literal's width from the next opener, so both stay literals and both are blanked.
+        "+    var s = 'quote .submit( here' + 'more prose text here'",
+        // The same shape with the openers far enough apart that even an escape-length span
+        // cannot be mistaken for a char literal.
+        "+    var s = 'quote .submit( here' and afterwards 'more prose text here'",
+      })
+  void shouldNotTreatDispatchTextInsideAStringLiteralAsEvidence(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isEmpty(),
+        "the dispatch text sits inside a string literal, so it is not live code: " + codeLine);
+  }
+
+  /** The other direction: a real dispatch next to an unrelated literal still registers. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    log.info(\"enqueue\"); executor.submit(() -> run(ctx));",
+        "+    executor.submit(() -> run(ctx)); log.info(\"enqueued one task\");",
+        // The literal itself quotes dispatch text, and the real dispatch follows it.
+        "+    log.info(\"about to .submit( work\"); executor.submit(() -> run(ctx));",
+        // An unclosed opener is ordinary text, so the dispatch after it stays visible.
+        "+    let f = &'a ctx; executor.submit(() -> run(ctx));",
+        // A lifetime's apostrophe pairing with a later char literal's opener must not blank the
+        // live code between them: the ; inside the would-be span marks it as code, not a literal.
+        "+    let f = &'a ctx; executor.submit(() -> run(ctx)); let nl = '\\n';",
+        "+    let f = &'a ctx; executor.submit(() -> run(ctx)); let sep = ',';",
+        // A turbofish lifetime pairing with a later char literal: no ; sits inside the misread
+        // span, so the lifetime position (after <) and the char-literal-shaped closer are the
+        // tells that keep the dispatch between the apostrophes live.
+        "+    foo::<'a>(executor.submit(|| ()), '\\n');",
+        // Two lifetimes with the dispatch between them and no char literal at all.
+        "+    fn go<'a>(e: &'a Exec) { e.submit(run); }",
+        // A span holding a ; is code shape even with the apostrophe in column zero, where there
+        // is no prefix character to consult.
+        "+'a; b' executor.submit(() -> run(ctx))",
+        // A stray apostrophe in an identifier pairing with a char literal's opener: neither a
+        // lifetime prefix nor a ; exists, so the char-literal-shaped closer is the tell.
+        "+    log(don't panic, executor.submit(() -> run(ctx)), '\\n')",
+        // A trait-bound lifetime (not after & or <) pairing with a long char-literal escape: the
+        // escape-shaped closer is the tell that keeps the dispatch live.
+        "+    fn f<T: 'a>(e: &mut Exec) { e.submit(run) } let c = '\\u{1F600}';",
+        "+    fn f<T: 'a>(e: &mut Exec) { e.submit(run) } let c = '\\u0041';",
+      })
+  void shouldKeepRealDispatchNextToAStringLiteral(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isPresent(),
+        "the dispatch sits outside the literal, so it is live code: " + codeLine);
+  }
+
+  /**
    * The mirror of the case above: a real trailing comment must stay stripped. Honouring a backslash
    * escape inside a Go raw string — where a backslash is literal — stepped over the closing
    * backtick, left the quote state open, and let the comment's own text pose as live code.
