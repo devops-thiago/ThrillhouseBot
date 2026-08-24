@@ -280,32 +280,7 @@ final class JacocoCoverageReport {
     var merged = new HashMap<String, NavigableSet<Integer>>();
     var aborted = false;
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
-      var seen = 0;
-      var inflatedTotal = 0L;
-      for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry(), seen++) {
-        if (seen >= MAX_ZIP_ENTRIES) {
-          // Stopping here and keeping the merge would hand the same prefix-choosing power the bomb
-          // abort refuses: pad an archive past the cap and whoever built it decides which reports
-          // the merge saw, while the result still reads as this build's coverage. Lines the unread
-          // reports cover come back uncovered, against a diff the model is told to treat as fact,
-          // so the archive is refused whole for the same reason.
-          Log.debugf(
-              "Coverage artifact carries more than %d entries; refusing it rather than merging the"
-                  + " prefix that fit",
-              MAX_ZIP_ENTRIES);
-          aborted = true;
-          break;
-        }
-        var read = readEntryInto(zip, entry, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, merged);
-        if (read < 0) {
-          Log.debugf(
-              "Coverage artifact inflates past the %d-byte aggregate cap; refusing it as a zip bomb",
-              MAX_TOTAL_INFLATED_BYTES);
-          aborted = true;
-          break;
-        }
-        inflatedTotal += read;
-      }
+      aborted = walkRefused(zip, merged);
     } catch (IOException | RuntimeException e) {
       Log.debugf(e, "Could not read the coverage artifact archive");
       aborted = true;
@@ -547,5 +522,56 @@ final class JacocoCoverageReport {
     } catch (XMLStreamException e) {
       Log.debug("Failed to close the coverage report reader", e);
     }
+  }
+
+  /**
+   * Walks the archive's entries into {@code merged}, and reports whether it gave up.
+   *
+   * <p>Each refusal leaves by returning rather than by breaking, which keeps the two limits reading
+   * as the two answers they are. It also matters mechanically: a {@code continue} here would run
+   * the loop's update expression, and {@code getNextEntry} inflates the remainder of the entry it
+   * is leaving — so skipping past a bomb entry would pay exactly the cost the aggregate budget
+   * exists to refuse.
+   *
+   * <p>The cap counts entries that could carry a report. Directories are walked past without
+   * charge, so a tree-shaped artifact is judged by how much content it holds rather than by how
+   * deeply it is nested.
+   *
+   * @return {@code true} when a limit stopped the walk, so whatever merged is a prefix the archive
+   *     chose and no report may be built from it
+   */
+  private static boolean walkRefused(ZipInputStream zip, Map<String, NavigableSet<Integer>> merged)
+      throws IOException {
+    var seen = 0;
+    var inflatedTotal = 0L;
+    for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+      if (entry.isDirectory()) {
+        // Directory entries carry no data, so skipping one costs nothing and can never hide a
+        // report. Counting them would refuse the shape this reader most needs to handle: a coverage
+        // artifact is usually a whole target/ tree rather than a flat list of reports, so its
+        // directories alone can outnumber the modules and push a handful of jacoco.xml files past a
+        // cap meant to bound how much content is read.
+        continue;
+      }
+      if (seen++ >= MAX_ZIP_ENTRIES) {
+        // Padding an archive past the cap would otherwise let whoever built it decide which reports
+        // the merge saw, while the result still reads as this build's coverage: lines the unread
+        // reports cover come back uncovered, against a diff the model is told to treat as fact.
+        Log.debugf(
+            "Coverage artifact carries more than %d entries; refusing it rather than merging the"
+                + " prefix that fit",
+            MAX_ZIP_ENTRIES);
+        return true;
+      }
+      var read = readEntryInto(zip, entry, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, merged);
+      if (read < 0) {
+        Log.debugf(
+            "Coverage artifact inflates past the %d-byte aggregate cap; refusing it as a zip bomb",
+            MAX_TOTAL_INFLATED_BYTES);
+        return true;
+      }
+      inflatedTotal += read;
+    }
+    return false;
   }
 }
