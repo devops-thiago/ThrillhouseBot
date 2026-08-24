@@ -63,7 +63,13 @@ final class JacocoCoverageReport {
   /** Entries walked in the artifact archive before the rest are ignored. */
   static final int MAX_ZIP_ENTRIES = 512;
 
-  /** Ceiling on one entry's decompressed size — a coverage report is not tens of megabytes. */
+  /**
+   * Ceiling on how much of one entry is <em>kept</em> for parsing — a coverage report is not tens
+   * of megabytes. Deliberately not a ceiling on inflation: an entry past this is still drained in
+   * full and simply contributes nothing (half a report is not a report), because stopping the read
+   * early would hand the rest of the entry to the next {@code getNextEntry()} to inflate anyway.
+   * Only {@link #MAX_TOTAL_INFLATED_BYTES} bounds the decompression itself.
+   */
   static final int MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 
   /**
