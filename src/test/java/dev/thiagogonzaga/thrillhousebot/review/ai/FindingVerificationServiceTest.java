@@ -177,6 +177,111 @@ class FindingVerificationServiceTest {
     assertSame(original, result);
   }
 
+  private static ReviewResponse.Finding described(String title, String description) {
+    return new ReviewResponse.Finding(
+        "medium", "medium", "src/Main.java", 10, title, description, null, null);
+  }
+
+  @Test
+  void dropsFindingWhoseOwnDescriptionConcludesNoDefectExists() {
+    // #635: the reviewer emits entries whose body investigates a candidate and concludes it is
+    // fine. The deterministic backstop drops them before the verifier spends a call on them.
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            described(
+                "dedupe key uses the raw file path without normalizing",
+                "The implementation is O(n) with a HashSet. No finding here."),
+            described(
+                "carrying() marks a notice announced even when the post failed",
+                "The code paths all match the intended tests, so there is no defect."),
+            described(
+                "BatchRun record fields shadow their former parameter names",
+                "The rename carries no semantics change; it is not a real finding."),
+            described(
+                "Producer-consumer contract preserved",
+                "Statuses scoped by previousFilesById are intentionally empty of defects."),
+            described(
+                "Rename-only change flagged in passing",
+                "The constructor keeps the same argument order, so this is not actually a bug."));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertTrue(result.findings().isEmpty());
+    assertEquals(0, result.summary().totalFindings());
+  }
+
+  @Test
+  void keepsFindingWhoseNoDefectRemarkIsNotItsConclusion() {
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    ReviewResponse original =
+        response(
+            described(
+                "Connection leak on the error path",
+                "There is no issue on the happy path; the error path leaks the connection."),
+            described(
+                "Quadratic scan added",
+                "There is no defect in the fast path, but the slow path rescans the whole list"
+                    + " per element."),
+            described("Null dereference", "request.user() is dereferenced without a guard."),
+            described("No description at all", null),
+            described("Blank description", "   "),
+            described(
+                "Quadratic slow path with a scoped final denial",
+                "The fast path is O(1); the slow path is O(n^2). There is no defect in the fast"
+                    + " path."),
+            described(
+                "Attributed denial the entry rejects",
+                "The previous review's no defect here conclusion is wrong."),
+            described(
+                "Asserting continuation with a connector",
+                "There is no defect on the happy path so the leak is on the error path."),
+            described(
+                "Degree adverb that affirms the defect",
+                "Losing the audit trail is not merely a bug."),
+            described(
+                "Hedging adverb that keeps the question open",
+                "The double release is not necessarily a defect."));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertSame(original, result);
+  }
+
+  @Test
+  void selfRetractedFindingsNeverReachTheVerifierCall() {
+    ReviewResponse original =
+        response(
+            described(
+                "Shadowed parameter names",
+                "The fields merely shadow their former parameter names; not a defect."));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertTrue(result.findings().isEmpty());
+    verifyNoInteractions(verifier);
+  }
+
+  @Test
+  void verifierScreensOnlyTheFindingsTheBackstopKept() {
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk("{\"verdicts\":[{\"id\":1,\"verdict\":\"confirmed\",\"reason\":\"real\"}]}"));
+    ReviewResponse original =
+        response(
+            described("Real bug", "The loop never terminates when the list is empty."),
+            described("Considered and fine", "After tracing the paths, no defect exists."));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(1, result.findings().size());
+    assertEquals("Real bug", result.findings().get(0).title());
+    var candidates = ArgumentCaptor.forClass(String.class);
+    verify(verifier)
+        .verify(candidates.capture(), anyString(), anyString(), anyString(), anyString());
+    assertFalse(candidates.getValue().contains("Considered and fine"));
+  }
+
   @Test
   void shouldSkipVerificationWhenDisabled() {
     when(reviewConfig.verifierEnabled()).thenReturn(false);

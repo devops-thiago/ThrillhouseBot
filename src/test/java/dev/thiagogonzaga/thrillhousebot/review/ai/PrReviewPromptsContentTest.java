@@ -132,6 +132,21 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void generatorPromptForbidsEmittingSelfRetractedEntries() {
+    // #635: a candidate that survives investigation as NOT a defect must be discarded, not
+    // emitted as an entry whose title asserts a defect its body disclaims.
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "survives your investigation as NOT a defect is discarded",
+        "the self-check must state that an investigated non-defect is dropped, never emitted");
+    assertContains(
+        sys,
+        "then retracts is invalid",
+        "the self-check must invalidate entries whose body retracts the title's claim");
+  }
+
+  @Test
   void generatorPromptKeepsTheCrossLocationConsistencyGuard() {
     String sys = PrReviewPrompts.SYSTEM;
     assertContains(

@@ -86,6 +86,105 @@ public class FindingVerificationService {
    */
   private static final Pattern CLAUSE_BOUNDARY = Pattern.compile("(?<=[.;!?])\\s+|\\R");
 
+  /** The defect nouns a no-defect conclusion rules out; shared by the wordings below. */
+  private static final String DEFECT_NOUN = "(?:defect|finding|issue|bug|problem)";
+
+  /** The same nouns with their optional plural, where the wording ends on the noun. */
+  private static final String DEFECT_NOUNS = DEFECT_NOUN + "s?\\b";
+
+  /** The optional dismissive adjective before the noun ("no REAL issue", "no SUCH bug"). */
+  private static final String DISMISSIVE_ADJECTIVE =
+      "(?:real\\s+|actual\\s+|genuine\\s+|such\\s+)?";
+
+  /**
+   * The bare no-defect negation opening the concluding clause ("No finding here" as its own
+   * sentence, "...; no defect beyond intent"). Deliberately anchored at the clause start so a real
+   * finding that mentions "no issue" mid-argument about something else does not match (#635). One
+   * wording of the {@linkplain #NO_DEFECT_CONCLUSIONS no-defect conclusion}.
+   */
+  private static final Pattern NO_DEFECT_AT_CLAUSE_START =
+      Pattern.compile(
+          "^\\W*+no\\s+" + DISMISSIVE_ADJECTIVE + DEFECT_NOUNS, Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The same negation after an existential or consequence lead-in ("there is no defect", "so no
+   * issue" mid-clause), the other anchoring that makes the bare negation a conclusion rather than a
+   * mid-argument mention.
+   */
+  private static final Pattern NO_DEFECT_AFTER_LEAD_IN =
+      Pattern.compile(
+          "\\b(?:there\\s+(?:is|was|are|were)|so|thus|hence|therefore)\\s+no\\s+"
+              + DISMISSIVE_ADJECTIVE
+              + DEFECT_NOUNS,
+          Pattern.CASE_INSENSITIVE);
+
+  /** The negation worded on the noun's state ("no defect exists", "no issue found/remains"). */
+  private static final Pattern NO_DEFECT_STATE =
+      Pattern.compile(
+          "\\bno\\s+" + DEFECT_NOUN + "s?\\s+(?:here|found|exists?|remains?)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** The negation on the entry's own standing ("not a defect", "not a real finding"). */
+  private static final Pattern NOT_A_DEFECT =
+      Pattern.compile(
+          "\\bnot\\s+an?\\s+" + DISMISSIVE_ADJECTIVE + DEFECT_NOUN + "\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The same standing negation with a negating adverb before the article ("not actually a defect",
+   * "not itself an issue"); held apart from {@link #NOT_A_DEFECT} only because one pattern carrying
+   * both slots is more than the regex complexity budget allows. The adverbs are enumerated, never a
+   * generic {@code \w+ly}: a degree adverb AFFIRMS the defect ("not merely / only / simply / purely
+   * a defect" says it IS one, and more) and "not necessarily a defect" is a hedge — none of those
+   * is a retraction, and matching them dropped real findings.
+   */
+  private static final Pattern NOT_ADVERBIALLY_A_DEFECT =
+      Pattern.compile(
+          "\\bnot\\s+(?:actually|really|truly|genuinely|itself)\\s+an?\\s+" + DEFECT_NOUN + "\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** The negation on the code's state ("nothing defective is asserted", "nothing is wrong"). */
+  private static final Pattern NOTHING_DEFECTIVE =
+      Pattern.compile(
+          "\\bnothing\\s+(?:\\w+\\s+)?(?:defective|wrong|broken)\\b", Pattern.CASE_INSENSITIVE);
+
+  /** The negation worded as emptiness ("intentionally empty of defects", "free of issues"). */
+  private static final Pattern DEVOID_OF_DEFECTS =
+      Pattern.compile(
+          "\\b(?:free|empty|devoid)\\s+of\\s+(?:\\w+\\s+)?" + DEFECT_NOUNS,
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * An explicit no-defect conclusion — the entry's own text ruling out the defect its title
+   * asserts. One conclusion recognized by seven wordings, held in separate patterns only because a
+   * single alternation of all of them is more than the regex complexity budget allows.
+   */
+  private static final List<Pattern> NO_DEFECT_CONCLUSIONS =
+      List.of(
+          NO_DEFECT_AT_CLAUSE_START,
+          NO_DEFECT_AFTER_LEAD_IN,
+          NO_DEFECT_STATE,
+          NOT_A_DEFECT,
+          NOT_ADVERBIALLY_A_DEFECT,
+          NOTHING_DEFECTIVE,
+          DEVOID_OF_DEFECTS);
+
+  /**
+   * What may follow the no-defect phrase for the clause to still be a whole-entry retraction:
+   * punctuation and a few closers ("here", "at all", "whatsoever"), nothing more. Any other word
+   * after the phrase means the clause goes on to say something — a scoped denial ("no defect in the
+   * fast path"), an attributed one ("...'s no defect here conclusion is wrong"), or an asserting
+   * continuation ("no defect on the happy path, but/so the error path leaks") — and a clause that
+   * says more than "nothing is wrong" must not drop the finding.
+   *
+   * <p>Possessive quantifiers throughout: the alternatives are disjoint (a non-word run can never
+   * re-parse as a closer word), so backtracking buys nothing — and a plain greedy {@code \W+}
+   * nested under {@code *} is ambiguously quantified, exponential on long non-matching tails.
+   */
+  private static final Pattern RETRACTION_TAIL =
+      Pattern.compile(
+          "(?:\\W++|(?:here|at|all|whatsoever|anymore)\\b)*+", Pattern.CASE_INSENSITIVE);
+
   /**
    * A clause that asks the reader to check something rather than hedging the defect itself. The
    * review prompt REQUIRES this clause on a finding whose sink and tainted value are both in the
@@ -591,7 +690,7 @@ public class FindingVerificationService {
       String projectStack,
       String previousFindings,
       Consumer<VerificationCoverage> coverageSink) {
-    ReviewResponse screened = demoteHedgedBlockingFindings(response);
+    ReviewResponse screened = demoteHedgedBlockingFindings(dropSelfRetractedFindings(response));
     if (!config.review().verifierEnabled() || screened.findings().isEmpty()) {
       return screened;
     }
@@ -822,6 +921,67 @@ public class FindingVerificationService {
       return;
     }
     tokenLedger.recordUsage(ledgerSessionId, usage.inputTokenCount(), usage.outputTokenCount());
+  }
+
+  /**
+   * Deterministic backstop for #635: an entry whose own description concludes that no defect exists
+   * is not a finding at all — the reviewer investigated a candidate, found it fine, and emitted the
+   * analysis anyway, with a title asserting a defect the body disclaims. Dropping it here saves the
+   * verifier the round trip of rejecting it, and keeps it out of the published review on the ~1/3
+   * of runs where verification fails open (#623).
+   *
+   * <p>Read on the description's CONCLUDING clause only — the last non-blank one — because that is
+   * where a genuine retraction lands ("...; no finding here."), while a mid-body denial about one
+   * code path followed by an asserted defect ("no issue on the happy path; the error path leaks")
+   * is a real finding that must survive. Within that clause the phrase must also be the final
+   * assertion — only a {@linkplain #RETRACTION_TAIL closing tail} may follow it — so a scoped
+   * denial ("no defect in the fast path"), an attributed one ("the previous review's no defect here
+   * conclusion is wrong"), and an asserting continuation ("no defect on the happy path, but/so the
+   * error path leaks") all keep the finding. Under-fire is the safe direction — a retraction this
+   * scan misses still reaches the verifier, which is today's behavior.
+   */
+  static ReviewResponse dropSelfRetractedFindings(ReviewResponse response) {
+    if (response.findings().isEmpty()) {
+      return response;
+    }
+    var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
+    for (ReviewResponse.Finding finding : response.findings()) {
+      if (concludesNoDefect(finding.description())) {
+        Log.infof(
+            "Dropping finding '%s' (%s:%d): its own description concludes no defect exists",
+            LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
+      } else {
+        kept.add(finding);
+      }
+    }
+    if (kept.size() == response.findings().size()) {
+      return response;
+    }
+    return new ReviewResponse(
+        kept, response.previousFindingsStatus(), recount(response.summary(), kept));
+  }
+
+  /** Whether the text's last non-blank clause is an unretracted no-defect conclusion. */
+  private static boolean concludesNoDefect(String description) {
+    if (description == null || description.isBlank()) {
+      return false;
+    }
+    // The text is stripped first, so split (which drops trailing empty strings) always leaves the
+    // clause holding the final non-whitespace character in the last slot.
+    String[] clauses = CLAUSE_BOUNDARY.split(description.strip());
+    String last = clauses[clauses.length - 1];
+    for (Pattern wording : NO_DEFECT_CONCLUSIONS) {
+      Matcher conclusion = wording.matcher(last);
+      // The phrase must be the clause's FINAL assertion: only a closing tail may follow it. A
+      // clause that goes on to scope the denial, attribute it, or assert something else is not a
+      // retraction of the whole entry, so it keeps the finding.
+      while (conclusion.find()) {
+        if (RETRACTION_TAIL.matcher(last).region(conclusion.end(), last.length()).matches()) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**

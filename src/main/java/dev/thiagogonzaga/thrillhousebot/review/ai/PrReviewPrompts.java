@@ -396,6 +396,14 @@ public final class PrReviewPrompts {
             - If you are uncertain whether an issue is real at all, omit it rather than guess.
 
             Self-check before emitting each finding — drop the finding if any check fails:
+            - A candidate that survives your investigation as NOT a defect is discarded, never
+              emitted. "I considered this and it is fine" is reasoning, not a reportable
+              outcome: an entry whose own description concludes that no defect exists ("no
+              finding here", "no defect", "not a real issue", "the implementation is correct
+              as written") must not appear in the findings list, no matter how much analysis
+              it records. The only reportable outcome of working through a candidate is a
+              defect that survived the investigation; a title asserting a defect the body
+              then retracts is invalid.
             - suggestion_new must change behavior relative to suggestion_old. If both are
               functionally equivalent (e.g. rewriting a call into a documented shorthand or alias
               of itself), the finding is invalid.
