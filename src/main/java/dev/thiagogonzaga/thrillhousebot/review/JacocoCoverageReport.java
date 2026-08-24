@@ -217,17 +217,26 @@ final class JacocoCoverageReport {
   /**
    * The coverage in a downloaded artifact archive: <em>every</em> {@code .xml} entry that parses as
    * a JaCoCo report is merged, so a multi-module artifact carrying one report per module
-   * contributes all of them rather than only the first. {@link #EMPTY} when the bytes are not a
-   * readable zip, hold no such entry, or hold nothing this parser understands. The merged size is
-   * bounded by {@link #MAX_SOURCE_FILES} (and each file by {@link #MAX_LINES_PER_FILE}); a path two
-   * reports both describe keeps only what they agree on, for the reasons on {@link #mergeInto}.
+   * contributes all of them rather than only the first. The merged size is bounded by {@link
+   * #MAX_SOURCE_FILES} (and each file by {@link #MAX_LINES_PER_FILE}); a path two reports both
+   * describe keeps only what they agree on, for the reasons on {@link #mergeInto}, and a path they
+   * agree on nothing about is dropped outright rather than reaching callers as a file with an empty
+   * line set.
+   *
+   * <p>{@link #EMPTY} when the bytes are not a readable zip, hold no such entry, hold nothing this
+   * parser understands — or when the walk gave up part-way, per the paragraph below. At most {@link
+   * #MAX_ZIP_ENTRIES} entries are walked, so a report sitting behind that many others is never
+   * reached.
    *
    * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
    * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
    * enough: the next {@link ZipInputStream#getNextEntry()} implicitly inflates the whole of an
    * unread entry to reach the following header, which is exactly the path a maximally-compressed
-   * archive takes to gigabytes. The walk aborts the moment the aggregate budget is blown, keeping
-   * whatever it had already merged.
+   * archive takes to gigabytes. The moment that aggregate budget is blown — or the stream breaks
+   * mid-walk — the archive is abandoned and <em>everything</em> already merged is discarded for
+   * {@link #EMPTY}: the surviving prefix is chosen by whoever built the archive rather than by the
+   * build, so returning it would report as uncovered whatever the unread remainder covers. No
+   * partial answer leaves this method; the abort itself carries the full reasoning.
    */
   static JacocoCoverageReport fromArtifactZip(byte[] zipBytes) {
     if (zipBytes == null || zipBytes.length == 0) {
