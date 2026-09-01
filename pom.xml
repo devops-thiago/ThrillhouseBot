@@ -19,7 +19,7 @@
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.38.3</quarkus.platform.version>
-        <quarkus-langchain4j.version>1.12.2</quarkus-langchain4j.version>
+        <quarkus-langchain4j.version>1.13.0</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <jackson-bom.version>2.22.2</jackson-bom.version>
@@ -330,7 +330,7 @@
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
-                <version>4.10.3.0</version>
+                <version>4.10.4.0</version>
                 <configuration>
                     <effort>Max</effort>
                     <threshold>Low</threshold>
