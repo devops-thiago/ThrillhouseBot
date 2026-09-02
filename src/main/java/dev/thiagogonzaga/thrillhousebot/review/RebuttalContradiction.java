@@ -108,34 +108,27 @@ final class RebuttalContradiction {
           Pattern.compile(
               "newVirtualThreadPerTaskExecutor|newCachedThreadPool|newScheduledThreadPool"
                   + "|newWorkStealingPool"),
-          // A fixed pool of more than one thread. A literal count of 1 is excluded, along with the
-          // whitespace and block comments around it, up to the end of the argument — a closing
-          // paren, or the comma of the ThreadFactory overload, which is the standard way to name a
-          // single worker. Every spelling this misses reports a serial pool as concurrent dispatch
-          // and overrules a decline that was right, so the exclusion is written to be hard to spell
-          // around: the paren alone let newFixedThreadPool(1, factory) through, tolerating only
-          // whitespace let a /* one worker */ next to the count through, and a dot that stops at a
-          // line break let that same comment through again once it wrapped. The evidence text is
-          // one string of rejoined lines, so a comment does span line breaks here.
+          // A fixed pool of more than one thread. A literal count of 1 is excluded, along with
+          // the whitespace around it, up to the end of the argument — a closing paren, or the
+          // comma of the ThreadFactory overload, which is the standard way to name a single
+          // worker. Every spelling this misses reports a serial pool as concurrent dispatch and
+          // overrules a decline that was right.
           //
-          // The skip before the count is possessive because a greedy run backtracks to zero width
-          // and re-matches past its own lookahead, which let newFixedThreadPool( 1 ) escape.
-          //
-          // Both bounds are real: a comment longer than 1024 characters, or a seventeenth run of
-          // them, reads as concurrent — a false positive, since the pool is serial. They exist to
-          // keep the scan over untrusted diff text linear, and nothing more should be read into
-          // them. Successive rounds found a justification comment that wrapped, then one that ran
-          // past 64 characters, then one carrying a long URL past 256, each time because the bound
-          // was asserted to sit above "any real" annotation. It does not: a comment is prose and
-          // prose has no bound. Raising this constant again is not the fix — parsing the argument
-          // list instead of pattern-matching it is (#651).
+          // Only whitespace has to be tolerated between the paren and the count because a block
+          // comment explaining the count — /* one worker */, the natural thing to write next to a
+          // pool of one — has already been blanked to spaces by LiveCodeScanner, wrapped across
+          // lines or not. That is what removed the bounds this pattern used to carry: successive
+          // rounds found a justification comment that wrapped, then one past 64 characters, then
+          // one carrying a long URL past 256, each time because the bound had been asserted to sit
+          // above "any real" annotation. A comment is prose and prose has no bound, so the fix was
+          // to stop matching comments at all (#651). A possessive run over whitespace is linear,
+          // needs no bound, and cannot backtrack to zero width and re-match past its own
+          // lookahead, which is what let newFixedThreadPool( 1 ) escape.
           //
           // A count that is not a literal 1 — a variable, or an expression like 1 + 0 — reads as
           // concurrent. That is deliberate and matches newFixedThreadPool(workers): the class may
           // only overrule a decline on what the code plainly shows, and it cannot evaluate.
-          Pattern.compile(
-              "newFixedThreadPool\\s{0,16}\\((?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}+"
-                  + "(?!1(?:\\s|/\\*[\\s\\S]{0,1024}?\\*/){0,16}[,)])"),
+          Pattern.compile("newFixedThreadPool\\s*+\\(\\s*+(?!1\\s*+[,)])"),
           // handing the work to an executor
           Pattern.compile("\\.(?:submit|execute)\\s{0,16}\\("),
           // an asynchronous future
@@ -195,9 +188,10 @@ final class RebuttalContradiction {
     if (claim == null) {
       return Optional.empty();
     }
-    // Match evidence only against right-side (added/context) code with line comments stripped: a
-    // dispatch the maintainer deleted this revision, or one that survives only in a comment, is not
-    // live code and must not reopen the finding by quoting a line the code no longer runs (F3).
+    // Match evidence only against right-side (added/context) code, with comments and quoted text
+    // taken out of it: a dispatch the maintainer deleted this revision, or one that survives only
+    // in a comment or a string, is not live code and must not reopen the finding by quoting a line
+    // the code no longer runs (F3).
     var rightSide = rightSideCode(reviewedCode);
     Matcher evidence = earliestMatch(CONCURRENT_DISPATCHES, rightSide);
     if (evidence == null) {
@@ -210,205 +204,57 @@ final class RebuttalContradiction {
 
   /**
    * The reviewed patch reduced to the code the revision actually runs: removed ({@code -}) lines
-   * are dropped and line comments are stripped, so a dispatch construct that was deleted or only
-   * mentioned in a comment cannot pose as live evidence. Added ({@code +}) and context lines are
-   * kept across every file in the patch — cross-file evidence is intentional — with the leading
-   * {@code +} marker dropped: the marker exists for display, not for matching, and a construct
-   * whose argument wraps onto a following added line otherwise carries a {@code \n+} in the middle
-   * of its argument gap. That broke the serial-pool exclusion of {@link #CONCURRENT_DISPATCHES} —
-   * {@code newFixedThreadPool(} with the {@code 1)} on the next added line read as concurrent
-   * dispatch, because the {@code +} is neither whitespace nor a comment and hid the count from the
-   * lookahead — precisely on the code a pull request introduces (#761). Only the one marker column
-   * is dropped; the line's own text (indentation included) stays verbatim, and {@link #clip} still
-   * tolerates a marker when quoting.
+   * are dropped and every remaining line is passed through {@link LiveCodeScanner}, so a dispatch
+   * construct that was deleted, or that survives only inside a comment or a string literal, cannot
+   * pose as live evidence. Added ({@code +}) and context lines are kept across every file in the
+   * patch — cross-file evidence is intentional — with the leading {@code +} marker dropped: the
+   * marker exists for display, not for matching, and a construct whose argument wraps onto a
+   * following added line otherwise carries a {@code \n+} in the middle of its argument gap. That
+   * broke the serial-pool exclusion of {@link #CONCURRENT_DISPATCHES} — {@code newFixedThreadPool(}
+   * with the {@code 1)} on the next added line read as concurrent dispatch, because the {@code +}
+   * is neither whitespace nor a comment and hid the count from the lookahead — precisely on the
+   * code a pull request introduces (#761). Only the one marker column is dropped; the line's own
+   * text (indentation included) stays verbatim, and {@link #clip} still tolerates a marker when
+   * quoting.
+   *
+   * <p>The scanner's state is carried from one hunk body line to the next and reset on every other
+   * line, so a text block or a block comment that opens on one added line and closes on the next is
+   * read as one literal, while a delimiter left open cannot blank anything past its own hunk. The
+   * lines that reset it are the ones that are not code in the first place: the {@code diff --git}
+   * and {@code @@} headers, the {@code ### file} heading and the ```` ```diff ```` fence {@code
+   * ReviewDiffFormatter} wraps each patch in — whose backticks would otherwise open a template
+   * literal over the hunk beneath it.
+   *
+   * <p><b>What the scan still cannot decide.</b> Two residues need to know the language, which a
+   * union-of-delimiters scan does not (#651). Python's {@code //} floor division reads as a comment
+   * start and cuts the line, which loses evidence and keeps the decline — the safe direction. A
+   * {@code #} comment is not a comment to this scan at all, so a dispatch named in one still reads
+   * as live code, which is the expensive direction; stripping {@code #} everywhere is not the fix,
+   * since it would cut a C {@code #include} and a CSS colour. The next step for either is a
+   * per-extension profile keyed off the diff header — a language hint the caller does not always
+   * have, since {@code find} is also handed bare patch fragments.
    */
   private static String rightSideCode(String reviewedCode) {
+    var scanner = new LiveCodeScanner();
     var kept = new ArrayList<String>();
     for (var line : reviewedCode.split("\n", -1)) {
       // A unified-diff removed line (and the "---" old-file header) starts with '-'.
       if (line.startsWith("-")) {
         continue;
       }
-      // An added line (and the "+++" new-file header) starts with '+'; drop the marker column.
-      if (line.startsWith("+")) {
-        line = line.substring(1);
+      // An added line starts with '+' and a context line with a space; everything else is a
+      // header, a heading or a fence, and carries no lexical state into or out of itself.
+      var added = line.startsWith("+");
+      var body = added || line.startsWith(" ");
+      if (!body) {
+        scanner.reset();
       }
-      kept.add(stripLineComment(line));
+      kept.add(scanner.scanLine(added ? line.substring(1) : line));
+      if (!body) {
+        scanner.reset();
+      }
     }
     return String.join("\n", kept);
-  }
-
-  /**
-   * Drops a trailing {@code //} line comment, leaving any code before it intact, and blanks the
-   * contents of every closed string literal to spaces (keeping the delimiters, so offsets are
-   * unchanged). A {@code ://} sequence (a URL scheme) is not treated as a comment start, and
-   * neither is a {@code //} that sits inside a string literal.
-   *
-   * <p>The blanking is the over-fire mirror of the carve-out below: keeping the whole line when the
-   * only {@code //} is quoted also kept the literal's contents as scan text, so dispatch text
-   * quoted in a string — {@code "hand work to .submit( here"} — reached {@link
-   * #CONCURRENT_DISPATCHES} and overruled a decline over code that dispatches nothing. Quoted prose
-   * is never live code, so it is erased rather than matched.
-   *
-   * <p>The string-literal carve-out matters because cutting at the wrong {@code //} silently throws
-   * away the rest of the line — including any dispatch construct on it. A line such as {@code
-   * String base = "//cdn.example.com"; executor.submit(task);}, a Go or C++ raw string ({@code
-   * `a//b`}, {@code R"(a//b)"}), or any quoted path holding a doubled slash used to be truncated at
-   * the quoted slashes, so the {@code executor.submit(} after them never reached {@link
-   * #CONCURRENT_DISPATCHES}. A maintainer's "it runs serially" decline then stood unchallenged over
-   * code that does dispatch concurrently — the false-negative direction this class exists to close.
-   *
-   * <p>Quote tracking is deliberately shallow: it toggles on an unescaped {@code "}, {@code '} or
-   * {@code `} and nothing else. It cannot know a language's escaping rules and does not try to.
-   *
-   * <p>An opener with no closer on the line is therefore assumed to have been something else — a
-   * Rust lifetime ({@code &'a ctx}), an apostrophe in prose — and the scan resumes past it,
-   * treating the opener as ordinary text. Without that a single stray apostrophe kept the whole
-   * trailing comment as scan text, and a dispatch named only inside a comment could overrule a
-   * decline — the false-positive direction, which the plain first-{@code //} cut this carve-out
-   * replaced did not have. Resuming quote-aware (rather than cutting at the first bare {@code //}
-   * the opener swallowed) keeps later literals stepped over whole, so {@code &'a ctx; var s =
-   * "//cdn.example.com"; executor.submit(...)} is not truncated inside the closed string.
-   *
-   * <p>The one escaping rule it does keep is where the escape applies: inside a {@code "} or {@code
-   * '} literal, never inside a backtick one and never outside a literal at all. A Go raw string is
-   * backtick-delimited and holds a backslash literally, so honouring the escape there stepped over
-   * the closing backtick of a Windows path ({@code `C:\`}), left the state open for the rest of the
-   * line, and kept a real trailing comment as live code. That is the false positive — a decline
-   * overruled by text the code does not run — which is the worse direction, and the plain
-   * first-{@code //} cut this carve-out replaced did not have it.
-   *
-   * <p>A <em>multi-character</em> delimiter is the case this shallowness does not cover, and it
-   * fails the other way. A Java text block or a C++ raw string whose content holds an interior
-   * quote ({@code """<a href="//host">x</a>"""}, {@code R"(a"b//c)"}) closes the scanner's
-   * single-quote state early, so a {@code //} still inside the literal truncates the line and drops
-   * any dispatch after it — the same false negative the carve-out above exists to close, one legal
-   * interior quote away from the shapes that are covered. Closing it needs delimiter-aware openers
-   * rather than a toggle; tracked in #651.
-   *
-   * <p>Two limits of the blanking are accepted for the same reason — each needs knowledge a
-   * line-scoped toggle cannot have, and both are the tokenizer #651 asks for. A literal spanning
-   * lines (a Go raw string, a Java text block) is not blanked: its opener has no closer on the
-   * line, so it is rescanned as ordinary text, and the content lines carry no delimiter at all —
-   * dispatch text quoted there still over-fires. Carrying quote state across lines is not the fix,
-   * because the scan text is a whole multi-file patch rejoined: one stray delimiter would blank
-   * unrelated files' code and silently drop real dispatches — trading a narrow over-fire for a
-   * broad false negative. And a backtick literal is always blanked whole, including a JavaScript
-   * template literal's {@code ${...}} interpolation, which is live code: a dispatch that appears
-   * only inside an interpolation is missed (under-fire, the decline stands). Telling a JS template
-   * apart from a Go raw string quoting literal {@code ${...}} text needs a language hint; erasing
-   * is the conservative side, since over-fire argues with a maintainer who is right.
-   */
-  private static String stripLineComment(String line) {
-    var out = new StringBuilder(line.length());
-    var i = 0;
-    while (i < line.length()) {
-      var c = line.charAt(i);
-      if (c == '"' || c == '\'' || c == '`') {
-        i = appendBlankedLiteral(line, i, out);
-      } else if (isDoubleSlash(line, i)) {
-        if (i > 0 && line.charAt(i - 1) == ':') {
-          out.append("//");
-          i += 2;
-        } else {
-          return out.toString();
-        }
-      } else {
-        out.append(c);
-        i++;
-      }
-    }
-    return out.toString();
-  }
-
-  /**
-   * Index of the quote closing the literal opened at {@code open}, or {@code -1} when the line ends
-   * first. A backslash escapes the next character in a {@code "} or {@code '} literal and not in a
-   * backtick one, which is a Go raw string and holds the backslash literally.
-   */
-  private static int endOfLiteral(String line, int open) {
-    var quote = line.charAt(open);
-    var i = open + 1;
-    while (i < line.length()) {
-      var c = line.charAt(i);
-      if (c == '\\' && quote != '`') {
-        i += 2;
-      } else if (c == quote) {
-        return i;
-      } else {
-        i++;
-      }
-    }
-    return -1;
-  }
-
-  /**
-   * Handles the quote opener at {@code open}: appends its rendering to {@code out} and returns the
-   * index the scan resumes at. A closed literal is stepped over whole — and blanked. Its delimiters
-   * stay (space for space, so every offset after it is unchanged and lineAround still quotes the
-   * real line shape), but its contents are prose, not code the revision runs: a log message, an
-   * error string or a fixture that mentions ".submit(" must not read as live dispatch and overrule
-   * a decline that was right. An opener that never closes — or a lone apostrophe (a Rust lifetime)
-   * paired with a later char literal's opener, whose "span" is really live code — was not one; it
-   * is appended verbatim and rescanned as ordinary text.
-   */
-  private static int appendBlankedLiteral(String line, int open, StringBuilder out) {
-    var quote = line.charAt(open);
-    var close = endOfLiteral(line, open);
-    out.append(quote);
-    if (close < 0 || isMisreadApostrophePair(line, quote, open, close)) {
-      return open + 1;
-    }
-    out.append(" ".repeat(close - open - 1));
-    out.append(line.charAt(close));
-    return close + 1;
-  }
-
-  /**
-   * Whether a {@code '}-quoted span is really two unrelated apostrophes with live code between
-   * them, rather than a literal. A lone apostrophe in non-string context — a Rust lifetime ({@code
-   * &'a ctx}, {@code foo::<'a>}) — followed later on the line by a real char literal ({@code '\n'})
-   * or another lifetime pairs with that later apostrophe, and blanking the span would erase any
-   * dispatch between them: a false negative the pre-blanking scanner did not have. Three tells mark
-   * a span as misread, each shaped so genuine quoted prose (which may hold {@code .submit(} text —
-   * the very thing the blanking exists to erase) keeps blanking: the opener sits directly after
-   * {@code &} or {@code <}, which is Rust lifetime syntax and never a string opener; the span holds
-   * a {@code ;}, which is statement shape, not prose; or the pairing closer itself opens a
-   * char-literal-shaped span, meaning the "closer" was really the next literal's opener. The
-   * residual miss — quoted prose that defeats every tell and also names a dispatch construct — is
-   * far narrower than erasing arbitrary real code. Double-quote and backtick openers have no
-   * lifetime-style bare use, so the guard applies to {@code '} alone.
-   */
-  private static boolean isMisreadApostrophePair(String line, char quote, int open, int close) {
-    if (quote != '\'') {
-      return false;
-    }
-    // Lifetime position: an apostrophe directly after & or < ( &'a ctx, foo::<'a> ) is Rust
-    // syntax, never a string opener, whatever its span holds.
-    if (open > 0 && (line.charAt(open - 1) == '&' || line.charAt(open - 1) == '<')) {
-      return true;
-    }
-    // Statement separator: a ; inside the span is code shape, not quoted prose.
-    if (line.substring(open + 1, close).indexOf(';') >= 0) {
-      return true;
-    }
-    // The pairing closer itself opens a char-literal-shaped span — '\n', ',', or a longer escape
-    // like a Rust unicode char (backslash-u{1F600}): the "closer" was really the next literal's
-    // opener, and everything between the two apostrophes is live code. Char-shaped means at most
-    // two characters — one character or a simple escape — or an escape sequence: backslash-led
-    // and short enough for the longest real spelling, Rust's backslash-u{10FFFF} at 9 characters.
-    // Ten leaves a margin without reading a backslash-led prose span as a char.
-    var closerAsOpener = endOfLiteral(line, close);
-    if (closerAsOpener < 0) {
-      return false;
-    }
-    var charSpan = line.substring(close + 1, closerAsOpener);
-    return charSpan.length() <= 2 || (charSpan.length() <= 10 && charSpan.charAt(0) == '\\');
-  }
-
-  /** Whether a doubled slash sits at {@code at}. */
-  private static boolean isDoubleSlash(String line, int at) {
-    return line.charAt(at) == '/' && at + 1 < line.length() && line.charAt(at + 1) == '/';
   }
 
   /**

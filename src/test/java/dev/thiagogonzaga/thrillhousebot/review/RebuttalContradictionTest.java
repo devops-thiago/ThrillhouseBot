@@ -839,4 +839,393 @@ class RebuttalContradictionTest {
     assertTrue(contradiction.isPresent());
     assertEquals("pool.submit(task);", contradiction.get().evidence());
   }
+
+  /**
+   * A multi-character delimiter whose content legally holds an interior quote. The single-character
+   * quote toggle the scanner used to run closed on that quote, so a {@code //} still inside the
+   * literal truncated the line and the dispatch after it never reached the matcher — the
+   * false-negative direction, which lets a decline that was wrong stand (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A Java text block quoting HTML: idiomatic in a Java 25 codebase, not exotic.
+        "+    var html = \"\"\"<a href=\"//cdn.example.com\">x</a>\"\"\";"
+            + " executor.submit(() -> run(ctx));",
+        // A Python triple-quoted string holding an apostrophe.
+        "+    s = '''a'b//c'''; executor.submit(lambda: run(ctx))",
+        // C++ raw strings: bare, with a named delimiter, and with an encoding prefix.
+        "+    auto path = R\"(a\"b//c)\"; executor.submit([]{ run(ctx); });",
+        "+    auto q = R\"sql(a\"b//c)sql\"; executor.submit([]{ run(ctx); });",
+        "+    auto p = u8R\"(a\"b//c)\"; executor.submit([]{ run(ctx); });",
+        // An escape inside a text block does not close it early either.
+        "+    var t = \"\"\"a\\\"b//c\"\"\"; executor.submit(() -> run(ctx));",
+        // A raw string in the first column: the prefix scan must stop at the start of the line.
+        "+R\"(a\"b//c)\"; executor.submit(() -> run(ctx));",
+      })
+  void shouldKeepDispatchAfterALiteralWhoseInteriorQuoteDoesNotCloseIt(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the interior quote does not close the literal, so the dispatch after it is live code: "
+            + codeLine);
+  }
+
+  /** A literal that stays open at the end of a line resumes on the next line of the same hunk. */
+  @Test
+  void shouldKeepDispatchAfterATextBlockWhoseEscapeEndsTheLine() {
+    var code = "+    var t = \"\"\"a\\\n+        b\"\"\"; executor.submit(() -> run(ctx));\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isPresent(),
+        "the text block closes on the second line, so the dispatch after it is live code");
+  }
+
+  /**
+   * Dispatch text inside a block comment is not live code. The scan stripped line comments and
+   * nothing else, so a construct sitting in a block comment was quoted back as evidence and
+   * overruled a maintainer whose decline was right — the over-fire direction (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var n = count; /* executor.submit(() -> run(ctx)); */\n+    run(ctx);\n",
+        """
+        +    /* one dispatch we removed:
+        +     * executor.submit(() -> run(ctx));
+        +     */
+        +    run(ctx);
+        """,
+      })
+  void shouldNotTreatDispatchTextInsideABlockCommentAsEvidence(String code) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "a dispatch named only in a block comment is not live code and keeps the decline: " + code);
+  }
+
+  /** The mirror: a closed block comment must not swallow the live code that follows it. */
+  @Test
+  void shouldKeepDispatchAfterAClosedBlockComment() {
+    var codeLine = "+    /* deferred */ executor.submit(() -> run(ctx));\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the dispatch sits after the block comment, so it is live code");
+  }
+
+  /**
+   * A literal that spans lines — a text block, a Go raw string, a C++ raw string — carries its
+   * state to the next line of the same hunk, so the dispatch text quoted inside it is blanked
+   * rather than matched as live code (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        """
+        +    var doc = \"""
+        +        hand work to executor.submit(task) here
+        +        \""";
+        """,
+        "+    doc := `\n+      each event calls handler.submit(ctx)\n+    `\n",
+        "+    auto sql = R\"sql(\n+      hand work to executor.submit(task)\n+    )sql\";\n",
+      })
+  void shouldNotTreatDispatchTextInsideALiteralThatSpansLinesAsEvidence(String code) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "the dispatch text is quoted inside a multi-line literal, so it is not live code: " + code);
+  }
+
+  /**
+   * A JavaScript template literal's {@code ${…}} interpolation is live code, not quoted text.
+   * Blanking the backtick literal whole erased a real dispatch sitting inside one — the
+   * false-negative direction, opposite to the quoted-text over-fire the blanking exists to close.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    const m = `job ${executor.submit(task)} queued`;",
+        // A template nested inside an interpolation of another template.
+        "+    const m = `a ${ `b ${executor.submit(t)}` } c`;",
+        // Braces inside the interpolation must not close it early.
+        "+    const m = `${ fn({k: v}) } ${executor.submit(t)}`;",
+      })
+  void shouldKeepDispatchInsideATemplateLiteralInterpolation(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "an interpolation is live code, so the dispatch inside it refutes the decline: "
+            + codeLine);
+  }
+
+  /** The mirror: a string literal inside an interpolation is still quoted text. */
+  @Test
+  void shouldNotTreatQuotedTextInsideATemplateInterpolationAsEvidence() {
+    var codeLine = "+    const m = `${map[\"hand work to .submit( here\"]}`;\n";
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isEmpty(),
+        "the dispatch text sits in a string inside the interpolation, so it is not live code");
+  }
+
+  /**
+   * A statement label ends in a colon too, so testing only the character before the slashes read
+   * {@code case 1://} as a URL scheme and kept the real comment after it as live code — the
+   * over-fire direction, where a dispatch named only in a comment overrules a correct decline.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    case 1:// executor.submit(() -> run(ctx));",
+        "+    default:// note: executor.submit(() -> run(ctx));",
+        "+  retry:// executor.submit(() -> run(ctx));",
+      })
+  void shouldNotTreatALabelColonAsAUrlScheme(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isEmpty(),
+        "the colon belongs to a label, so what follows is a comment: " + codeLine);
+  }
+
+  /**
+   * The scheme carve-out used to skip exactly one slash pair, so a URL whose own path holds a
+   * doubled slash was cut at the second pair and the dispatch after it was lost. A recognised
+   * scheme now consumes the whole URL token.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    var url = http://example.com//v1; executor.submit(() -> run(ctx));",
+        "+    var url = https://example.com//v1//v2; executor.submit(() -> run(ctx));",
+        "+    var f = file:///etc//hosts; executor.submit(() -> run(ctx));",
+        // A URL in the first column: the scheme scan must stop at the start of the line.
+        "+http://example.com//v1; executor.submit(() -> run(ctx));",
+        // A URL that runs to the end of the line, with the dispatch before it.
+        "+    executor.submit(() -> run(ctx)); var u = http://example.com//v1",
+      })
+  void shouldKeepDispatchAfterAUrlWhosePathHoldsADoubledSlash(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the doubled slash belongs to the URL, so the dispatch after it is live code: " + codeLine);
+  }
+
+  /**
+   * {@code R"} only opens a raw string when a well-formed delimiter and its {@code (} follow, and
+   * when it is not the tail of an identifier. Everything else falls back to a plain string literal,
+   * which is what the scan did before raw strings were modelled.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // No ( at all: an ordinary string with an R in front of it (a Python raw string).
+        "+    var s = R\"nodelim\"; executor.submit(() -> run(ctx));",
+        // Whitespace cannot appear in a C++ raw-string delimiter.
+        "+    var s = R\"a b(c)\"; executor.submit(() -> run(ctx));",
+        // A delimiter longer than any real one.
+        "+    var s = R\"abcdefghijklmnopqr(x)\"; executor.submit(() -> run(ctx));",
+        // The R is the last character of an identifier, not a raw-string prefix.
+        "+    var s = fooR\"(a)\"; executor.submit(() -> run(ctx));",
+        // A capital R that opens no literal at all.
+        "+    Runnable r = () -> run(ctx); executor.submit(r);",
+      })
+  void shouldFallBackToAPlainStringWhenARawStringOpenerIsNotWellFormed(String codeLine) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine).isPresent(),
+        "the literal closes at its quote, so the dispatch after it is live code: " + codeLine);
+  }
+
+  /**
+   * Carried state is bounded to one hunk. An unclosed block comment blanks the rest of the hunk it
+   * opens in — the safe direction, since blanking only ever keeps a decline — and the next hunk
+   * header starts from live code again, so one stray delimiter cannot silence a whole patch.
+   */
+  @Test
+  void shouldBoundCarriedLexicalStateToTheHunkThatOpensIt() {
+    var withinHunk =
+        """
+        diff --git a/Worker.java
+        @@ -1,2 +1,4 @@
+        +    var n = count; /* deferred:
+        +    executor.submit(() -> run(ctx));
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", withinHunk).isEmpty(),
+        "an unclosed block comment blanks the rest of its hunk, which keeps the decline");
+
+    var nextHunk =
+        """
+        diff --git a/Worker.java
+        @@ -1,2 +1,3 @@
+        +    var n = count; /* deferred:
+        @@ -20,2 +20,3 @@
+        +    executor.submit(() -> run(ctx));
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", nextHunk).isPresent(),
+        "the hunk header ends the carried state, so the next hunk's dispatch is live code");
+  }
+
+  /**
+   * A patch whose hunk starts inside a Java text block shows the closing delimiter without its
+   * opener — the shape a diff of this repository's own history produces constantly, since a text
+   * block constant sits just above the code most hunks touch. Reading that closer as an opener
+   * inverts every literal below it and blanks the live code in between, which is the false-negative
+   * this scan exists to avoid; a delimiter with a statement terminator after it ends a literal, it
+   * does not start one (JLS 3.10.6).
+   */
+  @Test
+  void shouldNotReadATextBlockCloserAtTheTopOfAHunkAsAnOpener() {
+    var midLiteral =
+        """
+        diff --git a/ReviewResult.java
+        @@ -340,6 +385,10 @@ public record ReviewResult(
+        \s
+               \""";
+        \s
+        +    executor.submit(() -> run(ctx));
+        """;
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, "It runs serially.", midLiteral);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the hunk opens inside a text block, so its first delimiter closes one and the dispatch"
+            + " below it is live code");
+    assertEquals("executor.submit(() -> run(ctx));", contradiction.get().evidence());
+
+    // The other spelling of the same closer: a text block concatenated with what follows it, where
+    // the terminator sits a space away from the delimiter.
+    var concatenated =
+        """
+        diff --git a/ReviewResult.java
+        @@ -340,6 +385,10 @@ public record ReviewResult(
+        \s
+               \""" + SUFFIX;
+        +    executor.submit(() -> run(ctx));
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", concatenated).isPresent(),
+        "a closer whose terminator is a space away still ends a literal rather than starting one");
+  }
+
+  /**
+   * A text block that ends an array initialiser or a subscript is followed by a brace or a bracket,
+   * neither of which was a statement terminator to the closer rule — so the delimiter that ends it
+   * read as an <em>opener</em> and blanked the live code below it, which is the very case the rule
+   * was written to prevent for {@code """;} (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // The last element of an array initialiser: the closer, a brace, a semicolon.
+        "};",
+        // A text block used as a subscript, or the last element of a list literal.
+        "];",
+      })
+  void shouldReadATextBlockCloserFollowedByABraceOrABracketAsACloser(String terminator) {
+    var code =
+        """
+        diff --git a/Fixtures.java
+        @@ -340,6 +385,10 @@ final class Fixtures {
+        \s
+               \"""%s
+        +    executor.submit(() -> run(ctx));
+        """
+            .formatted(terminator);
+
+    var contradiction = RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the delimiter closes the initialiser's text block, so the dispatch below it is live code: "
+            + terminator);
+    assertEquals("executor.submit(() -> run(ctx));", contradiction.get().evidence());
+  }
+
+  /**
+   * The closer rule holds only where a language forbids a body after the opener (JLS 3.10.6). A Go
+   * raw string and a JavaScript template literal start their body immediately, so a body that opens
+   * with a statement terminator made the scan read the literal's own <em>closing</em> backtick as
+   * an opener, push a region, and blank the real dispatch on the next line — the false-negative
+   * class this scan exists to close (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // Go: a raw string holding a separator, dispatch on the next body line.
+        "+    sep := `;abc`\n+    executor.submit(() -> run(ctx));\n",
+        // Kotlin and Python do let a triple-quoted body follow the opener, so a literal that closes
+        // on its own line opened one however its body starts — the closer rule may not claim it.
+        "+    val sep = \"\"\", \"\"\"\n+    executor.submit(task);\n",
+        "+    tail = '''); END'''\n+    executor.submit(task)\n",
+      })
+  void shouldNotReadALiteralsOwnCloserAsAnOpenerWhenItsBodyStartsWithATerminator(String code) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isPresent(),
+        "the literal closes on its own line, so the dispatch after it is live code: " + code);
+  }
+
+  /**
+   * The mirror of the same misreading: scanned as a closer, the whole line stayed live and the
+   * dispatch words quoted inside the literal were matched as evidence, overruling a decline that
+   * was right — the expensive direction (#651).
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "+    const m = `, hand work to .submit( here`;\n",
+        "+    s = '''; hand work to .submit( here'''\n",
+        // The same shape spanning lines, where nothing on the opener's line can close it:
+        // Python is the only language in the corpus that spells a literal with ''', and it
+        // lets the body follow the opener, so the rule has no premise to stand on there.
+        "+    s = '''; hand work to executor.submit(task)\n+    and more'''\n",
+      })
+  void shouldNotTreatQuotedTextAsLiveBecauseItsBodyStartsWithATerminator(String code) {
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "the dispatch text sits inside the literal, so it is not live code: " + code);
+  }
+
+  /**
+   * What restricting the rule costs, kept explicit: a hunk that starts inside a Go raw string shows
+   * only its closing backtick, which now reads as an opener and blanks the rest of the hunk. That
+   * is the under-fire direction — a decline that stands is this class's default outcome — and it is
+   * the side every ambiguity here is resolved toward, unlike the reading it replaces, which made a
+   * template literal's own quoted body live code.
+   */
+  @Test
+  void shouldBlankTheHunkWhenOnlyAGoRawStringsClosingBacktickIsVisible() {
+    var code =
+        """
+        diff --git a/worker.go
+        @@ -10,4 +10,6 @@ func run(ctx context.Context) {
+             hand work to executor.submit here
+           `)
+        +  executor.submit(func() { handle(ctx) })
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "a lone backtick has no reading that is safe both ways, so it blanks and keeps the decline");
+  }
+
+  /**
+   * The reviewed code arrives as {@code ReviewDiffFormatter} builds it: file sections whose patch
+   * sits inside a ```` ```diff ```` fence. A fence line is not a diff body line, so its backticks
+   * must not open a template literal that blanks the hunk under it.
+   */
+  @Test
+  void shouldNotLetAMarkdownFenceInTheFormattedDiffBlankTheHunk() {
+    var formatted =
+        """
+        ### src/main/java/Worker.java (modified, +1 -0)
+        ```diff
+        @@ -1,2 +1,3 @@
+        +    executor.submit(() -> run(ctx));
+        ```
+        """;
+
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", formatted).isPresent(),
+        "the ```diff fence is a section delimiter, not a literal opener");
+  }
 }
