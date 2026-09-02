@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamException;
@@ -325,12 +326,13 @@ class JacocoCoverageReportTest {
     @Test
     void skipsXmlEntriesThatCarryNoCoverage() throws IOException {
       var entries = new LinkedHashMap<String, String>();
+      entries.put("empty.xml", "");
       entries.put("a-surefire-report.xml", "<testsuite name=\"x\"/>");
       entries.put("jacoco.xml", REPORT);
 
       assertFalse(
           JacocoCoverageReport.fromArtifactZip(zipOf(entries)).isEmpty(),
-          "an unrelated XML entry earlier in the archive must not end the search");
+          "an empty or unrelated XML entry earlier in the archive must not end the search");
     }
 
     @Test
@@ -353,6 +355,40 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void mergesEveryXmlReportNotJustTheFirst() throws IOException {
+      var entries = new LinkedHashMap<String, String>();
+      entries.put(
+          "module-a/jacoco.xml",
+          """
+          <report name="a">
+            <package name="com/example/a">
+              <sourcefile name="Alpha.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="com/example/b">
+              <sourcefile name="Beta.java"><line nr="2" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      var report = JacocoCoverageReport.fromArtifactZip(zipOf(entries));
+
+      assertEquals(
+          List.of(1),
+          List.copyOf(report.uncoveredLines("module-a/src/main/java/com/example/a/Alpha.java")),
+          "the first module's report is read");
+      assertEquals(
+          List.of(2),
+          List.copyOf(report.uncoveredLines("module-b/src/main/java/com/example/b/Beta.java")),
+          "a second module's report must not be lost to a first-match-wins walk");
+    }
+
+    @Test
     void degradesToEmptyWhenTheArchiveIsTruncatedMidEntry() throws IOException {
       var whole = zipOf(Map.of("jacoco.xml", REPORT));
       var truncated = java.util.Arrays.copyOf(whole, whole.length / 2);
@@ -360,6 +396,264 @@ class JacocoCoverageReportTest {
       assertTrue(
           JacocoCoverageReport.fromArtifactZip(truncated).isEmpty(),
           "a half-downloaded archive must degrade, not throw out of the review");
+    }
+
+    @Test
+    void refusesAnArchiveThatInflatesPastTheAggregateCap() throws IOException {
+      // Every bomb entry stays WELL under the per-entry ceiling, so only their running sum can
+      // refuse this archive: a per-entry bound alone — what the reader had before — lets all of it
+      // through. Nothing here is XML either, which is the whole point: the unfixed walk skipped a
+      // non-XML entry without reading it, and the next getNextEntry() then inflated the whole of it
+      // to reach the following header. The real report sits BEHIND the bomb, so a reader that
+      // reaches it is a reader that paid the full inflation cost first.
+      var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
+      assertTrue(
+          perEntry < JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES,
+          "no single entry may blow the budget on its own, or it is not the aggregate bound this"
+              + " archive is refused by");
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        var zeros = new byte[64 * 1024];
+        var inflated = 0L;
+        for (var i = 0; inflated <= JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".bin"));
+          for (var written = 0; written < perEntry; written += zeros.length) {
+            zip.write(zeros);
+          }
+          zip.closeEntry();
+          inflated += perEntry;
+        }
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "an archive inflating past the aggregate cap must be refused, not walked to the report"
+              + " hidden behind the bomb");
+    }
+
+    @Test
+    void walksPastDirectoriesWithoutSpendingTheEntryCap() throws IOException {
+      // A coverage artifact is usually a whole target/ tree, so its directory entries can outnumber
+      // its reports several times over. Charging them to the cap refuses the multi-module shape the
+      // merge exists for, with the report sitting readable near the front.
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        for (var i = 0; i <= JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
+          zip.putNextEntry(new ZipEntry("module" + i + "/target/classes/"));
+          zip.closeEntry();
+        }
+      }
+
+      assertFalse(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "directories carry no report, so nesting must not cost the archive its coverage");
+    }
+
+    @Test
+    void refusesAnArchiveWithMoreEntriesThanItWalks() throws IOException {
+      // Same prefix-choosing power as the bomb abort, reached by padding instead: the report is
+      // read, the cap is hit, and the merge that fit would otherwise be returned as this build's
+      // coverage with every line the unread reports cover reported uncovered.
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        for (var i = 0; i <= JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".txt"));
+          zip.write(new byte[] {'x'});
+          zip.closeEntry();
+        }
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "an archive longer than the entry cap yields EMPTY, not the prefix that fit");
+    }
+
+    @Test
+    void readsAnArchiveThatExactlyFillsTheEntryCap() throws IOException {
+      // The boundary the refusal must not swallow: an archive using every entry it is allowed is
+      // read in full, so the cap refuses only what it cannot walk.
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        for (var i = 0; i < JacocoCoverageReport.MAX_ZIP_ENTRIES - 1; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".txt"));
+          zip.write(new byte[] {'x'});
+          zip.closeEntry();
+        }
+      }
+
+      assertFalse(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "an archive that fits inside the cap is still read");
+    }
+
+    @Test
+    void carriesNoPartialAnswerOutOfAnArchiveItRefused() throws IOException {
+      // The report sits BEFORE the bomb this time, so the walk has merged real coverage by the
+      // moment it gives up. Returning that prefix would let whoever built the archive choose which
+      // reports the merge sees: append a bomb after a benign report and the truncated result reads
+      // as complete coverage, so every line the rest of the artifact covers comes back uncovered.
+      var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+        var zeros = new byte[64 * 1024];
+        var inflated = 0L;
+        for (var i = 0; inflated <= JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES; i++) {
+          zip.putNextEntry(new ZipEntry("pad" + i + ".bin"));
+          for (var written = 0; written < perEntry; written += zeros.length) {
+            zip.write(zeros);
+          }
+          zip.closeEntry();
+          inflated += perEntry;
+        }
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "a refused archive yields EMPTY, not the reports that happened to precede the bomb");
+    }
+
+    @Test
+    void drainsButCollectsNothingFromAnEntryPastThePerEntryCeiling() throws IOException {
+      var sink = new ByteArrayOutputStream();
+      try (var zip =
+          new ZipInputStream(new ByteArrayInputStream(zipOf(Map.of("jacoco.xml", REPORT))))) {
+        zip.getNextEntry();
+
+        var read = JacocoCoverageReport.inflateEntry(zip, Long.MAX_VALUE, 8, sink);
+
+        assertEquals(
+            REPORT.getBytes(StandardCharsets.UTF_8).length,
+            read,
+            "the entry is drained in full even when nothing is kept, so the walk can reach the"
+                + " next header without the implicit inflation");
+        assertEquals(
+            0,
+            sink.size(),
+            "a report past the per-entry ceiling contributes nothing — half a report is not a"
+                + " report");
+      }
+    }
+
+    @Test
+    void capsTheSourceFilesMergedAcrossReports() throws IOException {
+      var first = new StringBuilder("<report name=\"a\"><package name=\"a\">");
+      for (var i = 0; i < JacocoCoverageReport.MAX_SOURCE_FILES; i++) {
+        first
+            .append("<sourcefile name=\"F")
+            .append(i)
+            .append(".java\"><line nr=\"1\" mi=\"1\" ci=\"0\"/></sourcefile>");
+      }
+      first.append("</package></report>");
+      var entries = new LinkedHashMap<String, String>();
+      entries.put("module-a/jacoco.xml", first.toString());
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="b">
+              <sourcefile name="Extra.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      var report = JacocoCoverageReport.fromArtifactZip(zipOf(entries));
+
+      assertFalse(
+          report.uncoveredLines("mod/a/F0.java").isEmpty(), "the first report's files are merged");
+      assertTrue(
+          report.uncoveredLines("mod/b/Extra.java").isEmpty(),
+          "merging a second report cannot grow the map past the source-file cap");
+    }
+
+    @Test
+    void keepsOnlyWhatTwoReportsOfTheSamePathAgreeOn() throws IOException {
+      // Two reports in one artifact both claiming com/example/Foo.java, which is what a
+      // **/jacoco.xml upload collects when a class exists in two modules, or when a per-module
+      // report sits next to an aggregate report of the same build. Unioning their misses charges
+      // one build's misses to the other's file — and the by-path ambiguity guard cannot catch it
+      // afterwards, because the merge has collapsed the two into one entry that exactly one
+      // repository file matches.
+      var entries = new LinkedHashMap<String, String>();
+      entries.put(
+          "module-a/jacoco.xml",
+          """
+          <report name="a">
+            <package name="com/example">
+              <sourcefile name="Foo.java">
+                <line nr="1" mi="1" ci="0"/>
+                <line nr="2" mi="1" ci="0"/>
+              </sourcefile>
+            </package>
+          </report>
+          """);
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="com/example">
+              <sourcefile name="Foo.java">
+                <line nr="2" mi="1" ci="0"/>
+                <line nr="3" mi="1" ci="0"/>
+              </sourcefile>
+              <sourcefile name="Bar.java"><line nr="7" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      var report = JacocoCoverageReport.fromArtifactZip(zipOf(entries));
+
+      assertEquals(
+          List.of(2),
+          List.copyOf(report.uncoveredLines("module-a/src/main/java/com/example/Foo.java")),
+          "only a line every report recorded as missed may be reported; a line one of them saw"
+              + " executed was executed");
+      assertEquals(
+          List.of(7),
+          List.copyOf(report.uncoveredLines("module-b/src/main/java/com/example/Bar.java")),
+          "a path only one report describes is untouched by that intersection");
+    }
+
+    @Test
+    void dropsAPathTwoReportsAgreeOnNothingAbout() throws IOException {
+      var entries = new LinkedHashMap<String, String>();
+      entries.put(
+          "module-a/jacoco.xml",
+          """
+          <report name="a">
+            <package name="com/example">
+              <sourcefile name="Foo.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+      entries.put(
+          "module-b/jacoco.xml",
+          """
+          <report name="b">
+            <package name="com/example">
+              <sourcefile name="Foo.java"><line nr="2" mi="1" ci="0"/></sourcefile>
+            </package>
+          </report>
+          """);
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(zipOf(entries)).isEmpty(),
+          "two reports that agree on nothing leave no coverage behind, not an empty entry the"
+              + " rest of the reader would have to special-case");
     }
 
     @Test
