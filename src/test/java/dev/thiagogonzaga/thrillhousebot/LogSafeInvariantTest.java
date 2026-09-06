@@ -119,9 +119,15 @@ class LogSafeInvariantTest {
    * Measured on 24 000 spaces, 2 494 ms; possessive, under 1 ms. A differential run over 400 000
    * random inputs found no input the two forms answer differently.
    */
+  /**
+   * A local's name and the start of its initializer. The initializer's END is found by {@link
+   * #initializerEnd}, not by this pattern: a {@code [^;]} class stops at the first semicolon
+   * wherever it sits, and {@code String msg = "prefix; " + finding.title();} then captured only
+   * {@code "prefix}, which {@link #withoutLiterals} dropped as an unterminated literal, so the
+   * accessor was never seen and the local never marked tainted.
+   */
   private static final Pattern LOCAL_DECLARATION =
-      Pattern.compile(
-          "\\b(?:final\\s+)?(?:String|var)\\s++(\\w+)\\s*+=\\s*+([^;]++);", Pattern.DOTALL);
+      Pattern.compile("\\b(?:final\\s+)?(?:String|var)\\s++(\\w+)\\s*+=\\s*+", Pattern.DOTALL);
 
   private static final Pattern IDENTIFIER = Pattern.compile("\\b\\w+\\b");
 
@@ -198,6 +204,13 @@ class LogSafeInvariantTest {
                 untrusted)
             .size(),
         "one wrapped value is not proof the rest of the argument is sanitized");
+    assertEquals(
+        1,
+        scanned(
+                "String msg = \"prefix; \" + finding.title();\nLog.infof(\"m %s\", msg);",
+                untrusted)
+            .size(),
+        "a semicolon inside a string literal does not end the initializer");
     assertEquals(
         1,
         scanned(
@@ -347,7 +360,9 @@ class LogSafeInvariantTest {
     var tainted = new TreeSet<String>();
     var declarations = LOCAL_DECLARATION.matcher(source);
     while (declarations.find()) {
-      var initializer = withoutLiterals(withoutSanitizedCalls(declarations.group(2)));
+      var end = initializerEnd(source, declarations.end());
+      var initializer =
+          withoutLiterals(withoutSanitizedCalls(source.substring(declarations.end(), end)));
       var accessors = NO_ARG_CALL.matcher(initializer);
       while (accessors.find()) {
         if (untrusted.contains(accessors.group(1))) {
@@ -555,5 +570,29 @@ class LogSafeInvariantTest {
       at = scan < expression.length() ? scan + 1 : expression.length();
     }
     return out.toString();
+  }
+
+  /**
+   * Index of the semicolon that ends an initializer starting at {@code from}, skipping any that sit
+   * inside a string, text-block or char literal. Returns the end of the source when none is found,
+   * so an unterminated declaration is scanned as far as it goes rather than silently dropped.
+   */
+  private static int initializerEnd(String source, int from) {
+    var quote = 0;
+    for (var i = from; i < source.length(); i++) {
+      var c = source.charAt(i);
+      if (quote != 0) {
+        if (c == '\\') {
+          i++;
+        } else if (c == quote) {
+          quote = 0;
+        }
+      } else if (c == '"' || c == '\'') {
+        quote = c;
+      } else if (c == ';') {
+        return i;
+      }
+    }
+    return source.length();
   }
 }
