@@ -324,18 +324,8 @@ final class LiveCodeScanner {
       if (closesLiteralOpenedAboveTheHunk(line, body, delimiter)) {
         return -1;
       }
-      if (!delimiter.spansLines()) {
-        var close = closerIndex(line, body, delimiter.close());
-        // A single-line literal may still run on: C, C++ and Python continue a string across a
-        // line break with a trailing backslash. Reading the unclosed quote as ordinary text would
-        // scan the literal's remainder as live code, which is the over-fire direction. The region
-        // is carried on the stack instead and closes on the line that closes it.
-        if (close < 0 && !continuesOnNextLine(line, body)) {
-          return -1;
-        }
-        if (close >= 0 && isMisreadApostrophePair(line, delimiter.open().charAt(0), i, close)) {
-          return -1;
-        }
+      if (!delimiter.spansLines() && opensNoLiteral(line, i, body, delimiter)) {
+        return -1;
       }
       // The backtick is the only delimiter in the table that does not escape on its own, so the
       // file hint only ever changes that one row.
@@ -345,6 +335,23 @@ final class LiveCodeScanner {
       return body;
     }
     return -1;
+  }
+
+  /**
+   * Whether a delimiter that cannot span lines opened nothing at {@code i}: it has no closer on its
+   * line and no continuation to carry it on, or the pair it closes is a misread apostrophe pair.
+   *
+   * <p>A single-line literal may still run on: C, C++ and Python continue a string across a line
+   * break with a trailing backslash. Reading the unclosed quote as ordinary text would scan the
+   * literal's remainder as live code, which is the over-fire direction. The region is carried on
+   * the stack instead and closes on the line that closes it.
+   */
+  private static boolean opensNoLiteral(String line, int i, int body, Delimiter delimiter) {
+    var close = closerIndex(line, body, delimiter.close());
+    if (close < 0) {
+      return !continuesOnNextLine(line, body);
+    }
+    return isMisreadApostrophePair(line, delimiter.open().charAt(0), i, close);
   }
 
   /**
