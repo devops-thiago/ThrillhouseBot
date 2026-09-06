@@ -26,11 +26,13 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 
 @ApplicationScoped
 public class ReviewResponseParser {
 
+  private static final String FINDINGS = "findings";
   private static final String PREVIOUS_FINDINGS_STATUS = "previous_findings_status";
   private static final String SUMMARY = "summary";
   private static final String DESCRIPTION_GAPS = "description_gaps";
@@ -60,19 +62,163 @@ public class ReviewResponseParser {
     if (raw == null || raw.isBlank()) {
       throw new IllegalArgumentException("Model returned an empty response");
     }
-    JsonNode root;
-    try {
-      root = mapper.readTree(extractJson(raw));
-    } catch (IOException e) {
-      throw new IllegalArgumentException("Model response is not valid review JSON", e);
-    }
+    var root = readDocuments(extractJson(raw));
     normalizePreviousFindingsStatus(root);
     normalizeDescriptionGaps(root);
     normalizeFileSummaries(root);
+    if (!root.hasNonNull(FINDINGS)) {
+      // Absent is not the same as empty. A review that found nothing says "findings": [] — both
+      // prompts require it — so a root without the node is a response that never delivered the
+      // review, and the salvage below would have read it as a clean approval (#805).
+      throw new IllegalArgumentException(
+          "Model response has no findings node; a clean review states \"findings\": []");
+    }
     try {
       return mapper.treeToValue(root, ReviewResponse.class);
     } catch (JsonProcessingException e) {
       return parseWithoutSummary(root, e);
+    }
+  }
+
+  /**
+   * Reads every JSON document in the extracted text and folds them into one root. Jackson's {@code
+   * readTree} returns after the first complete value and ignores whatever follows, so a response
+   * that put its summary in one object and its findings in a second, fenced one parsed as a root
+   * with no findings — an approval with nothing recorded about the 5,780 bytes it never read
+   * (#805). Reasoning models split their output this way despite the "respond ONLY with valid JSON"
+   * instruction, so the split is read rather than refused: each further document is merged by
+   * {@link #mergeInto}, and one warning names how much of the response lay past the first document.
+   *
+   * <p>Between documents it skips whitespace, fence markers and any prose ahead of the next opening
+   * brace — the same tolerance {@link #extractJson} extends to prose ahead of the first. Prose
+   * after the last document that holds no brace is discarded with a warning rather than failed: the
+   * document was read whole, prose carries no findings, and a format failure is a full-price retry
+   * that a model which habitually signs off would spend every one of on the same sentence. What
+   * must fail is a brace after the last document that does not parse as a complete object — a
+   * truncated or malformed further document is content the parser could not read, and it raises the
+   * same {@code IllegalArgumentException} a malformed response does, so the caller retries instead
+   * of approving from a response it only partly read.
+   */
+  private ObjectNode readDocuments(String json) {
+    var first = readObject(json, 0);
+    var root = first.node();
+    var position = first.end();
+    var documents = 1;
+    var tally = new MergeTally();
+    for (var next = nextDocumentStart(json, position);
+        next >= 0;
+        next = nextDocumentStart(json, position)) {
+      var document = readObject(json, next);
+      mergeInto(root, document.node(), tally);
+      position = document.end();
+      documents++;
+    }
+    if (documents > 1) {
+      Log.warnf(
+          "Review response held %d JSON documents rather than one — read the %d characters past"
+              + " the first document and merged the rest into it: %d finding(s) appended, %d"
+              + " duplicate finding(s) dropped, %d conflicting top-level field(s) kept from the"
+              + " earlier document",
+          documents,
+          json.length() - first.end(),
+          tally.appended,
+          tally.duplicates,
+          tally.conflicts);
+    }
+    return root;
+  }
+
+  /** One document read out of the response text: its root and the index just past its close. */
+  private record Document(ObjectNode node, int end) {}
+
+  /** What merging the later documents did, for the one warning {@link #readDocuments} logs. */
+  private static final class MergeTally {
+    int appended;
+    int duplicates;
+    int conflicts;
+  }
+
+  /**
+   * Reads the JSON object starting at {@code start}. The parser is asked for exactly one value, and
+   * where it stopped is what tells the caller whether the response continues.
+   */
+  private Document readObject(String json, int start) {
+    JsonNode node;
+    int end;
+    try (var parser = mapper.createParser(json.substring(start))) {
+      node = mapper.readTree(parser);
+      end = start + (int) parser.currentLocation().getCharOffset();
+    } catch (IOException e) {
+      throw new IllegalArgumentException("Model response is not valid review JSON", e);
+    }
+    if (!(node instanceof ObjectNode object)) {
+      throw new IllegalArgumentException("Model response is not a JSON object");
+    }
+    return new Document(object, end);
+  }
+
+  /**
+   * The index of the next document's opening brace at or after {@code from}, or -1 when none
+   * remains. Prose ahead of a further brace is skipped, as the prose ahead of the first document
+   * is; prose with no brace after it is discarded, and the discard is logged with its size.
+   */
+  private static int nextDocumentStart(String json, int from) {
+    var at = from;
+    while (at < json.length()) {
+      var c = json.charAt(at);
+      if (c == '{') {
+        return at;
+      }
+      if (json.startsWith("```", at)) {
+        // The marker and its language tag only — a document opened on the same line still counts.
+        at += 3;
+        while (at < json.length() && Character.isLetterOrDigit(json.charAt(at))) {
+          at++;
+        }
+      } else if (Character.isWhitespace(c)) {
+        at++;
+      } else {
+        var brace = json.indexOf('{', at);
+        if (brace < 0) {
+          Log.warnf(
+              "Review response continued past its last JSON document with %d characters that hold"
+                  + " no further document; discarded them",
+              json.length() - at);
+          return -1;
+        }
+        at = brace;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Folds a later document into {@code root}. Findings append in document order, and a finding
+   * object identical to one already held is kept once; every other top-level field keeps the first
+   * non-null value it was given, so two documents that disagree resolve the same way every time.
+   */
+  private static void mergeInto(ObjectNode root, ObjectNode document, MergeTally tally) {
+    for (var entry : document.properties()) {
+      var value = entry.getValue();
+      if (FINDINGS.equals(entry.getKey())
+          && value.isArray()
+          && root.get(FINDINGS) instanceof ArrayNode findings) {
+        // JsonNode equality and hashing are structural, so the set is the "identical object" test.
+        var held = new HashSet<JsonNode>();
+        findings.forEach(held::add);
+        for (var finding : value) {
+          if (held.add(finding)) {
+            findings.add(finding);
+            tally.appended++;
+          } else {
+            tally.duplicates++;
+          }
+        }
+      } else if (!root.hasNonNull(entry.getKey())) {
+        root.set(entry.getKey(), value);
+      } else {
+        tally.conflicts++;
+      }
     }
   }
 

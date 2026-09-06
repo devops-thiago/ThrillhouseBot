@@ -919,6 +919,156 @@ class PrSummaryGeneratorTest {
     assertTrue(summary.contains("…and 7 more file(s)."), summary);
   }
 
+  /**
+   * #804 — the rows used to be the first {@code MAX_FILE_ROWS} files in the order GitHub lists
+   * them, which is alphabetical, while the model summarizes the files it judges matter. On a large
+   * PR the two sets barely overlapped: nearly every row said "Not summarized" and the files that
+   * did have a summary were hidden behind the "…and N more" note. The summarized files are the rows
+   * now, ahead of the alphabet.
+   */
+  @Test
+  void summarizedFilesAreTheRowsEvenWhenTheAlphabetPutsThemLast() {
+    var changedFiles = new java.util.ArrayList<PrSummaryGenerator.ChangedFile>();
+    for (int i = 0; i < PrSummaryGenerator.MAX_FILE_ROWS; i++) {
+      changedFiles.add(new PrSummaryGenerator.ChangedFile("docs/page" + i + ".md", "modified"));
+    }
+    changedFiles.add(new PrSummaryGenerator.ChangedFile("src/auth.py", "modified"));
+    changedFiles.add(new PrSummaryGenerator.ChangedFile("src/services.py", "added"));
+    changedFiles.add(new PrSummaryGenerator.ChangedFile("src/views.py", "modified"));
+    // The model lists its entries most impactful first; the table keeps the diff's order instead.
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary("src/views.py", "Adds the billing endpoints"),
+            new ReviewResponse.FileSummary("src/auth.py", "Token refresh on expiry"),
+            new ReviewResponse.FileSummary("src/services.py", "New billing service"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+    int total = changedFiles.size();
+
+    var summary = generator.generate(total, 0, 0, changedFiles, aiSummary, result);
+
+    String auth = "| `src/auth.py` | Modified | Token refresh on expiry |";
+    String services = "| `src/services.py` | Added | New billing service |";
+    String views = "| `src/views.py` | Modified | Adds the billing endpoints |";
+    assertTrue(summary.contains(auth), summary);
+    assertTrue(summary.contains(services), summary);
+    assertTrue(summary.contains(views), summary);
+    // Summarized rows first, in the order the diff lists them; the alphabet fills in after.
+    assertTrue(summary.indexOf(auth) < summary.indexOf(services), summary);
+    assertTrue(summary.indexOf(services) < summary.indexOf(views), summary);
+    assertTrue(summary.indexOf(views) < summary.indexOf("| `docs/page0.md` |"), summary);
+    // The three rows the summaries took come out of the tail, and the footer counts them.
+    int lastFilled = PrSummaryGenerator.MAX_FILE_ROWS - 3 - 1;
+    assertTrue(summary.contains("`docs/page" + lastFilled + ".md`"), summary);
+    assertFalse(summary.contains("`docs/page" + (lastFilled + 1) + ".md`"), summary);
+    assertTrue(summary.contains("…and 3 more file(s)."), summary);
+  }
+
+  /**
+   * #804 — with fewer summaries than rows, the summarized files lead and the remaining rows are
+   * filled from the rest of the change set in the order the diff lists it, so a small PR's table
+   * still reads like the diff and a row is never left blank while an unsummarized file waits.
+   */
+  @Test
+  void rowsLeftBySummariesAreFilledFromTheRestInDiffOrder() {
+    var changedFiles = new java.util.ArrayList<PrSummaryGenerator.ChangedFile>();
+    int total = 25;
+    for (int i = 0; i < total; i++) {
+      changedFiles.add(new PrSummaryGenerator.ChangedFile("src/F" + i + ".java", "modified"));
+    }
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary("src/F21.java", "Late in the alphabet"),
+            new ReviewResponse.FileSummary("src/F3.java", "Early in the alphabet"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(total, 0, 0, changedFiles, aiSummary, result);
+
+    String f3 = "| `src/F3.java` | Modified | Early in the alphabet |";
+    String f21 = "| `src/F21.java` | Modified | Late in the alphabet |";
+    String f0 = "| `src/F0.java` | Modified | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |";
+    String f4 = "| `src/F4.java` | Modified | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |";
+    assertTrue(summary.indexOf(f3) < summary.indexOf(f21), summary);
+    assertTrue(summary.indexOf(f21) < summary.indexOf(f0), summary);
+    assertTrue(summary.indexOf(f0) < summary.indexOf(f4), summary);
+    // 2 summarized + 18 filled: F0-F2 and F4-F18 are shown, F19, F20 and F22-F24 roll up.
+    assertTrue(summary.contains("`src/F18.java`"), summary);
+    assertFalse(summary.contains("`src/F19.java`"), summary);
+    assertFalse(summary.contains("`src/F20.java`"), summary);
+    assertFalse(summary.contains("`src/F22.java`"), summary);
+    assertTrue(summary.contains("…and 5 more file(s)."), summary);
+  }
+
+  /**
+   * #804 with the #547 grounding rule kept: a summary naming a path that is not a changed file
+   * creates no row and takes no row from the changed files — only the diff decides what is a row.
+   * The rollup note is still measured against GitHub's authoritative total, not the rows.
+   */
+  @Test
+  void summaryForAPathThatIsNotAChangedFileCreatesNoRowAndTakesNone() {
+    var changedFiles = new java.util.ArrayList<PrSummaryGenerator.ChangedFile>();
+    int reviewable = PrSummaryGenerator.MAX_FILE_ROWS + 1;
+    for (int i = 0; i < reviewable; i++) {
+      changedFiles.add(new PrSummaryGenerator.ChangedFile("src/F" + i + ".java", "modified"));
+    }
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary("src/Ghost.java", "Not in this PR at all"),
+            new ReviewResponse.FileSummary(
+                "src/F" + PrSummaryGenerator.MAX_FILE_ROWS + ".java", "The last file"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(reviewable + 9, 0, 0, changedFiles, aiSummary, result);
+
+    assertFalse(summary.contains("Ghost"), summary);
+    assertTrue(
+        summary.contains(
+            "| `src/F" + PrSummaryGenerator.MAX_FILE_ROWS + ".java` | Modified | The last file |"),
+        summary);
+    // One summarized row leads, so exactly one unsummarized file drops off the alphabet's tail.
+    assertTrue(summary.contains("`src/F" + (PrSummaryGenerator.MAX_FILE_ROWS - 2) + ".java`"));
+    assertFalse(summary.contains("`src/F" + (PrSummaryGenerator.MAX_FILE_ROWS - 1) + ".java`"));
+    assertTrue(summary.contains("…and 10 more file(s)."), summary);
+  }
+
+  /**
+   * #804 — the model summarized a whole package as {@code billing/} on the reported PR. A directory
+   * is not a changed file: the entry creates no row, and it does not count as a summary for the
+   * files under it, which keep saying that no note came back for them.
+   */
+  @Test
+  void directoryEntryCreatesNoRowAndSummarizesNoneOfTheFilesUnderIt() {
+    var changedFiles =
+        List.of(
+            new PrSummaryGenerator.ChangedFile("billing/__init__.py", "added"),
+            new PrSummaryGenerator.ChangedFile("billing/models.py", "added"),
+            new PrSummaryGenerator.ChangedFile("src/views.py", "modified"));
+    var aiSummary =
+        summaryWithFiles(
+            new ReviewResponse.FileSummary("billing/", "New billing package"),
+            new ReviewResponse.FileSummary("src/views.py", "Wires the billing endpoints"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(3, 0, 0, changedFiles, aiSummary, result);
+
+    assertFalse(summary.contains("`billing/`"), summary);
+    assertFalse(summary.contains("New billing package"), summary);
+    String views = "| `src/views.py` | Modified | Wires the billing endpoints |";
+    String init = "| `billing/__init__.py` | Added | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |";
+    String models = "| `billing/models.py` | Added | " + PrSummaryGenerator.NO_MODEL_SUMMARY + " |";
+    assertTrue(summary.contains(init), summary);
+    assertTrue(summary.contains(models), summary);
+    assertTrue(summary.indexOf(views) < summary.indexOf(init), summary);
+    assertFalse(summary.contains("more file(s)"), summary);
+  }
+
   @Test
   void shouldEscapePipesInChangedFilesTable() {
     var changedFiles = List.of(new PrSummaryGenerator.ChangedFile("src/a|b.java", "modified"));

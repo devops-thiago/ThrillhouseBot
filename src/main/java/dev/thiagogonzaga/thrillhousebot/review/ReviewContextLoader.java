@@ -480,7 +480,7 @@ public class ReviewContextLoader {
     var linkedIssuesContext =
         bugFixContextResolver.loadLinkedIssueContext(
             auth, req.owner(), req.repo(), req.prDescription());
-    var configKeyContext = resolveConfigKeyContext(auth, req, reviewableFiles);
+    var configKeyContext = resolveConfigKeyContext(auth, req, reviewableFiles, ignoreGlobs);
     // Reuses the repo settings and the post-ignore file list already computed above: the coverage
     // artifact name comes from the same single read, and an ignored file is never reported as
     // under-tested.
@@ -578,22 +578,24 @@ public class ReviewContextLoader {
 
   /**
    * Definition sites for the config keys the PR's documentation/config files name, read at the PR
-   * head so a key added by this same PR resolves. Best-effort enrichment like the project stack: a
-   * failure degrades to no extra context, never a failed review.
+   * head so a key added by this same PR resolves. The head SHA is always known here: {@link
+   * #fetchPrTotalsForReview} has already rejected a request whose SHA is null or no longer current
+   * before any context is loaded, so a fallback to the default branch could never run and is not
+   * kept (#483). Best-effort enrichment like the project stack: a failure degrades to no extra
+   * context, never a failed review.
+   *
+   * @param ignoreGlobs the review's effective ignore set, applied to the candidate definition files
+   *     the resolver walks — which come from the repository tree, not the diff — so a config file
+   *     under an ignored path is neither fetched nor rendered (#483)
    */
   String resolveConfigKeyContext(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
-    var ref =
-        req.commitSha() != null && !req.commitSha().isBlank()
-            ? req.commitSha()
-            : req.defaultBranch();
-    if (ref == null || ref.isBlank()) {
-      return "";
-    }
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+      ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     try {
-      return configKeyContextResolver.resolve(auth, req.owner(), req.repo(), ref, reviewableFiles);
+      return configKeyContextResolver.resolve(
+          auth, req.owner(), req.repo(), req.commitSha(), reviewableFiles, ignoreGlobs);
     } catch (RuntimeException e) {
       Log.warn("Config-key context resolution failed, continuing without it", e);
       return "";
