@@ -263,6 +263,30 @@ class PatchCoverageResolverTest {
     }
 
     @Test
+    void ignoresCoverageFromARunThatDidNotSucceed() {
+      // With the common `if: always()` upload, a run that aborted still attaches the artifact — but
+      // its ci=0 regions are the run stopping short, not measured fact. A failed conclusion must be
+      // skipped before its artifacts are even listed, and so must an absent one: a run GitHub
+      // reports as completed with no conclusion is not a run that said it succeeded.
+      givenRuns(
+          new GitHubActionsClient.WorkflowRun(41L, "ci", HEAD_SHA, "completed", null),
+          new GitHubActionsClient.WorkflowRun(42L, "ci", HEAD_SHA, "completed", "failure"));
+      when(actionsClient.listRunArtifacts(any(), any(), eq("o"), eq("r"), eq(42L), anyInt()))
+          .thenReturn(
+              new GitHubActionsClient.RunArtifacts(
+                  1, List.of(new GitHubActionsClient.Artifact(99L, ARTIFACT, 1_024, false))));
+      givenDownloadRedirectsTo(BLOB);
+      when(zipFetcher.fetch(BLOB)).thenReturn(zippedReport(REPORT));
+
+      assertEquals(
+          "",
+          resolve(true, ARTIFACT),
+          "coverage from a failed or cancelled run is not something the model may treat as fact");
+      verify(actionsClient, never())
+          .listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt());
+    }
+
+    @Test
     void degradesToNoContextWhenTheDownloadCannotBeFollowed() {
       givenRunWithArtifact(ARTIFACT);
       givenDownloadRedirectsTo(null);
@@ -301,7 +325,8 @@ class PatchCoverageResolverTest {
     void probesOnlyABoundedNumberOfRunsForTheSameCommit() {
       var runs = new GitHubActionsClient.WorkflowRun[PatchCoverageResolver.MAX_RUNS_PROBED + 4];
       for (var i = 0; i < runs.length; i++) {
-        runs[i] = new GitHubActionsClient.WorkflowRun(i + 1L, "ci", HEAD_SHA, "completed", "ok");
+        runs[i] =
+            new GitHubActionsClient.WorkflowRun(i + 1L, "ci", HEAD_SHA, "completed", "success");
       }
       givenRuns(runs);
       when(actionsClient.listRunArtifacts(any(), any(), any(), any(), anyLong(), anyInt()))
@@ -487,6 +512,49 @@ class PatchCoverageResolverTest {
       assertEquals(
           List.of("a/Many.java", "a/Few.java"),
           uncovered.stream().map(PatchCoverageResolver.UncoveredFile::path).toList());
+    }
+
+    @Test
+    void dropsAReportEntryThatMatchesMoreThanOneRepositoryFile() {
+      // One report entry in a shared package suffix-matches the same-named class in two modules of
+      // a multi-module build. Attributing module-a's uncovered lines to module-b (or the other way)
+      // is the symmetric twin of the existing N-entries->1-path guard and must be refused.
+      var report =
+          JacocoCoverageReport.parse(
+              new java.io.ByteArrayInputStream(
+                  """
+                  <report name="multi">
+                    <package name="com/example">
+                      <sourcefile name="Foo.java"><line nr="1" mi="1" ci="0"/></sourcefile>
+                    </package>
+                  </report>
+                  """
+                      .getBytes(StandardCharsets.UTF_8)));
+      var files =
+          List.of(
+              new FileDiff(
+                  "module-a/src/main/java/com/example/Foo.java",
+                  "modified",
+                  1,
+                  0,
+                  1,
+                  "@@ -1,0 +1,1 @@\n+x"),
+              new FileDiff(
+                  "module-b/src/main/java/com/example/Foo.java",
+                  "modified",
+                  1,
+                  0,
+                  1,
+                  "@@ -1,0 +1,1 @@\n+x"));
+
+      var uncovered = PatchCoverageResolver.intersectWithAddedLines(report, files);
+
+      assertTrue(
+          uncovered.isEmpty(),
+          () ->
+              "one report entry matches both modules' same-named class; attributing it to either is"
+                  + " a guess: "
+                  + uncovered.stream().map(PatchCoverageResolver.UncoveredFile::path).toList());
     }
 
     @Test

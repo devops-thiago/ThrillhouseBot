@@ -25,7 +25,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.NavigableSet;
+import java.util.Set;
 import java.util.TreeSet;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -60,6 +62,15 @@ public class PatchCoverageResolver {
 
   /** Only a finished run has uploaded its artifacts. */
   private static final String COMPLETED = "completed";
+
+  /**
+   * Run conclusions whose coverage report may be trusted as measured fact. {@code success} is the
+   * ordinary green run; {@code neutral} is a deliberate non-failing outcome (a run that chose to
+   * pass without asserting). Every other completed conclusion — {@code failure}, {@code cancelled},
+   * {@code timed_out}, {@code skipped}, {@code action_required}, {@code stale} — is a run that did
+   * not finish its work, so its report describes an aborted build, not the code under review.
+   */
+  private static final Set<String> USABLE_CONCLUSIONS = Set.of("success", "neutral");
 
   /** Runs whose artifact list is fetched before the search gives up, bounding the API cost. */
   static final int MAX_RUNS_PROBED = 10;
@@ -179,12 +190,17 @@ public class PatchCoverageResolver {
     if (runs == null) {
       return null;
     }
-    // Declarative rather than a loop with jumps: the policy is "only runs for this exact commit,
-    // and at most MAX_RUNS_PROBED of them", and saying it once here keeps the walk below to the
-    // single thing it does — look for the named artifact.
+    // Declarative rather than a loop with jumps: the policy is "only SUCCEEDED runs for this exact
+    // commit, and at most MAX_RUNS_PROBED of them", and saying it once here keeps the walk below to
+    // the single thing it does — look for the named artifact. The conclusion filter is necessary
+    // but not sufficient: a run reported success can still upload a partial report, and this cannot
+    // tell that apart — but a report from a run that failed, was cancelled, or timed out (commonly
+    // still uploaded via `if: always()`) is the run stopping short, not measured coverage, and its
+    // ci=0 regions must not reach the model as fact.
     var candidates =
         runs.workflowRuns().stream()
             .filter(run -> headSha.equalsIgnoreCase(run.headSha()))
+            .filter(run -> isUsableConclusion(run.conclusion()))
             .limit(MAX_RUNS_PROBED)
             .toList();
     for (var run : candidates) {
@@ -194,6 +210,11 @@ public class PatchCoverageResolver {
       }
     }
     return null;
+  }
+
+  /** Whether a completed run's conclusion means its coverage report can be trusted as fact. */
+  private static boolean isUsableConclusion(String conclusion) {
+    return conclusion != null && USABLE_CONCLUSIONS.contains(conclusion.toLowerCase(Locale.ROOT));
   }
 
   /** The named, unexpired artifact's id on one run, or {@code null} when it has none. */
@@ -244,10 +265,18 @@ public class PatchCoverageResolver {
    */
   static List<UncoveredFile> intersectWithAddedLines(
       JacocoCoverageReport report, List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+    // Resolve the whole file list at once so a report entry that suffix-matches more than one of
+    // these repository paths (a multi-module build's same-named class) is dropped rather than
+    // attributed to each — a per-file lookup cannot see that cross-file collision.
+    var uncoveredByPath =
+        report.uncoveredLinesByPath(
+            reviewableFiles.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
     var result = new ArrayList<UncoveredFile>();
     for (var file : reviewableFiles) {
-      var reportedUncovered = report.uncoveredLines(file.filename());
-      if (reportedUncovered.isEmpty()) {
+      // Absent means either the report says nothing about this file or the attribution was
+      // ambiguous and was dropped; a present entry always carries at least one uncovered line.
+      var reportedUncovered = uncoveredByPath.get(file.filename());
+      if (reportedUncovered == null) {
         continue;
       }
       var uncoveredAdditions = new TreeSet<Integer>();
