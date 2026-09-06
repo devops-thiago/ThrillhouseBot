@@ -261,9 +261,11 @@ final class JacocoCoverageReport {
    *
    * <p>{@link #EMPTY} when the bytes are not a readable zip, hold no such entry, hold nothing this
    * parser understands — or when the walk gave up part-way, per the paragraph below. At most {@link
-   * #MAX_ZIP_ENTRIES} file entries are read; directory entries pass uncounted, since they carry no
-   * data and cost nothing to step over. An archive with more file entries than that is refused
-   * whole rather than merged as far as the cap allowed.
+   * #MAX_ZIP_ENTRIES} file entries are read. Directory entries are not counted against that cap,
+   * but they are not trusted either: a name ending in a slash may still carry a payload, so each
+   * one is drained against the same aggregate budget as a file and refused the same way when it
+   * blows it. An archive with more file entries than the cap is refused whole rather than merged as
+   * far as the cap allowed.
    *
    * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
    * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
