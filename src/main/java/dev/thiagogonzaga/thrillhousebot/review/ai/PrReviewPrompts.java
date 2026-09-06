@@ -628,9 +628,11 @@ public final class PrReviewPrompts {
               chars) describing what changed in that file and why, derived from the diff — not the
               file name. Cover the most significant files first and cap the array at 20 entries;
               for a larger PR, summarize the 20 most impactful files and omit purely mechanical
-              ones (generated code, lockfiles, bulk renames). This field is what fills the rendered
-              walkthrough table, so emit an entry for every changed file up to that cap; an empty
-              array leaves every row of that table blank.
+              ones (generated code, lockfiles, bulk renames). Every entry names one changed file,
+              never a directory or a group of files: an entry such as "billing/" matches no file
+              and is dropped. This field is what fills the rendered walkthrough table, so emit an
+              entry for every changed file up to that cap; an empty array leaves every row of that
+              table blank.
             - suggested_labels: ONLY when an "Available Repository Labels" section is provided,
               a JSON array of label names that best categorize this PR — area, change type, risk.
               Follow that section's guidance on which labels you may use, pick the few most
@@ -770,14 +772,15 @@ public final class PrReviewPrompts {
               naming methods, values or behavior the material does not show — so stay at the
               granularity the file list and findings justify, and prefer a rougher true line over
               no line at all. "path" must match a path from the changed-file list below EXACTLY,
-              character for character (no a/ or b/ prefix, no truncation). The object keys must be
-              spelled exactly "path" and "summary" — not "file", "filename" or "description" —
-              and the field itself must be an ARRAY, never an object keyed by
-              path. "summary" is a single line, max ~100 chars. One entry per listed file, most
-              impactful first, capped at 20 entries; when the list is longer than that, cover the
-              20 most impactful and skip purely mechanical ones (generated code, lockfiles, bulk
-              renames). Files the list marks as pure renames, omitted, or not reviewed need no
-              entry.
+              character for character (no a/ or b/ prefix, no truncation), and it names one file
+              from that list — never a directory from the breakdown, which matches no file and is
+              dropped. The object keys must be spelled exactly "path" and "summary" — not "file",
+              "filename" or "description" — and the field itself
+              must be an ARRAY, never an object keyed by path. "summary" is a single line, max
+              ~100 chars. One entry per listed file, most impactful first, capped at 20 entries;
+              when the list is longer than that, cover the 20 most impactful and skip purely
+              mechanical ones (generated code, lockfiles, bulk renames). Files the list marks as
+              pure renames, omitted, or not reviewed need no entry.
             - suggested_labels: ONLY when an "Available Repository Labels" section is provided, a
               JSON array of the few most relevant label names (typically 1-3); follow that section's
               guidance and emit an empty array if none apply. Omit the field entirely otherwise.

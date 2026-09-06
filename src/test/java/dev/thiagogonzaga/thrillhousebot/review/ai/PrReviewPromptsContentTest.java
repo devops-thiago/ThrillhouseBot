@@ -1091,6 +1091,19 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void bothPromptsSayAFileSummaryEntryNamesAFileNeverADirectory() {
+    // The reported PR's response carried "billing/" as an entry, which matches no row (#804).
+    assertContains(
+        PrReviewPrompts.SYSTEM,
+        "never a directory",
+        "the review prompt must rule out directory entries in file_summaries (#804)");
+    assertContains(
+        PrReviewPrompts.SUMMARY_SYSTEM,
+        "never a directory",
+        "the summary prompt must rule out directory entries in file_summaries (#804)");
+  }
+
+  @Test
   void summaryPromptGroundsFileSummariesInTheMaterialThatCallActuallyHas() {
     String sys = PrReviewPrompts.SUMMARY_SYSTEM;
     // The collapse to "-" on large PRs is this call omitting the field: it is told it never sees
