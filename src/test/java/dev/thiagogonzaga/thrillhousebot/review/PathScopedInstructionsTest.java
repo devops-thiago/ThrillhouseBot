@@ -92,6 +92,30 @@ class PathScopedInstructionsTest {
     assertEquals(List.of("src/main/generated/Api.java"), resolved.scopes().get(0).files());
   }
 
+  /**
+   * #481 — scope globs are documented as the same gitignore-style syntax as the ignore lists, and
+   * they compile through the same matcher, so the idioms fixed there have to work here too. A scope
+   * written {@code payments/} used to match nothing at all, which quietly dropped the rules a
+   * maintainer wrote for that directory.
+   */
+  @Test
+  void readsTheSameGitignoreIdiomsTheIgnoreListsDo() {
+    var resolved =
+        PathScopedInstructions.resolve(
+            settings(scope("payments/", "Money is in integer cents.")),
+            List.of("payments/api/Charge.java", "web/Landing.tsx"));
+
+    assertEquals(1, resolved.scopes().size());
+    assertEquals(List.of("payments/api/Charge.java"), resolved.scopes().get(0).files());
+
+    var bareName =
+        PathScopedInstructions.resolve(
+            settings(scope("generated", "Generated code.")),
+            List.of("src/main/generated/Api.java", "src/main/Api.java"));
+
+    assertEquals(List.of("src/main/generated/Api.java"), bareName.scopes().get(0).files());
+  }
+
   @Test
   void aRepositoryDeclaringNoScopesResolvesToNone() {
     assertSame(

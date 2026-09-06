@@ -313,6 +313,14 @@ public interface ThrillhouseConfig {
      * ecosystems — generated or vendored artifacts only, never handwritten source. Overridable per
      * deployment; directory globs like {@code **}{@code /build/**} may need narrowing in repos that
      * keep real source under those names.
+     *
+     * <p>Patterns are gitignore-style and are compiled by {@code ReviewDiffFormatter.IgnoreGlobs},
+     * the same matcher a repository's own {@code review.ignored-files} list goes through, so the
+     * two keys can never drift apart (#481). The defaults are spelled with an explicit {@code
+     * **}{@code /} prefix, which is what an unanchored pattern means anyway; they are left that way
+     * so this list reads identically to the one shipped in {@code application.properties}. Being a
+     * comma-separated value, this key cannot carry a {@code &#123;a,b&#125;} alternation — write
+     * those as separate patterns.
      */
     @WithDefault(
         "**/pom.xml,**/package-lock.json,**/pnpm-lock.yaml,**/go.sum,**/*.lock,**/*.generated.*,"

@@ -424,6 +424,51 @@ class ReviewContextLoaderTest {
     }
 
     /**
+     * #481 — the review records which of the repository's own globs excluded nothing here, so the
+     * summary can say so. Computed against the whole PR file list (a glob that matched is one that
+     * removed a file from the reviewable set) and empty when every declaration did something.
+     */
+    @Test
+    void recordsWhichDeclaredIgnoreGlobsMatchedNoFileInThisPullRequest() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new GitHubPullRequestClient.FileDiff(
+                  "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(
+              new RepoSettings(
+                  List.of("docs/generated/**", "paymnets/**"),
+                  List.of(),
+                  ".github/thrillhousebot.yml"));
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(List.of("paymnets/**"), ctx.unmatchedIgnoreGlobs());
+    }
+
+    @Test
+    void recordsNoUnmatchedGlobsForARepositoryThatDeclaredNone() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
+      stubCommonLoadDeps(files);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(RepoSettings.EMPTY);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals(List.of(), ctx.unmatchedIgnoreGlobs());
+    }
+
+    /**
      * #108 meets #51: config-key resolution reads the post-ignore-filter file set, so a key
      * documented only in an ignored Markdown file is never resolved. The resolver takes the
      * reviewable list rather than the raw one precisely so it inherits every ignore rule.
