@@ -650,4 +650,232 @@ class ReviewResponseParserTest {
     assertEquals(direct, response);
     assertEquals(java.util.List.of("gap one", "gap two"), response.summary().descriptionGaps());
   }
+
+  /**
+   * The production shape from issue #805: prose, then an object carrying the summary and the
+   * previous-findings status, then a fenced second object carrying the findings. {@code readTree}
+   * reads the first document and ignores everything after it, so the root had no findings node,
+   * that read as an empty list, and the pull request was approved with 0 findings.
+   */
+  @Test
+  void shouldReadFindingsFromASecondFencedJsonDocument() {
+    var raw =
+        """
+        When reviewing this kind of PR, I first try to find actual runtime or security bugs.
+
+        {"summary": {"total_findings": 1, "critical": 0, "high": 0, "medium": 0, "low": 1,
+          "overall_assessment": "one low", "pr_purpose": "registration",
+          "file_summaries": [{"path": "users/views.py", "summary": "adds RegisterView"}]},
+         "previous_findings_status": [{"id": 1, "status": "resolved", "note": "ok"}]}
+        ```
+        ```json
+        {
+          "findings": [
+            {"risk": "low", "confidence": "medium", "file": "users/views.py", "line": 237,
+             "title": "RegisterView 500s when two valid emails share a username prefix",
+             "description": "the second registration crashes with an IntegrityError"}
+          ]
+        }
+        ```
+        """;
+
+    var response = parser.parse(raw);
+
+    assertEquals(1, response.findings().size());
+    assertEquals("users/views.py", response.findings().get(0).file());
+    assertEquals(237, response.findings().get(0).line());
+    assertNotNull(response.summary());
+    assertEquals("registration", response.summary().prPurpose());
+    assertEquals(1, response.summary().fileSummaries().size());
+    assertEquals(1, response.previousFindingsStatus().size());
+  }
+
+  @Test
+  void shouldReadFindingsFromAnUnfencedSecondDocument() {
+    var response =
+        parser.parse(
+            """
+            {"summary": {"total_findings": 1, "pr_purpose": "p"}}
+
+            {"findings": [{"risk": "high", "confidence": "high", "file": "f", "line": 3,
+              "title": "t", "description": "d"}]}
+            """);
+
+    assertEquals(1, response.findings().size());
+    assertEquals("t", response.findings().get(0).title());
+    assertEquals("p", response.summary().prPurpose());
+  }
+
+  @Test
+  void shouldConcatenateFindingsAcrossDocumentsAndKeepTheFirstValueOfAnyOtherField() {
+    // Findings append in document order and an identical finding object is kept once; every
+    // other top-level field keeps the first non-null value it was given.
+    var response =
+        parser.parse(
+            """
+            {"findings": [{"risk": "low", "file": "a", "line": 1, "title": "first",
+                           "description": "d"}],
+             "summary": {"total_findings": 2, "pr_purpose": "first"}}
+            {"findings": [{"risk": "low", "file": "a", "line": 1, "title": "first",
+                           "description": "d"},
+                          {"risk": "high", "file": "b", "line": 2, "title": "second",
+                           "description": "d"}],
+             "summary": {"total_findings": 9, "pr_purpose": "later"},
+             "previous_findings_status": [{"id": 4, "status": "resolved", "note": "n"}]}
+            ```json
+            {"findings": [{"risk": "medium", "file": "c", "line": 3, "title": "third",
+                           "description": "d"}]}
+            ```
+            """);
+
+    assertEquals(
+        java.util.List.of("first", "second", "third"),
+        response.findings().stream().map(ReviewResponse.Finding::title).toList());
+    assertEquals("first", response.summary().prPurpose());
+    assertEquals(1, response.previousFindingsStatus().size());
+    assertEquals(4, response.previousFindingsStatus().get(0).id());
+  }
+
+  @Test
+  void shouldKeepTheFirstFindingsNodeWhenALaterOneIsNotAnArray() {
+    var response =
+        parser.parse(
+            """
+            {"findings": [{"risk": "low", "file": "a", "line": 1, "title": "t",
+                           "description": "d"}]}
+            {"findings": "none"}
+            """);
+
+    assertEquals(1, response.findings().size());
+  }
+
+  @Test
+  void shouldSkipFenceMarkersWhereverTheyFallBetweenDocuments() {
+    // An outer fence, a closing fence on its own line, an opening fence sharing a line with the
+    // document it opens, and a closing fence with no newline before it.
+    var response =
+        parser.parse(
+            "```json\n{\"summary\": {\"total_findings\": 0}}\n```\n```json {\"findings\": []}```");
+
+    assertTrue(response.findings().isEmpty());
+    assertNotNull(response.summary());
+  }
+
+  @Test
+  void shouldDiscardTrailingProseThatHoldsNoFurtherDocument() {
+    // The document was read whole and a closing sentence carries no findings, so it is discarded
+    // (with a warning) rather than failing the response: a format failure is a full-price retry,
+    // and a model that habitually signs off would exhaust every retry and fail the review.
+    var response = parser.parse("{\"findings\": []}\n\nLet me know if you want more detail.");
+
+    assertTrue(response.findings().isEmpty());
+  }
+
+  @Test
+  void shouldRejectATruncatedSecondDocument() {
+    // A brace after the last document that never closes is a document the parser could not read,
+    // which is the one case that must not pass as a clean review.
+    IllegalArgumentException ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> parser.parse("{\"findings\": []}\n{\"findings\": [{\"risk\": \"high\", \"fi"));
+
+    assertTrue(ex.getMessage().contains("not valid review JSON"), ex.getMessage());
+  }
+
+  @Test
+  void shouldRejectAFurtherDocumentThatDoesNotParse() {
+    IllegalArgumentException ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> parser.parse("{\"findings\": []}\nsee the {config} block"));
+
+    assertTrue(ex.getMessage().contains("not valid review JSON"), ex.getMessage());
+  }
+
+  @Test
+  void shouldRejectAResponseWithNoJsonObjectAtAll() {
+    assertThrows(IllegalArgumentException.class, () -> parser.parse("```\n```"));
+  }
+
+  @Test
+  void shouldRejectARootWithoutAFindingsNode() {
+    // "no findings node" is a response that never delivered the review; only an explicit empty
+    // array is a clean one.
+    IllegalArgumentException ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> parser.parse("{\"summary\": {\"total_findings\": 0}}"));
+
+    assertTrue(ex.getMessage().contains("findings"), ex.getMessage());
+  }
+
+  @Test
+  void shouldTreatANullFindingsNodeAsMissing() {
+    assertThrows(IllegalArgumentException.class, () -> parser.parse("{\"findings\": null}"));
+  }
+
+  @Test
+  void shouldAcceptAnExplicitlyEmptyFindingsArrayAsACleanReview() {
+    var response = parser.parse("{\"findings\": []}");
+
+    assertTrue(response.findings().isEmpty());
+    assertNull(response.summary());
+  }
+
+  @Test
+  void shouldSkipProseAheadOfAFurtherDocumentAsItSkipsProseAheadOfTheFirst() {
+    var response =
+        parser.parse(
+            """
+            {"summary": {"total_findings": 1}}
+            And the findings, as requested:
+            {"findings": [{"risk": "low", "file": "f", "line": 1, "title": "t",
+                           "description": "d"}]}
+            """);
+
+    assertEquals(1, response.findings().size());
+  }
+
+  @Test
+  void shouldTolerateAClosingFenceThatEndsTheResponse() {
+    // The inline fence extractJson leaves in place (see shouldHandleUnterminatedOrInlineFences).
+    assertTrue(parser.parse("{\"findings\": []}```").findings().isEmpty());
+  }
+
+  @Test
+  void shouldKeepAMisShapedFirstFindingsNodeOverALaterArrayAndFailTheMapping() {
+    // First non-null wins even when the later value is the well-formed one: the outcome is the
+    // schema mismatch the first document earned, not a silently different merge order.
+    IllegalArgumentException ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                parser.parse(
+                    """
+                    {"findings": "none"}
+                    {"findings": [{"risk": "low", "file": "f", "line": 1, "title": "t",
+                                   "description": "d"}]}
+                    """));
+
+    assertTrue(ex.getMessage().contains("did not match the review schema"), ex.getMessage());
+  }
+
+  @Test
+  void shouldFindTheSecondDocumentAfterMultibyteTextInTheFirst() {
+    // The document-end index must be a character offset, not a byte one: an accented word, an em
+    // dash, a supplementary-plane emoji and CJK text ahead of the second document would each push a
+    // byte-based index past the second document's opening brace, and the findings would be skipped
+    // silently — the #805 failure again, with no warning.
+    var response =
+        parser.parse(
+            """
+            {"summary": {"total_findings": 1, "pr_purpose": "café — réussi 🚀 日本語"}}
+            {"findings": [{"risk": "low", "file": "f", "line": 1, "title": "t",
+                           "description": "d"}]}
+            """);
+
+    assertEquals(1, response.findings().size());
+    assertEquals("café — réussi 🚀 日本語", response.summary().prPurpose());
+  }
 }
