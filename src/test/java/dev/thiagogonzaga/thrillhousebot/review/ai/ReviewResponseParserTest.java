@@ -851,4 +851,22 @@ class ReviewResponseParserTest {
 
     assertTrue(ex.getMessage().contains("did not match the review schema"), ex.getMessage());
   }
+
+  @Test
+  void shouldFindTheSecondDocumentAfterMultibyteTextInTheFirst() {
+    // The document-end index must be a character offset, not a byte one: an accented word, an em
+    // dash, a supplementary-plane emoji and CJK text ahead of the second document would each push a
+    // byte-based index past the second document's opening brace, and the findings would be skipped
+    // silently — the #805 failure again, with no warning.
+    var response =
+        parser.parse(
+            """
+            {"summary": {"total_findings": 1, "pr_purpose": "café — réussi 🚀 日本語"}}
+            {"findings": [{"risk": "low", "file": "f", "line": 1, "title": "t",
+                           "description": "d"}]}
+            """);
+
+    assertEquals(1, response.findings().size());
+    assertEquals("café — réussi 🚀 日本語", response.summary().prPurpose());
+  }
 }
