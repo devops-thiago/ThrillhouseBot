@@ -26,6 +26,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 
 @ApplicationScoped
@@ -198,12 +199,15 @@ public class ReviewResponseParser {
       if (FINDINGS.equals(entry.getKey())
           && value.isArray()
           && root.get(FINDINGS) instanceof ArrayNode findings) {
+        // JsonNode equality and hashing are structural, so the set is the "identical object" test.
+        var held = new HashSet<JsonNode>();
+        findings.forEach(held::add);
         for (var finding : value) {
-          if (contains(findings, finding)) {
-            tally.duplicates++;
-          } else {
+          if (held.add(finding)) {
             findings.add(finding);
             tally.appended++;
+          } else {
+            tally.duplicates++;
           }
         }
       } else if (!root.hasNonNull(entry.getKey())) {
@@ -212,15 +216,6 @@ public class ReviewResponseParser {
         tally.conflicts++;
       }
     }
-  }
-
-  private static boolean contains(ArrayNode findings, JsonNode finding) {
-    for (var held : findings) {
-      if (held.equals(finding)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
