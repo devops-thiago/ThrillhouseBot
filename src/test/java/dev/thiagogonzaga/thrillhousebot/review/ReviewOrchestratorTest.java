@@ -128,6 +128,8 @@ class ReviewOrchestratorTest {
   private final ReviewSkipEmitter skipEmitter =
       new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
 
+  private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
+
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   private ReviewOrchestrator orchestrator;
@@ -263,7 +265,8 @@ class ReviewOrchestratorTest {
             mock(PatchCoverageResolver.class),
             sessionPersistence,
             BOT_ID,
-            new ActiveModelSettings(config, "m")),
+            new ActiveModelSettings(config, "m"),
+            carryover),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         new DiffBudgetPlanner(
             diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
@@ -272,6 +275,7 @@ class ReviewOrchestratorTest {
         findingPipeline,
         mock(FindingFeedbackCaptureService.class),
         skipEmitter,
+        carryover,
         reviewExecutor);
   }
 
@@ -3264,10 +3268,14 @@ class ReviewOrchestratorTest {
       doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
 
       assertDoesNotThrow(
-          () -> orchestrator.abandonSupersededRun("Bearer tok", req, session, 1L, "movedsha"));
+          () ->
+              orchestrator.abandonSupersededRun(
+                  "Bearer tok", req, session, 1L, "movedsha", List.of()));
       // And with no check run to conclude, the abandon still counts and broadcasts.
       assertDoesNotThrow(
-          () -> orchestrator.abandonSupersededRun("Bearer tok", req, session, -1L, "movedsha"));
+          () ->
+              orchestrator.abandonSupersededRun(
+                  "Bearer tok", req, session, -1L, "movedsha", List.of()));
 
       assertEquals(2L, skipEmitter.countsByReason().get("HEAD_MOVED"));
       verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
@@ -7216,6 +7224,328 @@ class ReviewOrchestratorTest {
               1,
               List.of(new GitHubCheckRunClient.CombinedStatus.StatusDetail(1L, "s", "c", "d")));
       assertFalse(statusVal.statuses().isEmpty());
+    }
+  }
+
+  @Nested
+  class SupersededRunCarryover {
+
+    private final FollowUpAnalyzer realAnalyzer = new FollowUpAnalyzer(new ObjectMapper());
+
+    /** A finding the superseded run generated, verified and then never posted (#806). */
+    private static final ReviewResponse.Finding VERIFIED_BY_SUPERSEDED_RUN =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "src/Main.java",
+            10,
+            "Carried null dereference",
+            "the guard was removed",
+            "new",
+            "fixed");
+
+    private static GitHubPullRequestClient.PullRequestDetails headAt(String sha) {
+      return new GitHubPullRequestClient.PullRequestDetails(
+          "Test PR",
+          "",
+          new GitHubPullRequestClient.Ref(sha),
+          new GitHubPullRequestClient.Ref("base-sha"),
+          1,
+          1,
+          1);
+    }
+
+    private static ReviewOrchestrator.ReviewRequest requestFor(String sha) {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 42, sha, "Test PR", "", "base1234567", "main", 123L, false);
+    }
+
+    private ReviewSession stubbedSession() {
+      var session = mock(ReviewSession.class);
+      session.id = 1L;
+      when(session.getRepository()).thenReturn("owner/repo");
+      when(session.getPrNumber()).thenReturn(42);
+      when(session.getPrTitle()).thenReturn("Test PR");
+      when(session.getCommitSha()).thenReturn("abcdefgh");
+      when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      return session;
+    }
+
+    /** The GitHub reads both runs share; the previous-findings machinery is the real analyzer. */
+    private void stubTwoRuns() {
+      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+      when(prClient.compareCommits(
+              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of());
+      when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+      when(followUpAnalyzer.parsePreviousResponses(any()))
+          .thenAnswer(inv -> realAnalyzer.parsePreviousResponses(inv.getArgument(0)));
+      when(followUpAnalyzer.buildPreviousFindingsContext(
+              anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any()))
+          .thenAnswer(
+              inv ->
+                  realAnalyzer.buildPreviousFindingsContext(
+                      inv.getArgument(0),
+                      inv.getArgument(1),
+                      inv.getArgument(2),
+                      inv.getArgument(3),
+                      inv.getArgument(4),
+                      inv.getArgument(5),
+                      inv.getArgument(6)));
+      // Run 1 finds one thing; the replacement finds nothing of its own — the #806 shape, where
+      // the only run that posts is the quiet one.
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(new ReviewResponse(List.of(VERIFIED_BY_SUPERSEDED_RUN), List.of(), null))
+          .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+      // The head is abcdefgh while run 1 loads its context and d4389d2aa by the time it would
+      // post; every later read (run 2's whole life) sees d4389d2aa.
+      when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(headAt("abcdefgh"))
+          .thenReturn(headAt("d4389d2aa"));
+    }
+
+    /**
+     * #806: a run that stands down for HEAD_MOVED has already generated and verified its findings.
+     * The coalesced run for the new head must be shown them as previous findings and asked to
+     * confirm or resolve them against the new head, instead of starting from nothing and publishing
+     * whatever a fresh pass happens to find.
+     */
+    @Test
+    void replacementRunIsShownTheSupersededRunsVerifiedFindingsAsPreviousFindings() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = stubbedSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubTwoRuns();
+
+        assertFalse(orchestrator.review(requestFor("abcdefgh")));
+        assertEquals(1L, skipEmitter.countsByReason().get("HEAD_MOVED"));
+
+        assertTrue(orchestrator.review(requestFor("d4389d2aa")));
+
+        var prompts = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+        verify(aiReviewService, times(2)).review(any(ReviewSession.class), prompts.capture());
+        var replacementPrompt = prompts.getAllValues().get(1);
+        assertTrue(
+            replacementPrompt.previousFindings().contains("Carried null dereference"),
+            () ->
+                "the replacement run was not shown the superseded run's verified finding;"
+                    + " its previous-findings context was: '"
+                    + replacementPrompt.previousFindings()
+                    + "'");
+        // Consumed by the replacement: a third run of the pull request starts clean.
+        assertTrue(carryover.take("owner", "repo", 42, "d4389d2aa").isEmpty());
+      }
+    }
+
+    /** The verdict passes the carried statuses go through, on the real analyzer. */
+    private void delegateVerdictPasses() {
+      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any()))
+          .thenAnswer(
+              inv ->
+                  realAnalyzer.supersedeVanished(
+                      inv.getArgument(0),
+                      inv.getArgument(1),
+                      inv.getArgument(2),
+                      inv.getArgument(3),
+                      inv.getArgument(4)));
+      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any()))
+          .thenAnswer(
+              inv ->
+                  realAnalyzer.addUnreportedVanished(
+                      inv.getArgument(0),
+                      inv.getArgument(1),
+                      inv.getArgument(2),
+                      inv.getArgument(3),
+                      inv.getArgument(4)));
+      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+          .thenAnswer(inv -> inv.getArgument(1));
+      when(followUpAnalyzer.unresolvedFindings(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))
+          .thenAnswer(
+              inv ->
+                  realAnalyzer.unresolvedFindings(
+                      inv.<List<ReviewResponse.Finding>>getArgument(0), inv.getArgument(1)));
+      when(followUpAnalyzer.toStatuses(any()))
+          .thenAnswer(inv -> realAnalyzer.toStatuses(inv.getArgument(0)));
+      when(followUpAnalyzer.hasUnresolved(any()))
+          .thenAnswer(inv -> realAnalyzer.hasUnresolved(inv.getArgument(0)));
+    }
+
+    private GitHubReviewClient.CreateReviewRequest reviewPostedByTheReplacement() {
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(
+              anyString(), anyString(), eq("owner"), eq("repo"), eq(42), captor.capture());
+      return captor.getValue();
+    }
+
+    /**
+     * A carried finding the replacement confirms is held like any unresolved previous finding, at
+     * the risk and confidence the superseded run verified it at: a high-confidence high-risk one
+     * blocks the replacement outright. That is the ratchet toward silence #806 describes, undone —
+     * the quiet run no longer wins by default.
+     */
+    @Test
+    void aCarriedFindingTheReplacementConfirmsHoldsItsApproval() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = stubbedSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubTwoRuns();
+        delegateVerdictPasses();
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(VERIFIED_BY_SUPERSEDED_RUN), List.of(), null))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(),
+                    List.of(
+                        new ReviewResponse.PreviousFindingStatus(
+                            1, "unresolved", "the guard is still gone")),
+                    null));
+
+        assertFalse(orchestrator.review(requestFor("abcdefgh")));
+        assertTrue(orchestrator.review(requestFor("d4389d2aa")));
+
+        var posted = reviewPostedByTheReplacement();
+        assertEquals("REQUEST_CHANGES", posted.event());
+        assertTrue(
+            posted.body().contains("1 previous finding(s) remain unresolved"), posted.body());
+      }
+    }
+
+    /**
+     * A carried finding whose code is no longer on the new head is superseded by the vanish pass,
+     * not held: the anchoring every previous-round finding gets applies to a carried one too, so a
+     * finding about a line the push removed is never posted as if the line were still there.
+     */
+    @Test
+    void aCarriedFindingWhoseCodeLeftTheNewHeadIsSupersededNotHeld() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = stubbedSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubTwoRuns();
+        delegateVerdictPasses();
+        // The new head rewrote the line the finding anchored on.
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)))
+            .thenReturn(
+                List.of(
+                    new GitHubPullRequestClient.FileDiff(
+                        "src/Main.java", "modified", 1, 1, 2, "@@ -10,1 +10,1 @@\n-old\n+other")));
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(VERIFIED_BY_SUPERSEDED_RUN), List.of(), null))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(),
+                    List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still")),
+                    null));
+
+        assertFalse(orchestrator.review(requestFor("abcdefgh")));
+        assertTrue(orchestrator.review(requestFor("d4389d2aa")));
+
+        var posted = reviewPostedByTheReplacement();
+        assertEquals("APPROVE", posted.event());
+        assertFalse(posted.body().contains("remain unresolved"), posted.body());
+      }
+    }
+
+    @Test
+    void abandonSupersededRunHandsItsVerifiedFindingsToTheReplacement() {
+      var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
+      session.id = 7L;
+      session.setPublicId("test-public-id");
+      var req = requestFor("abcdefgh");
+
+      orchestrator.abandonSupersededRun(
+          "Bearer tok", req, session, 1L, "movedsha", List.of(VERIFIED_BY_SUPERSEDED_RUN));
+
+      var carried = carryover.take("owner", "repo", 42, "movedsha");
+      assertEquals("abcdefgh", carried.supersededSha());
+      assertEquals(List.of(VERIFIED_BY_SUPERSEDED_RUN), carried.findings());
+    }
+
+    /**
+     * A replacement that is itself superseded hands on its own findings plus the carried ones its
+     * verdict still holds open — and only those: a carried finding it resolved is settled, a
+     * persisted round's finding is tracked by that round, a duplicate id (model plus backstop) is
+     * carried once, and an id outside the round is ignored.
+     */
+    @Test
+    void findingsToCarryKeepsOwnFindingsAndTheCarriedOnesStillOpen() {
+      var posted = new ReviewResponse.Finding("low", "low", "a.java", 1, "Posted", "d", "x", "y");
+      var carriedA =
+          new ReviewResponse.Finding("high", "high", "b.java", 2, "Carried A", "d", "x", "y");
+      var carriedB =
+          new ReviewResponse.Finding("high", "high", "c.java", 3, "Carried B", "d", "x", "y");
+      var own = new ReviewResponse.Finding("medium", "high", "d.java", 4, "Own", "d", "x", "y");
+      var merged = new ReviewResponse(List.of(posted, carriedA, carriedB), List.of(), null);
+      var ctx =
+          new ReviewContextLoader.ReviewContext(
+              List.of(),
+              "diff",
+              "",
+              0,
+              List.of(),
+              List.of("{}"),
+              List.of(merged),
+              false,
+              true,
+              "{}",
+              List.of(),
+              "",
+              new InstructionsResolver.ResolvedInstructions("", ""),
+              PathScopedInstructions.NONE,
+              List.of(),
+              "",
+              "",
+              "",
+              "",
+              List.of(),
+              () -> new DiffLineResolver(Map.of()),
+              null,
+              List.of(),
+              List.of(),
+              new SupersededFindingsCarryover.Carried(
+                  "abcdefgh", "d4389d2aa", List.of(carriedA, carriedB)));
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", "posted round's own"),
+                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "still open"),
+                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "backstop duplicate"),
+                  new ReviewResult.PreviousFindingStatus(3, "resolved", "fixed on this head"),
+                  new ReviewResult.PreviousFindingStatus(99, "unresolved", "no such id")),
+              List.of(),
+              0);
+
+      var carry =
+          ReviewOrchestrator.findingsToCarry(
+              ctx, new ReviewResponse(List.of(own), List.of(), null), result);
+
+      assertEquals(List.of(carriedA, own), carry);
     }
   }
 }

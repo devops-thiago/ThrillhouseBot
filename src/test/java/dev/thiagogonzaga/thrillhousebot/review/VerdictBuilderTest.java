@@ -1439,6 +1439,43 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
   }
 
+  /**
+   * #806 — findings carried from a run that stood down for HEAD_MOVED are disclosed in the same
+   * review-scope blockquote, so a quiet replacement after a loud discard reads as "carried N and
+   * cleared them", never as a clean pass over a clean head.
+   */
+  @Test
+  void findingsCarriedFromASupersededRunAreDisclosedInTheReviewScopeNote() {
+    var carried =
+        new SupersededFindingsCarryover.Carried(
+            "23e277100000000",
+            "c957198",
+            List.of(
+                new ReviewResponse.Finding("high", "high", "a.java", 1, "t", "d", null, null),
+                new ReviewResponse.Finding("low", "low", "b.java", 2, "u", "d", null, null)));
+    var ctx = contextCarrying(List.of("payments/"), carried);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 ignore glob declared in this repository's"
+                    + " ThrillhouseBot config matched no file in this pull request (`payments/`)"
+                    + "\n>\n> 2 findings from the review of superseded head `23e2771`, abandoned"
+                    + " when the pull request head moved, were carried into this review as"
+                    + " previous findings and re-checked against the current head\n\n"),
+        result.summaryMarkdown());
+  }
+
   @Test
   void aReviewWhoseDeclaredGlobsAllMatchedCarriesNoScopeNote() {
     var realSummaryBuilder =
@@ -1458,6 +1495,12 @@ class VerdictBuilderTest {
   /** A one-file context carrying {@code unmatched} as the repository's dead ignore globs. */
   private static ReviewContextLoader.ReviewContext contextWithUnmatchedGlobs(
       List<String> unmatched) {
+    return contextCarrying(unmatched, SupersededFindingsCarryover.Carried.NONE);
+  }
+
+  /** The same one-file context, also carrying a superseded run's findings (#806). */
+  private static ReviewContextLoader.ReviewContext contextCarrying(
+      List<String> unmatched, SupersededFindingsCarryover.Carried carried) {
     var changed = new FileDiff("src/Main.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x");
     return new ReviewContextLoader.ReviewContext(
         List.of(changed),
@@ -1483,7 +1526,8 @@ class VerdictBuilderTest {
         () -> new DiffLineResolver(Map.of()),
         null,
         List.of(),
-        unmatched);
+        unmatched,
+        carried);
   }
 
   @Test
