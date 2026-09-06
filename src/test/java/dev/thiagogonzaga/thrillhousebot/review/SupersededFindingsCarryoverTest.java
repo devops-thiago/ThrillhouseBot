@@ -150,7 +150,7 @@ class SupersededFindingsCarryoverTest {
                         && line.contains("owner/repo #18 on head 23e2771")
                         && line.contains("this review is of ffff000")
                         && line.contains("(c957198)")),
-        () -> logged.toString());
+        logged::toString);
     // Dropped, not held for a review that may never come.
     assertTrue(carryover.take("owner", "repo", 18, SUPERSEDING).isEmpty());
   }
@@ -186,7 +186,7 @@ class SupersededFindingsCarryoverTest {
                     SUPERSEDING,
                     List.of(finding("Lost <script>"), finding("Also lost"))));
 
-    assertEquals(1, logged.size(), () -> logged.toString());
+    assertEquals(1, logged.size(), logged::toString);
     var line = logged.get(0);
     assertTrue(line.startsWith("WARN "), line);
     assertTrue(
