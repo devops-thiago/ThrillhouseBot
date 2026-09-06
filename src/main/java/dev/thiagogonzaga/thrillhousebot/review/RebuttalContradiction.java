@@ -232,7 +232,9 @@ final class RebuttalContradiction {
    * as live code, which is the expensive direction; stripping {@code #} everywhere is not the fix,
    * since it would cut a C {@code #include} and a CSS colour. The next step for either is a
    * per-extension profile keyed off the diff header — a language hint the caller does not always
-   * have, since {@code find} is also handed bare patch fragments.
+   * have, since {@code find} is also handed bare patch fragments. The header already settles one
+   * fact where it is present: whether a backslash escapes inside a backtick literal ({@link
+   * LiveCodeScanner#fileNamed}).
    */
   private static String rightSideCode(String reviewedCode) {
     var scanner = new LiveCodeScanner();
@@ -248,6 +250,9 @@ final class RebuttalContradiction {
       var body = added || line.startsWith(" ");
       if (!body) {
         scanner.reset();
+      }
+      if (line.startsWith("diff --git ")) {
+        scanner.fileNamed(line);
       }
       kept.add(scanner.scanLine(added ? line.substring(1) : line));
       if (!body) {

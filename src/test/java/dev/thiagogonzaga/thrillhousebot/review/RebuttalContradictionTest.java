@@ -1327,4 +1327,38 @@ class RebuttalContradictionTest {
             .isPresent(),
         "two backslashes are one escaped backslash and no continuation");
   }
+
+  /**
+   * #651 review. The backtick is Go's raw string and JavaScript's template literal, and the two
+   * disagree on a backslash. In a JavaScript file {@code \`} is an escaped backtick; reading it as
+   * the closer scanned the rest of the literal as live code and overruled a maintainer who was
+   * right. The diff header names the file, and its extension decides.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte"})
+  void keepsAnEscapedBacktickInsideATemplateLiteral(String extension) {
+    var diff =
+        "diff --git a/src/a.%s b/src/a.%s\n@@ -1,3 +1,5 @@\n".formatted(extension, extension)
+            + "+    const m = `prefix \\` hand work to executor.submit(task) here`;\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
+        "the escaped backtick does not close the template literal in a ." + extension + " file");
+  }
+
+  /**
+   * The Go reading stays where the file is not JavaScript, or names no extension at all: the
+   * backslash is literal, the backtick after it closes the raw string, and the code after it is
+   * live.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"src/a.go", "src/Makefile", "src/v1.2/README"})
+  void readsABackslashAsLiteralInsideABacktickOutsideJavaScript(String path) {
+    var diff =
+        "diff --git a/%s b/%s\n@@ -1,3 +1,5 @@\n".formatted(path, path)
+            + "+    s := `C:\\`; executor.submit(task)\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
+            .isPresent(),
+        "a backslash before the closing backtick is literal in " + path);
+  }
 }

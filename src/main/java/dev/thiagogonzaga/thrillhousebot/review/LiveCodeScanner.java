@@ -124,6 +124,7 @@ final class LiveCodeScanner {
           new Delimiter("'''", "'''", true, false, true, false),
           // Go raw string and JavaScript template literal share a delimiter; only the latter
           // interpolates, and reading ${…} as code is the direction that keeps real dispatches.
+          // Whether a backslash escapes is the file's call, not the table's: see fileNamed.
           new Delimiter("`", "`", false, true, true, false),
           new Delimiter("\"", "\"", true, false, false, false),
           new Delimiter("'", "'", true, false, false, false));
@@ -172,9 +173,41 @@ final class LiveCodeScanner {
    */
   private final Deque<Region> open = new ArrayDeque<>();
 
+  /**
+   * The file extensions whose backtick literal is a JavaScript template literal, where a backslash
+   * escapes, rather than a Go raw string, where it is literal.
+   */
+  private static final Set<String> TEMPLATE_LITERAL_EXTENSIONS =
+      Set.of("js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte");
+
+  /** Whether a backtick literal in the file being scanned honours a backslash escape. */
+  private boolean templateEscapes;
+
   /** Forgets every open region, so the next line is scanned as live code from its first column. */
   void reset() {
     open.clear();
+  }
+
+  /**
+   * Tells the scan which file the lines that follow come from — a path, or the {@code diff --git}
+   * header naming it; only the extension is read. It outlives {@link #reset()}, which runs on every
+   * hunk header of the same file.
+   *
+   * <p>This is the one lexical fact the delimiter table cannot carry on its own. The backtick is
+   * both Go's raw string and JavaScript's template literal, and the two disagree on a backslash: Go
+   * takes it literally, so a Windows path may end right before the closer and honouring the escape
+   * there stepped over the closer and hid the code after it (#647); JavaScript escapes with it, so
+   * {@code \`} is an escaped backtick and reading it as the closer scans the rest of the literal as
+   * live code, the over-fire direction (#651 review). A fragment that names no file keeps the Go
+   * reading the table always had.
+   */
+  void fileNamed(String path) {
+    var dot = path.lastIndexOf('.');
+    var slash = path.lastIndexOf('/');
+    templateEscapes =
+        dot > slash
+            && TEMPLATE_LITERAL_EXTENSIONS.contains(
+                path.substring(dot + 1).toLowerCase(Locale.ROOT));
   }
 
   /**
@@ -304,7 +337,10 @@ final class LiveCodeScanner {
           return -1;
         }
       }
-      open.push(Region.quoted(delimiter.close(), delimiter.escapes(), delimiter.interpolates()));
+      // The backtick is the only delimiter in the table that does not escape on its own, so the
+      // file hint only ever changes that one row.
+      var escapes = delimiter.escapes() || templateEscapes;
+      open.push(Region.quoted(delimiter.close(), escapes, delimiter.interpolates()));
       out.append(delimiter.open());
       return body;
     }
