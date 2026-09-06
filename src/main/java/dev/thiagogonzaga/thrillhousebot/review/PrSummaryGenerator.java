@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /** Generates the PR summary comment posted on the first review. */
 @ApplicationScoped
@@ -500,7 +501,7 @@ public class PrSummaryGenerator {
    * change type comes from the diff (authoritative); the summary is the model's per-file note,
    * matched by path. Files without a model summary still appear, so the table always mirrors the
    * reviewable change set. Bounded to {@link #MAX_FILE_ROWS} rows to respect the comment-size
-   * budget.
+   * budget; which files take those rows is {@link #walkthroughRows}'s call.
    *
    * <p>The trailing "…and N more file(s)" rollup is measured against {@code totalFilesChanged}
    * (GitHub's authoritative total), not the reviewable-row count, so it also accounts for files the
@@ -517,7 +518,7 @@ public class PrSummaryGenerator {
     sb.append("### Changed Files\n");
     sb.append("| File | Change | Summary |\n");
     sb.append("|------|--------|---------|\n");
-    for (ChangedFile file : changedFiles.stream().limit(MAX_FILE_ROWS).toList()) {
+    for (ChangedFile file : walkthroughRows(changedFiles, summaryByPath)) {
       String summary = summaryByPath.getOrDefault(file.path(), "");
       sb.append("| `")
           .append(MarkdownSafe.tableCell(file.path()))
@@ -533,6 +534,40 @@ public class PrSummaryGenerator {
       sb.append("\n_…and ").append(overflow).append(" more file(s)._\n");
     }
     sb.append("\n");
+  }
+
+  /**
+   * The changed files that get a row: those the model summarized first, then the rest, each group
+   * in the order the diff lists it, cut at {@link #MAX_FILE_ROWS}.
+   *
+   * <p>The rows used to be the first {@code MAX_FILE_ROWS} files in GitHub's order, which is
+   * alphabetical, while the prompt asks the model for the {@code MAX_FILE_SUMMARIES} files it
+   * judges most impactful. Making the two caps equal (#536) guarantees every row can carry a
+   * summary only while the change set fits in the table; on a larger PR the two selections were
+   * made independently and intersected, and the overlap was whatever the alphabet granted — one
+   * file out of twenty on the reported 148-file PR, with the summarized files hidden behind the
+   * rollup note (#804). Selecting by summary first spends the rows on the files that have something
+   * to say, and the remaining rows fill from the change set so a small PR's table still lists every
+   * file.
+   *
+   * <p>Within each group the diff's order is kept rather than the model's. The table's identity is
+   * the reviewable change set, in the order GitHub's Files tab shows it and the summary prompt's
+   * overview lists it (#547); the model's ordering is a hint about impact that the same prompt has
+   * to hedge, and the notes reach this method as a map with no order left in it. Only a changed
+   * file can be a row, so a summary naming a path that is not in the diff — a file the PR does not
+   * touch, or a directory such as {@code billing/} standing in for the files under it — creates no
+   * row and lends no summary to any other.
+   */
+  private static List<ChangedFile> walkthroughRows(
+      List<ChangedFile> changedFiles, Map<String, String> summaryByPath) {
+    var summarized = changedFiles.stream().filter(f -> hasModelSummary(f, summaryByPath));
+    var rest = changedFiles.stream().filter(f -> !hasModelSummary(f, summaryByPath));
+    return Stream.concat(summarized, rest).limit(MAX_FILE_ROWS).toList();
+  }
+
+  /** True when the model returned a non-blank note for this file's exact path. */
+  private static boolean hasModelSummary(ChangedFile file, Map<String, String> summaryByPath) {
+    return !summaryByPath.getOrDefault(file.path(), "").isBlank();
   }
 
   /**
