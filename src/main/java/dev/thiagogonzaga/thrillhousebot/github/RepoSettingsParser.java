@@ -18,7 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -83,6 +85,16 @@ final class RepoSettingsParser {
    * bearing from #481 on: aliases are resolved now, so this is what bounds the expansion.
    */
   private static final int MAX_ALIASES = 50;
+
+  /**
+   * Ceiling on the node count a document reaches once every alias is written out. The alias ceiling
+   * counts uses, not what they multiply to: a ladder of lists that each name the rung below twice
+   * stays under fifty uses and expands to millions of nodes, which is the blowup the alias ceiling
+   * was meant to refuse (#481 review). A document that spelled its aliases out could not hold more
+   * nodes than code points, so this refuses only what aliases multiply past the size the resolver
+   * already capped.
+   */
+  static final int MAX_EXPANDED_NODES = MAX_CODE_POINTS;
 
   /** Ceiling on how many extra ignore globs one repository may contribute. */
   static final int MAX_PATTERNS = 200;
@@ -171,35 +183,65 @@ final class RepoSettingsParser {
           e.getProblem());
       graph = firstDocument(yaml, loaderOptions(true));
     }
-    if (graph != null
-        && refersToItself(graph, Collections.newSetFromMap(new IdentityHashMap<>()))) {
-      // #481 review: an alias may name its own container — `a: &a {self: *a}` or `&a [*a]` — and
-      // SafeConstructor builds exactly that, a Map or List containing itself, one alias use and far
-      // under the alias ceiling. convertValue then walks the cycle until the stack is gone, and a
-      // StackOverflowError is not something the webhook path catches. Refusing the document here
-      // costs one walk over a graph that is bounded by the file size the resolver already capped.
+    if (graph == null) {
+      return null;
+    }
+    // #481 review: an alias may name its own container — `a: &a {self: *a}` or `&a [*a]` — and
+    // SafeConstructor builds exactly that, a Map or List containing itself, one alias use and far
+    // under the alias ceiling. convertValue then walks the cycle until the stack is gone, and a
+    // StackOverflowError is not something the webhook path catches. The same walk sizes what the
+    // aliases expand to, since convertValue copies every shared node once per reference.
+    var expanded =
+        expandedSize(
+            graph, Collections.newSetFromMap(new IdentityHashMap<>()), new IdentityHashMap<>());
+    if (expanded < 0) {
       log.warn("Repository config {}: an alias refers to its own container; ignoring it", source);
       return null;
     }
-    return graph == null ? null : MAPPER.convertValue(graph, JsonNode.class);
+    if (expanded > MAX_EXPANDED_NODES) {
+      log.warn(
+          "Repository config {}: aliases expand to more than {} nodes; ignoring it",
+          source,
+          MAX_EXPANDED_NODES);
+      return null;
+    }
+    return MAPPER.convertValue(graph, JsonNode.class);
   }
 
-  /** Whether {@code node} contains itself, directly or through any chain of maps and lists. */
-  private static boolean refersToItself(Object node, Set<Object> onPath) {
+  /**
+   * How many nodes {@code node} becomes once every alias is written out, saturating one past {@link
+   * #MAX_EXPANDED_NODES}, or {@code -1} when it contains itself, directly or through any chain of
+   * maps and lists.
+   *
+   * <p>A node reached through several parents is sized once and the answer reused ({@code sizes}).
+   * Walking it again from each parent would be the expansion itself: on a ladder of lists that each
+   * name the rung below twice, the walk that only tracked the current path took as long as the
+   * blowup it was there to prevent (#481 review). With the memo the walk is linear in the nodes the
+   * document actually holds, whatever they multiply to.
+   */
+  private static long expandedSize(Object node, Set<Object> onPath, Map<Object, Long> sizes) {
     if (!(node instanceof Map<?, ?>) && !(node instanceof Iterable<?>)) {
-      return false;
+      return 1;
+    }
+    var known = sizes.get(node);
+    if (known != null) {
+      return known;
     }
     if (!onPath.add(node)) {
-      return true;
+      return -1;
     }
     var children = node instanceof Map<?, ?> m ? m.values() : (Iterable<?>) node;
+    var size = 1L;
     for (var child : children) {
-      if (refersToItself(child, onPath)) {
-        return true;
+      var childSize = expandedSize(child, onPath, sizes);
+      if (childSize < 0) {
+        return -1;
       }
+      size = Math.min(size + childSize, MAX_EXPANDED_NODES + 1L);
     }
     onPath.remove(node);
-    return false;
+    sizes.put(node, size);
+    return size;
   }
 
   /**
@@ -352,6 +394,7 @@ final class RepoSettingsParser {
   static List<String> splitPatternList(String value) {
     var parts = new ArrayList<String>();
     var current = new StringBuilder();
+    var literalBraces = unmatchedOpeningBraces(value);
     var braceDepth = 0;
     for (var i = 0; i < value.length(); i++) {
       var c = value.charAt(i);
@@ -360,7 +403,7 @@ final class RepoSettingsParser {
         current.setLength(0);
         continue;
       }
-      if (c == '{') {
+      if (c == '{' && !literalBraces.get(i)) {
         braceDepth++;
       } else if (c == '}' && braceDepth > 0) {
         braceDepth--;
@@ -369,6 +412,27 @@ final class RepoSettingsParser {
     }
     parts.add(current.toString());
     return parts;
+  }
+
+  /**
+   * The positions of every {@code '{'} that no {@code '}'} closes. Such a brace opens no
+   * alternation, so the commas after it still separate entries: a truncated {@code *.{js,ts}} costs
+   * its own entry and not every entry written after it, the same per-entry rule a stray closing
+   * brace already follows (#481 review).
+   */
+  private static BitSet unmatchedOpeningBraces(String value) {
+    var openers = new ArrayDeque<Integer>();
+    for (var i = 0; i < value.length(); i++) {
+      var c = value.charAt(i);
+      if (c == '{') {
+        openers.push(i);
+      } else if (c == '}' && !openers.isEmpty()) {
+        openers.pop();
+      }
+    }
+    var literal = new BitSet();
+    openers.forEach(literal::set);
+    return literal;
   }
 
   /** The scalar entries of a sequence; a nested mapping or sequence entry is not a glob. */

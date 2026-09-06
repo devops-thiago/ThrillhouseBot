@@ -226,6 +226,26 @@ class RepoSettingsResolverTest {
 
       assertEquals(java.util.List.of("weird}name", "kept/**"), settings.ignoredFiles());
     }
+
+    /**
+     * #481 review. A brace that nothing closes opens no alternation, so the commas after it still
+     * split: a truncated {@code *.{js,ts}} costs its own entry, not every entry after it.
+     */
+    @Test
+    void anUnclosedOpeningBraceDoesNotSwallowTheRestOfTheScalarList() {
+      assertEquals(
+          java.util.List.of("docs/**", " **/*.{js", " kept/**"),
+          RepoSettingsParser.splitPatternList("docs/**, **/*.{js, kept/**"));
+      assertEquals(
+          java.util.List.of("a{b,c}", " d{e"), RepoSettingsParser.splitPatternList("a{b,c}, d{e"));
+      stubFile(YML, "review:\n  ignored-files: \"docs/**, **/*.{js, kept/**\"\n");
+
+      var settings = resolve();
+
+      assertTrue(
+          settings.ignoredFiles().containsAll(java.util.List.of("docs/**", "kept/**")),
+          settings.ignoredFiles().toString());
+    }
   }
 
   /**
@@ -959,5 +979,33 @@ class RepoSettingsResolverTest {
   void refusesAnAliasThatNamesItsOwnContainer(String yaml) {
     org.junit.jupiter.api.Assertions.assertEquals(
         RepoSettings.EMPTY, RepoSettingsParser.parse(yaml, "cycle.yml"));
+  }
+
+  /**
+   * #481 review. The alias ceiling counts uses, and a ladder of lists that each name the rung below
+   * twice stays under it while expanding to millions of nodes. The cycle walk that only tracked the
+   * current path re-walked every shared rung from each parent and took as long as the expansion
+   * itself, and convertValue then built it for real; the document has to be refused, and quickly.
+   */
+  @Test
+  void refusesADiamondAliasLadderThatStaysUnderTheAliasCeiling() {
+    var yaml = new StringBuilder("l0: &l0 [x, x]\n");
+    for (var i = 1; i <= 24; i++) {
+      yaml.append("l%d: &l%d [*l%d, *l%d]\n".formatted(i, i, i - 1, i - 1));
+    }
+    yaml.append("review:\n  ignored-files: [kept/**]\n");
+
+    assertTimeoutPreemptively(
+        java.time.Duration.ofSeconds(10),
+        () -> assertEquals(RepoSettings.EMPTY, RepoSettingsParser.parse(yaml.toString(), "l.yml")));
+  }
+
+  /** A node shared by several parents is sized once; a small document with shared rungs is kept. */
+  @Test
+  void keepsADocumentWhoseSharedAliasesStaySmall() {
+    var yaml = "review: &r\n  ignored-files: [kept/**]\nagain: [*r, *r, [*r, *r]]\n";
+
+    assertEquals(
+        java.util.List.of("kept/**"), RepoSettingsParser.parse(yaml, "d.yml").ignoredFiles());
   }
 }
