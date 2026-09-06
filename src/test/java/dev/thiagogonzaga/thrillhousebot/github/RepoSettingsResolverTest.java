@@ -944,4 +944,20 @@ class RepoSettingsResolverTest {
       assertEquals(0, resolver.cache.size());
     }
   }
+
+  /**
+   * #481 review. A self-referential alias is a legal document, one alias use, far under the alias
+   * ceiling, and SafeConstructor builds the cycle it describes. Converting that graph walked the
+   * cycle until the stack was gone, which is an Error and not something the webhook path catches.
+   */
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(
+      strings = {
+        "a: &a {self: *a}\nreview:\n  ignored-files: [x]",
+        "review: &r\n  ignored-files: [*r]"
+      })
+  void refusesAnAliasThatNamesItsOwnContainer(String yaml) {
+    org.junit.jupiter.api.Assertions.assertEquals(
+        RepoSettings.EMPTY, RepoSettingsParser.parse(yaml, "cycle.yml"));
+  }
 }

@@ -19,7 +19,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.LoaderOptions;
@@ -167,7 +171,35 @@ final class RepoSettingsParser {
           e.getProblem());
       graph = firstDocument(yaml, loaderOptions(true));
     }
+    if (graph != null
+        && refersToItself(graph, Collections.newSetFromMap(new IdentityHashMap<>()))) {
+      // #481 review: an alias may name its own container — `a: &a {self: *a}` or `&a [*a]` — and
+      // SafeConstructor builds exactly that, a Map or List containing itself, one alias use and far
+      // under the alias ceiling. convertValue then walks the cycle until the stack is gone, and a
+      // StackOverflowError is not something the webhook path catches. Refusing the document here
+      // costs one walk over a graph that is bounded by the file size the resolver already capped.
+      log.warn("Repository config {}: an alias refers to its own container; ignoring it", source);
+      return null;
+    }
     return graph == null ? null : MAPPER.convertValue(graph, JsonNode.class);
+  }
+
+  /** Whether {@code node} contains itself, directly or through any chain of maps and lists. */
+  private static boolean refersToItself(Object node, Set<Object> onPath) {
+    if (!(node instanceof Map<?, ?>) && !(node instanceof Iterable<?>)) {
+      return false;
+    }
+    if (!onPath.add(node)) {
+      return true;
+    }
+    var children = node instanceof Map<?, ?> m ? m.values() : (Iterable<?>) node;
+    for (var child : children) {
+      if (refersToItself(child, onPath)) {
+        return true;
+      }
+    }
+    onPath.remove(node);
+    return false;
   }
 
   /**
