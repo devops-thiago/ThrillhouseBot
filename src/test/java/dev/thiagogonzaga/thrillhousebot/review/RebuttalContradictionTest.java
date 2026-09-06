@@ -1250,9 +1250,12 @@ class RebuttalContradictionTest {
   @Test
   void keepsABackslashContinuedStringQuotedOnTheNextLine() {
     var diff =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,4 @@\n"
-            + "+    const char* s = \"log: hand work to \\\n"
-            + "+        executor.execute( here\"; return 0;\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,4 @@
+        +    const char* s = "log: hand work to \\
+        +        executor.execute( here"; return 0;
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
         "the continued literal's remainder is quoted text, not a dispatch");
@@ -1262,9 +1265,12 @@ class RebuttalContradictionTest {
   @Test
   void keepsAContinuedStringQuotedWhenSpacesFollowTheBackslash() {
     var diff =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,4 @@\n"
-            + "+    const char* s = \"log: hand work to \\   \n"
-            + "+        executor.execute( here\"; return 0;\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,4 @@
+        +    const char* s = "log: hand work to \\  \s
+        +        executor.execute( here"; return 0;
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
         "spaces after the backslash do not turn the literal back into live code");
@@ -1274,9 +1280,12 @@ class RebuttalContradictionTest {
   @Test
   void readsAnEscapedBackslashAtLineEndAsNoContinuation() {
     var diff =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,4 @@\n"
-            + "+    const char* s = \"path\\\\\"; \n"
-            + "+    executor.execute(run);\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,4 @@
+        +    const char* s = "path\\\\";\s
+        +    executor.execute(run);
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
             .isPresent(),
@@ -1287,10 +1296,13 @@ class RebuttalContradictionTest {
   @Test
   void readsALineOfOnlyBackslashesAsAContinuation() {
     var diff =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
-            + "+    const char* s = \"hand work to \\"
-            + "\n+\\\n"
-            + "+        executor.execute( here\"; return 0;\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,5 @@
+        +    const char* s = "hand work to \\
+        +\\
+        +        executor.execute( here"; return 0;
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
         "the literal is still open across the backslash-only line");
@@ -1299,9 +1311,12 @@ class RebuttalContradictionTest {
   @Test
   void readsAQuoteFollowedOnlyBySpacesAsProse() {
     var diff =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
-            + "+    puts(\"   \n"
-            + "+    executor.execute(work);\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,5 @@
+        +    puts("  \s
+        +    executor.execute(work);
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
             .isPresent(),
@@ -1311,17 +1326,23 @@ class RebuttalContradictionTest {
   @Test
   void readsABodyOfOnlyBackslashesByParity() {
     var continued =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
-            + "+    const char* s = \"\\\\\\"
-            + "\n+        executor.execute( here\"; return 0;\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,5 @@
+        +    const char* s = "\\\\\\
+        +        executor.execute( here"; return 0;
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", continued)
             .isEmpty(),
         "three backslashes are an escaped one plus a continuation");
     var escaped =
-        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
-            + "+    const char* s = \"\\\\"
-            + "\n+    executor.execute(work);\n";
+        """
+        diff --git a/src/a.c b/src/a.c
+        @@ -1,3 +1,5 @@
+        +    const char* s = "\\\\
+        +    executor.execute(work);
+        """;
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", escaped)
             .isPresent(),
@@ -1338,7 +1359,11 @@ class RebuttalContradictionTest {
   @ValueSource(strings = {"js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte"})
   void keepsAnEscapedBacktickInsideATemplateLiteral(String extension) {
     var diff =
-        "diff --git a/src/a.%s b/src/a.%s\n@@ -1,3 +1,5 @@\n".formatted(extension, extension)
+        "diff --git a/src/a."
+            + extension
+            + " b/src/a."
+            + extension
+            + "\n@@ -1,3 +1,5 @@\n"
             + "+    const m = `prefix \\` hand work to executor.submit(task) here`;\n";
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
@@ -1354,7 +1379,11 @@ class RebuttalContradictionTest {
   @ValueSource(strings = {"src/a.go", "src/Makefile", "src/v1.2/README"})
   void readsABackslashAsLiteralInsideABacktickOutsideJavaScript(String path) {
     var diff =
-        "diff --git a/%s b/%s\n@@ -1,3 +1,5 @@\n".formatted(path, path)
+        "diff --git a/"
+            + path
+            + " b/"
+            + path
+            + "\n@@ -1,3 +1,5 @@\n"
             + "+    s := `C:\\`; executor.submit(task)\n";
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
