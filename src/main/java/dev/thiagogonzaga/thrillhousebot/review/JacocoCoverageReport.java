@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import io.quarkus.logging.Log;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -231,7 +232,7 @@ final class JacocoCoverageReport {
     if (pathsPerEntry.get(sourceFile) != 1) {
       Log.debugf(
           "Coverage entry %s matches more than one repository file; ignoring it",
-          sourceFile.path());
+          LogSafe.oneLine(sourceFile.path()));
       return null;
     }
     return sourceFile;
@@ -548,11 +549,24 @@ final class JacocoCoverageReport {
     var inflatedTotal = 0L;
     for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
       if (entry.isDirectory()) {
-        // Directory entries carry no data, so skipping one costs nothing and can never hide a
-        // report. Counting them would refuse the shape this reader most needs to handle: a coverage
-        // artifact is usually a whole target/ tree rather than a flat list of reports, so its
-        // directories alone can outnumber the modules and push a handful of jacoco.xml files past a
-        // cap meant to bound how much content is read.
+        // A name ending in '/' is not a promise of zero data: nothing in the local-header format
+        // stops a crafted entry called bomb/ carrying megabytes of deflate. Leaving it to the
+        // loop's
+        // getNextEntry() would inflate that payload uncharged, since the stream must dispose of the
+        // current entry before it can reach the next header. So the entry is drained here, against
+        // the same aggregate budget as everything else, and refused the same way when it blows it.
+        // A real directory costs one immediate EOF read. It is still not charged to the entry cap:
+        // a coverage artifact is usually a whole target/ tree, and its directories alone can push
+        // a handful of jacoco.xml files past a cap that bounds how much content is read.
+        var drained = inflateEntry(zip, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, 0, null);
+        if (drained < 0) {
+          Log.debugf(
+              "Coverage artifact inflates past the %d-byte aggregate cap inside a directory entry;"
+                  + " refusing it as a zip bomb",
+              MAX_TOTAL_INFLATED_BYTES);
+          return true;
+        }
+        inflatedTotal += drained;
         continue;
       }
       if (seen++ >= MAX_ZIP_ENTRIES) {

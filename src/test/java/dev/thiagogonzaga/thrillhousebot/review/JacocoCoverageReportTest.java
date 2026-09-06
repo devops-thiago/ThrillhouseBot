@@ -435,6 +435,34 @@ class JacocoCoverageReportTest {
     }
 
     @Test
+    void refusesABombCarriedUnderADirectoryName() throws IOException {
+      // A trailing slash is only a name. Each of these entries is a "directory" to the reader and a
+      // full payload to the deflater, and none may reach the report behind them without the walk
+      // paying for the inflation it does.
+      var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        var zeros = new byte[64 * 1024];
+        var inflated = 0L;
+        for (var i = 0; inflated <= JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES; i++) {
+          zip.putNextEntry(new ZipEntry("bomb" + i + "/"));
+          for (var written = 0; written < perEntry; written += zeros.length) {
+            zip.write(zeros);
+          }
+          zip.closeEntry();
+          inflated += perEntry;
+        }
+        zip.putNextEntry(new ZipEntry("jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+
+      assertTrue(
+          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          "a payload under a directory-shaped name must be charged to the aggregate cap");
+    }
+
+    @Test
     void walksPastDirectoriesWithoutSpendingTheEntryCap() throws IOException {
       // A coverage artifact is usually a whole target/ tree, so its directory entries can outnumber
       // its reports several times over. Charging them to the cap refuses the multi-module shape the
