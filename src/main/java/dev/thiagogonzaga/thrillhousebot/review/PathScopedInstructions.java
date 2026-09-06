@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
@@ -86,7 +87,9 @@ public record PathScopedInstructions(List<AppliedScope> scopes, String source) {
     for (RepoSettings.PathInstructions declared : settings.pathInstructions()) {
       var globs = ReviewDiffFormatter.IgnoreGlobs.compile(List.of(declared.path()));
       if (globs.matchers().isEmpty()) {
-        Log.warnf("Ignoring path-scoped review rules for uncompilable glob: %s", declared.path());
+        Log.warnf(
+            "Ignoring path-scoped review rules for uncompilable glob: %s",
+            LogSafe.oneLine(declared.path()));
         continue;
       }
       var matched = filenames.stream().filter(globs::matches).toList();

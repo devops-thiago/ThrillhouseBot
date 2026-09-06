@@ -374,6 +374,107 @@ class ModelSuppliedTextInLogLinesTest {
     assertRecordCannotBeForged(captured, "Missing null check");
   }
 
+  /**
+   * A finding-shaped forgery with no prose: the control and format characters alone. The hedging
+   * and injection-sink screens below read the finding's own words to decide whether to fire, so a
+   * crafted title that also carried sentences could change which branch runs rather than what the
+   * branch logs.
+   */
+  private static final String BARE_FORGERY = NEL + LS + PS + NUL + ESC + RLO;
+
+  /** A verification service whose verifier is off, so only the deterministic screens run. */
+  private static FindingVerificationService screeningOnlyService() {
+    var mapper = new ObjectMapper();
+    var config = mock(ThrillhouseConfig.class);
+    var reviewConfig = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(reviewConfig);
+    when(reviewConfig.verifierEnabled()).thenReturn(false);
+    return new FindingVerificationService(
+        mock(FindingVerifier.class),
+        config,
+        mapper,
+        mock(ReviewTokenLedger.class),
+        new TruncatedResponseSalvager(mapper));
+  }
+
+  /** {@link FindingVerificationService} demoting a finding whose own wording hedges the defect. */
+  @Test
+  void aCraftedTitleCannotForgeARecordFromTheHedgedDemotion() {
+    var hedged =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "src/Main.java",
+            10,
+            "Underscore variable may not compile" + FORGED,
+            "If the project targets Java 17, compilation could fail.",
+            null,
+            null);
+
+    var captured =
+        logsOf(
+            FindingVerificationService.class,
+            () -> screeningOnlyService().verify(42L, response(hedged), "diff", "stack", ""));
+
+    assertRecordCannotBeForged(captured, "Underscore variable may not compile");
+  }
+
+  /** {@link FindingVerificationService} raising an unmitigated injection sink to high risk. */
+  @Test
+  void aCraftedTitleCannotForgeARecordFromTheInjectionSinkFloor() {
+    var sink =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "src/components/Comment.tsx",
+            14,
+            "User comment written to innerHTML" + BARE_FORGERY,
+            "Nothing sanitizes the value before innerHTML receives it.",
+            null,
+            null);
+
+    var captured =
+        logsOf(
+            FindingVerificationService.class,
+            () -> screeningOnlyService().verify(42L, response(sink), "diff", "stack", ""));
+
+    assertRecordCannotBeForged(captured, "User comment written to innerHTML");
+  }
+
+  /**
+   * {@link FollowUpAnalyzer} clearing a prior finding a maintainer named in the PR conversation.
+   * This line carries two model-supplied values, not one: the title, and the {@code path:line}
+   * locator composed from the finding's own file and line a few statements earlier. A fix that
+   * wrapped the title alone would leave the path forging records, so the crafted value here is the
+   * path and the assertion is on the composed locator.
+   */
+  @Test
+  void aCraftedPathCannotForgeARecordFromTheConversationClear() {
+    var prior =
+        new ReviewResponse.Finding(
+            "medium", "low", FORGED_PATH, 7, "Unbounded retry loop", "description", null, null);
+    var clearing =
+        new GitHubCommentClient.IssueComment(
+            901L,
+            "@thrillhousebot resolved `" + FORGED_PATH + ":7` — Unbounded retry loop",
+            new GitHubReviewClient.ReviewResponse.User("maintainer"),
+            "MEMBER");
+    var current = response(finding("src/Other.java", 3, "A later finding", null));
+
+    var captured =
+        logsOf(
+            FollowUpAnalyzer.class,
+            () ->
+                FollowUpAnalyzer.withoutPreviouslyLitigated(
+                    current,
+                    List.of(new ReviewResponse(List.of(prior), List.of(), null)),
+                    List.of(),
+                    List.of(clearing),
+                    BotIdentity.of("thrillhousebot")));
+
+    assertRecordCannotBeForged(captured, "app.js");
+  }
+
   /** {@link FindingVerificationService} logging the verdict that rejected a finding. */
   @Test
   void aCraftedTitleCannotForgeARecordFromTheVerifierRejection() {

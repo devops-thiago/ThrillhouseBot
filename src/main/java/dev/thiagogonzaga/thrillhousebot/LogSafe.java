@@ -24,6 +24,26 @@ import java.util.regex.Pattern;
  * of defect is fixed in one place rather than re-litigated at each new call site (#731, #740,
  * #742).
  *
+ * <p>That first sentence is a claim about every call site in the code base, and five rounds found
+ * it untrue — each one fixed the sites someone had enumerated, so the next site written was outside
+ * the list by default. It is now checked rather than remembered: {@code LogSafeInvariantTest} reads
+ * the untrusted accessor names off the AI response records themselves and fails on any log
+ * statement in {@code src/main/java} that calls one of them in the call's own arguments, or that
+ * logs a same-file local composed from such a call, without this class (#764). Both halves of that
+ * check extend themselves — a field added to a response record is covered the moment it exists, and
+ * a log line added anywhere in main is scanned the moment it is written.
+ *
+ * <p>Those two shapes are the check's whole reach, and the limit is worth knowing at this class
+ * rather than only at the test: a value that arrived at the log line through a method parameter, a
+ * field or a return value is not tracked, because the scan reads source text and has no call graph
+ * to follow it back to the accessor. So wrap the value where the accessor is read, and it stays
+ * inside what is checked; wrap it several frames later and only the convention below is holding it.
+ *
+ * <p>What the check covers is the model-supplied half, which is the half that can be derived: the
+ * response records name their own fields. A GitHub error body has no such record to read, so that
+ * half remains a convention this class states and its call sites keep ({@code GitHubApiError}
+ * collapses the body and each diagnostic it appends).
+ *
  * <p>This is the log-destined counterpart to {@code MarkdownSafe}, and the two are deliberately
  * separate. {@code MarkdownSafe.oneLine} feeds text the bot posts to GitHub, where the wider class
  * below has a real rendering cost; a log record is a diagnostic identity rather than a rendering
