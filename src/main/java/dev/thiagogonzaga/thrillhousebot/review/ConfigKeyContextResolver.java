@@ -188,18 +188,22 @@ public class ConfigKeyContextResolver {
    *
    * @param ref the revision definitions are read at, normally the PR head SHA so a key added by
    *     this same PR resolves against the PR's own tree
+   * @param ignoreGlobs the review's effective ignore set (global ∪ per-repo), applied to the
+   *     candidate definition files as well as to the diff: a config file under an ignored path is
+   *     neither fetched nor rendered (#483)
    */
   String resolve(
       String auth,
       String owner,
       String repo,
       String ref,
-      List<GitHubPullRequestClient.FileDiff> files) {
+      List<GitHubPullRequestClient.FileDiff> files,
+      ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     var tokens = extractTokens(files);
     if (tokens.isEmpty()) {
       return "";
     }
-    var candidates = candidatePaths(auth, owner, repo, ref);
+    var candidates = candidatePaths(auth, owner, repo, ref, ignoreGlobs);
     if (candidates.isEmpty()) {
       return "";
     }
@@ -313,8 +317,20 @@ public class ConfigKeyContextResolver {
    * Repository paths that can define a config key, most likely first: {@code application*}
    * properties/YAML resources, then config source files. One recursive tree listing replaces
    * probing paths one by one; a failure yields no candidates and therefore no extra context.
+   *
+   * <p>The listing is the whole tree, so the review's ignore globs are applied here rather than
+   * inherited: filtering only the diff files (the token side) left a definition file under an
+   * ignored path fetched and rendered anyway, which put in the prompt the one place the repository
+   * had asked the review not to look (#483). The same compiled set the diff is filtered through is
+   * matched with the same gitignore reading, so {@code config/} hides {@code
+   * config/application.yml} from this walk exactly as it hides it from the diff.
    */
-  List<String> candidatePaths(String auth, String owner, String repo, String ref) {
+  List<String> candidatePaths(
+      String auth,
+      String owner,
+      String repo,
+      String ref,
+      ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     List<GitHubPullRequestClient.TreeEntry> entries;
     try {
       var tree = prClient.getTree(auth, ACCEPT, owner, repo, ref, "1");
@@ -336,7 +352,7 @@ public class ConfigKeyContextResolver {
     var resources = new ArrayList<String>();
     var sources = new ArrayList<String>();
     for (var entry : entries) {
-      if (!isWorthReading(entry)) {
+      if (!isWorthReading(entry) || ignoreGlobs.matches(entry.path())) {
         continue;
       }
       if (isConfigResource(entry.path())) {

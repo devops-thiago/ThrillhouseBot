@@ -33,6 +33,7 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -496,8 +497,21 @@ class ReviewContextLoaderTest {
       assertFalse(
           ctx.reviewableFiles().contains(ignoredDoc),
           () -> "an ignored doc file must not reach config-key resolution: " + ctx.files());
+      // #483: the same compiled ignore set reaches the resolver, so the candidate definition files
+      // it walks (from the tree, not the diff) are filtered by the repository's own globs too.
+      var globs = ArgumentCaptor.forClass(ReviewDiffFormatter.IgnoreGlobs.class);
       verify(configKeyContextResolver)
-          .resolve("auth", "owner", "repo", "headsha1", ctx.reviewableFiles());
+          .resolve(
+              eq("auth"),
+              eq("owner"),
+              eq("repo"),
+              eq("headsha1"),
+              eq(ctx.reviewableFiles()),
+              globs.capture());
+      assertTrue(
+          globs.getValue().matches("docs/generated/application.yml"),
+          "the repository's own glob must reach candidate filtering");
+      assertFalse(globs.getValue().matches("src/main/resources/application.properties"));
     }
 
     @Test
@@ -1118,7 +1132,11 @@ class ReviewContextLoaderTest {
     }
   }
 
-  /** #108 — config-key definitions are best-effort enrichment read at the PR head. */
+  /**
+   * #108 — config-key definitions are best-effort enrichment read at the PR head. The head SHA is
+   * always present by the time this runs — {@code fetchPrTotalsForReview} rejects a null or stale
+   * one first — so there is no default-branch fallback to pin (#483).
+   */
   @Nested
   class ResolveConfigKeyContext {
 
@@ -1126,48 +1144,26 @@ class ReviewContextLoaderTest {
         new ReviewOrchestrator.ReviewRequest(
             "owner", "repo", 1, "headsha", "title", "", "base", "main", 123L, false);
 
+    private static final ReviewDiffFormatter.IgnoreGlobs GLOBS =
+        ReviewDiffFormatter.IgnoreGlobs.compile(List.of("config/"));
+
     @Test
-    void shouldResolveAtThePrHeadSha() {
+    void shouldResolveAtThePrHeadShaWithTheReviewsIgnoreGlobs() {
       var files =
           List.of(new GitHubPullRequestClient.FileDiff("README.md", "modified", 1, 0, 1, ""));
-      when(configKeyContextResolver.resolve("auth", "owner", "repo", "headsha", files))
+      when(configKeyContextResolver.resolve("auth", "owner", "repo", "headsha", files, GLOBS))
           .thenReturn("### definitions");
 
-      assertEquals("### definitions", loader.resolveConfigKeyContext("auth", REQUEST, files));
+      assertEquals(
+          "### definitions", loader.resolveConfigKeyContext("auth", REQUEST, files, GLOBS));
     }
 
     @Test
     void shouldReturnEmptyWhenTheResolverThrows() {
-      when(configKeyContextResolver.resolve(any(), any(), any(), any(), any()))
+      when(configKeyContextResolver.resolve(any(), any(), any(), any(), any(), any()))
           .thenThrow(new RuntimeException("github down"));
 
-      assertEquals("", loader.resolveConfigKeyContext("auth", REQUEST, List.of()));
-    }
-
-    @Test
-    void shouldReturnEmptyWithoutResolvingWhenNoRefIsKnown() {
-      var blankRefs =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 1, "", "title", "", "base", "", 123L, false);
-      var nullRefs =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 1, null, "title", "", "base", null, 123L, false);
-
-      assertEquals("", loader.resolveConfigKeyContext("auth", blankRefs, List.of()));
-      assertEquals("", loader.resolveConfigKeyContext("auth", nullRefs, List.of()));
-      verifyNoInteractions(configKeyContextResolver);
-    }
-
-    @Test
-    void shouldFallBackToTheDefaultBranchWhenTheHeadShaIsAbsent() {
-      var noSha =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 1, null, "title", "", "base", "main", 123L, false);
-      when(configKeyContextResolver.resolve("auth", "owner", "repo", "main", List.of()))
-          .thenReturn("### from default branch");
-
-      assertEquals(
-          "### from default branch", loader.resolveConfigKeyContext("auth", noSha, List.of()));
+      assertEquals("", loader.resolveConfigKeyContext("auth", REQUEST, List.of(), GLOBS));
     }
   }
 
