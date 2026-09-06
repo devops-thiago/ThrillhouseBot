@@ -89,12 +89,15 @@ public class ReviewResponseParser {
    * instruction, so the split is read rather than refused: each further document is merged by
    * {@link #mergeInto}, and one warning names how much of the response lay past the first document.
    *
-   * <p>What the parser cannot read it must not pass over. Between documents it skips whitespace,
-   * fence markers and any prose ahead of the next opening brace — the same tolerance {@link
-   * #extractJson} extends to prose ahead of the first — but text after the last document that holds
-   * no further object is a format failure, the same {@code IllegalArgumentException} a malformed
-   * response raises, so the caller retries instead of approving from a response it only partly
-   * read.
+   * <p>Between documents it skips whitespace, fence markers and any prose ahead of the next opening
+   * brace — the same tolerance {@link #extractJson} extends to prose ahead of the first. Prose
+   * after the last document that holds no brace is discarded with a warning rather than failed: the
+   * document was read whole, prose carries no findings, and a format failure is a full-price retry
+   * that a model which habitually signs off would spend every one of on the same sentence. What
+   * must fail is a brace after the last document that does not parse as a complete object — a
+   * truncated or malformed further document is content the parser could not read, and it raises the
+   * same {@code IllegalArgumentException} a malformed response does, so the caller retries instead
+   * of approving from a response it only partly read.
    */
   private ObjectNode readDocuments(String json) {
     var first = readObject(json, 0);
@@ -155,9 +158,9 @@ public class ReviewResponseParser {
   }
 
   /**
-   * The index of the next document's opening brace at or after {@code from}, or -1 when nothing but
-   * whitespace and fence markers remain. Prose ahead of a further brace is skipped, as the prose
-   * ahead of the first document is; prose with no brace after it is unread content and fails.
+   * The index of the next document's opening brace at or after {@code from}, or -1 when none
+   * remains. Prose ahead of a further brace is skipped, as the prose ahead of the first document
+   * is; prose with no brace after it is discarded, and the discard is logged with its size.
    */
   private static int nextDocumentStart(String json, int from) {
     var at = from;
@@ -177,10 +180,11 @@ public class ReviewResponseParser {
       } else {
         var brace = json.indexOf('{', at);
         if (brace < 0) {
-          throw new IllegalArgumentException(
-              "Model response continued past its last JSON document with "
-                  + (json.length() - at)
-                  + " characters that are not a further document");
+          Log.warnf(
+              "Review response continued past its last JSON document with %d characters that hold"
+                  + " no further document; discarded them",
+              json.length() - at);
+          return -1;
         }
         at = brace;
       }

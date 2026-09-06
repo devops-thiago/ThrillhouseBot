@@ -762,16 +762,25 @@ class ReviewResponseParserTest {
   }
 
   @Test
-  void shouldRejectTrailingContentThatIsNotAFurtherDocument() {
-    // Fail closed: a response the parser did not read to the end must not become an approval, and
-    // the failure message carries a count rather than the model's text.
+  void shouldDiscardTrailingProseThatHoldsNoFurtherDocument() {
+    // The document was read whole and a closing sentence carries no findings, so it is discarded
+    // (with a warning) rather than failing the response: a format failure is a full-price retry,
+    // and a model that habitually signs off would exhaust every retry and fail the review.
+    var response = parser.parse("{\"findings\": []}\n\nLet me know if you want more detail.");
+
+    assertTrue(response.findings().isEmpty());
+  }
+
+  @Test
+  void shouldRejectATruncatedSecondDocument() {
+    // A brace after the last document that never closes is a document the parser could not read,
+    // which is the one case that must not pass as a clean review.
     IllegalArgumentException ex =
         assertThrows(
             IllegalArgumentException.class,
-            () -> parser.parse("{\"findings\": []}\n\nLet me know if you want more detail."));
+            () -> parser.parse("{\"findings\": []}\n{\"findings\": [{\"risk\": \"high\", \"fi"));
 
-    assertTrue(ex.getMessage().contains("characters"), ex.getMessage());
-    assertFalse(ex.getMessage().contains("Let me know"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("not valid review JSON"), ex.getMessage());
   }
 
   @Test
