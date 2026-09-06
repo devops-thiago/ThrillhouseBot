@@ -991,7 +991,7 @@ class RepoSettingsResolverTest {
   void refusesADiamondAliasLadderThatStaysUnderTheAliasCeiling() {
     var yaml = new StringBuilder("l0: &l0 [x, x]\n");
     for (var i = 1; i <= 24; i++) {
-      yaml.append("l%d: &l%d [*l%d, *l%d]\n".formatted(i, i, i - 1, i - 1));
+      yaml.append("l" + i + ": &l" + i + " [*l" + (i - 1) + ", *l" + (i - 1) + "]\n");
     }
     yaml.append("review:\n  ignored-files: [kept/**]\n");
 
