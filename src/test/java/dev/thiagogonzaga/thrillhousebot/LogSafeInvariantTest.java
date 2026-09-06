@@ -113,18 +113,17 @@ class LogSafeInvariantTest {
    * the value logged was {@code file() + ":" + line()} composed a few lines earlier, so a check
    * that only read the log call's own accessors saw a bare identifier and passed it (#764).
    *
-   * <p>Possessive around the {@code =} for the reason {@link #CONVERSION} is: {@code \s} and {@code
-   * [^;]} both match whitespace, so the run after the {@code =} splits every way between them, and
-   * an initializer this scan reaches with no {@code ;} beyond it makes the match try each split.
-   * Measured on 24 000 spaces, 2 494 ms; possessive, under 1 ms. A differential run over 400 000
-   * random inputs found no input the two forms answer differently.
-   */
-  /**
-   * A local's name and the start of its initializer. The initializer's END is found by {@link
-   * #initializerEnd}, not by this pattern: a {@code [^;]} class stops at the first semicolon
-   * wherever it sits, and {@code String msg = "prefix; " + finding.title();} then captured only
-   * {@code "prefix}, which {@link #withoutLiterals} dropped as an unterminated literal, so the
-   * accessor was never seen and the local never marked tainted.
+   * <p>The pattern matches a local's name and the start of its initializer. The initializer's END
+   * is found by {@link #initializerEnd}, not by the pattern: a {@code [^;]} class stops at the
+   * first semicolon wherever it sits, and {@code String msg = "prefix; " + finding.title();} then
+   * captured only {@code "prefix}, which {@link #withoutLiterals} dropped as an unterminated
+   * literal, so the accessor was never seen and the local never marked tainted.
+   *
+   * <p>Possessive around the {@code =} for the reason {@link #CONVERSION} is: while the pattern
+   * still ended in {@code [^;]}, that class and {@code \s} both matched whitespace, so the run
+   * after the {@code =} split every way between them, and an initializer with no {@code ;} beyond
+   * it made the match try each split. Measured on 24 000 spaces, 2 494 ms; possessive, under 1 ms.
+   * A differential run over 400 000 random inputs found no input the two forms answer differently.
    */
   private static final Pattern LOCAL_DECLARATION =
       Pattern.compile("\\b(?:final\\s+)?(?:String|var)\\s++(\\w+)\\s*+=\\s*+", Pattern.DOTALL);
