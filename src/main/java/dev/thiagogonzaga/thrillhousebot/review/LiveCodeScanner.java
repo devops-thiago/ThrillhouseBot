@@ -293,7 +293,14 @@ final class LiveCodeScanner {
       }
       if (!delimiter.spansLines()) {
         var close = closerIndex(line, body, delimiter.close());
-        if (close < 0 || isMisreadApostrophePair(line, delimiter.open().charAt(0), i, close)) {
+        // A single-line literal may still run on: C, C++ and Python continue a string across a
+        // line break with a trailing backslash. Reading the unclosed quote as ordinary text would
+        // scan the literal's remainder as live code, which is the over-fire direction. The region
+        // is carried on the stack instead and closes on the line that closes it.
+        if (close < 0 && !continuesOnNextLine(line, body)) {
+          return -1;
+        }
+        if (close >= 0 && isMisreadApostrophePair(line, delimiter.open().charAt(0), i, close)) {
           return -1;
         }
       }
@@ -371,7 +378,10 @@ final class LiveCodeScanner {
       return -1;
     }
     var end = at + 2;
-    var limit = Math.min(line.length(), end + RAW_DELIMITER_LIMIT);
+    // The delimiter may run RAW_DELIMITER_LIMIT characters, and the '(' sits after the last of
+    // them, so the window has to reach one position past the limit to see a maximal delimiter's
+    // opener. Off by one here fell back to a plain-string read for a legal 16-character delimiter.
+    var limit = Math.min(line.length(), end + RAW_DELIMITER_LIMIT + 1);
     while (end < limit) {
       var c = line.charAt(end);
       if (c == '(') {
@@ -558,5 +568,21 @@ final class LiveCodeScanner {
     static Region interpolation() {
       return new Region("}", false, false, true, false);
     }
+  }
+
+  /**
+   * Whether the literal body starting at {@code body} ends in an unescaped backslash, the
+   * string-continuation marker. Only the body is read: the opener before it is never a backslash.
+   */
+  private static boolean continuesOnNextLine(String line, int body) {
+    var end = line.length();
+    while (end > body && Character.isWhitespace(line.charAt(end - 1))) {
+      end--;
+    }
+    var slashes = 0;
+    while (end - slashes > body && line.charAt(end - slashes - 1) == '\\') {
+      slashes++;
+    }
+    return (slashes & 1) == 1;
   }
 }

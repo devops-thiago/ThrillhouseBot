@@ -1228,4 +1228,103 @@ class RebuttalContradictionTest {
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", formatted).isPresent(),
         "the ```diff fence is a section delimiter, not a literal opener");
   }
+
+  /** A legal C++ raw-string delimiter runs to sixteen characters; the window has to see the '('. */
+  @Test
+  void readsARawStringWithTheMaximalDelimiter() {
+    var diff =
+        """
+        diff --git a/src/a.cc b/src/a.cc
+        @@ -1,2 +1,3 @@
+        +    auto s = R"0123456789abcdef(a"b//c)0123456789abcdef"; executor.submit(run);
+        """;
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
+            .isPresent(),
+        "the dispatch after a maximal-delimiter raw string is live code and must be seen");
+  }
+
+  /**
+   * A trailing backslash carries a single-line literal onto the next line; its body stays quoted.
+   */
+  @Test
+  void keepsABackslashContinuedStringQuotedOnTheNextLine() {
+    var diff =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,4 @@\n"
+            + "+    const char* s = \"log: hand work to \\\n"
+            + "+        executor.execute( here\"; return 0;\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
+        "the continued literal's remainder is quoted text, not a dispatch");
+  }
+
+  /** Trailing whitespace after the continuation backslash is still a continuation. */
+  @Test
+  void keepsAContinuedStringQuotedWhenSpacesFollowTheBackslash() {
+    var diff =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,4 @@\n"
+            + "+    const char* s = \"log: hand work to \\   \n"
+            + "+        executor.execute( here\"; return 0;\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
+        "spaces after the backslash do not turn the literal back into live code");
+  }
+
+  /** An escaped backslash at the line end is a character, not a continuation. */
+  @Test
+  void readsAnEscapedBackslashAtLineEndAsNoContinuation() {
+    var diff =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,4 @@\n"
+            + "+    const char* s = \"path\\\\\"; \n"
+            + "+    executor.execute(run);\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
+            .isPresent(),
+        "the literal closed on its own line, so the dispatch below it is live");
+  }
+
+  /** A line that is nothing but backslashes is read to its start without running past it. */
+  @Test
+  void readsALineOfOnlyBackslashesAsAContinuation() {
+    var diff =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
+            + "+    const char* s = \"hand work to \\"
+            + "\n+\\\n"
+            + "+        executor.execute( here\"; return 0;\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
+        "the literal is still open across the backslash-only line");
+  }
+
+  @Test
+  void readsAQuoteFollowedOnlyBySpacesAsProse() {
+    var diff =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
+            + "+    puts(\"   \n"
+            + "+    executor.execute(work);\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff)
+            .isPresent(),
+        "a lone quote with nothing after it opens no literal, so the next line is live code");
+  }
+
+  @Test
+  void readsABodyOfOnlyBackslashesByParity() {
+    var continued =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
+            + "+    const char* s = \"\\\\\\"
+            + "\n+        executor.execute( here\"; return 0;\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", continued)
+            .isEmpty(),
+        "three backslashes are an escaped one plus a continuation");
+    var escaped =
+        "diff --git a/src/a.c b/src/a.c\n@@ -1,3 +1,5 @@\n"
+            + "+    const char* s = \"\\\\"
+            + "\n+    executor.execute(work);\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", escaped)
+            .isPresent(),
+        "two backslashes are one escaped backslash and no continuation");
+  }
 }
