@@ -260,8 +260,9 @@ final class JacocoCoverageReport {
    *
    * <p>{@link #EMPTY} when the bytes are not a readable zip, hold no such entry, hold nothing this
    * parser understands — or when the walk gave up part-way, per the paragraph below. At most {@link
-   * #MAX_ZIP_ENTRIES} entries are walked, so a report sitting behind that many others is never
-   * reached.
+   * #MAX_ZIP_ENTRIES} file entries are read; directory entries pass uncounted, since they carry no
+   * data and cost nothing to step over. An archive with more file entries than that is refused
+   * whole rather than merged as far as the cap allowed.
    *
    * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
    * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
@@ -315,8 +316,9 @@ final class JacocoCoverageReport {
       long budgetLeft,
       Map<String, NavigableSet<Integer>> merged)
       throws IOException {
-    var isReport =
-        !entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
+    // Directories never reach here: walkRefused steps over them before charging the cap, so the
+    // only question left is whether this file entry is a report.
+    var isReport = entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
     var sink = isReport ? new ByteArrayOutputStream() : null;
     var read = inflateEntry(zip, budgetLeft, MAX_ENTRY_BYTES, sink);
     if (read < 0 || sink == null || sink.size() == 0) {
