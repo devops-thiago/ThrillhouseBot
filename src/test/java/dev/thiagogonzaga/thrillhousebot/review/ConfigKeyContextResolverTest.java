@@ -105,7 +105,8 @@ class ConfigKeyContextResolverTest {
   }
 
   private String resolve(List<FileDiff> files) {
-    return resolver.resolve("auth", "o", "r", "headsha", files);
+    return resolver.resolve(
+        "auth", "o", "r", "headsha", files, ReviewDiffFormatter.IgnoreGlobs.NONE);
   }
 
   @Nested
@@ -695,6 +696,94 @@ class ConfigKeyContextResolverTest {
     }
   }
 
+  /**
+   * #483 — the candidate definition files come from a whole-tree walk, not from the diff, so the
+   * review's ignore globs have to be applied to them directly. Filtering the diff files alone left
+   * a config file under an ignored path fetched and rendered into the prompt: the one place the
+   * repository asked the review not to look was the one place this resolver still read from.
+   */
+  @Nested
+  class IgnoredPaths {
+
+    private static final String IGNORED_YAML = "config/application.yml";
+    private static final String NESTED_IGNORED_YAML = "deploy/config/application-prod.yml";
+
+    private static final String YAML_SOURCE =
+        """
+        thrillhousebot:
+          webhook:
+            dedup-ttl: ${WEBHOOK_DEDUP_TTL:24h}
+        """;
+
+    /** Resolves one dotenv key with {@code pattern} as the repository's only ignore glob. */
+    private String resolveIgnoring(String pattern) {
+      return resolver.resolve(
+          "auth",
+          "o",
+          "r",
+          "headsha",
+          List.of(docDiff(".env.example", "#WEBHOOK_DEDUP_TTL=24h")),
+          ReviewDiffFormatter.IgnoreGlobs.compile(List.of(pattern)));
+    }
+
+    private void verifyNeverFetched(String path) {
+      verify(prClient, never()).getFileContent(any(), any(), any(), any(), eq(path), any());
+    }
+
+    @Test
+    void shouldNeitherFetchNorRenderACandidateUnderAnIgnoredPath() {
+      givenRepository(IGNORED_YAML, PROPERTIES_PATH);
+      givenFile(IGNORED_YAML, YAML_SOURCE);
+      givenFile(PROPERTIES_PATH, PROPERTIES_SOURCE);
+
+      var context = resolveIgnoring("config/");
+
+      assertFalse(
+          context.contains(IGNORED_YAML), () -> "ignored candidate was rendered: " + context);
+      verifyNeverFetched(IGNORED_YAML);
+      assertTrue(
+          context.contains(PROPERTIES_PATH),
+          () -> "the non-ignored candidate must still resolve: " + context);
+      assertTrue(
+          context.contains("thrillhousebot.webhook.dedup-ttl=${WEBHOOK_DEDUP_TTL:24h}"),
+          () -> "explicit override missing from: " + context);
+    }
+
+    @Test
+    void shouldMatchCandidatesWithGitignoreSemantics() {
+      // A bare "config/" names a directory at any depth: the root tree and a nested one alike.
+      // Both shallower candidates would otherwise sort ahead of the properties file and use up
+      // the per-key snippet cap, so a leak shows as the real definition going missing.
+      givenRepository(IGNORED_YAML, NESTED_IGNORED_YAML, PROPERTIES_PATH);
+      givenFile(IGNORED_YAML, YAML_SOURCE);
+      givenFile(NESTED_IGNORED_YAML, YAML_SOURCE);
+      givenFile(PROPERTIES_PATH, PROPERTIES_SOURCE);
+
+      var context = resolveIgnoring("config/");
+
+      assertFalse(context.contains(IGNORED_YAML), () -> "root config tree leaked: " + context);
+      assertFalse(
+          context.contains(NESTED_IGNORED_YAML), () -> "nested config tree leaked: " + context);
+      verifyNeverFetched(IGNORED_YAML);
+      verifyNeverFetched(NESTED_IGNORED_YAML);
+      assertTrue(
+          context.contains(PROPERTIES_PATH),
+          () -> "the non-ignored candidate must still resolve: " + context);
+    }
+
+    @Test
+    void shouldKeepEveryCandidateWhenNoGlobMatches() {
+      givenRepository(IGNORED_YAML, PROPERTIES_PATH);
+      givenFile(IGNORED_YAML, YAML_SOURCE);
+      givenFile(PROPERTIES_PATH, PROPERTIES_SOURCE);
+
+      var context = resolveIgnoring("docs/");
+
+      assertTrue(context.contains(IGNORED_YAML), () -> "unmatched glob dropped: " + context);
+      assertTrue(context.contains(PROPERTIES_PATH), () -> "unmatched glob dropped: " + context);
+    }
+  }
+
   @Nested
   class FailSoft {
 
@@ -819,7 +908,9 @@ class ConfigKeyContextResolverTest {
                       new TreeEntry("README.md", "blob", 10)),
                   false));
 
-      var candidates = resolver.candidatePaths("auth", "o", "r", "headsha");
+      var candidates =
+          resolver.candidatePaths(
+              "auth", "o", "r", "headsha", ReviewDiffFormatter.IgnoreGlobs.NONE);
 
       assertEquals(
           List.of(
