@@ -61,6 +61,8 @@ class ReviewContextLoaderTest {
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
+  private final SupersededFindingsCarryover carryover =
+      new SupersededFindingsCarryover(new ObjectMapper());
 
   @BeforeEach
   void setUp() {
@@ -84,7 +86,8 @@ class ReviewContextLoaderTest {
             patchCoverageResolver,
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
-            activeModel);
+            activeModel,
+            carryover);
   }
 
   @Nested
@@ -781,6 +784,134 @@ class ReviewContextLoaderTest {
     }
   }
 
+  /** #806: a superseded run's verified findings join the round the replacement reports on. */
+  @Nested
+  class SupersededRunCarryover {
+
+    private static final ReviewResponse.Finding CARRIED =
+        new ReviewResponse.Finding(
+            "high", "high", "src/Main.java", 10, "Carried finding", "d", "guard(x)", "guard(x, y)");
+
+    private static final String POSTED_ROUND_JSON =
+        """
+        {"findings":[{"risk":"low","file":"a.java","line":1,"title":"Posted finding",\
+        "description":"d","suggestion_old":"a"}],"previous_findings_status":[]}""";
+
+    private ReviewContextLoader realAnalyzerLoader() {
+      return new ReviewContextLoader(
+          prClient,
+          reviewClient,
+          commentClient,
+          instructionsResolver,
+          repoSettingsResolver,
+          projectStackResolver,
+          diffFormatter,
+          labeler,
+          new FollowUpAnalyzer(new ObjectMapper()),
+          new BugFixContextResolver(commentClient),
+          configKeyContextResolver,
+          patchCoverageResolver,
+          sessionPersistence,
+          BotIdentity.from(List.of(BOT_LOGIN)),
+          activeModel,
+          carryover);
+    }
+
+    private ReviewOrchestrator.ReviewRequest request() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner", "repo", 1, "headsha1", "Title", "body", "basesha1", "main", 99L, false, "main");
+    }
+
+    private void stubLoad(List<String> priorJsons) {
+      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/Main.java", "modified", 1, 0, 1, "@@ -10 +10 @@\n+guard(x)")));
+      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Title",
+                  "body",
+                  new GitHubPullRequestClient.Ref("headsha1"),
+                  new GitHubPullRequestClient.Ref("basesha1"),
+                  1,
+                  1,
+                  0));
+      when(prClient.compareCommits(
+              any(), any(), eq("owner"), eq("repo"), eq("basesha1"), eq("headsha1")))
+          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(sessionPersistence.findAllPriorAiResponseJsons(any(), eq(1), anyLong()))
+          .thenReturn(priorJsons);
+      when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
+          .thenReturn(new InstructionsResolver.ResolvedInstructions("", ""));
+      when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
+    }
+
+    private ReviewContextLoader.ReviewContext load() {
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+      return realAnalyzerLoader().load("auth", request(), session, "owner/repo");
+    }
+
+    @Test
+    void carriedFindingsBecomeTheOnlyPreviousRoundOfAFirstReview() {
+      stubLoad(List.of());
+      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
+
+      var ctx = load();
+
+      assertTrue(ctx.hasContext());
+      assertEquals(List.of(CARRIED), ctx.carried().findings());
+      assertEquals("oldsha1", ctx.carried().supersededSha());
+      assertEquals(List.of(CARRIED), ctx.previousFindingsList());
+      assertEquals(1, ctx.priorAiResponseJsons().size());
+      assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
+      assertTrue(
+          ctx.previousFindings().contains("1. [HIGH] src/Main.java:10 — Carried finding"),
+          ctx.previousFindings());
+      // Consumed: the next load of this pull request starts without it.
+      assertTrue(carryover.take("owner", "repo", 1, "headsha1").isEmpty());
+    }
+
+    @Test
+    void carriedFindingsTakeTheIdsAfterThePostedRoundsOwn() {
+      stubLoad(List.of(POSTED_ROUND_JSON));
+      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
+
+      var ctx = load();
+
+      assertEquals(2, ctx.previousFindingsList().size());
+      assertEquals("Posted finding", ctx.previousFindingsList().get(0).title());
+      assertEquals(CARRIED, ctx.previousFindingsList().get(1));
+      assertTrue(ctx.previousFindings().contains("1. [LOW] a.java:1 — Posted finding"));
+      assertTrue(ctx.previousFindings().contains("2. [HIGH] src/Main.java:10 — Carried finding"));
+      assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
+    }
+
+    @Test
+    void aReviewOfAnotherHeadCarriesNothingAndStartsClean() {
+      stubLoad(List.of());
+      carryover.stash("owner", "repo", 1, "oldsha1", "someothersha", List.of(CARRIED));
+
+      var ctx = load();
+
+      assertFalse(ctx.hasContext());
+      assertTrue(ctx.carried().isEmpty());
+      assertEquals("", ctx.previousFindings());
+    }
+
+    @Test
+    void aReviewWithNothingStashedCarriesNothing() {
+      stubLoad(List.of());
+
+      var ctx = load();
+
+      assertFalse(ctx.hasContext());
+      assertSame(SupersededFindingsCarryover.Carried.NONE, ctx.carried());
+    }
+  }
+
   @Nested
   class FetchPrFiles {
 
@@ -1392,7 +1523,8 @@ class ReviewContextLoaderTest {
           patchCoverageResolver,
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
-          activeModel);
+          activeModel,
+          carryover);
     }
 
     /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */

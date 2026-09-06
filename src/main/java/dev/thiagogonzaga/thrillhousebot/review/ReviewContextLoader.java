@@ -68,6 +68,7 @@ public class ReviewContextLoader {
   private final ReviewSessionPersistence sessionPersistence;
   private final BotIdentity botIdentity;
   private final ActiveModelSettings activeModel;
+  private final SupersededFindingsCarryover carryover;
 
   @Inject
   public ReviewContextLoader(
@@ -85,7 +86,8 @@ public class ReviewContextLoader {
       PatchCoverageResolver patchCoverageResolver,
       ReviewSessionPersistence sessionPersistence,
       BotIdentity botIdentity,
-      ActiveModelSettings activeModel) {
+      ActiveModelSettings activeModel,
+      SupersededFindingsCarryover carryover) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
@@ -101,6 +103,7 @@ public class ReviewContextLoader {
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
     this.activeModel = activeModel;
+    this.carryover = carryover;
   }
 
   /**
@@ -136,7 +139,8 @@ public class ReviewContextLoader {
       Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals,
       List<GitHubCommentClient.IssueComment> conversationComments,
-      List<String> unmatchedIgnoreGlobs) {
+      List<String> unmatchedIgnoreGlobs,
+      SupersededFindingsCarryover.Carried carried) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -147,6 +151,66 @@ public class ReviewContextLoader {
       reviewableFiles = List.copyOf(reviewableFiles);
       conversationComments = List.copyOf(conversationComments);
       unmatchedIgnoreGlobs = List.copyOf(unmatchedIgnoreGlobs);
+    }
+
+    /**
+     * Back-compat constructor for callers that carry nothing from a superseded run. Defaults it to
+     * {@link SupersededFindingsCarryover.Carried#NONE}, which reads as "no run of this pull request
+     * stood down for this one" — the quiet direction, since a carry-over nobody stashed must never
+     * be disclosed.
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals,
+        List<GitHubCommentClient.IssueComment> conversationComments,
+        List<String> unmatchedIgnoreGlobs) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          conversationComments,
+          unmatchedIgnoreGlobs,
+          SupersededFindingsCarryover.Carried.NONE);
     }
 
     /**
@@ -344,11 +408,21 @@ public class ReviewContextLoader {
         priorReviews.stream()
                 .noneMatch(r -> r.user() != null && botIdentity.matches(r.user().login()))
             && !botSummaryCommentExists(auth, req.owner(), req.repo(), req.prNumber());
-    var hasContext = !priorAiResponseJsons.isEmpty();
     // Deserialize each prior response once for the whole review — context formatting, unresolved
     // gate, approve backstop, and later thread matching all reuse these objects.
     List<ReviewResponse> priorAiResponses =
         followUpAnalyzer.parsePreviousResponses(priorAiResponseJsons);
+    // A run of this pull request that stood down for this head (#806) left its verified findings
+    // behind; they join the round this review reports on, so the model confirms or resolves them
+    // against the new head like any posted finding. The superseded session itself is FAILED and
+    // never enters the persisted history (#624), so this is the only way back in.
+    var carried = carryover.take(req.owner(), req.repo(), req.prNumber(), req.commitSha());
+    if (!carried.isEmpty()) {
+      var rounds = carryover.merge(priorAiResponseJsons, priorAiResponses, carried.findings());
+      priorAiResponseJsons = rounds.jsons();
+      priorAiResponses = rounds.parsed();
+    }
+    var hasContext = !priorAiResponseJsons.isEmpty();
     // The round this review reports on is the newest prior round that actually raised findings: a
     // round that legitimately found nothing exposes no ids, and treating it as "the previous round"
     // dropped the still-open finding out of the prompt and out of every id-keyed consumer (#455).
@@ -436,7 +510,8 @@ public class ReviewContextLoader {
         lineResolverSupplier,
         prTotals,
         conversationComments,
-        unmatchedIgnoreGlobs);
+        unmatchedIgnoreGlobs,
+        carried);
   }
 
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */

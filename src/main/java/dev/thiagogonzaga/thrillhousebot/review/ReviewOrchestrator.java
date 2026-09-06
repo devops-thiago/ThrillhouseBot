@@ -28,6 +28,8 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -102,6 +104,8 @@ public class ReviewOrchestrator {
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
   private final ReviewSkipEmitter skipEmitter;
+
+  private final SupersededFindingsCarryover carryover;
 
   private final ExecutorService reviewExecutor;
 
@@ -219,6 +223,7 @@ public class ReviewOrchestrator {
       FindingPipeline findingPipeline,
       FindingFeedbackCaptureService findingFeedbackCapture,
       ReviewSkipEmitter skipEmitter,
+      SupersededFindingsCarryover carryover,
       @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
     this.authClient = authClient;
@@ -234,6 +239,7 @@ public class ReviewOrchestrator {
     this.findingPipeline = findingPipeline;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.skipEmitter = skipEmitter;
+    this.carryover = carryover;
     this.reviewExecutor = reviewExecutor;
   }
 
@@ -309,7 +315,13 @@ public class ReviewOrchestrator {
       var movedHead =
           contextLoader.currentHeadSha(auth, req).filter(fresh -> headMoved(headReq, fresh));
       if (movedHead.isPresent()) {
-        abandonSupersededRun(auth, req, session, checkRunId, movedHead.get());
+        abandonSupersededRun(
+            auth,
+            req,
+            session,
+            checkRunId,
+            movedHead.get(),
+            findingsToCarry(ctx, aiResponse, result));
         return false;
       }
 
@@ -410,13 +422,48 @@ public class ReviewOrchestrator {
   }
 
   /**
+   * What a run that stands down hands to its replacement (#806): the findings it verified this
+   * round, plus any it was itself carrying that are still open on its verdict — a run superseded
+   * while replacing another must not lose the first run's findings a second time. A carried finding
+   * the run resolved, justified or superseded is settled and stays behind. The carried ones occupy
+   * the ids after the persisted round's own in {@link
+   * ReviewContextLoader.ReviewContext#previousFindingsList}, which is how they are told apart from
+   * findings a posted round already tracks.
+   */
+  static List<ReviewResponse.Finding> findingsToCarry(
+      ReviewContextLoader.ReviewContext ctx, ReviewResponse aiResponse, ReviewResult result) {
+    var previous = ctx.previousFindingsList();
+    var firstCarriedId = previous.size() - ctx.carried().findings().size() + 1;
+    var carry = new ArrayList<ReviewResponse.Finding>();
+    var seen = new HashSet<Integer>();
+    for (var status : result.previousStatuses()) {
+      if (status.id() >= firstCarriedId
+          && status.id() <= previous.size()
+          && "unresolved".equalsIgnoreCase(status.status())
+          && seen.add(status.id())) {
+        carry.add(previous.get(status.id() - 1));
+      }
+    }
+    carry.addAll(aiResponse.findings());
+    return carry;
+  }
+
+  /**
    * Retires a run whose head moved while it reviewed: counted as a structured skip, the check run
    * on the reviewed (old) sha concluded as skipped, and the session closed out — nothing is posted
    * to the PR and no user-facing error is raised, because the dispatcher's coalesced run for the
-   * new head re-reviews and posts in this run's place (#704). Visible for tests.
+   * new head re-reviews and posts in this run's place (#704). The run's verified findings are
+   * handed to that replacement rather than dropped with the post (#806). Visible for tests.
    */
   void abandonSupersededRun(
-      String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
+      String auth,
+      ReviewRequest req,
+      ReviewSession session,
+      long checkRunId,
+      String freshHead,
+      List<ReviewResponse.Finding> verifiedFindings) {
+    carryover.stash(
+        req.owner(), req.repo(), req.prNumber(), req.commitSha(), freshHead, verifiedFindings);
     skipEmitter.recordSkip(
         ReviewSkipReason.HEAD_MOVED,
         req.owner(),

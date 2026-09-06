@@ -249,7 +249,8 @@ public class VerdictBuilder {
             changedFiles,
             ReviewDiffFormatter.formatPureRenameRollup(
                 ReviewDiffFormatter.pureRenameFiles(ctx.files())),
-            ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs())),
+            ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
+            SupersededFindingsCarryover.formatScopeNote(ctx.carried())),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -501,14 +502,15 @@ public class VerdictBuilder {
   }
 
   /**
-   * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, and the
-   * unmatched-ignore-glob note. The two notes share the review-scope blockquote — both answer "what
-   * did this review not look at, and why".
+   * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, the
+   * unmatched-ignore-glob note, and the superseded-run carry-over note. The notes share the
+   * review-scope blockquote — each answers "what did this review look at, or not, and why".
    */
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       String pureRenameRollup,
-      String unmatchedIgnoreGlobs) {}
+      String unmatchedIgnoreGlobs,
+      String carriedFromSupersededRun) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -522,7 +524,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", ""),
+        new SummaryInputs(changedFiles, "", "", ""),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -657,14 +659,16 @@ public class VerdictBuilder {
   }
 
   /**
-   * The summary's review-scope blockquote: what the review did not look at, and why. Both notes are
-   * optional and either can stand alone; when both apply they are separate paragraphs of one
-   * blockquote, so a reader meets one scope caveat rather than two competing banners.
+   * The summary's review-scope blockquote: what the review did not look at, and why — and, after a
+   * superseded run, what it looked at that a fresh pass would not have (#806). Every note is
+   * optional and any can stand alone; when several apply they are separate paragraphs of one
+   * blockquote, so a reader meets one scope caveat rather than competing banners.
    */
   private static String reviewScopeNote(SummaryInputs summaryInputs) {
-    var notes = new ArrayList<String>(2);
+    var notes = new ArrayList<String>(3);
     addScopeNote(notes, summaryInputs.pureRenameRollup());
     addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
+    addScopeNote(notes, summaryInputs.carriedFromSupersededRun());
     return String.join("\n>\n> ", notes);
   }
 
