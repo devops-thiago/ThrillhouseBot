@@ -152,20 +152,57 @@ public final class GitHubApiError {
       Pattern.compile("(?<![\\w-])eyJ[\\w-]{8,}(?:\\.[\\w-]*){1,2}");
 
   /**
-   * The wording GitHub uses when it is throttling rather than refusing. A secondary rate limit and
-   * a primary rate limit both arrive as 403; only the message distinguishes them from a permission
-   * refusal when the headers are absent.
+   * The wording GitHub uses when it is throttling rather than refusing, consulted only once the
+   * headers have had their say ({@link #isThrottled()}). A secondary rate limit and a primary rate
+   * limit both arrive as 403; when neither documented header is present, only the message
+   * distinguishes them from a permission refusal — and that is GitHub's own contract, not a
+   * shortcut: its rate-limit documentation says a secondary limit is "a 403 or 429 response and an
+   * error message that indicates that you exceeded a secondary rate limit", and its own client
+   * library decides the class from that message.
+   *
+   * <p>Every alternative is a phrase GitHub is on record as sending (#784); none is a guess at a
+   * variant. {@code secondary rate limit} is the sentence documented above and measured in #722.
+   * {@code secondary-rate-limits} is the anchor of the {@code documentation_url} the same responses
+   * carry — {@code #secondary-rate-limits} under {@code resources-in-the-rest-api} and {@code
+   * #about-secondary-rate-limits} under {@code rate-limits-for-the-rest-api}, both recorded on the
+   * content-creation block in GitHub's community discussions #50326 and #32120 — and is the one
+   * part of the body sent as a token rather than as prose, so a message reworded around it is still
+   * read. {@code abuse detection} is the pre-2021 name for the same limit ("You have triggered an
+   * abuse detection mechanism…"). {@code rate limit exceeded} is the primary-limit sentence ("API
+   * rate limit exceeded for…"), and {@code request quota exhausted} the other primary-limit
+   * sentence GitHub sends beside it ("Request quota exhausted for request GET /search/issues",
+   * octokit/plugin-throttling#124); both usually arrive with {@code x-ratelimit-remaining: 0},
+   * which is read first, and the words cover the response that does not.
    *
    * <p>The blocked-creation wording is carried here as well as in {@link #CONTENT_CREATION_BLOCK},
    * in the same two word orders, because broadening only the latter would be inert: a body that
    * named the block without one of the other phrases would not be read as a throttle at all, so the
    * call would fail fast and the floor below it would never be consulted (#722). A 403 that says
    * creation is blocked is a throttle by definition, never a permission refusal.
+   *
+   * <p>A 403 that matches none of this and still talks about rate limits is not a throttle here,
+   * and is not silently a permission refusal either: {@link #hasUnrecognisedThrottleWording()}
+   * reports it, so the list grows on evidence rather than one imagined variant at a time.
    */
   private static final Pattern THROTTLE_WORDING =
       Pattern.compile(
-          "(?i)secondary rate limit|abuse detection|rate limit exceeded"
-              + "|blocked from (?:content creation|creating content)");
+          "(?i)secondary rate limit|secondary-rate-limits|abuse detection|rate limit exceeded"
+              + "|request quota exhausted|blocked from (?:content creation|creating content)");
+
+  /**
+   * What a 403 says when it is about rate limiting at all, in whatever words (#784). Deliberately
+   * loose, because it decides nothing about the call: it only decides whether a body that {@link
+   * #THROTTLE_WORDING} did not match is worth a warning, so the next wording GitHub adopts is a
+   * one-line fix on evidence rather than another guess. A false positive here costs one log line.
+   */
+  private static final Pattern THROTTLE_HINT = Pattern.compile("(?i)rate.?limit|blocked|abuse");
+
+  /**
+   * The same reading for the block: a throttle whose body says something is blocked but not in the
+   * words {@link #CONTENT_CREATION_BLOCK} knows (#784). The generic secondary-limit sentence blocks
+   * nothing and says so, so it does not fire this.
+   */
+  private static final Pattern BLOCK_HINT = Pattern.compile("(?i)blocked");
 
   /** Backoff used when GitHub throttles without saying for how long. */
   static final Duration FALLBACK_DELAY = Duration.ofSeconds(5);
@@ -292,6 +329,18 @@ public final class GitHubApiError {
    * says so only through a {@code Retry-After}, an exhausted {@code x-ratelimit-remaining}, or the
    * rate-limit wording in the body. A permission 403 carries none of the three and so fails fast.
    *
+   * <p>The order is the headers first and the words last, and it is the whole of what the headers
+   * can decide (#784). {@code Retry-After} is the header GitHub documents for a secondary limit,
+   * and {@code x-ratelimit-remaining: 0} the one it documents for a primary limit, so a 403
+   * carrying either is a throttle whatever the body says and however GitHub has reworded it since.
+   * What the headers cannot do is decide the rest: #784 proposed reading a 403 with {@code
+   * x-ratelimit-remaining} well above zero as a secondary limit outright, and that is exactly how
+   * the measured block presented ({@code remaining=4771}, no {@code Retry-After}) — but it is also
+   * exactly how a permission refusal presents, since a refused request counts against a quota it
+   * did not exhaust. A remaining count above zero rules the primary limit out and nothing in. So
+   * for a 403 with neither header the body is the only evidence there is, which is what GitHub's
+   * own documentation says of a secondary limit, and the wording stays the deciding signal there.
+   *
    * <p>The wording is looked for in {@link Body#classified}, not in the line that goes to the log:
    * the log's cap and the redaction bound are about what an operator should be shown, and letting
    * them decide whether a completed generation is repeated turned this into a question about where
@@ -307,6 +356,30 @@ public final class GitHubApiError {
     return retryAfterSeconds().isPresent()
         || "0".equals(rateLimitRemaining)
         || THROTTLE_WORDING.matcher(body.classified()).find();
+  }
+
+  /**
+   * Whether this is a 403 that {@link #isThrottled()} read as a refusal while its body talks about
+   * rate limiting, blocking or abuse — a throttle worded in a way the classification does not know
+   * (#784). The call still fails fast, since the hint is far too loose to spend three repeats on;
+   * what changes is that {@link GitHubWriteRetry} writes the body down at warning level, so the
+   * miss is a one-line fix instead of a permission refusal nobody can tell from a lost generation.
+   */
+  public boolean hasUnrecognisedThrottleWording() {
+    return status == 403 && !isThrottled() && THROTTLE_HINT.matcher(body.classified()).find();
+  }
+
+  /**
+   * Whether this is a throttle whose body says something is blocked in words {@link
+   * #CONTENT_CREATION_BLOCK} does not know (#784). The repeat is kept, but the floor that makes the
+   * budget outlast the measured block is lost with the wording, so the linear backoff spends the
+   * whole budget inside the window — the #722 failure in different words. Reported for the same
+   * reason as {@link #hasUnrecognisedThrottleWording()}.
+   */
+  public boolean hasUnrecognisedBlockWording() {
+    return isThrottled()
+        && !blocksContentCreation()
+        && BLOCK_HINT.matcher(body.classified()).find();
   }
 
   /**

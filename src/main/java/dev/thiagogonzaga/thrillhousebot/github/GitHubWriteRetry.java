@@ -238,7 +238,11 @@ public final class GitHubWriteRetry {
       String operation, WebApplicationException failure, int attempt) {
     var error = GitHubApiError.of(failure);
     if (error.isEmpty() || !error.get().isThrottled()) {
+      error.ifPresent(refusal -> warnIfWordingWasMissed(operation, refusal));
       return Optional.empty();
+    }
+    if (attempt == 1) {
+      warnIfWordingWasMissed(operation, error.get());
     }
     if (attempt >= MAX_ATTEMPTS) {
       if (log.isWarnEnabled()) {
@@ -252,6 +256,39 @@ public final class GitHubWriteRetry {
       return Optional.empty();
     }
     return Optional.of(min(error.get().retryDelay(attempt, clock.get()), MAX_DELAY_PER_ATTEMPT));
+  }
+
+  /**
+   * Writes down a 403 whose body reads like a throttle but matched no known wording (#784). The
+   * classification is a whitelist of the phrases GitHub is known to send, and a miss used to be
+   * silent in both directions: a refusal-shaped miss failed fast exactly like a permission 403, and
+   * a block-shaped miss kept the repeat but lost the floor the budget is sized by. Neither decision
+   * changes here — a hint this loose must not spend repeats — but the body is named, so the next
+   * wording GitHub adopts is added on evidence rather than guessed at under review. Once per call:
+   * the throttled path asks on the first attempt only, since the body does not change between
+   * attempts. Behind a level check for the reason the give-up line above is.
+   */
+  private void warnIfWordingWasMissed(String operation, GitHubApiError error) {
+    if (!log.isWarnEnabled()) {
+      return;
+    }
+    if (error.hasUnrecognisedThrottleWording()) {
+      log.warn(
+          "GitHub refused {} with a 403 that reads like a rate limit but matched no known throttle"
+              + " wording — not retried, so the generated content is lost; if this is a throttle,"
+              + " its wording needs adding to GitHubApiError. {}",
+          operation,
+          error.diagnostics());
+    } else if (error.hasUnrecognisedBlockWording()) {
+      log.warn(
+          "GitHub throttled {} with wording that names a block but matched no known"
+              + " content-creation wording — retried on the linear backoff without the {}s floor;"
+              + " if this is the content-creation block, its wording needs adding to"
+              + " GitHubApiError. {}",
+          operation,
+          GitHubApiError.CONTENT_CREATION_BLOCK_MIN_DELAY.toSeconds(),
+          error.diagnostics());
+    }
   }
 
   private static Duration min(Duration left, Duration right) {

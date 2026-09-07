@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A 403 whose wording the throttle classification does not know is written down instead of failing like a permission refusal** (#784): both readings of a refused write, whether it is a throttle worth repeating and whether it is the content-creation block the 30-second floor is sized against, are whitelists of specific phrases, and a body GitHub words differently matched neither. A missed block dropped the floor and spent the budget on the linear 5s/10s/15s, and a missed throttle failed fast with no repeat, so the generated content was lost on the first refusal; both were silent. The headers GitHub documents (`retry-after`, `x-ratelimit-remaining: 0`) are read before any wording and decide the class on their own, and the wording is the fallback for the 403 that carries neither, which is what GitHub's own documentation says of a secondary limit. The phrase list gains only wording GitHub is on record as sending: the `secondary-rate-limits` anchor of the `documentation_url` those responses carry, and the `Request quota exhausted` primary-limit sentence. A 403 that still matches nothing while its body mentions a rate limit, blocking or abuse is not retried, but the retry now names it and the body at WARN, and a throttle that names a block in unknown words is warned about once per call when its wait falls back to the linear backoff, so the next wording GitHub adopts is added on evidence rather than guessed at
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
