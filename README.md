@@ -755,7 +755,8 @@ Uploading the whole `target/site/jacoco/` tree, with the HTML report beside `jac
 is fine: only `.xml` entries count toward the archive's 512-entry cap. An artifact the
 bot found but refused to read — more `.xml` entries than that, or one that inflates past
 128 MB — is named in the review summary's scope note the way an ignore glob that matched
-nothing is, so a configured artifact never goes quiet without saying why.
+nothing is. An artifact that was never uploaded, has expired, or holds no JaCoCo XML is
+still the quiet case above: nothing was refused, so nothing is disclosed.
 
 The file is read from the repository's default branch on each review and cached for
 five minutes. YAML anchors, aliases and merge keys are resolved; a document that is
