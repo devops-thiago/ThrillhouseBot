@@ -53,6 +53,13 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * coverage signal would be worse than none, because the reviewer is told to raise its confidence on
  * the strength of it.
  *
+ * <p>The one exception to that silence is an artifact that was found and then refused by the reader
+ * — more {@code .xml} entries than it will merge, or one that inflates past its decompression
+ * budget (#813). That contributes no section either, but it is not the same situation: the
+ * maintainer configured an artifact, the run uploaded it, and this review chose not to read it. So
+ * the reason travels out in {@link Resolution#artifactRefusal} and the summary's review-scope note
+ * says the artifact was not read, the way an ignore glob that matched nothing is disclosed (#481).
+ *
  * <p>Every fetch is best-effort. Nothing here can fail a review.
  */
 @ApplicationScoped
@@ -88,6 +95,18 @@ public class PatchCoverageResolver {
   static final String SECTION_HEADING =
       "### Patch coverage for this diff (from the repository's own CI coverage report)";
 
+  /**
+   * What one review took from the configured coverage artifact: the prompt section, or {@code ""}
+   * when there is nothing truthful to say, and the reason the artifact was refused when it was —
+   * {@code ""} otherwise — in the words {@link #formatScopeNote} puts in the summary. A refused
+   * artifact never yields a section and a section never comes with a refusal; both empty is the
+   * common case.
+   */
+  record Resolution(String section, String artifactRefusal) {
+    /** Nothing to add to the prompt and nothing to disclose. */
+    static final Resolution NONE = new Resolution("", "");
+  }
+
   private final GitHubActionsClient actionsClient;
   private final ArtifactZipFetcher zipFetcher;
   private final boolean enabled;
@@ -109,48 +128,67 @@ public class PatchCoverageResolver {
   }
 
   /**
-   * The prompt-ready uncovered-changed-lines section, or {@code ""} when there is nothing truthful
-   * to say — the feature is off, the repository named no artifact, the head SHA is unknown, no
-   * report could be read, or every added line the report knows about is covered.
+   * The prompt-ready uncovered-changed-lines section, or an empty one when there is nothing
+   * truthful to say — the feature is off, the repository named no artifact, the head SHA is
+   * unknown, no report could be read, or every added line the report knows about is covered — and,
+   * separately, the reason the artifact was refused when it was.
    *
    * @param reviewableFiles the post-ignore-filter file list the rest of the review already uses, so
    *     a file the ignore set removed from review scope is never reported as under-tested
    */
-  String resolve(
+  Resolution resolve(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
       RepoSettings repoSettings,
       List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
     if (!enabled) {
-      return "";
+      return Resolution.NONE;
     }
     // Never null: RepoSettings normalizes an absent name to "" in its compact constructor.
     var artifactName = repoSettings.coverageArtifact();
     if (artifactName.isBlank()) {
-      return "";
+      return Resolution.NONE;
     }
     var headSha = req.commitSha();
     if (headSha == null || headSha.isBlank() || reviewableFiles.isEmpty()) {
-      return "";
+      return Resolution.NONE;
     }
     try {
       var report = loadReport(auth, req.owner(), req.repo(), headSha, artifactName.strip());
+      var refusal = report.refusal();
+      if (refusal != null) {
+        // The reader already logged the refusal at WARN with its counts; this is the one path
+        // where "no section" has to reach the maintainer as well as the operator.
+        return new Resolution("", refusal.reason());
+      }
       if (report.isEmpty()) {
-        return "";
+        return Resolution.NONE;
       }
       var uncovered = intersectWithAddedLines(report, reviewableFiles);
       if (uncovered.isEmpty()) {
         Log.debugf("Coverage report for %s covers every added line", headSha);
-        return "";
+        return Resolution.NONE;
       }
       Log.infof(
           "Patch coverage: %d changed file(s) have added lines with no covering test",
           uncovered.size());
-      return render(uncovered);
+      return new Resolution(render(uncovered), "");
     } catch (RuntimeException e) {
       Log.warn("Patch-coverage resolution failed, continuing without it", e);
+      return Resolution.NONE;
+    }
+  }
+
+  /**
+   * The summary's review-scope note for a refused artifact, in the voice of the other scope notes
+   * (#481's unmatched-glob note, #806's carry-over note): what this review did not look at, and
+   * why. Empty when nothing was refused.
+   */
+  static String formatScopeNote(String artifactRefusal) {
+    if (artifactRefusal == null || artifactRefusal.isBlank()) {
       return "";
     }
+    return "the configured coverage artifact was not read: " + artifactRefusal;
   }
 
   // ---------------------------------------------------------------- sourcing

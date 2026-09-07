@@ -140,7 +140,8 @@ public class ReviewContextLoader {
       PrTotals prTotals,
       List<GitHubCommentClient.IssueComment> conversationComments,
       List<String> unmatchedIgnoreGlobs,
-      SupersededFindingsCarryover.Carried carried) {
+      SupersededFindingsCarryover.Carried carried,
+      String coverageArtifactRefusal) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -151,6 +152,67 @@ public class ReviewContextLoader {
       reviewableFiles = List.copyOf(reviewableFiles);
       conversationComments = List.copyOf(conversationComments);
       unmatchedIgnoreGlobs = List.copyOf(unmatchedIgnoreGlobs);
+    }
+
+    /**
+     * Back-compat constructor for callers that carry no coverage-artifact refusal. Defaults it to
+     * empty, which reads as "the configured artifact was read, or none was configured" — the quiet
+     * direction, since a refusal nobody observed must never be disclosed (#813).
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals,
+        List<GitHubCommentClient.IssueComment> conversationComments,
+        List<String> unmatchedIgnoreGlobs,
+        SupersededFindingsCarryover.Carried carried) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          conversationComments,
+          unmatchedIgnoreGlobs,
+          carried,
+          "");
     }
 
     /**
@@ -483,7 +545,7 @@ public class ReviewContextLoader {
     var configKeyContext = resolveConfigKeyContext(auth, req, reviewableFiles, ignoreGlobs);
     // Reuses the repo settings and the post-ignore file list already computed above: the coverage
     // artifact name comes from the same single read, and an ignored file is never reported as
-    // under-tested.
+    // under-tested. The section goes to the prompt; a refusal goes to the summary's scope note.
     var patchCoverage = patchCoverageResolver.resolve(auth, req, repoSettings, reviewableFiles);
 
     return new ReviewContext(
@@ -505,13 +567,14 @@ public class ReviewContextLoader {
         projectStack,
         linkedIssuesContext,
         configKeyContext,
-        patchCoverage,
+        patchCoverage.section(),
         reviewableFiles,
         lineResolverSupplier,
         prTotals,
         conversationComments,
         unmatchedIgnoreGlobs,
-        carried);
+        carried,
+        patchCoverage.artifactRefusal());
   }
 
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */

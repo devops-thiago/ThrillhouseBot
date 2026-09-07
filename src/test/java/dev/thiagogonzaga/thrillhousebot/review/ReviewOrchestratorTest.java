@@ -262,7 +262,7 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             new BugFixContextResolver(commentClient),
             new ConfigKeyContextResolver(prClient),
-            mock(PatchCoverageResolver.class),
+            quietPatchCoverage(),
             sessionPersistence,
             BOT_ID,
             new ActiveModelSettings(config, "m"),
@@ -277,6 +277,17 @@ class ReviewOrchestratorTest {
         skipEmitter,
         carryover,
         reviewExecutor);
+  }
+
+  /**
+   * A coverage resolver that finds nothing. Stubbed rather than bare: a bare mock answers null for
+   * the resolution record, and the loader reads its section and refusal on every review.
+   */
+  private static PatchCoverageResolver quietPatchCoverage() {
+    var resolver = mock(PatchCoverageResolver.class);
+    when(resolver.resolve(any(), any(), any(), any()))
+        .thenReturn(PatchCoverageResolver.Resolution.NONE);
+    return resolver;
   }
 
   private DiffLineResolver resolverFor(GitHubPullRequestClient.FileDiff... files) {

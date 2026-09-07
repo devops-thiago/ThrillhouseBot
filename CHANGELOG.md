@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coverage artifact that uploads the HTML report beside `jacoco.xml` is read, and one that is refused says so** (#813): the archive walk charged every file entry to the 512-entry cap, not only the `.xml` entries that can carry a report, so uploading `target/site/jacoco/` (one `.html` per class plus the stylesheet, images and script) crossed the cap on a project of a few hundred classes and the whole artifact was refused, with a DEBUG line as the only trace. Only `.xml` entries count toward the cap now; every other entry is still drained in full against the 128 MB aggregate budget from #789, so the zip-bomb bound is unchanged. A refusal is logged at WARN with the counts, and the review summary's scope note says the configured coverage artifact was not read and why. Latent until `thrillhousebot.review.patch-coverage.enabled` is turned on
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
