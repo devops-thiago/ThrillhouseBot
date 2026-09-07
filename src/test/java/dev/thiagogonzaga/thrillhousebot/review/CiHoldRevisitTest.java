@@ -179,15 +179,14 @@ class CiHoldRevisitTest {
   }
 
   @Test
-  void unreadableHeadIsTreatedAsUnmoved() {
+  void unreadableHeadKeepsTheHoldWithoutPosting() {
     hold();
     when(contextLoader.currentHeadSha(eq(AUTH), any())).thenReturn(Optional.empty());
-    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(green());
 
     revisit.revisit(RECHECK);
 
-    verify(reviewPublisher)
-        .createReviewWithFallback(anyString(), anyString(), anyString(), anyInt(), any());
+    verifyNoInteractions(ciStatusEvaluator, reviewPublisher, checkRunManager);
+    assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isPresent());
   }
 
   @Test
