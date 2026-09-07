@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `:latest` gate ignores pre-release and floating tags, and records its decision** (#733): `promote` found the highest existing release with `sort -V`, which ranks `v0.6.8-rc1` and `nightly` above `v0.6.8`, so a repository carrying either would have read a legitimate release as older than the highest one, and `publish-docs` and `bump-version` would have been skipped with nothing in the run to say so, which is the silent miss #717 set out to end. Only `vMAJOR.MINOR.PATCH` releases take part in the comparison now, and the outcome, promoted or held back and which version it lost to, is written to the run summary and a notice annotation either way. A refused docs dispatch still fails the job. Latent here, since the repository has no such tags
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.

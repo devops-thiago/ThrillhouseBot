@@ -173,23 +173,37 @@ jobs:
           crane tag "${IMAGE}:${SHA}" "${TAG}"
           crane tag "${IMAGE}:${SHA}-distroless" "${TAG}-distroless"
 
+          # :latest, the docs site and the version bump follow the highest release, so a patch
+          # cut on an older line must not take them. Only vMAJOR.MINOR.PATCH releases compete:
+          # `sort -V` ranks a pre-release (v0.6.8-rc1) or a floating tag (nightly) above the
+          # plain version, which would read a legitimate release as older than the highest one
+          # and skip the docs deploy and the bump with nothing said (#733). The verify job holds
+          # TAG to that shape, so the new version always takes part. sed rather than grep: under
+          # pipefail a filter that matches nothing (first release) must not fail the step.
           UPDATE_LATEST=true
-          HIGHEST_VER=$(gh release list --limit 200 --json tagName -q '.[].tagName' \
-            | sed 's/^v//' \
+          HIGHEST_VER=$(gh release list --limit 200 --exclude-drafts --json tagName -q '.[].tagName' \
+            | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' \
             | sort -V \
             | tail -1)
           if [ -n "$HIGHEST_VER" ]; then
             HIGHEST=$(printf '%s\n%s' "$HIGHEST_VER" "$NEW_VER" | sort -V | tail -1)
             if [ "$HIGHEST" != "$NEW_VER" ]; then
               UPDATE_LATEST=false
-              echo "Skipping :latest — ${TAG} is older than highest release v${HIGHEST_VER}"
             fi
           fi
 
+          # The outcome is a decision either way, and the jobs it gates (publish-docs,
+          # bump-version) are skipped on false, which says nothing on its own. Record it where
+          # a reader looks: the run summary and a notice annotation (#733).
           if [ "$UPDATE_LATEST" = true ]; then
             crane tag "${IMAGE}:${SHA}" latest
             crane tag "${IMAGE}:${SHA}-distroless" latest-distroless
+            DECISION="${TAG} is the highest release${HIGHEST_VER:+ (previously v${HIGHEST_VER})}: :latest, the docs site and the version bump follow it"
+          else
+            DECISION="${TAG} is a release on an older line, below v${HIGHEST_VER}: :latest, the docs site and the version bump stay where they are (see docs/RELEASING.md to republish the docs by hand)"
           fi
+          echo "::notice title=Promotion::${DECISION}"
+          printf '## Promotion\n\n%s\n' "${DECISION}" >> "$GITHUB_STEP_SUMMARY"
 
           echo "update_latest=${UPDATE_LATEST}" >> "$GITHUB_OUTPUT"
       - id: digest
