@@ -4,7 +4,9 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
-## [0.6.7] — 2026-09-07
+### Fixed
+
+- **A verdict held on pending CI is posted when CI turns green, without a second review** (#825): with `REVIEW_CI_GATING=strict` a review that found nothing while a required check was still running ended as a neutral "cannot be approved until required CI is confirmed green", and nothing came back to it. The bot handled `pull_request` and comment events only, so the moment CI finished was invisible to it, and every green pull request needed a manual `/review` that re-ran the model to reach the verdict it already had; every pull request opened on this repository since 0.6.6 went through that. The app now subscribes to `check_suite` and `status`. A completion on the head a verdict is held on re-reads the CI gate alone, through the same code that placed the hold, and when it is green posts the approval and concludes the check run `success`. A failed check keeps the hold and says so in the check-run summary, a later green re-run lifts it, and a push supersedes it. The re-evaluation runs on the per-pull-request worker the reviews use, after any review in flight, and re-reads the head before posting. Held verdicts live in memory per replica, and an app registered before this release must be subscribed to the two events by hand; the README says where
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
 

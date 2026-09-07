@@ -1836,4 +1836,28 @@ class VerdictBuilderTest {
             < markdown.indexOf(CONFIDENCE_HOLD_HEADLINE),
         markdown);
   }
+
+  private static final CiStatusEvaluator.CiEvaluation CI_PENDING =
+      new CiStatusEvaluator.CiEvaluation(
+          List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)), false);
+
+  @Test
+  void strictGateHoldsApprovalOnPendingOrUnreadableCiOnly() {
+    assertTrue(builder.ciHoldsApproval(CI_PENDING));
+    assertTrue(builder.ciHoldsApproval(CI_UNREADABLE));
+    assertFalse(builder.ciHoldsApproval(CI_CLEAR));
+  }
+
+  @Test
+  void warnGateNeverHoldsApproval() {
+    var warn =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            CiGatingMode.WARN);
+
+    assertFalse(warn.ciHoldsApproval(CI_PENDING));
+    assertFalse(warn.ciHoldsApproval(CI_UNREADABLE));
+  }
 }

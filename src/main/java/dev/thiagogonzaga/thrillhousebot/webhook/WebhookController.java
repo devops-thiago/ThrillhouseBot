@@ -18,6 +18,8 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
+import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
+import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
@@ -61,6 +63,7 @@ public class WebhookController {
   private final AckReactionService ackReactionService;
   private final ReviewSkipEmitter skipEmitter;
   private final FindingFeedbackCaptureService findingFeedbackCapture;
+  private final CiHoldRegistry ciHoldRegistry;
   private final ObjectMapper mapper;
 
   @Inject
@@ -79,6 +82,7 @@ public class WebhookController {
       AckReactionService ackReactionService,
       ReviewSkipEmitter skipEmitter,
       FindingFeedbackCaptureService findingFeedbackCapture,
+      CiHoldRegistry ciHoldRegistry,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
@@ -94,6 +98,7 @@ public class WebhookController {
     this.ackReactionService = ackReactionService;
     this.skipEmitter = skipEmitter;
     this.findingFeedbackCapture = findingFeedbackCapture;
+    this.ciHoldRegistry = ciHoldRegistry;
     this.mapper = mapper;
   }
 
@@ -167,6 +172,8 @@ public class WebhookController {
             case "pull_request" -> handlePullRequest(payload);
             case "issue_comment" -> handleIssueComment(payload);
             case "pull_request_review_comment" -> handleReviewComment(payload);
+            case "check_suite" -> handleCheckSuite(payload);
+            case "status" -> handleStatus(payload);
             case "installation", "installation_repositories" -> {
               log.info(
                   "App installation event (action: {}), installation id: {}",
@@ -478,6 +485,95 @@ public class WebhookController {
             comment.id(),
             true,
             comment.diffHunk()));
+  }
+
+  /**
+   * Handles {@code check_suite} events (#825): a completed suite on a head whose review is held on
+   * the CI gate gets that gate re-evaluated. {@code check_suite} rather than {@code workflow_run}
+   * because it fires for every app that reports check runs — GitHub Actions and any other CI — and
+   * reads from the same source the gate does; and the head is matched through {@link
+   * CiHoldRegistry} rather than the payload's {@code pull_requests}, which is empty for a fork. The
+   * bot's own suite completing is what every held review ends with, and never changes the gate, so
+   * it is skipped.
+   *
+   * @return {@code false} only when a re-evaluation was attempted but the dispatcher rejected it
+   *     (so the dedup slot should be rolled back); {@code true} otherwise
+   */
+  private boolean handleCheckSuite(WebhookPayload payload) {
+    if (!"completed".equals(payload.action())) {
+      log.debug("Ignoring check_suite action: {}", payload.action());
+      return true;
+    }
+    var suite = payload.checkSuite();
+    if (suite == null) {
+      log.debug("Ignoring check_suite with missing check_suite");
+      return true;
+    }
+    if (suite.app() != null && isOwnApp(suite.app())) {
+      log.debug("Ignoring the bot's own check suite");
+      return true;
+    }
+    return recheckHeldVerdicts(payload, suite.headSha(), "check suite");
+  }
+
+  /**
+   * Handles {@code status} events (#825): a required check reported through the legacy Commit
+   * Status API completes no check suite, so a hold whose last outstanding check is one of those is
+   * lifted from here. A {@code pending} status changes nothing and is ignored.
+   */
+  private boolean handleStatus(WebhookPayload payload) {
+    if (payload.state() == null || "pending".equalsIgnoreCase(payload.state())) {
+      log.debug("Ignoring status with state: {}", payload.state());
+      return true;
+    }
+    return recheckHeldVerdicts(payload, payload.sha(), "status " + payload.context());
+  }
+
+  private boolean isOwnApp(WebhookPayload.App app) {
+    var appId = config.github().appId();
+    return appId != null && appId.strip().equals(Long.toString(app.id()));
+  }
+
+  /**
+   * Dispatches a CI re-evaluation for every pull request tracked or held at {@code headSha}. Most
+   * completions match nothing — the head is not under a held review — and end here at no cost.
+   */
+  private boolean recheckHeldVerdicts(WebhookPayload payload, String headSha, String source) {
+    var repo = payload.repository();
+    if (headSha == null
+        || headSha.isBlank()
+        || repo == null
+        || repo.owner() == null
+        || payload.installation() == null) {
+      log.debug("Ignoring {} event with missing head sha, repository, or installation", source);
+      return true;
+    }
+    var owner = repo.owner().login();
+    var prNumbers = ciHoldRegistry.pullRequestsAt(owner, repo.name(), headSha);
+    if (prNumbers.isEmpty()) {
+      log.debug(
+          "No review held on {} in {} — ignoring the {} completion",
+          headSha,
+          repo.fullName(),
+          source);
+      return true;
+    }
+    var queued = true;
+    for (var prNumber : prNumbers) {
+      log.info(
+          "CI reported on {} for PR #{} in {} ({}) — re-evaluating the held verdict",
+          headSha,
+          prNumber,
+          repo.fullName(),
+          source);
+      var task =
+          new CiHoldRevisit.Recheck(
+              owner, repo.name(), prNumber, headSha, payload.installation().id());
+      if (!reviewDispatcher.dispatchCiRecheck(task)) {
+        queued = false;
+      }
+    }
+    return queued;
   }
 
   /**

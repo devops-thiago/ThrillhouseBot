@@ -23,6 +23,8 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
+import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
+import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
@@ -32,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,6 +81,8 @@ class WebhookControllerTest {
 
   @Mock private FindingFeedbackCaptureService findingFeedbackCapture;
 
+  @Mock private CiHoldRegistry ciHoldRegistry;
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   /** A non-null delivery id; the mocked deduplicator reports it unseen unless a test overrides. */
@@ -108,6 +113,7 @@ class WebhookControllerTest {
             ackReactionService,
             skipEmitter,
             findingFeedbackCapture,
+            ciHoldRegistry,
             mapper);
   }
 
@@ -1665,6 +1671,244 @@ class WebhookControllerTest {
 
     // The async routeEvent should have caught the RuntimeException and logged it
     verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldRecheckHeldVerdictWhenCheckSuiteCompletes() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(ciHoldRegistry.pullRequestsAt("a", "b", "abc123")).thenReturn(List.of(7));
+    when(reviewDispatcher.dispatchCiRecheck(any())).thenReturn(true);
+
+    var body =
+        buildCheckSuitePayload("completed", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    var response = controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
+
+    assertEquals(200, response.getStatus());
+    verify(reviewDispatcher)
+        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(deduplicator, never()).forget(anyString());
+  }
+
+  @Test
+  void shouldRecheckEveryPullRequestHeldAtTheCompletedHead() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(ciHoldRegistry.pullRequestsAt("a", "b", "abc123")).thenReturn(List.of(7, 8));
+    when(reviewDispatcher.dispatchCiRecheck(any())).thenReturn(true);
+
+    var body =
+        buildCheckSuitePayload("completed", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
+
+    verify(reviewDispatcher)
+        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+    verify(reviewDispatcher)
+        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 8, "abc123", 1L));
+  }
+
+  @Test
+  void shouldIgnoreCheckSuiteWhenNoVerdictIsHeldAtItsHead() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(ciHoldRegistry.pullRequestsAt("a", "b", "abc123")).thenReturn(List.of());
+
+    var body =
+        buildCheckSuitePayload("completed", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
+
+    verify(reviewDispatcher, never()).dispatchCiRecheck(any());
+  }
+
+  @Test
+  void shouldIgnoreCheckSuiteThatIsNotCompleted() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        buildCheckSuitePayload("requested", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
+
+    verifyNoInteractions(ciHoldRegistry);
+    verify(reviewDispatcher, never()).dispatchCiRecheck(any());
+  }
+
+  @Test
+  void shouldIgnoreTheBotsOwnCheckSuite() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(githubConfig.appId()).thenReturn("99");
+
+    var body =
+        buildCheckSuitePayload("completed", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
+
+    verifyNoInteractions(ciHoldRegistry);
+    verify(reviewDispatcher, never()).dispatchCiRecheck(any());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("incompleteCheckSuitePayloads")
+  void shouldIgnoreCheckSuiteWithMissingFields(String name, String payload) {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    controller.handleWebhook(
+        "sha256=valid", "check_suite", null, DELIVERY, payload.getBytes(StandardCharsets.UTF_8));
+
+    verifyNoInteractions(ciHoldRegistry);
+    verify(reviewDispatcher, never()).dispatchCiRecheck(any());
+  }
+
+  static Stream<Arguments> incompleteCheckSuitePayloads() {
+    var repository = repositoryJson("a/b");
+    return Stream.of(
+        arguments(
+            "no check_suite",
+            "{\"action\":\"completed\"," + repository + ",\"installation\":{\"id\":1}}"),
+        arguments(
+            "no head_sha",
+            "{\"action\":\"completed\",\"check_suite\":{\"head_branch\":\"f\"},"
+                + repository
+                + ",\"installation\":{\"id\":1}}"),
+        arguments(
+            "no repository",
+            "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc123\"},"
+                + "\"installation\":{\"id\":1}}"),
+        arguments(
+            "blank head_sha",
+            "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\" \"},"
+                + repository
+                + ",\"installation\":{\"id\":1}}"),
+        arguments(
+            "no repository owner",
+            "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc123\"},"
+                + "\"repository\":{\"name\":\"b\"},\"installation\":{\"id\":1}}"),
+        arguments(
+            "no installation",
+            "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc123\"},"
+                + repository
+                + "}"));
+  }
+
+  @Test
+  void shouldRecheckOnAnotherAppsCheckSuiteWhenOwnAppIdIsConfigured() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(githubConfig.appId()).thenReturn("12345");
+    when(ciHoldRegistry.pullRequestsAt("a", "b", "abc123")).thenReturn(List.of(7));
+    when(reviewDispatcher.dispatchCiRecheck(any())).thenReturn(true);
+
+    var body =
+        buildCheckSuitePayload("completed", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
+
+    verify(reviewDispatcher)
+        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+  }
+
+  @Test
+  void shouldIgnoreCommitStatusWithoutState() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        ("{\"sha\":\"abc123\",\"context\":\"ci\","
+                + repositoryJson("a/b")
+                + ",\"installation\":{\"id\":1}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "status", null, DELIVERY, body);
+
+    verifyNoInteractions(ciHoldRegistry);
+  }
+
+  @Test
+  void shouldForgetDeliveryIdWhenCiRecheckDispatchIsRejected() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(ciHoldRegistry.pullRequestsAt("a", "b", "abc123")).thenReturn(List.of(7));
+    when(reviewDispatcher.dispatchCiRecheck(any())).thenReturn(false);
+
+    var body =
+        buildCheckSuitePayload("completed", "a/b", "abc123", 99L).getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "check_suite", null, "delivery-ci", body);
+
+    verify(deduplicator).forget("delivery-ci");
+  }
+
+  @Test
+  void shouldRecheckHeldVerdictWhenCommitStatusSettles() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(ciHoldRegistry.pullRequestsAt("a", "b", "abc123")).thenReturn(List.of(7));
+    when(reviewDispatcher.dispatchCiRecheck(any())).thenReturn(true);
+
+    var body = buildStatusPayload("a/b", "abc123", "success").getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "status", null, DELIVERY, body);
+
+    verify(reviewDispatcher)
+        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+  }
+
+  @Test
+  void shouldIgnorePendingCommitStatus() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body = buildStatusPayload("a/b", "abc123", "pending").getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "status", null, DELIVERY, body);
+
+    verifyNoInteractions(ciHoldRegistry);
+    verify(reviewDispatcher, never()).dispatchCiRecheck(any());
+  }
+
+  @Test
+  void shouldIgnoreCommitStatusWithoutSha() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+
+    var body =
+        ("{\"state\":\"success\",\"context\":\"ci\","
+                + repositoryJson("a/b")
+                + ",\"installation\":{\"id\":1}}")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "status", null, DELIVERY, body);
+
+    verifyNoInteractions(ciHoldRegistry);
+  }
+
+  private static String buildCheckSuitePayload(
+      String action, String fullName, String headSha, long appId) {
+    return "{\"action\":\""
+        + action
+        + "\",\"check_suite\":{\"head_sha\":\""
+        + headSha
+        + "\",\"head_branch\":\"feature\",\"conclusion\":\"success\",\"app\":{\"id\":"
+        + appId
+        + ",\"slug\":\"ci\"},\"pull_requests\":[]},"
+        + repositoryJson(fullName)
+        + ",\"installation\":{\"id\":1}}";
+  }
+
+  private static String buildStatusPayload(String fullName, String sha, String state) {
+    return "{\"sha\":\""
+        + sha
+        + "\",\"state\":\""
+        + state
+        + "\",\"context\":\"codecov/patch\","
+        + repositoryJson(fullName)
+        + ",\"installation\":{\"id\":1}}";
+  }
+
+  private static String repositoryJson(String fullName) {
+    var slash = fullName.indexOf('/');
+    return "\"repository\":{\"full_name\":\""
+        + fullName
+        + "\",\"name\":\""
+        + fullName.substring(slash + 1)
+        + "\",\"default_branch\":\"main\",\"owner\":{\"login\":\""
+        + fullName.substring(0, slash)
+        + "\",\"id\":2}}";
   }
 
   @Test

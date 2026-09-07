@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -49,6 +50,7 @@ class ReviewDispatcherTest {
   @Mock private ReviewOrchestrator orchestrator;
   @Mock private AutoReviewRateLimiter rateLimiter;
   @Mock private ReviewSkipEmitter skipEmitter;
+  @Mock private CiHoldRevisit ciHoldRevisit;
 
   private ExecutorService reviewExecutor;
   private ReviewDispatcher dispatcher;
@@ -57,7 +59,144 @@ class ReviewDispatcherTest {
   void setUp() {
     MockitoAnnotations.openMocks(this);
     reviewExecutor = Executors.newSingleThreadExecutor();
-    dispatcher = new ReviewDispatcher(reviewExecutor, orchestrator, rateLimiter, skipEmitter);
+    dispatcher =
+        new ReviewDispatcher(reviewExecutor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+  }
+
+  private static CiHoldRevisit.Recheck recheck(int prNumber, String sha) {
+    return new CiHoldRevisit.Recheck("owner", "repo", prNumber, sha, 1L);
+  }
+
+  /** Blocks the orchestrator's review until {@code release} is counted down. */
+  private void blockReviewUntil(CountDownLatch started, CountDownLatch release) {
+    doAnswer(
+            invocation -> {
+              started.countDown();
+              release.await(5, TimeUnit.SECONDS);
+              return true;
+            })
+        .when(orchestrator)
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void shouldRunCiRecheckOnItsOwnWhenNoReviewIsInFlight() {
+    var task = recheck(42, "sha1");
+
+    assertTrue(dispatcher.dispatchCiRecheck(task));
+
+    verify(ciHoldRevisit, timeout(2000)).revisit(task);
+    verify(orchestrator, never()).review(any());
+  }
+
+  @Test
+  void shouldRunCiRecheckAfterTheInFlightReview() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var task = recheck(42, "sha1");
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    assertTrue(dispatcher.dispatchCiRecheck(task));
+    verify(ciHoldRevisit, after(200).never()).revisit(any());
+
+    release.countDown();
+
+    verify(ciHoldRevisit, timeout(5000)).revisit(task);
+    var order = inOrder(orchestrator, ciHoldRevisit);
+    order.verify(orchestrator).review(any(ReviewOrchestrator.ReviewRequest.class));
+    order.verify(ciHoldRevisit).revisit(task);
+  }
+
+  @Test
+  void shouldDropCiRecheckWhenAReviewIsAlreadyQueued() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
+    assertTrue(dispatcher.dispatchCiRecheck(recheck(42, "sha1")));
+
+    release.countDown();
+
+    verify(orchestrator, timeout(5000).times(2))
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(ciHoldRevisit, after(300).never()).revisit(any());
+  }
+
+  @Test
+  void shouldDropQueuedCiRecheckWhenAReviewArrivesBehindIt() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    assertTrue(dispatcher.dispatchCiRecheck(recheck(42, "sha1")));
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
+
+    release.countDown();
+
+    verify(orchestrator, timeout(5000).times(2))
+        .review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(ciHoldRevisit, after(300).never()).revisit(any());
+  }
+
+  @Test
+  void shouldKeepOnlyTheLatestQueuedCiRecheck() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    dispatcher.dispatchCiRecheck(recheck(42, "sha1"));
+    dispatcher.dispatchCiRecheck(recheck(42, "sha1"));
+
+    release.countDown();
+
+    verify(ciHoldRevisit, timeout(5000)).revisit(recheck(42, "sha1"));
+    verify(ciHoldRevisit, after(300).times(1)).revisit(any());
+  }
+
+  @Test
+  void shouldContinueAfterCiRecheckFailure() {
+    doThrow(new RuntimeException("boom")).when(ciHoldRevisit).revisit(any());
+
+    dispatcher.dispatchCiRecheck(recheck(42, "sha1"));
+    verify(ciHoldRevisit, timeout(2000)).revisit(any());
+
+    ReviewOrchestrator.ReviewRequest req = reviewRequest("owner", "repo", 42, "sha2");
+    dispatcher.dispatch(req);
+    verify(orchestrator, timeout(2000)).review(req);
+  }
+
+  @Test
+  void shouldReturnFalseWhenExecutorRejectsCiRecheck() {
+    var rejecting = mock(ExecutorService.class);
+    doThrow(new RejectedExecutionException("saturated")).when(rejecting).execute(any());
+    var saturated =
+        new ReviewDispatcher(rejecting, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+
+    assertFalse(saturated.dispatchCiRecheck(recheck(42, "sha1")));
+    assertEquals(0, saturated.stateCount());
+  }
+
+  @Test
+  void shouldNotReviveRetiredStateOnCiRecheck() {
+    var key = new ReviewDispatcher.PrKey("owner", "repo", 9);
+    var retired = new ReviewDispatcher.PerPrState();
+    retired.retired = true;
+    dispatcher.seedState(key, retired);
+    var task = recheck(9, "sha1");
+
+    dispatcher.dispatchCiRecheck(task);
+
+    verify(ciHoldRevisit, timeout(2000)).revisit(task);
+    assertEquals(false, retired.running);
   }
 
   @AfterEach
@@ -180,7 +319,8 @@ class ReviewDispatcherTest {
   void shouldClearStateWhenExecutorRejectsWithoutRunningTask() {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
-    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter);
+    dispatcher =
+        new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1"));
     verify(orchestrator, after(500).never()).review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -291,7 +431,8 @@ class ReviewDispatcherTest {
   void shouldReturnFalseWhenExecutorRejectsTask() {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
-    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter);
+    dispatcher =
+        new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
 
     // A rejected task means no review will run, so callers can roll back dedup state.
     assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
@@ -315,7 +456,8 @@ class ReviewDispatcherTest {
         .when(executor)
         .execute(any());
 
-    dispatcher = new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter);
+    dispatcher =
+        new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha1"));
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha2"));
