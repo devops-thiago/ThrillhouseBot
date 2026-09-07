@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Changed
+
+- **The artifact download client is built once, not once per download** (#478): `ArtifactZipFetcher` built an `HttpClient` for every coverage-artifact download and closed it in the same call, a selector thread and a fresh TLS handshake each time for a client that carries no per-call state. One client now lives for the life of the bean and is shut down with the application. The per-request timeout stays on the request, no credential is attached to the shared client and the field says so, and the JVM's default proxy selector is read once when the bean is built rather than per download, which changes nothing for a proxy configured through system properties at startup
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
