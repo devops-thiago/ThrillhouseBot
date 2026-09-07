@@ -4,6 +4,11 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A truncation's concise flag can no longer be re-marked apart from its message** (#600): `AiResponseTruncatedException#implicatingConciseModel()` flipped the flag and kept the message, which is how a summary-lane truncation once told the operator to raise a knob its own flag said did not apply (#581). #595 moved both the remedy and the flag into `ModelLane#truncation`, and the method has had no production caller since. It is removed, so the two are set together at construction or not at all
+- **The truncation javadocs describe what the lanes carry** (#600): `TruncatedResponseSalvager#salvage` and `AiResponseTruncatedException` still said the blocking lanes buffer no body, which #592 made false when it put `Result#content()` on the truncation for exactly those lanes. A reader was being told salvage is impossible where it now runs. Both say that every lane carries the text it had before the cut and that a null body is a call that produced none
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
