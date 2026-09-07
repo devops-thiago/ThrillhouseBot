@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Kotlin raw string and a Kotlin or Python triple-quoted body are read by the file's language** (#814): `LiveCodeScanner` has told a backtick literal's escape rule from the diff header since #791 and left two `"""` misreadings as documented trades, because nothing else had a hint. A Kotlin raw string ending in a backslash (`"""C:\Users\"""`) was read with the Java text-block escape, never saw its closer and blanked the rest of the hunk, so a wrong "runs serially" decline stood; a Kotlin or Python triple-quoted body that starts with a statement terminator and runs past its line was read as the closer of a literal opened above the hunk, and the dispatch words quoted inside it overruled a decline that was right. The header now yields a per-file profile of three booleans: a `.kt` or `.kts` file turns the `"""` escape off, a `.kt`, `.kts` or `.py` file turns the closer rule off, and everything else, a fragment that names no file included, reads as before. The profile is also read from the `### path (…)` heading `ReviewDiffFormatter` puts over each file section, since that is the text the re-check actually sees and a GitHub patch carries no `diff --git` line; until now the backtick hint from #791 never applied outside a bare patch
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
