@@ -2906,6 +2906,60 @@ class FollowUpAnalyzerTest {
     assertEquals("It is fine.", declines.get(0).reason());
   }
 
+  /**
+   * The other plausible wrap: after the word, with the {@code path:line} and title on the next
+   * line, blank lines or not. That line is the directive's, so the naming reads it and the reason
+   * starts below it; the acknowledgement already saw the locator, and the review must agree.
+   */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("wrapsAfterTheWord")
+  void conversationDeclinesShouldReadANamingWrappedAfterTheWord(
+      String name, String body, String naming, String reason) {
+    var declines = FollowUpAnalyzer.conversationDeclines(body, BOT_ID);
+
+    assertEquals(List.of(new FollowUpAnalyzer.ConversationDecline(naming, reason)), declines, name);
+  }
+
+  static Stream<Arguments> wrapsAfterTheWord() {
+    return Stream.of(
+        arguments(
+            "next line",
+            "@thrillhousebot declined\n`src/A.java:10` — SQL injection\n\nIt is fine.",
+            "@thrillhousebot declined\n`src/A.java:10` — SQL injection",
+            "It is fine."),
+        arguments(
+            "after a blank line",
+            "@thrillhousebot declined  \n\n`src/A.java:10` — SQL injection\nIt is fine.",
+            "@thrillhousebot declined  \n\n`src/A.java:10` — SQL injection",
+            "It is fine."),
+        arguments(
+            "nothing at all after the word",
+            "@thrillhousebot declined\n\n",
+            "@thrillhousebot declined",
+            ""));
+  }
+
+  @Test
+  void conversationDeclineShouldApplyADirectiveWrappedAfterTheWord() {
+    var wrapped =
+        List.of(
+            declines(
+                901L,
+                "@thrillhousebot declined\n`"
+                    + RACE_LOCATOR
+                    + "` — "
+                    + RACE_TITLE
+                    + "\n\n"
+                    + ASYNC_AFTER_ACK));
+
+    var rechecked = conversationRecheck(wrapped);
+
+    assertEquals("unresolved", rechecked.get(0).status(), "the decline was applied and re-checked");
+    assertTrue(
+        rechecked.get(0).note().contains("only ever called from"),
+        "the reason below the wrapped naming is the reason: " + rechecked.get(0).note());
+  }
+
   @Test
   void conversationDeclinesShouldReadTheEdgeShapes() {
     var oneLine =

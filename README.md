@@ -475,7 +475,9 @@ maintainer's reply, which the next review records as **justified** after
 re-checking the stated reason against the code (see **Re-checking declines**).
 A finding with no thread has no reply to give, so the decline is written on
 the PR conversation, as the clearing directive's sibling: the directive line
-names the finding, and the lines below it are the reason.
+names the finding, and the lines below it are the reason. The directive may
+wrap once, before or after `declined`; the line that then carries the
+`path:line` and title is still the directive's, never the reason's.
 
 ```
 @thrillhousebot declined src/main/java/com/example/Widget.java:42 — Missing null check

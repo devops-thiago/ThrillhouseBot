@@ -1069,8 +1069,9 @@ public class FollowUpAnalyzer {
    * body with its quoted text blanked in place ({@link #quotedTextBlanked}) rather than dropped, so
    * a match's offsets are offsets into the body itself and the lines it spans can be told from the
    * lines around it. A match may span two lines — the separator between the mention and the word
-   * admits a line feed — and every line it touches is the directive's, none of them the reason's,
-   * so the finding's title cannot survive into the reason on a line break.
+   * admits a line feed — and a directive may wrap once more after the word ({@link #namingLine});
+   * every line it touches is the directive's, none of them the reason's, so the finding's title
+   * cannot survive into the reason on a line break.
    */
   static List<ConversationDecline> conversationDeclines(String body, BotIdentity botIdentity) {
     var masked = quotedTextBlanked(body);
@@ -1082,7 +1083,7 @@ public class FollowUpAnalyzer {
       // directive that begins a line is the previous line's feed; the directive's first line is
       // the mention's own.
       var at = masked.indexOf('@', matches.start());
-      spans.add(new int[] {lineAt(body, at), lineAt(body, matches.end() - 1)});
+      spans.add(new int[] {lineAt(body, at), namingLine(body, lines, matches.end())});
     }
     var declines = new ArrayList<ConversationDecline>(spans.size());
     for (var i = 0; i < spans.size(); i++) {
@@ -1096,6 +1097,28 @@ public class FollowUpAnalyzer {
               String.join("\n", lines.subList(afterLast, next)).strip()));
     }
     return declines;
+  }
+
+  /**
+   * The last line of a directive whose word ends at {@code wordEnd}: the word's own line, or, when
+   * nothing follows the word on it, the next line with text. A maintainer who wraps after the word
+   * puts the {@code path:line} and title on that line, and it is the directive's — the naming is
+   * read from it and the reason begins below it — the same way the line before the word is the
+   * directive's when the wrap comes before it. Without this the wrapped naming fell into the
+   * reason, the directive named nothing and did nothing, and the acknowledgement, which sees the
+   * locator wherever it sits in the comment, had promised a decline the review then never applied.
+   */
+  private static int namingLine(String body, List<String> lines, int wordEnd) {
+    var lineEnd = body.indexOf('\n', wordEnd);
+    var last = lineAt(body, wordEnd - 1);
+    if (!body.substring(wordEnd, lineEnd < 0 ? body.length() : lineEnd).isBlank()) {
+      return last;
+    }
+    var next = last + 1;
+    while (next < lines.size() && lines.get(next).isBlank()) {
+      next++;
+    }
+    return next < lines.size() ? next : last;
   }
 
   /** The 0-based line {@code index} falls on in {@code text}: the line feeds before it. */
