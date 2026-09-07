@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The on-request commands no longer render a whole-PR diff that nothing reads** (#474): since #457 `/describe`, `/changelog`, `/improve` and `/generate-tests` send the model per-batch renders planned from the file list, but `loadInputs` still built the `max-diff-lines`-capped render of the whole pull request on every call, hundreds of kilobytes on a large one, and read it once to ask whether it was blank. It cannot be blank whenever the file list is not, so a pull request whose every changed file was ignored or a pure rename passed the check, had its title, body and instructions loaded, and only then stopped on an empty batch plan. The reviewable-file list is the signal now: an empty one ends the command before anything else is fetched, and the posted outcome is unchanged in every case. The `diff` field is gone from the shared `Inputs` record, where its meaning had come to depend on the command that built it (empty was the abort signal on four commands and the normal value on `/add-docs`)
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
