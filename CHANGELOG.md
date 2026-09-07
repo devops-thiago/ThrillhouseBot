@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An empty server-sent event in a streamed review does not reach the Vert.x uncaught-exception handler, and a test now holds that through the real client** (#237): this is the older report of the throw #555 fixed in 0.6.0, where a payload-less event (a keep-alive comment, a bare `data:`, a stray blank line) was handed to Jackson on the event loop and logged as `Uncaught exception received by Vert.x` while the review went on to complete. The report was parked waiting on an upstream fix; there is none. `OpenAiRestApi.OpenAiRestApiReaderInterceptor` in quarkus-langchain4j 1.13.1 is the 1.11.2 code line for line and still passes the empty payload straight to the mapper, so the dependency bumps since did not change the behaviour and the in-app reader interceptor from #555 remains the fix. What #555 proved around one dispatched event is now proved on a real stream: the `OpenAiRestApi` client reads from a loopback provider that sends all three filler shapes between two real chunks, both chunks arrive, and nothing reaches the Vert.x handler. With the interceptor reduced to a pass-through the same stream reports four uncaught mapping failures while still delivering both chunks, the exact shape the report described
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
