@@ -64,6 +64,12 @@ import org.slf4j.LoggerFactory;
  * are spent the failure propagates unchanged, and the log says the generated content was lost so an
  * operator can see the command needs re-running.
  *
+ * <p>That bound is per call, and a review makes one call per route per finding, so a review GitHub
+ * refuses throughout could still hold its slot for the sum of every route's backoff — hours, at the
+ * default comment cap (#734). Inside a review every wait is charged to the review's {@link
+ * GitHubWriteBudget} as well, and once that is spent a throttled write is given up on without a
+ * wait, exactly as it is once the attempts are.
+ *
  * <h2>Why the budget is what it is</h2>
  *
  * #722: the budget was three attempts, and its own documentation claimed the resulting 60s was
@@ -223,16 +229,17 @@ public final class GitHubWriteRetry {
   }
 
   /**
-   * How long to wait before repeating this failure, or empty when it must not be repeated — either
-   * because GitHub is refusing rather than throttling, or because the attempts are spent. The
-   * spent-attempts case is logged, because it is the one where a completed generation is discarded
-   * and the operator needs the response's own words to see why.
+   * How long to wait before repeating this failure, or empty when it must not be repeated — because
+   * GitHub is refusing rather than throttling, because the attempts are spent, or because the
+   * review this write belongs to has spent its {@link GitHubWriteBudget} (#734). The spent cases
+   * are logged, because they are the ones where a completed generation is discarded and the
+   * operator needs the response's own words to see why.
    *
-   * <p>That line sits behind a level check because {@link GitHubApiError#diagnostics()} builds its
+   * <p>Those lines sit behind a level check because {@link GitHubApiError#diagnostics()} builds its
    * string eagerly — a parameter placeholder defers the {@code toString}, not the call that
-   * produces the argument. The message itself is unchanged: this is the warning that surfaced the
-   * issue-624 diagnosis in production, so what it prints when it prints must stay exactly as it
-   * was.
+   * produces the argument. The spent-attempts message itself is unchanged: this is the warning that
+   * surfaced the issue-624 diagnosis in production, so what it prints when it prints must stay
+   * exactly as it was.
    */
   private Optional<Duration> retryDelay(
       String operation, WebApplicationException failure, int attempt) {
@@ -255,7 +262,18 @@ public final class GitHubWriteRetry {
       }
       return Optional.empty();
     }
-    return Optional.of(min(error.get().retryDelay(attempt, clock.get()), MAX_DELAY_PER_ATTEMPT));
+    var delay = min(error.get().retryDelay(attempt, clock.get()), MAX_DELAY_PER_ATTEMPT);
+    if (!GitHubWriteBudget.admits(operation, delay)) {
+      if (log.isWarnEnabled()) {
+        log.warn(
+            "GitHub throttled {} after the review's write-retry budget was spent — not retried, so"
+                + " the content is lost unless a later route lands it. {}",
+            operation,
+            error.get().diagnostics());
+      }
+      return Optional.empty();
+    }
+    return Optional.of(delay);
   }
 
   /**
