@@ -1,5 +1,11 @@
-# Architecture
-<!-- docs:architecture:start -->
+---
+slug: 0.6.6/architecture
+title: Architecture
+description: One-page overview of how the bot is structured and how a review flows through it.
+---
+
+
+
 
 One-page overview of how the bot is structured and how a review flows through it.
 
@@ -256,12 +262,9 @@ unless `REVIEW_PATCH_COVERAGE_ENABLED` is set.
 repository's own ignore globs and path-scoped review instructions, read from the
 default branch and cached for five minutes. Ignore globs are additive to the
 deployment list; a repository can narrow its own review scope but cannot restore
-a file the deployment excludes. Globs follow gitignore's reading and go through
-the same matcher as the deployment list. Every failure mode (missing file,
-invalid YAML, unexpected shape, uncompilable glob) is logged and skipped,
-leaving the deployment configuration in force; a repeated key keeps its last
-value, and a read that failed for a reason other than "no such file" is not
-remembered as "no config".
+a file the deployment excludes. Every failure mode (missing file, invalid YAML,
+unexpected shape, uncompilable glob) is logged and skipped, leaving the
+deployment configuration in force.
 
 **Write pacing** — content-creating GitHub calls are spaced process-wide by
 `GITHUB_WRITE_MIN_INTERVAL` so a burst of comments never reaches the secondary
@@ -289,4 +292,5 @@ model's input cap and generation parameters, and `AI_REASONING_ENABLED` /
 `AI_REASONING_EFFORT` when the model supports reasoning. See the
 [provider table](https://devops-thiago.github.io/ThrillhouseBot/providers/) and
 the [configuration reference](https://devops-thiago.github.io/ThrillhouseBot/configuration/).
-<!-- docs:architecture:end -->
+
+
