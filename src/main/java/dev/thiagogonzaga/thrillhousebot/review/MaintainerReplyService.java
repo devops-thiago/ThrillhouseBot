@@ -266,8 +266,8 @@ public class MaintainerReplyService {
    */
   static final String DECLINE_DIRECTIVE_ACK =
       "The next review will record every previous finding this comment names by its `path:line`"
-          + " and title as declined, checking the reason it gives against the reviewed code;"
-          + " anything it does not name stays open.";
+          + " and title as declined, checking the reason written below each against the reviewed"
+          + " code; anything it does not name stays open.";
 
   /** The decline counterpart of {@link #clearDirectiveNoLocatorAck}. */
   static String declineDirectiveNoLocatorAck(BotIdentity botIdentity) {

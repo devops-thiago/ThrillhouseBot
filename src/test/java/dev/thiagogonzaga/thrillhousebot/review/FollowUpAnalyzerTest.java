@@ -2851,27 +2851,125 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
-  void declineReasonShouldBeTheCommentWithoutItsDirectiveLines() {
+  void conversationDeclinesShouldScopeEachReasonToTheLinesBelowItsDirective() {
     var body =
         """
-        Looked at this again.
+        Looked at both again.
+
         @thrillhousebot declined `src/A.java:10` — SQL injection
         The column name comes from an allow-list.
 
         Docs say to write `@thrillhousebot declined path:line — title`, which this does.
-        > @thrillhousebot declined `src/B.java:5` — quoted, so the re-check drops it itself
+        > @thrillhousebot declined `src/C.java:1` — quoted, so it is no directive
+        @thrillhousebot declined `src/B.java:5` — Missing null check
+        The caller null-checks; this is a private helper.
         """;
 
+    var declines = FollowUpAnalyzer.conversationDeclines(body, BOT_ID);
+
+    assertEquals(2, declines.size(), declines.toString());
+    assertEquals(
+        "@thrillhousebot declined `src/A.java:10` — SQL injection", declines.get(0).naming());
     assertEquals(
         """
-        Looked at this again.
         The column name comes from an allow-list.
 
         Docs say to write `@thrillhousebot declined path:line — title`, which this does.
-        > @thrillhousebot declined `src/B.java:5` — quoted, so the re-check drops it itself""",
-        FollowUpAnalyzer.declineReason(body, BOT_ID),
-        "only the line that uses the directive is the directive; the rest is the reason");
-    assertEquals("", FollowUpAnalyzer.declineReason(DECLINES_RACE, BOT_ID));
+        > @thrillhousebot declined `src/C.java:1` — quoted, so it is no directive""",
+        declines.get(0).reason(),
+        "the preamble is nobody's reason; quoted forms neither split a reason nor count");
+    assertEquals(
+        "@thrillhousebot declined `src/B.java:5` — Missing null check", declines.get(1).naming());
+    assertEquals("The caller null-checks; this is a private helper.", declines.get(1).reason());
+  }
+
+  /**
+   * The separator between the mention and the word admits a line feed, so a directive can span two
+   * lines. Both are the directive's: the title on the second line is the bot's text, never the
+   * maintainer's reason, whichever line it lands on.
+   */
+  @Test
+  void conversationDeclinesShouldKeepATitleOffTheReasonWhenTheDirectiveWrapsALine() {
+    var body =
+        """
+        @thrillhousebot
+        declined `src/A.java:10` — only ever called from one place
+
+        It is fine.""";
+
+    var declines = FollowUpAnalyzer.conversationDeclines(body, BOT_ID);
+
+    assertEquals(1, declines.size());
+    assertEquals(
+        "@thrillhousebot\ndeclined `src/A.java:10` — only ever called from one place",
+        declines.get(0).naming());
+    assertEquals("It is fine.", declines.get(0).reason());
+  }
+
+  @Test
+  void conversationDeclinesShouldReadTheEdgeShapes() {
+    var oneLine =
+        "@thrillhousebot declined `src/A.java:10` — t1 and @thrillhousebot declined"
+            + " `src/B.java:5` — t2";
+
+    var shared = FollowUpAnalyzer.conversationDeclines(oneLine, BOT_ID);
+
+    assertEquals(2, shared.size(), "two directives on one line are two directives");
+    assertEquals(oneLine, shared.get(0).naming());
+    assertEquals("", shared.get(0).reason(), "nothing lies below the first");
+    assertEquals(oneLine, shared.get(1).naming());
+    assertEquals("", shared.get(1).reason(), "nor below the second");
+    assertEquals(
+        List.of(),
+        FollowUpAnalyzer.conversationDeclines(
+            "```\n@thrillhousebot declined `src/A.java:10` — t\n```\nprose", BOT_ID),
+        "a fenced directive is documentation");
+    assertEquals(
+        List.of(new FollowUpAnalyzer.ConversationDecline(DECLINES_RACE, "")),
+        FollowUpAnalyzer.conversationDeclines(DECLINES_RACE, BOT_ID),
+        "a directive with nothing below it is a decline with no reason");
+  }
+
+  /**
+   * One comment declining two concurrency findings with two reasons: the first reason is the
+   * dogfood premise the diff contradicts, the second is accepted risk. Each re-check must read only
+   * its own reason, or the first finding's contradiction re-opens the second.
+   */
+  @Test
+  void conversationDeclineShouldCheckEachFindingAgainstItsOwnReason() {
+    var counterRace =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "src/B.java",
+            5,
+            "Race in flush(): the counter is read then written without a lock",
+            "two callers can interleave the read and the write",
+            null,
+            null);
+    var previous = List.of(RACE_PREVIOUS.get(0), counterRace);
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"));
+    var both =
+        List.of(
+            declines(
+                901L,
+                DECLINES_RACE
+                    + "\n"
+                    + ASYNC_AFTER_ACK
+                    + "\n\n@thrillhousebot declined `src/B.java:5` — Race in flush(): the counter"
+                    + " is read then written without a lock\nAccepted risk: the counter is a"
+                    + " metric and may drift."));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            previous, statuses, List.of(), both, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals("unresolved", rechecked.get(0).status(), "the first reason is contradicted");
+    assertEquals(
+        "justified", rechecked.get(1).status(), "the second is checked against its own reason");
   }
 
   /**
@@ -3033,8 +3131,10 @@ class FollowUpAnalyzerTest {
         List.of(
             declines(
                 901L,
-                "@thrillhousebot declined `src/B.java:5` — Missing null check\n\nThe caller"
-                    + " null-checks; this is a private helper."));
+                """
+                @thrillhousebot declined `src/B.java:5` — Missing null check
+
+                The caller null-checks; this is a private helper."""));
 
     var rechecked =
         analyzer.recheckDeclines(

@@ -1045,23 +1045,89 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The reason a decline directive gives: the comment with every line that carries the directive
-   * itself taken out. The directive line names the finding by its title, and the title is the bot's
-   * own text about the defect — "check-then-insert race", say — not the maintainer's premise, so
-   * handing it to {@link RebuttalContradiction} would let the finding argue against itself.
-   * Everything else in the comment is the maintainer's, before the directive line as much as after
-   * it. Quoted blocks and inline code are not dropped here: the re-check strips them itself, in the
-   * same way it strips them from a reply on a thread, so the two paths read one text.
+   * One use of the decline directive in a comment: the line(s) the directive itself spans, which is
+   * where it names the finding, and the reason written below it.
+   *
+   * <p>The naming is confined to the directive's own line(s) and the reason to the lines that
+   * follow, up to the next directive, for two reasons a whole-comment reading cannot serve. The
+   * directive line names the finding by its title, and the title is the bot's own text about the
+   * defect — "check-then-insert race", say — not the maintainer's premise, so it must never reach
+   * {@link RebuttalContradiction} as the reason, or a finding argues against itself. And one
+   * comment may decline several findings, each with its own reason: a reason read as "the whole
+   * comment minus the directive lines" would hand finding A's re-check the claim made for finding
+   * B, and a contradiction in B's reason would re-open A. Quoted blocks and inline code are not
+   * dropped from the reason: the re-check strips them itself, in the same way it strips them from a
+   * reply on a thread, so the two paths read one text.
+   *
+   * @param naming the directive's own line(s) as {@link #namingText}, matched against the finding
+   * @param reason the lines below the directive up to the next one, stripped; empty when none
    */
-  static String declineReason(String body, BotIdentity botIdentity) {
-    var directive = declineDirective(botIdentity);
-    var kept = new ArrayList<String>();
-    for (var line : body.split("\n", -1)) {
-      if (!directive.matcher(directiveText(line)).find()) {
-        kept.add(line);
+  record ConversationDecline(String naming, String reason) {}
+
+  /**
+   * Every use of the decline directive in {@code body}, in order. The directive is located over the
+   * body with its quoted text blanked in place ({@link #quotedTextBlanked}) rather than dropped, so
+   * a match's offsets are offsets into the body itself and the lines it spans can be told from the
+   * lines around it. A match may span two lines — the separator between the mention and the word
+   * admits a line feed — and every line it touches is the directive's, none of them the reason's,
+   * so the finding's title cannot survive into the reason on a line break.
+   */
+  static List<ConversationDecline> conversationDeclines(String body, BotIdentity botIdentity) {
+    var masked = quotedTextBlanked(body);
+    var lines = List.of(body.split("\n", -1));
+    var spans = new ArrayList<int[]>();
+    var matches = declineDirective(botIdentity).matcher(masked);
+    while (matches.find()) {
+      // The match opens on the character before the '@' (or at the start of the text), which for a
+      // directive that begins a line is the previous line's feed; the directive's first line is
+      // the mention's own.
+      var at = masked.indexOf('@', matches.start());
+      spans.add(new int[] {lineAt(body, at), lineAt(body, matches.end() - 1)});
+    }
+    var declines = new ArrayList<ConversationDecline>(spans.size());
+    for (var i = 0; i < spans.size(); i++) {
+      var first = spans.get(i)[0];
+      var afterLast = spans.get(i)[1] + 1;
+      // Two directives on one line share it: the second opens where the first's line ends.
+      var next = i + 1 < spans.size() ? Math.max(afterLast, spans.get(i + 1)[0]) : lines.size();
+      declines.add(
+          new ConversationDecline(
+              namingText(String.join("\n", lines.subList(first, afterLast))),
+              String.join("\n", lines.subList(afterLast, next)).strip()));
+    }
+    return declines;
+  }
+
+  /** The 0-based line {@code index} falls on in {@code text}: the line feeds before it. */
+  private static int lineAt(String text, int index) {
+    var line = 0;
+    for (var i = 0; i < index; i++) {
+      if (text.charAt(i) == '\n') {
+        line++;
       }
     }
-    return String.join("\n", kept).strip();
+    return line;
+  }
+
+  /**
+   * {@code body} with fenced code, blockquote lines and inline code spans overwritten by spaces,
+   * one per character, line feeds kept — the text {@link #directiveText} finds the directive in, at
+   * the body's own offsets. The three passes run in the order {@link #directiveText} applies them,
+   * each over the text the previous one blanked.
+   */
+  private static String quotedTextBlanked(String body) {
+    var masked = new StringBuilder(body);
+    for (var quoted : List.of(FENCED_CODE, BLOCKQUOTE_LINE, INLINE_CODE)) {
+      var found = quoted.matcher(masked.toString());
+      while (found.find()) {
+        for (var i = found.start(); i < found.end(); i++) {
+          if (masked.charAt(i) != '\n') {
+            masked.setCharAt(i, ' ');
+          }
+        }
+      }
+    }
+    return masked.toString();
   }
 
   /**
@@ -1247,10 +1313,10 @@ public class FollowUpAnalyzer {
 
   /**
    * Whether a maintainer declined this finding from the PR conversation, and with what reasons: one
-   * entry per maintainer comment that uses the decline directive and names the finding, oldest
-   * first, each carrying that comment's {@link #declineReason}. Empty when no comment does, which
-   * is what every guard below yields — the same guards {@link #clearedInConversation} applies,
-   * because naming a finding wrongly costs the same whichever decision follows (#709).
+   * entry per use of the decline directive that names the finding, in comment order, each carrying
+   * the reason written below that directive ({@link #conversationDeclines}). Empty when none does,
+   * which is what every guard below yields — the same guards {@link #clearedInConversation}
+   * applies, because naming a finding wrongly costs the same whichever decision follows (#709).
    *
    * <p>A list rather than a flag because the count is the "one push-back, then defer" rule: {@link
    * #recheckDeclines} re-checks a lone decline's reason and defers to a second one, exactly as it
@@ -1270,10 +1336,13 @@ public class FollowUpAnalyzer {
     String locator = finding.file() + ":" + finding.line();
     var reasons = new ArrayList<String>();
     for (var comment : conversationComments) {
-      if (isMaintainerConversationComment(comment, botIdentity)
-          && isDeclineDirective(comment.body(), botIdentity)
-          && namesFinding(namingText(comment.body()), locator, anchor)) {
-        reasons.add(declineReason(comment.body(), botIdentity));
+      if (!isMaintainerConversationComment(comment, botIdentity)) {
+        continue;
+      }
+      for (var decline : conversationDeclines(comment.body(), botIdentity)) {
+        if (namesFinding(decline.naming(), locator, anchor)) {
+          reasons.add(decline.reason());
+        }
       }
     }
     return reasons;
@@ -1795,9 +1864,9 @@ public class FollowUpAnalyzer {
    * #declineDirective}) arrives here as a model-reported {@code unresolved} and is applied by
    * {@link #declineNamedInConversation} after the thread pass: the finding is recorded {@code
    * justified}, unless the comment's reason fails the very same re-check, under the very same
-   * one-push-back rule counted in directive comments instead of replies (#709). The two passes
-   * touch disjoint statuses — one rewrites {@code justified}, the other {@code unresolved} — so
-   * their order cannot change an outcome.
+   * one-push-back rule counted in directives instead of replies (#709). The two passes touch
+   * disjoint statuses — one rewrites {@code justified}, the other {@code unresolved} — so their
+   * order cannot change an outcome.
    *
    * @param conversationComments the PR conversation, read for decline directives naming findings
    *     the model still reports unresolved

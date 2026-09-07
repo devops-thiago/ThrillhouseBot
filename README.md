@@ -475,7 +475,7 @@ maintainer's reply, which the next review records as **justified** after
 re-checking the stated reason against the code (see **Re-checking declines**).
 A finding with no thread has no reply to give, so the decline is written on
 the PR conversation, as the clearing directive's sibling: the directive line
-names the finding, and the rest of the comment is the reason.
+names the finding, and the lines below it are the reason.
 
 ```
 @thrillhousebot declined src/main/java/com/example/Widget.java:42 — Missing null check
@@ -503,9 +503,11 @@ thread re-check writes, quoting the claim and the contradicting line. The
 reason is read exactly as a thread reply is: fenced code, blockquotes and
 inline code inside it are quoted material rather than the maintainer's claim,
 and the directive line itself is never read as the reason, so a title that
-happens to mention concurrency cannot argue against its own finding. A comment
-with no reason at all is still a decline; there is nothing to contradict, so it
-is recorded as is.
+happens to mention concurrency cannot argue against its own finding. One
+comment may decline several findings; each directive's reason is the text
+below it up to the next directive, so no finding is checked against another's
+reason. A directive with nothing below it is still a decline; there is nothing
+to contradict, so it is recorded as is.
 
 The push-back happens once. A second `declined` comment naming the same
 finding is the maintainer answering it, and it always wins: the finding is
