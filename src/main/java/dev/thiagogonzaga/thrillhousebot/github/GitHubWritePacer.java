@@ -83,6 +83,11 @@ public final class GitHubWritePacer {
    * asserts the two are equal instead, so widening the backoff budget for a window like the
    * 72-second one measured in #722 fails a test here rather than leaving this ceiling silently
    * short of it.
+   *
+   * <p>This literal is only the fallback for a build with no {@code application.properties}: the
+   * packaged bot reads {@link #MAX_WAIT_KEY}, whose shipped default carries the same number, and
+   * the same test pins that default too. It had shipped as 60 seconds after #723 widened the budget
+   * to 90, so the pin guarded a value production never used (#830).
    */
   static final Duration DEFAULT_MAX_WAIT = Duration.ofSeconds(90);
 
