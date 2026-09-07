@@ -80,7 +80,6 @@ public class AiResponseTruncatedException extends AiReviewException {
     return conciseModelImplicated;
   }
 
-  /** The text received before the cut, on any lane; {@code null} when the call produced none. */
   /**
    * The truncation inside a failure's cause chain, if any. Hoisted from {@code FindingPipeline} so
    * every layer that reacts to a truncation — the pipeline's disclose step, the orchestrator's
