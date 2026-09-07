@@ -44,12 +44,12 @@ import org.slf4j.LoggerFactory;
  *
  * <p>What is charged is the waiting the retry serves, not wall-clock time: the model calls before
  * publication and the HTTP round trips themselves are not what #734 measured, and a pacing wait in
- * {@link GitHubWritePacer} is bounded on its own. The ledger is thread state rather than an
- * instance's, for the reason {@link GitHubLostWrites} keeps its deliveries on the thread: a
- * review's routes run one after another on the thread publishing it, and the retry that charges the
- * ledger sits behind the REST client interface with no handle to be passed one through. An instance
- * carries only the size of the budget it opens a review with, which is what lets a test open one
- * small enough to cross while the retry it exercises is the shared one.
+ * {@link GitHubWritePacer} is bounded on its own. The ledger is thread state, for the reason {@link
+ * GitHubLostWrites} keeps its deliveries on the thread: a review's routes run one after another on
+ * the thread publishing it, and the retry that charges the ledger sits behind the REST client
+ * interface with no handle to be passed one through. The size of the ceiling is the caller's to
+ * name — the publisher reads it from the typed configuration, {@code
+ * thrillhousebot.github.write-retry-budget} — so this class holds no configuration of its own.
  *
  * <p>Off outside a review: the on-demand commands and the thread replies post one piece of content
  * each, and the per-call bound is the right one for them.
@@ -57,22 +57,6 @@ import org.slf4j.LoggerFactory;
 public final class GitHubWriteBudget {
 
   private static final Logger log = LoggerFactory.getLogger(GitHubWriteBudget.class);
-
-  /** Ceiling on one review's waiting across all of its writes; zero or negative turns it off. */
-  public static final String KEY = "thrillhousebot.github.write-retry-budget";
-
-  /**
-   * Five minutes: room for a few of the 72-second content-creation blocks measured in #722 — the
-   * first finding refused inside one waits out most of the block and the rest flow — but well short
-   * of the hours a review refused throughout used to wait. A secondary limit that outlasts this is
-   * telling the deployment it is writing too fast, and the answer there is the pacing in {@link
-   * GitHubWritePacer}, not a review holding its slot until GitHub relents.
-   */
-  static final Duration DEFAULT_BUDGET = Duration.ofMinutes(5);
-
-  /** The instance production uses, sized once from configuration when the first review loads it. */
-  public static final GitHubWriteBudget SHARED =
-      new GitHubWriteBudget(GitHubWritePacer.configured(KEY, DEFAULT_BUDGET));
 
   /** The review open on this thread, if one is. Absent while nothing is. */
   private static final ThreadLocal<Ledger> OPEN = new ThreadLocal<>();
@@ -90,29 +74,16 @@ public final class GitHubWriteBudget {
     }
   }
 
-  private final Duration budget;
+  private GitHubWriteBudget() {}
 
   /**
-   * A budget of a given size. Production has one, {@link #SHARED}; this is how a publisher test in
-   * another package opens a review small enough to cross.
-   */
-  public GitHubWriteBudget(Duration budget) {
-    this.budget = budget;
-  }
-
-  /** The ceiling this instance opens a review with. */
-  Duration budget() {
-    return budget;
-  }
-
-  /**
-   * Runs one review's publication under this budget. A review already open on this thread is
+   * Runs one review's publication under {@code budget}. A review already open on this thread is
    * rejoined rather than restarted — nested publication is still the same review, and a ledger that
    * reset on entry would let the inner scope spend what the outer one already had. A budget that is
    * zero or negative opens nothing, so every wait is admitted. The ledger is closed on every exit
    * path, so a review that fails leaves nothing behind for the next one on the thread.
    */
-  public void within(String review, Runnable work) {
+  public static void within(String review, Duration budget, Runnable work) {
     if (!budget.isPositive() || OPEN.get() != null) {
       work.run();
       return;

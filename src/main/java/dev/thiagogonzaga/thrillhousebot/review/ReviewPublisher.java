@@ -55,7 +55,6 @@ public class ReviewPublisher {
   private final PrLabeler labeler;
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
-  private final GitHubWriteBudget writeBudget;
 
   @Inject
   public ReviewPublisher(
@@ -67,32 +66,6 @@ public class ReviewPublisher {
       PrLabeler labeler,
       ThrillhouseConfig config,
       BotIdentity botIdentity) {
-    this(
-        reviewClient,
-        commentClient,
-        reviewThreadService,
-        suggestionFormatter,
-        followUpAnalyzer,
-        labeler,
-        config,
-        botIdentity,
-        GitHubWriteBudget.SHARED);
-  }
-
-  /**
-   * The same, naming the write-retry budget a review publishes under (#734). Production uses the
-   * shared, configured one; a test hands in one small enough to cross in a single wait.
-   */
-  ReviewPublisher(
-      GitHubReviewClient reviewClient,
-      GitHubCommentClient commentClient,
-      ReviewThreadService reviewThreadService,
-      SuggestionFormatter suggestionFormatter,
-      FollowUpAnalyzer followUpAnalyzer,
-      PrLabeler labeler,
-      ThrillhouseConfig config,
-      BotIdentity botIdentity,
-      GitHubWriteBudget writeBudget) {
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.reviewThreadService = reviewThreadService;
@@ -101,7 +74,6 @@ public class ReviewPublisher {
     this.labeler = labeler;
     this.config = config;
     this.botIdentity = botIdentity;
-    this.writeBudget = writeBudget;
   }
 
   /**
@@ -368,11 +340,14 @@ public class ReviewPublisher {
    * GitHub refuses throughout stops waiting once the budget is spent rather than holding its pull
    * request's dispatcher slot for the sum of every route's backoff. A write refused after that
    * point takes the path a write GitHub outlasted already takes — the next route, then the review
-   * body — and {@link #unanchoredFindingsBody} says the budget is why.
+   * body — and {@link #unanchoredFindingsBody} says the budget is why. The ceiling is {@code
+   * thrillhousebot.github.write-retry-budget}; zero turns it off.
    */
   void postReview(PostReviewRequest post) {
-    writeBudget.within(
-        post.owner() + "/" + post.repo() + " #" + post.prNumber(), () -> publishReview(post));
+    GitHubWriteBudget.within(
+        post.owner() + "/" + post.repo() + " #" + post.prNumber(),
+        config.github().writeRetryBudget(),
+        () -> publishReview(post));
   }
 
   private void publishReview(PostReviewRequest post) {

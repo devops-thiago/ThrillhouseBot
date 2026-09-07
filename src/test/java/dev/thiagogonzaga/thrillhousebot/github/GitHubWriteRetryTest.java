@@ -1050,20 +1050,20 @@ class GitHubWriteRetryTest {
     void aThrottledWriteIsNotRepeatedOnceTheReviewHasSpentItsBudget() {
       var calls = new AtomicInteger();
 
-      new GitHubWriteBudget(Duration.ofSeconds(6))
-          .within(
-              "o/r #7",
-              () -> {
-                throttledCall(calls);
-                // The first wait leaves 2s; the second crosses the ceiling and is still served;
-                // the third is refused, so the call ends after three attempts rather than four.
-                assertEquals(3, calls.get());
-                assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+      GitHubWriteBudget.within(
+          "o/r #7",
+          Duration.ofSeconds(6),
+          () -> {
+            throttledCall(calls);
+            // The first wait leaves 2s; the second crosses the ceiling and is still served;
+            // the third is refused, so the call ends after three attempts rather than four.
+            assertEquals(3, calls.get());
+            assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
 
-                // The next write of the same review is not repeated at all.
-                throttledCall(calls);
-                assertEquals(4, calls.get());
-              });
+            // The next write of the same review is not repeated at all.
+            throttledCall(calls);
+            assertEquals(4, calls.get());
+          });
 
       assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
       var stops = warnings().stream().filter(line -> line.contains("write-retry budget")).toList();
@@ -1078,13 +1078,13 @@ class GitHubWriteRetryTest {
       julLogger.setLevel(Level.OFF);
       var calls = new AtomicInteger();
 
-      new GitHubWriteBudget(Duration.ofSeconds(1))
-          .within(
-              "o/r #7",
-              () -> {
-                throttledCall(calls);
-                assertEquals(2, calls.get());
-              });
+      GitHubWriteBudget.within(
+          "o/r #7",
+          Duration.ofSeconds(1),
+          () -> {
+            throttledCall(calls);
+            assertEquals(2, calls.get());
+          });
 
       assertEquals(List.of(Duration.ofSeconds(4)), slept);
       assertTrue(logged.isEmpty(), logged.toString());
@@ -1094,7 +1094,7 @@ class GitHubWriteRetryTest {
     void aReviewThatNeverCrossesItsBudgetKeepsTheFullPerCallBackoff() {
       var calls = new AtomicInteger();
 
-      new GitHubWriteBudget(Duration.ofHours(1)).within("o/r #7", () -> throttledCall(calls));
+      GitHubWriteBudget.within("o/r #7", Duration.ofHours(1), () -> throttledCall(calls));
 
       assertEquals(4, calls.get());
       assertEquals(

@@ -35,6 +35,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -56,6 +57,8 @@ class ReviewPublisherTest {
 
   private final ThrillhouseConfig.ReviewConfig reviewConfig =
       mock(ThrillhouseConfig.ReviewConfig.class);
+  private final ThrillhouseConfig.GitHubConfig githubConfig =
+      mock(ThrillhouseConfig.GitHubConfig.class);
 
   private final ThrillhouseConfig.FollowUpSummaryConfig followUpSummaryConfig =
       mock(ThrillhouseConfig.FollowUpSummaryConfig.class);
@@ -73,6 +76,8 @@ class ReviewPublisherTest {
 
   private void followUpSummaryEnabled(boolean enabled) {
     when(config.review()).thenReturn(reviewConfig);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
     when(reviewConfig.followUpSummary()).thenReturn(followUpSummaryConfig);
     when(followUpSummaryConfig.enabled()).thenReturn(enabled);
   }

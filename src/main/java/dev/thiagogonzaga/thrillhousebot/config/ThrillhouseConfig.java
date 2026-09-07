@@ -100,9 +100,8 @@ public interface ThrillhouseConfig {
      * writes (#734). The backoff bounds one call at 90 seconds and a review makes one call per
      * route per finding, so without this a review refused throughout could hold its pull request's
      * dispatcher slot for hours. Once spent, later throttled writes in the review go out once and
-     * are not repeated; the review body names the findings they carried. Zero turns it off.
-     * Declared here as the namespace's schema, like the pacing keys above — the budget sits on the
-     * REST clients' write path and reads the key directly (see {@code GitHubWriteBudget}).
+     * are not repeated; the review body names the findings they carried. Zero turns it off. Read by
+     * {@code ReviewPublisher} when it opens a review's ledger (see {@code GitHubWriteBudget}).
      */
     @WithName("write-retry-budget")
     @WithDefault("5m")

@@ -28,7 +28,6 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubWriteBudget;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
@@ -44,9 +43,9 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Drives {@link GitHubReviewClient}'s own {@code default} methods for the reason {@code
  * RescuedFindingLostWriteTest} does: the budget is charged inside the retry those methods run, so a
- * mocked client would stub the very seam under test away. Only the client is real; the budget is
- * handed to the publisher small enough to cross in one wait, and GitHub names a one-second deadline
- * so that wait is real but short.
+ * mocked client would stub the very seam under test away. Only the client is real; the configured
+ * budget is small enough to cross in one wait, and GitHub names a one-second deadline so that wait
+ * is real but short.
  */
 class ReviewWriteBudgetTest {
 
@@ -59,7 +58,8 @@ class ReviewWriteBudgetTest {
   private final int prNumber = PR_NUMBERS.incrementAndGet();
   private final FakeReviewClient reviewClient = new FakeReviewClient();
 
-  private ReviewPublisher publisher(GitHubWriteBudget budget) {
+  /** A publisher whose review publishes under {@code budget} — the configured ceiling. */
+  private ReviewPublisher publisher(Duration budget) {
     var suggestionFormatter = mock(SuggestionFormatter.class);
     when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
         .thenReturn("the finding");
@@ -67,6 +67,9 @@ class ReviewWriteBudgetTest {
     var reviewConfig = mock(ThrillhouseConfig.ReviewConfig.class);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
+    var githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.writeRetryBudget()).thenReturn(budget);
     return new ReviewPublisher(
         reviewClient,
         mock(GitHubCommentClient.class),
@@ -75,8 +78,7 @@ class ReviewWriteBudgetTest {
         mock(FollowUpAnalyzer.class),
         mock(PrLabeler.class),
         config,
-        BotIdentity.of("thrillhousebot[bot]"),
-        budget);
+        BotIdentity.of("thrillhousebot[bot]"));
   }
 
   /**
@@ -92,7 +94,7 @@ class ReviewWriteBudgetTest {
     var first = finding("First bug", 10);
     var second = finding("Second bug", 11);
 
-    publisher(new GitHubWriteBudget(Duration.ofSeconds(1)))
+    publisher(Duration.ofSeconds(1))
         .postReview(
             "Bearer tok", "owner", "repo", prNumber, "sha", result(first, second), resolver());
 
@@ -114,7 +116,7 @@ class ReviewWriteBudgetTest {
     reviewClient.retryAfterSeconds = 0;
     var finding = finding("Only bug", 10);
 
-    publisher(new GitHubWriteBudget(Duration.ofHours(1)))
+    publisher(Duration.ofHours(1))
         .postReview("Bearer tok", "owner", "repo", prNumber, "sha", result(finding), resolver());
 
     var body = reviewClient.reviewBodies.getLast();

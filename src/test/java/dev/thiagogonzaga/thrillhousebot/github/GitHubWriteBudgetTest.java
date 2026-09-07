@@ -16,11 +16,11 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -47,6 +47,7 @@ class GitHubWriteBudgetTest {
   private static final String REVIEW = "o/r #7";
   private static final String OPERATION = "an inline comment on o/r #7";
   private static final Duration FOUR_SECONDS = Duration.ofSeconds(4);
+  private static final Duration SIX_SECONDS = Duration.ofSeconds(6);
 
   private final List<LogRecord> logged = new CopyOnWriteArrayList<>();
   private final Logger julLogger = Logger.getLogger(GitHubWriteBudget.class.getName());
@@ -100,18 +101,18 @@ class GitHubWriteBudgetTest {
 
   @Test
   void aReviewIsStoppedOnceItsWaitingCrossesTheBudget() {
-    var budget = new GitHubWriteBudget(Duration.ofSeconds(6));
-    var admitted = new java.util.ArrayList<Boolean>();
+    var admitted = new ArrayList<Boolean>();
 
-    budget.within(
+    GitHubWriteBudget.within(
         REVIEW,
+        SIX_SECONDS,
         () -> {
           admitted.add(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
           assertEquals(Optional.empty(), GitHubWriteBudget.exhausted(), "4s of 6s is not spent");
           // The wait that crosses the ceiling is still served — the overrun is bounded by one
           // clamped wait — and it is the last one that is.
           admitted.add(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
-          assertEquals(Optional.of(Duration.ofSeconds(6)), GitHubWriteBudget.exhausted());
+          assertEquals(Optional.of(SIX_SECONDS), GitHubWriteBudget.exhausted());
           admitted.add(GitHubWriteBudget.admits(OPERATION, Duration.ofSeconds(1)));
         });
 
@@ -123,10 +124,9 @@ class GitHubWriteBudgetTest {
 
   @Test
   void crossingTheBudgetIsWarnedAboutOnceNamingTheReviewAndTheBudget() {
-    var budget = new GitHubWriteBudget(Duration.ofSeconds(1));
-
-    budget.within(
+    GitHubWriteBudget.within(
         REVIEW,
+        Duration.ofSeconds(1),
         () -> {
           GitHubWriteBudget.admits(OPERATION, Duration.ofSeconds(1));
           GitHubWriteBudget.admits(OPERATION, Duration.ofSeconds(1));
@@ -142,10 +142,9 @@ class GitHubWriteBudgetTest {
 
   @Test
   void aZeroBudgetTurnsTheCeilingOff() {
-    var budget = new GitHubWriteBudget(Duration.ZERO);
-
-    budget.within(
+    GitHubWriteBudget.within(
         REVIEW,
+        Duration.ZERO,
         () -> {
           assertTrue(GitHubWriteBudget.admits(OPERATION, Duration.ofHours(1)));
           assertEquals(Optional.empty(), GitHubWriteBudget.exhausted());
@@ -156,16 +155,16 @@ class GitHubWriteBudgetTest {
 
   @Test
   void aNestedScopeRejoinsTheOpenReviewRatherThanStartingALedgerOfItsOwn() {
-    var outer = new GitHubWriteBudget(Duration.ofSeconds(6));
-    var inner = new GitHubWriteBudget(Duration.ofHours(1));
-    var admitted = new java.util.ArrayList<Boolean>();
+    var admitted = new ArrayList<Boolean>();
 
-    outer.within(
+    GitHubWriteBudget.within(
         REVIEW,
+        SIX_SECONDS,
         () -> {
           admitted.add(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
-          inner.within(
+          GitHubWriteBudget.within(
               REVIEW,
+              Duration.ofHours(1),
               () -> {
                 // Charged to the review already open, under its budget, not to a fresh hour.
                 admitted.add(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
@@ -173,7 +172,7 @@ class GitHubWriteBudgetTest {
               });
           // The inner scope closing does not close the review it joined.
           admitted.add(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
-          assertEquals(Optional.of(Duration.ofSeconds(6)), GitHubWriteBudget.exhausted());
+          assertEquals(Optional.of(SIX_SECONDS), GitHubWriteBudget.exhausted());
         });
 
     assertEquals(List.of(true, true, false, false), admitted);
@@ -182,13 +181,12 @@ class GitHubWriteBudgetTest {
 
   @Test
   void theScopeIsClosedEvenWhenTheReviewThrows() {
-    var budget = new GitHubWriteBudget(Duration.ofSeconds(1));
-
     assertThrows(
         IllegalStateException.class,
         () ->
-            budget.within(
+            GitHubWriteBudget.within(
                 REVIEW,
+                Duration.ofSeconds(1),
                 () -> {
                   GitHubWriteBudget.admits(OPERATION, Duration.ofSeconds(1));
                   throw new IllegalStateException("the review failed");
@@ -196,16 +194,5 @@ class GitHubWriteBudgetTest {
 
     assertEquals(Optional.empty(), GitHubWriteBudget.exhausted());
     assertTrue(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
-  }
-
-  @Test
-  void theSharedBudgetIsTheConfiguredOneAndDefaultsToFiveMinutes() {
-    // Nothing in the test configuration sets the key, so the shared instance carries the default
-    // the README documents. Read into locals first so neither constant sits in the expected slot.
-    var configured = GitHubWriteBudget.SHARED.budget();
-    var documented = Duration.ofMinutes(5);
-
-    assertEquals(documented, configured);
-    assertFalse(configured.isZero(), "the ceiling is on by default");
   }
 }
