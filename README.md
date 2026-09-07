@@ -98,11 +98,13 @@ not a reaction.
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
 | `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval (see **Clearing a finding with no thread** under Configuration) | write |
+| `@thrillhousebot declined <path>:<line> — <title>` | Decline a previous finding that has no review thread to reply on, with the reason on the lines that follow; the reason is re-checked against the code the way a reply on a thread is (see **Declining a finding with no thread** under Configuration) | write |
 
 **Access** — every slash command except `/help` requires the commenter to hold write access
 to the repository, or to be named in `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`,
 since reviews spend the operator's AI budget. The allowlist covers the slash commands only:
-the `@thrillhousebot resolved` directive always requires write access, as described below.
+the `@thrillhousebot resolved` and `@thrillhousebot declined` directives always require
+write access, as described below.
 
 **`@thrillhousebot resolved`** — a directive, not a slash command: it has no `/resolved`
 form, and it is read by the *next* review rather than acted on immediately. The bot replies
@@ -388,6 +390,10 @@ of being recorded justified. It is deliberately conservative:
 
 Set it to `false` to make a maintainer's reply final, unconditionally.
 
+A finding published with no thread has no reply to carry its decline; it is
+declined from the PR conversation instead (see **Declining a finding with no
+thread** below), and the reason given there goes through this same re-check.
+
 ### Clearing a finding with no thread
 
 Replying on a finding's review thread is the usual way to close it — but a
@@ -460,6 +466,56 @@ clear anything that round. The bot logs a warning naming the ceiling whenever it
 is reached, so this shows up as a log line rather than as the feature quietly
 doing nothing; push a commit to re-review, or reply on the finding's thread if it
 has one.
+
+### Declining a finding with no thread
+
+Clearing a finding closes it with no check. Declining it is the other decision
+— "this is fine, and here is why" — and on a review thread it is simply the
+maintainer's reply, which the next review records as **justified** after
+re-checking the stated reason against the code (see **Re-checking declines**).
+A finding with no thread has no reply to give, so the decline is written on
+the PR conversation, as the clearing directive's sibling: the directive line
+names the finding, and the rest of the comment is the reason.
+
+```
+@thrillhousebot declined src/main/java/com/example/Widget.java:42 — Missing null check
+
+The value is validated two frames up, in `RequestGuard`, and this helper is
+private to that path.
+```
+
+The word is `declined`. It is a statement about the finding rather than a
+command, which is why it is not `decline`, and it is a different decision from
+`resolved`, which is why the two are never spelled alike. Everything that
+governs the clearing directive governs this one unchanged: the comment must
+state `@thrillhousebot declined` as plain text, name the finding by both its
+`path:line` and its title exactly as the summary prints them, and come from an
+author with write access; quoted blocks and fenced code are dropped before
+anything is matched; a marked-up directive is documentation; `declined?` asks
+and declines nothing; an ambiguous naming holds the finding; and the
+conversation read ceiling applies. Naming the wrong finding costs the same
+whichever decision follows, so the rules are one set.
+
+What differs is what happens next. The next review records the named finding
+**justified** — unless the reviewed code plainly contradicts the reason, in
+which case the finding is kept open for one more round under the same note the
+thread re-check writes, quoting the claim and the contradicting line. The
+reason is read exactly as a thread reply is: fenced code, blockquotes and
+inline code inside it are quoted material rather than the maintainer's claim,
+and the directive line itself is never read as the reason, so a title that
+happens to mention concurrency cannot argue against its own finding. A comment
+with no reason at all is still a decline; there is nothing to contradict, so it
+is recorded as is.
+
+The push-back happens once. A second `declined` comment naming the same
+finding is the maintainer answering it, and it always wins: the finding is
+recorded justified with no further re-check, exactly as a second reply on a
+thread ends the re-check there. `REVIEW_DECLINE_RECHECK_ENABLED=false` makes
+the first comment final, as it does for replies.
+
+The bot acknowledges the directive the way it acknowledges a clear, under the
+same limits: it says what the next review will evaluate, and the review is what
+reports the outcome.
 
 ### Blocking strictness
 

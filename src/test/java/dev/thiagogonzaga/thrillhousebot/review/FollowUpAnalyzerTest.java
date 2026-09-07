@@ -2405,7 +2405,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals(1, rechecked.size());
     assertEquals(
@@ -2439,7 +2439,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals(
         "justified",
@@ -2454,7 +2454,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals(
         "justified",
@@ -2472,7 +2472,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals(
         "justified",
@@ -2490,7 +2490,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         disabled.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals("justified", rechecked.get(0).status());
   }
@@ -2507,19 +2507,20 @@ class FollowUpAnalyzerTest {
     assertEquals(
         unresolved,
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, unresolved, comments, BOT_ID, () -> DISPATCHING_DIFF));
+            RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF));
     // No thread to read the rebuttal from.
     assertEquals(
         "justified",
         analyzer
-            .recheckDeclines(RACE_PREVIOUS, justified(), List.of(), BOT_ID, () -> DISPATCHING_DIFF)
+            .recheckDeclines(
+                RACE_PREVIOUS, justified(), List.of(), List.of(), BOT_ID, () -> DISPATCHING_DIFF)
             .get(0)
             .status());
     // No reviewed code to check the rebuttal against.
     assertEquals(
         "justified",
         analyzer
-            .recheckDeclines(RACE_PREVIOUS, justified(), comments, BOT_ID, () -> "")
+            .recheckDeclines(RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> "")
             .get(0)
             .status());
     // Status id outside the prior round.
@@ -2528,8 +2529,9 @@ class FollowUpAnalyzerTest {
     assertEquals(
         outOfRange,
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, outOfRange, comments, BOT_ID, () -> DISPATCHING_DIFF));
-    assertTrue(analyzer.recheckDeclines(RACE_PREVIOUS, null, comments, BOT_ID, null).isEmpty());
+            RACE_PREVIOUS, outOfRange, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF));
+    assertTrue(
+        analyzer.recheckDeclines(RACE_PREVIOUS, null, comments, List.of(), BOT_ID, null).isEmpty());
   }
 
   /**
@@ -2579,7 +2581,7 @@ class FollowUpAnalyzerTest {
       Supplier<String> code) {
     assertEquals(
         statuses,
-        analyzer.recheckDeclines(previous, statuses, comments, BOT_ID, code),
+        analyzer.recheckDeclines(previous, statuses, comments, List.of(), BOT_ID, code),
         "the decline must survive untouched when the re-check has nothing to verify: " + name);
   }
 
@@ -2600,7 +2602,8 @@ class FollowUpAnalyzerTest {
                 + " asynchronously on the review executor after the webhook has returned 200.");
 
     var rechecked =
-        analyzer.recheckDeclines(twoFindings, mixed, comments, BOT_ID, () -> DISPATCHING_DIFF);
+        analyzer.recheckDeclines(
+            twoFindings, mixed, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals("unresolved", rechecked.get(0).status());
     assertEquals(
@@ -2634,7 +2637,7 @@ class FollowUpAnalyzerTest {
 
     var rechecked =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF);
+            RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
 
     assertEquals(
         "unresolved",
@@ -2659,7 +2662,8 @@ class FollowUpAnalyzerTest {
     assertEquals(
         "justified",
         configured
-            .recheckDeclines(RACE_PREVIOUS, justified(), comments, BOT_ID, () -> DISPATCHING_DIFF)
+            .recheckDeclines(
+                RACE_PREVIOUS, justified(), comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF)
             .get(0)
             .status(),
         "the injected constructor must honour thrillhousebot.review.decline-recheck-enabled");
@@ -2674,6 +2678,427 @@ class FollowUpAnalyzerTest {
   /** Names the first PREVIOUS_JSON finding exactly as the summary prints it. */
   private static final String CLEARS_FINDING_ONE =
       "@thrillhousebot resolved `src/A.java:10` — SQL injection (fixed in abc123)";
+
+  // --- recheckDeclines: a decline written on the PR conversation, for a finding with no thread
+  // (#709) ---
+
+  private static final String RACE_LOCATOR = PAUSE_FILE + ":60";
+
+  /** The documented directive line, naming the race finding the way the summary prints it. */
+  private static final String DECLINES_RACE =
+      "@thrillhousebot declined `" + RACE_LOCATOR + "` — " + RACE_TITLE;
+
+  /** The dogfood rebuttal from PR #160, whose premise {@link #DISPATCHING_DIFF} contradicts. */
+  private static final String ASYNC_AFTER_ACK =
+      "Not changed — pause() is only ever called from the /pause command path, which runs"
+          + " asynchronously on the review executor after the webhook has returned 200.";
+
+  private static List<ReviewResponse.PreviousFindingStatus> unresolvedRace() {
+    return List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"));
+  }
+
+  private static GitHubCommentClient.IssueComment declines(long id, String body) {
+    return new GitHubCommentClient.IssueComment(
+        id, body, new GitHubReviewClient.ReviewResponse.User("maintainer"), "MEMBER");
+  }
+
+  /** A single-comment conversation declining the race finding with {@code reason} below it. */
+  private static List<GitHubCommentClient.IssueComment> declinesRace(String reason) {
+    return List.of(declines(901L, DECLINES_RACE + "\n\n" + reason));
+  }
+
+  /** The re-check over the thread-less race finding: no inline comments, only the conversation. */
+  private List<ReviewResponse.PreviousFindingStatus> conversationRecheck(
+      List<GitHubCommentClient.IssueComment> conversation) {
+    return analyzer.recheckDeclines(
+        RACE_PREVIOUS, unresolvedRace(), List.of(), conversation, BOT_ID, () -> DISPATCHING_DIFF);
+  }
+
+  @Test
+  void conversationDeclineShouldBeReopenedWhenTheReviewedCodeContradictsItsReason() {
+    var rechecked = conversationRecheck(declinesRace(ASYNC_AFTER_ACK));
+
+    assertEquals(1, rechecked.size());
+    assertEquals(
+        "unresolved",
+        rechecked.get(0).status(),
+        "a conversation decline the reviewed code contradicts must not be recorded justified");
+    var note = rechecked.get(0).note();
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.contains("only ever called from"), "the note must quote the claim: " + note);
+    assertTrue(
+        note.contains("executor.execute(() -> execute(ctx));"),
+        "the note must quote the contradicting line: " + note);
+    assertTrue(
+        note.contains("A second @thrillhousebot declined comment naming this finding"),
+        "a finding with no thread must be told which reply ends the re-check: " + note);
+  }
+
+  @Test
+  void conversationDeclineShouldBeRecordedJustifiedWhenTheCodeDoesNotContradictIt() {
+    var rechecked =
+        conversationRecheck(
+            declinesRace(
+                "Accepted risk: the unique constraint makes the second insert fail loudly, and"
+                    + " the webhook is retried by GitHub."));
+
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(
+                1, "justified", FollowUpAnalyzer.conversationDeclinedNote(BOT_ID))),
+        rechecked);
+  }
+
+  @Test
+  void conversationDeclineShouldDeferOnceTheMaintainerHasDeclinedTwice() {
+    var twice =
+        List.of(
+            declines(901L, DECLINES_RACE + "\n\n" + ASYNC_AFTER_ACK),
+            declines(
+                902L,
+                DECLINES_RACE + "\n\nStill no — the executor never runs two of these for one PR."));
+
+    var rechecked = conversationRecheck(twice);
+
+    assertEquals(
+        "justified",
+        rechecked.get(0).status(),
+        "a second directive answers the push-back and always wins, like a second thread reply");
+  }
+
+  @Test
+  void conversationDeclineShouldBeRecordedJustifiedWhenTheRecheckIsDisabled() {
+    var disabled = new FollowUpAnalyzer(new ObjectMapper(), false);
+
+    var rechecked =
+        disabled.recheckDeclines(
+            RACE_PREVIOUS,
+            unresolvedRace(),
+            List.of(),
+            declinesRace(ASYNC_AFTER_ACK),
+            BOT_ID,
+            () -> DISPATCHING_DIFF);
+
+    assertEquals("justified", rechecked.get(0).status());
+    assertEquals(FollowUpAnalyzer.conversationDeclinedNote(BOT_ID), rechecked.get(0).note());
+  }
+
+  /**
+   * With nothing to check the reason against the decline is trusted, the same outcome the thread
+   * path gives a {@code justified} it cannot verify — not the untouched {@code unresolved}, which
+   * would leave the maintainer's decision unapplied.
+   */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("noReviewedCode")
+  void conversationDeclineShouldTrustTheMaintainerWhenThereIsNoCodeToCheckAgainst(
+      String name, Supplier<String> code) {
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS,
+            unresolvedRace(),
+            List.of(),
+            declinesRace(ASYNC_AFTER_ACK),
+            BOT_ID,
+            code);
+
+    assertEquals("justified", rechecked.get(0).status(), name);
+  }
+
+  static Stream<Arguments> noReviewedCode() {
+    return Stream.of(
+        arguments("no code supplier", null),
+        arguments("supplier yields null", supplier(null)),
+        arguments("supplier yields blank", supplier("  \n")));
+  }
+
+  /**
+   * The directive line names the finding by the bot's own title, which is not the maintainer's
+   * premise. A title that happens to state a no-concurrency phrase must not be read back as the
+   * reason and contradicted by the very code it describes.
+   */
+  @Test
+  void conversationDeclineShouldNotReadTheDirectiveLineAsTheReason() {
+    var titleStatesTheClaim =
+        List.of(
+            new ReviewResponse.Finding(
+                "medium",
+                "low",
+                PAUSE_FILE,
+                60,
+                "Race in pause(): the check-then-insert is only ever called from webhooks",
+                "two deliveries can both pass the check before either inserts",
+                null,
+                null));
+    var directiveOnly =
+        List.of(
+            declines(
+                901L,
+                "@thrillhousebot declined `"
+                    + RACE_LOCATOR
+                    + "` — Race in pause(): the check-then-insert is only ever called from"
+                    + " webhooks"));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            titleStatesTheClaim,
+            unresolvedRace(),
+            List.of(),
+            directiveOnly,
+            BOT_ID,
+            () -> DISPATCHING_DIFF);
+
+    assertEquals("justified", rechecked.get(0).status());
+  }
+
+  @Test
+  void declineReasonShouldBeTheCommentWithoutItsDirectiveLines() {
+    var body =
+        """
+        Looked at this again.
+        @thrillhousebot declined `src/A.java:10` — SQL injection
+        The column name comes from an allow-list.
+
+        Docs say to write `@thrillhousebot declined path:line — title`, which this does.
+        > @thrillhousebot declined `src/B.java:5` — quoted, so the re-check drops it itself
+        """;
+
+    assertEquals(
+        """
+        Looked at this again.
+        The column name comes from an allow-list.
+
+        Docs say to write `@thrillhousebot declined path:line — title`, which this does.
+        > @thrillhousebot declined `src/B.java:5` — quoted, so the re-check drops it itself""",
+        FollowUpAnalyzer.declineReason(body, BOT_ID),
+        "only the line that uses the directive is the directive; the rest is the reason");
+    assertEquals("", FollowUpAnalyzer.declineReason(DECLINES_RACE, BOT_ID));
+  }
+
+  /**
+   * Every way a comment fails to be a decline of this finding. The status must come back exactly as
+   * the model reported it — held — and the reason must never reach the matcher, because a finding
+   * declined by mistake is closed without anyone having decided to.
+   */
+  static Stream<Arguments> conversationDeclineHeldCases() {
+    var body = DECLINES_RACE + "\n\n" + ASYNC_AFTER_ACK;
+    return Stream.of(
+        arguments(
+            "author without write access",
+            new GitHubCommentClient.IssueComment(
+                901L, body, new GitHubReviewClient.ReviewResponse.User("drive-by"), "CONTRIBUTOR")),
+        arguments(
+            "author with no association",
+            new GitHubCommentClient.IssueComment(
+                901L, body, new GitHubReviewClient.ReviewResponse.User("anyone"))),
+        arguments(
+            "the bot's own comment",
+            new GitHubCommentClient.IssueComment(
+                901L, body, new GitHubReviewClient.ReviewResponse.User(BOT), "MEMBER")),
+        arguments("no body", declines(901L, null)),
+        arguments("no author", new GitHubCommentClient.IssueComment(901L, body, null, "MEMBER")),
+        arguments("fenced directive", declines(901L, "```\n" + body + "\n```")),
+        arguments(
+            "blockquoted directive",
+            declines(901L, "> " + DECLINES_RACE + "\n\n" + ASYNC_AFTER_ACK)),
+        arguments(
+            "inline-code directive",
+            declines(901L, "write `" + DECLINES_RACE + "`\n\n" + ASYNC_AFTER_ACK)),
+        arguments(
+            "interrogative",
+            declines(
+                901L,
+                "@thrillhousebot declined? `"
+                    + RACE_LOCATOR
+                    + "` — "
+                    + RACE_TITLE
+                    + "\n\n"
+                    + ASYNC_AFTER_ACK)),
+        arguments(
+            "the clearing directive is not a decline",
+            declines(
+                901L,
+                "@thrillhousebot resolved `"
+                    + RACE_LOCATOR
+                    + "` — "
+                    + RACE_TITLE
+                    + "\n\n"
+                    + ASYNC_AFTER_ACK)),
+        arguments(
+            "the imperative is not the directive",
+            declines(
+                901L,
+                "@thrillhousebot decline `"
+                    + RACE_LOCATOR
+                    + "` — "
+                    + RACE_TITLE
+                    + "\n\n"
+                    + ASYNC_AFTER_ACK)),
+        arguments(
+            "names only the locator",
+            declines(
+                901L, "@thrillhousebot declined `" + RACE_LOCATOR + "`\n\n" + ASYNC_AFTER_ACK)),
+        arguments(
+            "names only the title",
+            declines(901L, "@thrillhousebot declined " + RACE_TITLE + "\n\n" + ASYNC_AFTER_ACK)),
+        arguments(
+            "names a longer line number",
+            declines(
+                901L,
+                "@thrillhousebot declined `"
+                    + RACE_LOCATOR
+                    + "0` — "
+                    + RACE_TITLE
+                    + "\n\n"
+                    + ASYNC_AFTER_ACK)),
+        arguments(
+            "ambiguous spaced range stays held",
+            declines(
+                901L,
+                "@thrillhousebot declined "
+                    + RACE_LOCATOR
+                    + " - 61 — "
+                    + RACE_TITLE
+                    + "\n\n"
+                    + ASYNC_AFTER_ACK)));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("conversationDeclineHeldCases")
+  void conversationDeclineShouldHoldTheFindingWhenTheCommentDoesNotDeclineIt(
+      String name, GitHubCommentClient.IssueComment comment) {
+    assertEquals(unresolvedRace(), conversationRecheck(List.of(comment)), name);
+  }
+
+  /** Inputs with nothing to apply a conversation decline to; each hands the statuses back as-is. */
+  static Stream<Arguments> conversationDeclineNoOpInputs() {
+    var declined = declinesRace(ASYNC_AFTER_ACK);
+    var justified = justified();
+    var noFile =
+        List.of(new ReviewResponse.Finding("medium", "low", null, 60, RACE_TITLE, "d", null, null));
+    var noContent =
+        List.of(new ReviewResponse.Finding("medium", "low", PAUSE_FILE, 60, null, " ", null, null));
+    return Stream.of(
+        arguments("no prior round", null, unresolvedRace(), declined),
+        arguments("no conversation", RACE_PREVIOUS, unresolvedRace(), null),
+        arguments("empty conversation", RACE_PREVIOUS, unresolvedRace(), List.of()),
+        arguments("status already settled", RACE_PREVIOUS, justified, declined),
+        arguments(
+            "id below the prior round",
+            RACE_PREVIOUS,
+            List.of(new ReviewResponse.PreviousFindingStatus(0, "unresolved", "bad id")),
+            declined),
+        arguments(
+            "id past the prior round",
+            RACE_PREVIOUS,
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", "bad id")),
+            declined),
+        arguments("finding with no file", noFile, unresolvedRace(), declined),
+        arguments(
+            "finding with neither title nor description", noContent, unresolvedRace(), declined));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("conversationDeclineNoOpInputs")
+  void conversationDeclineShouldPassStatusesThroughWhenThereIsNothingToApply(
+      String name,
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubCommentClient.IssueComment> conversation) {
+    assertEquals(
+        statuses,
+        analyzer.recheckDeclines(
+            previous, statuses, List.of(), conversation, BOT_ID, () -> DISPATCHING_DIFF),
+        name);
+  }
+
+  /**
+   * The thread pass rewrites {@code justified} and the conversation pass rewrites {@code
+   * unresolved}, so one call can overturn a thread decline and apply a conversation decline on two
+   * different findings without either touching the other, and an entry neither names is untouched.
+   */
+  @Test
+  void conversationAndThreadDeclinesShouldEachRewriteOnlyTheirOwnEntry() {
+    var threadless =
+        new ReviewResponse.Finding(
+            "low", "low", "src/B.java", 5, "Missing null check", "may NPE", null, null);
+    var untouched =
+        new ReviewResponse.Finding("low", "low", "src/C.java", 7, "Unrelated", "d", null, null);
+    var previous = List.of(RACE_PREVIOUS.get(0), threadless, untouched);
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "justified", "declined on the thread"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"),
+            new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still there"));
+    var conversation =
+        List.of(
+            declines(
+                901L,
+                "@thrillhousebot declined `src/B.java:5` — Missing null check\n\nThe caller"
+                    + " null-checks; this is a private helper."));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            previous,
+            statuses,
+            raceThread(ASYNC_AFTER_ACK),
+            conversation,
+            BOT_ID,
+            () -> DISPATCHING_DIFF);
+
+    assertEquals("unresolved", rechecked.get(0).status(), "the thread decline is overturned");
+    assertEquals(
+        new ReviewResponse.PreviousFindingStatus(
+            2, "justified", FollowUpAnalyzer.conversationDeclinedNote(BOT_ID)),
+        rechecked.get(1),
+        "the conversation decline is applied");
+    assertEquals(statuses.get(2), rechecked.get(2), "the entry nobody named is untouched");
+  }
+
+  @Test
+  void isDeclineDirectiveShouldRecognizeOnlyAnUnquotedDeclinedInstruction() {
+    assertTrue(
+        FollowUpAnalyzer.isDeclineDirective(
+            "@thrillhousebot declined src/A.java:10 — title\nbecause", BOT_ID));
+    assertTrue(
+        FollowUpAnalyzer.isDeclineDirective(
+            "@thrillhousebot declined `src/A.java:10` — title", BOT_ID),
+        "a backticked locator is how the summary prints it and must still be a directive");
+    assertTrue(
+        FollowUpAnalyzer.isDeclineDirective("thanks!\n\n@ThrillhouseBot\u00a0DECLINED", BOT_ID));
+    assertFalse(FollowUpAnalyzer.isDeclineDirective(null, BOT_ID));
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective("@thrillhousebot why is this flagged?", BOT_ID));
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective(
+            "@thrillhousebot resolved src/A.java:10 — title", BOT_ID),
+        "the clearing directive is the other decision");
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective("@thrillhousebot decline src/A.java:10", BOT_ID),
+        "the directive is the participle, like resolved");
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective(
+            "@thrillhousebot declined? src/A.java:10 — title", BOT_ID),
+        "asking whether a finding was declined is not declining it");
+    assertFalse(FollowUpAnalyzer.isDeclineDirective("> @thrillhousebot declined", BOT_ID));
+    assertFalse(FollowUpAnalyzer.isDeclineDirective("```\n@thrillhousebot declined\n```", BOT_ID));
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective(
+            "write `@thrillhousebot declined src/A.java:10 — title`", BOT_ID),
+        "a marked-up directive is documentation, not an instruction");
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective(
+            "root@thrillhousebot declined src/A.java:10 — title", BOT_ID),
+        "an email local part is not a mention");
+    var custom = BotIdentity.of("my-review-bot[bot]");
+    assertTrue(
+        FollowUpAnalyzer.isDeclineDirective("@my-review-bot declined src/A.java:10 — t", custom));
+    assertFalse(
+        FollowUpAnalyzer.isDeclineDirective("@thrillhousebot declined src/A.java:10 — t", custom),
+        "a custom-login install answers to its own login only");
+    assertTrue(
+        FollowUpAnalyzer.conversationDeclinedNote(custom).contains("@my-review-bot declined"),
+        "the note spells the directive with the configured mention name");
+  }
 
   private static GitHubCommentClient.IssueComment conversationComment(
       String body, String author, String association) {
@@ -2713,6 +3138,29 @@ class FollowUpAnalyzerTest {
         List.of(2),
         heldIds(held),
         "the named finding must be cleared and the one it does not name must stay held");
+  }
+
+  /**
+   * A decline directive on the PR conversation is a maintainer acting on the finding, the same way
+   * a reply on its thread is (#709). The backstop must not keep holding a finding whose only
+   * repliable surface is the conversation after the maintainer used it.
+   */
+  @Test
+  void backstopShouldNotHoldAThreadlessFindingAMaintainerDeclinedInConversation() {
+    var held =
+        backstopWith(
+            List.of(
+                maintainerSays(
+                    """
+                    @thrillhousebot declined `src/A.java:10` — SQL injection
+
+                    The column name comes from an allow-list, never from the request.
+                    """)));
+
+    assertEquals(
+        List.of(2),
+        heldIds(held),
+        "a decline is a disposition, so only the finding it does not name stays held");
   }
 
   @Test
@@ -3653,6 +4101,34 @@ class FollowUpAnalyzerTest {
         pruned.previousFindingsStatus(),
         "previous-findings accounting is untouched");
     assertEquals(1, pruned.summary().totalFindings(), "the summary counts are recounted");
+  }
+
+  private static GitHubCommentClient.IssueComment declinesLitigated(
+      ReviewResponse.Finding finding, long id) {
+    return declines(
+        id,
+        "@thrillhousebot declined `"
+            + finding.file()
+            + ":"
+            + finding.line()
+            + "` — "
+            + finding.title()
+            + "\n\nThe wording is deliberate.");
+  }
+
+  @Test
+  void countsAConversationDeclineAsADisposition() {
+    // The decline directive is the other action a thread-less finding's maintainer has (#709), so
+    // two declines on one anchor settle it the way two clears or two thread replies do.
+    var pruned =
+        FollowUpAnalyzer.withoutPreviouslyLitigated(
+            withCurrent(speculative("src/A.java", 12, "A third hypothesis on the same lines")),
+            twiceLitigatedRounds(),
+            List.of(),
+            List.of(declinesLitigated(LITIGATED_ONE, 901L), declinesLitigated(LITIGATED_TWO, 902L)),
+            BOT_ID);
+
+    assertEquals(List.of(), titlesOf(pruned));
   }
 
   @Test

@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finding with no review thread can be declined from the PR conversation, and its reason is re-checked** (#709): the decline re-check read only inline review comments, so a finding published without a thread, collapsed under "Things to double-check" or listed as unanchored, could be closed with the `resolved` directive but never declined with a reason. On the round-7 corpus that was 10 of 13 findings on one pull request and 11 of 13 on another, and the one action left to a maintainer was the one that closes a finding without checking their reasoning. A maintainer can now write `@thrillhousebot declined <path>:<line> — <title>` on the PR conversation with the reason on the lines that follow. The directive is matched with the same strictness as `resolved` (whole locator plus title, write access, quoted and fenced text ignored, the interrogative refused), the finding is recorded justified, and the reason goes through the contradiction re-check a reply on a thread gets, under the same rule: one push-back, then a second directive naming the finding ends it. The directive line is never read as the reason, so the finding's own title cannot argue against it. The bot acknowledges the directive as it does a clear, and a decline counts as a maintainer disposition for the approve backstop and the litigated-anchor count exactly as a reply on a thread does
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
