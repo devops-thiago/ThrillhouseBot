@@ -538,9 +538,9 @@ final class JacocoCoverageReport {
    * is leaving — so skipping past a bomb entry would pay exactly the cost the aggregate budget
    * exists to refuse.
    *
-   * <p>The cap counts entries that could carry a report. Directories are walked past without
-   * charge, so a tree-shaped artifact is judged by how much content it holds rather than by how
-   * deeply it is nested.
+   * <p>The cap counts file entries, report or not. Directories are drained against the aggregate
+   * budget like everything else but not charged to the cap, so a tree-shaped artifact is judged by
+   * how much content it holds rather than by how deeply it is nested.
    *
    * @return {@code true} when a limit stopped the walk, so whatever merged is a prefix the archive
    *     chose and no report may be built from it

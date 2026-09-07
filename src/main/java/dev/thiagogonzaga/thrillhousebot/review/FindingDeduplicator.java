@@ -184,7 +184,7 @@ public class FindingDeduplicator {
     // RiskLevel natural order is most-severe-first (CRITICAL..LOW); an even cluster takes the more
     // severe of the two central values (the lower index).
     int mid = ranked.size() / 2;
-    RiskLevel severity = ranked.size() % 2 == 0 ? ranked.get(mid - 1) : ranked.get(mid);
+    RiskLevel severity = ranked.get(ranked.size() % 2 == 0 ? mid - 1 : mid);
     // Confidence natural order is most-certain-first (HIGH < MEDIUM < LOW), so min() selects the
     // highest confidence among members carrying the chosen severity.
     Confidence confidence =
