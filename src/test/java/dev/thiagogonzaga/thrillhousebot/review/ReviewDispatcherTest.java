@@ -110,39 +110,65 @@ class ReviewDispatcherTest {
   }
 
   @Test
-  void shouldDropCiRecheckWhenAReviewIsAlreadyQueued() throws InterruptedException {
+  void shouldRunCiRecheckAfterTheQueuedReviewToo() throws InterruptedException {
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
     blockReviewUntil(started, release);
+    var task = recheck(42, "sha1");
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
     started.await(2, TimeUnit.SECONDS);
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
-    assertTrue(dispatcher.dispatchCiRecheck(recheck(42, "sha1")));
+    assertTrue(dispatcher.dispatchCiRecheck(task));
 
     release.countDown();
 
-    verify(orchestrator, timeout(5000).times(2))
-        .review(any(ReviewOrchestrator.ReviewRequest.class));
-    verify(ciHoldRevisit, after(300).never()).revisit(any());
+    verify(ciHoldRevisit, timeout(5000)).revisit(task);
+    var order = inOrder(orchestrator, ciHoldRevisit);
+    order.verify(orchestrator, times(2)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    order.verify(ciHoldRevisit).revisit(task);
   }
 
   @Test
-  void shouldDropQueuedCiRecheckWhenAReviewArrivesBehindIt() throws InterruptedException {
+  void shouldKeepQueuedCiRecheckWhenAReviewArrivesBehindIt() throws InterruptedException {
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
     blockReviewUntil(started, release);
+    var task = recheck(42, "sha1");
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
     started.await(2, TimeUnit.SECONDS);
-    assertTrue(dispatcher.dispatchCiRecheck(recheck(42, "sha1")));
+    assertTrue(dispatcher.dispatchCiRecheck(task));
     dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
 
     release.countDown();
 
-    verify(orchestrator, timeout(5000).times(2))
-        .review(any(ReviewOrchestrator.ReviewRequest.class));
-    verify(ciHoldRevisit, after(300).never()).revisit(any());
+    verify(ciHoldRevisit, timeout(5000)).revisit(task);
+    var order = inOrder(orchestrator, ciHoldRevisit);
+    order.verify(orchestrator, times(2)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    order.verify(ciHoldRevisit).revisit(task);
+  }
+
+  @Test
+  void shouldRunCiRecheckWhenTheReviewAheadOfItIsRateLimited() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var task = recheck(42, "sha1");
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha1"));
+    started.await(2, TimeUnit.SECONDS);
+    // The window closes while the first review runs, so the queued review is skipped at drain.
+    when(rateLimiter.isThrottled("owner", "repo", 42)).thenReturn(true);
+    dispatcher.dispatch(reviewRequest("owner", "repo", 42, "sha2"));
+    assertTrue(dispatcher.dispatchCiRecheck(task));
+
+    release.countDown();
+
+    verify(ciHoldRevisit, timeout(5000)).revisit(task);
+    verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(skipEmitter)
+        .recordSkip(eq(ReviewSkipReason.RATE_LIMITED), eq("owner"), eq("repo"), eq(42), any());
   }
 
   @Test
@@ -410,6 +436,22 @@ class ReviewDispatcherTest {
 
       verify(orchestrator, timeout(5000).times(2))
           .review(any(ReviewOrchestrator.ReviewRequest.class));
+    } finally {
+      julLogger.setLevel(originalLevel);
+    }
+  }
+
+  @Test
+  void shouldDispatchCiRecheckWithInfoLoggingDisabled() {
+    var julLogger = java.util.logging.Logger.getLogger(ReviewDispatcher.class.getName());
+    var originalLevel = julLogger.getLevel();
+    julLogger.setLevel(java.util.logging.Level.WARNING);
+    try {
+      var task = recheck(21, "sha1");
+
+      assertTrue(dispatcher.dispatchCiRecheck(task));
+
+      verify(ciHoldRevisit, timeout(2000)).revisit(task);
     } finally {
       julLogger.setLevel(originalLevel);
     }

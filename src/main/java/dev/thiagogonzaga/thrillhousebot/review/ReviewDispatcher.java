@@ -100,13 +100,16 @@ public final class ReviewDispatcher {
 
   /**
    * Queues a CI re-evaluation for the pull request's held verdict (#825), serialized with its
-   * reviews: it runs after a review in flight, and is dropped when a review is already queued —
-   * that review reads the CI gate itself, after the completion this task reports. Repeated
-   * completions for the same pull request collapse into one pending re-evaluation.
+   * reviews: the worker runs every queued review first and the re-evaluation after them. It is
+   * never dropped for a queued review, because a queued review is not guaranteed to read the CI
+   * gate — the rate-limit re-check in {@link #runReviewBatch} can skip it, and a review can fail
+   * before its gate read — and a re-evaluation that finds the review already released or replaced
+   * the hold is a cheap no-op. Repeated completions for the same pull request collapse into one
+   * pending re-evaluation.
    *
-   * @return {@code true} if the re-evaluation was queued, coalesced, or superseded by a queued
-   *     review; {@code false} if the executor rejected the task, so the caller can roll back the
-   *     webhook dedup state and a redelivery can retry.
+   * @return {@code true} if the re-evaluation was queued or coalesced; {@code false} if the
+   *     executor rejected the task, so the caller can roll back the webhook dedup state and a
+   *     redelivery can retry.
    */
   public boolean dispatchCiRecheck(CiHoldRevisit.Recheck task) {
     var key = new PrKey(task.owner(), task.repo(), task.prNumber());
@@ -118,13 +121,15 @@ public final class ReviewDispatcher {
         states.remove(key, state);
         continue;
       }
-      log.info(
-          "CI re-evaluation for {}/{} #{} (sha: {}): {}",
-          task.owner(),
-          task.repo(),
-          task.prNumber(),
-          abbreviateSha(task.headSha()),
-          outcome);
+      if (log.isInfoEnabled()) {
+        log.info(
+            "CI re-evaluation for {}/{} #{} (sha: {}): {}",
+            task.owner(),
+            task.repo(),
+            task.prNumber(),
+            abbreviateSha(task.headSha()),
+            outcome);
+      }
       if (outcome == PerPrState.RecheckOutcome.STARTED) {
         try {
           reviewExecutor.execute(() -> runSerialized(key, state));
@@ -300,7 +305,7 @@ public final class ReviewDispatcher {
     private final Object lock = new Object();
     ReviewOrchestrator.ReviewRequest latestRequest;
 
-    /** At most one CI re-evaluation waits per PR; a queued review supersedes it (#825). */
+    /** At most one CI re-evaluation waits per PR; it runs after every queued review (#825). */
     CiHoldRevisit.Recheck pendingRecheck;
 
     boolean running = false;
@@ -320,10 +325,8 @@ public final class ReviewDispatcher {
       RETRY,
       /** No worker was running; the caller starts one. */
       STARTED,
-      /** A worker is running; the re-evaluation runs after it. */
-      QUEUED,
-      /** A review is queued and reads the CI gate itself; the re-evaluation is dropped. */
-      SUPERSEDED
+      /** A worker is running; the re-evaluation runs after it and any review it has queued. */
+      QUEUED
     }
 
     DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req) {
@@ -334,8 +337,6 @@ public final class ReviewDispatcher {
           return new DispatchResult(true, false, 0);
         }
         latestRequest = req;
-        // The review re-reads the CI gate after this point, so a waiting re-evaluation is moot.
-        pendingRecheck = null;
         if (running) {
           coalesced++;
           return new DispatchResult(false, false, coalesced);
@@ -350,9 +351,6 @@ public final class ReviewDispatcher {
       synchronized (lock) {
         if (retired) {
           return RecheckOutcome.RETRY;
-        }
-        if (latestRequest != null) {
-          return RecheckOutcome.SUPERSEDED;
         }
         pendingRecheck = task;
         if (running) {

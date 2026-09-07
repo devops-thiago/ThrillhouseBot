@@ -57,6 +57,7 @@ class CiHoldRegistryTest {
     assertTrue(registry.heldAt("owner", "repo", 42, "def456").isEmpty());
     assertTrue(registry.pullRequestsAt("owner", "repo", "def456").isEmpty());
     assertTrue(registry.pullRequestsAt("owner", "other", "abc123").isEmpty());
+    assertTrue(registry.pullRequestsAt("other", "repo", "abc123").isEmpty());
   }
 
   @Test

@@ -518,8 +518,9 @@ check run's summary says so; a re-run that turns green lifts it. A push to the P
 supersedes the hold, since the new head gets its own review. A verdict with findings
 is not held: it is complete, and CI would not change it.
 
-Held verdicts are kept in memory (see [Known limitations](#known-limitations)), so
-after a restart a PR that was held before it still needs a manual `/review`.
+Held verdicts are kept in memory, like the other single-process state listed under
+Known limitations, so after a restart a PR that was held before it still needs a
+manual `/review`.
 
 Apps registered before these events were part of the manifest must subscribe to
 them by hand: on GitHub, open **Settings → Developer settings → GitHub Apps → your
