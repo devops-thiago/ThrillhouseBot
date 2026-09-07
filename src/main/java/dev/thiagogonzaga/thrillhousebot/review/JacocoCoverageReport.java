@@ -108,7 +108,11 @@ final class JacocoCoverageReport {
    */
   private static final String BINARY_PACKAGE_SEPARATOR = "/";
 
-  /** No coverage data — the value every failure path degrades to. */
+  /**
+   * No coverage data and nothing refused — what a read that found nothing usable degrades to. A
+   * refused archive degrades to its own empty report instead, carrying the {@link Refusal}, so
+   * {@code isEmpty()} rather than identity with this constant is the test for "no coverage".
+   */
   static final JacocoCoverageReport EMPTY = new JacocoCoverageReport(Map.of(), null);
 
   /**
