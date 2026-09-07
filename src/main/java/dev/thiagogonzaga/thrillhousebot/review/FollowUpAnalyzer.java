@@ -783,10 +783,11 @@ public class FollowUpAnalyzer {
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity) {
     var dispositioned = new ArrayList<ReviewResponse.Finding>();
+    var directives = maintainerDeclines(conversationComments, botIdentity);
     for (var round : priorRounds) {
       for (var prior : round.findings()) {
         if (answeredRootComment(prior, inlineComments, botIdentity) != null
-            || dispositionedInConversation(prior, conversationComments, botIdentity)) {
+            || dispositionedInConversation(prior, conversationComments, directives, botIdentity)) {
           dispositioned.add(prior);
         }
       }
@@ -1335,21 +1336,40 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * Whether a maintainer declined this finding from the PR conversation, and with what reasons: one
-   * entry per use of the decline directive that names the finding, in comment order, each carrying
-   * the reason written below that directive ({@link #conversationDeclines}). Empty when none does,
-   * which is what every guard below yields — the same guards {@link #clearedInConversation}
-   * applies, because naming a finding wrongly costs the same whichever decision follows (#709).
+   * Every use of the decline directive by a maintainer on the PR conversation, in comment order —
+   * the non-bot, write-capable authorship gate of {@link #isMaintainerConversationComment}, the
+   * same one {@link #clearedInConversation} applies, because naming a finding wrongly costs the
+   * same whichever decision follows (#709). Parsed once per pass and handed to every per-finding
+   * match, since the parse depends on the comment and the bot identity alone; parsing inside the
+   * per-finding loop repeated it once per finding held or reported.
+   */
+  private static List<ConversationDecline> maintainerDeclines(
+      List<GitHubCommentClient.IssueComment> conversationComments, BotIdentity botIdentity) {
+    if (conversationComments == null || conversationComments.isEmpty()) {
+      return List.of();
+    }
+    var declines = new ArrayList<ConversationDecline>();
+    for (var comment : conversationComments) {
+      if (isMaintainerConversationComment(comment, botIdentity)) {
+        declines.addAll(conversationDeclines(comment.body(), botIdentity));
+      }
+    }
+    return declines;
+  }
+
+  /**
+   * The reasons a maintainer declined this finding with on the PR conversation: one entry per
+   * directive in {@code directives} ({@link #maintainerDeclines}) that names the finding, in
+   * comment order, each carrying the reason written below that directive. Empty when none does,
+   * which is what every guard below yields.
    *
    * <p>A list rather than a flag because the count is the "one push-back, then defer" rule: {@link
    * #recheckDeclines} re-checks a lone decline's reason and defers to a second one, exactly as it
    * counts a thread's maintainer replies.
    */
   private static List<String> conversationDeclineReasons(
-      ReviewResponse.Finding finding,
-      List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
-    if (conversationComments == null || conversationComments.isEmpty() || finding.file() == null) {
+      ReviewResponse.Finding finding, List<ConversationDecline> directives) {
+    if (directives.isEmpty() || finding.file() == null) {
       return List.of();
     }
     String anchor = ownContentAnchor(finding);
@@ -1358,38 +1378,28 @@ public class FollowUpAnalyzer {
     }
     String locator = finding.file() + ":" + finding.line();
     var reasons = new ArrayList<String>();
-    for (var comment : conversationComments) {
-      if (!isMaintainerConversationComment(comment, botIdentity)) {
-        continue;
-      }
-      for (var decline : conversationDeclines(comment.body(), botIdentity)) {
-        if (namesFinding(decline.naming(), locator, anchor)) {
-          reasons.add(decline.reason());
-        }
+    for (var decline : directives) {
+      if (namesFinding(decline.naming(), locator, anchor)) {
+        reasons.add(decline.reason());
       }
     }
     return reasons;
-  }
-
-  /** Whether at least one maintainer decline directive on the PR conversation names the finding. */
-  private static boolean declinedInConversation(
-      ReviewResponse.Finding finding,
-      List<GitHubCommentClient.IssueComment> conversationComments,
-      BotIdentity botIdentity) {
-    return !conversationDeclineReasons(finding, conversationComments, botIdentity).isEmpty();
   }
 
   /**
    * Whether a maintainer dispositioned this finding from the PR conversation by either directive. A
    * decline is as much a maintainer acting on the finding as a clear is, and for a finding with no
    * thread the two directives are the only actions there are (#709).
+   *
+   * @param directives the conversation's decline directives, parsed once by the caller
    */
   private static boolean dispositionedInConversation(
       ReviewResponse.Finding finding,
       List<GitHubCommentClient.IssueComment> conversationComments,
+      List<ConversationDecline> directives,
       BotIdentity botIdentity) {
     return clearedInConversation(finding, conversationComments, botIdentity)
-        || declinedInConversation(finding, conversationComments, botIdentity);
+        || !conversationDeclineReasons(finding, directives).isEmpty();
   }
 
   /**
@@ -1967,7 +1977,8 @@ public class FollowUpAnalyzer {
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity,
       Supplier<String> reviewedCode) {
-    if (previous == null || conversationComments == null || conversationComments.isEmpty()) {
+    var directives = maintainerDeclines(conversationComments, botIdentity);
+    if (previous == null || directives.isEmpty()) {
       return statuses;
     }
     var declines = new LinkedHashMap<Integer, List<String>>();
@@ -1977,8 +1988,7 @@ public class FollowUpAnalyzer {
       if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status()) || id < 1 || id > previous.size()) {
         continue;
       }
-      var reasons =
-          conversationDeclineReasons(previous.get(id - 1), conversationComments, botIdentity);
+      var reasons = conversationDeclineReasons(previous.get(id - 1), directives);
       if (!reasons.isEmpty()) {
         declines.put(at, reasons);
       }
@@ -2285,12 +2295,14 @@ public class FollowUpAnalyzer {
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
+    var directives = maintainerDeclines(conversationComments, botIdentity);
     for (var cluster : clusters) {
       OpenFinding target =
           holdableTarget(
               cluster,
               inlineComments,
               conversationComments,
+              directives,
               lineResolver,
               botIdentity,
               renameTargets);
@@ -2322,6 +2334,7 @@ public class FollowUpAnalyzer {
       List<OpenFinding> cluster,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
+      List<ConversationDecline> directives,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
@@ -2333,7 +2346,7 @@ public class FollowUpAnalyzer {
         target = member;
       }
       if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null
-          || dispositionedInConversation(finding, conversationComments, botIdentity)) {
+          || dispositionedInConversation(finding, conversationComments, directives, botIdentity)) {
         answered = true;
       }
     }
