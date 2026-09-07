@@ -181,18 +181,20 @@ class GitHubWriteBudgetTest {
 
   @Test
   void theScopeIsClosedEvenWhenTheReviewThrows() {
-    assertThrows(
-        IllegalStateException.class,
-        () ->
-            GitHubWriteBudget.within(
-                REVIEW,
-                Duration.ofSeconds(1),
-                () -> {
-                  GitHubWriteBudget.admits(OPERATION, Duration.ofSeconds(1));
-                  throw new IllegalStateException("the review failed");
-                }));
+    assertThrows(IllegalStateException.class, GitHubWriteBudgetTest::aReviewThatFails);
 
     assertEquals(Optional.empty(), GitHubWriteBudget.exhausted());
     assertTrue(GitHubWriteBudget.admits(OPERATION, FOUR_SECONDS));
+  }
+
+  /** A review that spends its whole budget and then fails, so the ledger has to be cleaned up. */
+  private static void aReviewThatFails() {
+    GitHubWriteBudget.within(
+        REVIEW,
+        Duration.ofSeconds(1),
+        () -> {
+          GitHubWriteBudget.admits(OPERATION, Duration.ofSeconds(1));
+          throw new IllegalStateException("the review failed");
+        });
   }
 }

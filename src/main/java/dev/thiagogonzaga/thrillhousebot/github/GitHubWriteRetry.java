@@ -248,9 +248,6 @@ public final class GitHubWriteRetry {
       error.ifPresent(refusal -> warnIfWordingWasMissed(operation, refusal));
       return Optional.empty();
     }
-    if (attempt == 1) {
-      warnIfWordingWasMissed(operation, error.get());
-    }
     if (attempt >= MAX_ATTEMPTS) {
       if (log.isWarnEnabled()) {
         log.warn(
@@ -273,6 +270,9 @@ public final class GitHubWriteRetry {
       }
       return Optional.empty();
     }
+    if (attempt == 1) {
+      warnIfWordingWasMissed(operation, error.get());
+    }
     return Optional.of(delay);
   }
 
@@ -284,7 +284,10 @@ public final class GitHubWriteRetry {
    * changes here — a hint this loose must not spend repeats — but the body is named, so the next
    * wording GitHub adopts is added on evidence rather than guessed at under review. Once per call:
    * the throttled path asks on the first attempt only, since the body does not change between
-   * attempts. Behind a level check for the reason the give-up line above is.
+   * attempts, and only once that attempt's wait has been admitted — the block-shaped line says the
+   * write is retried, and a write the review's budget stops is not, so asking before the budget
+   * would have the log say both (#734). Behind a level check for the reason the give-up line above
+   * is.
    */
   private void warnIfWordingWasMissed(String operation, GitHubApiError error) {
     if (!log.isWarnEnabled()) {

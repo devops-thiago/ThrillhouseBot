@@ -1073,6 +1073,43 @@ class GitHubWriteRetryTest {
     }
 
     @Test
+    void aStoppedWriteIsNotAlsoReportedAsRetriedOnUnrecognisedBlockWording() {
+      // The #784 block-miss line says the write is retried without the floor. Once the budget is
+      // spent it is not retried at all, and a log that said both would contradict itself, so the
+      // wording report is made only once the wait has actually been admitted.
+      var body =
+          "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily"
+              + " blocked from creating comments.\"}";
+      var calls = new AtomicInteger();
+
+      GitHubWriteBudget.within(
+          "o/r #7",
+          Duration.ofSeconds(1),
+          () -> {
+            throttledCall(calls);
+            assertThrows(
+                WebApplicationException.class,
+                () ->
+                    retry.call(
+                        "a comment on o/r #7",
+                        () -> {
+                          calls.incrementAndGet();
+                          throw failure(403, body, "Retry-After", "4");
+                        }));
+          });
+
+      assertEquals(3, calls.get());
+      var lines = warnings();
+      assertTrue(
+          lines.stream().noneMatch(line -> line.contains("matched no known content-creation")),
+          lines.toString());
+      assertEquals(
+          2,
+          lines.stream().filter(line -> line.contains("write-retry budget")).count(),
+          lines.toString());
+    }
+
+    @Test
     void theStopIsSilentWhenWarningsAreOff() {
       // Behind the same level check as the give-up line, because diagnostics() is eager.
       julLogger.setLevel(Level.OFF);
