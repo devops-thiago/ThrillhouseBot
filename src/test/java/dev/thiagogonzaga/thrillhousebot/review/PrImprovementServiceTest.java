@@ -629,7 +629,7 @@ class PrImprovementServiceTest {
             .estimateTokens(
                 PrImproveAssistantPrompts.systemPrompt()
                     + PrSuggestionPrompts.userPrompt()
-                    + PromptTemplateEscaper.fence(" ")
+                    + PromptTemplateEscaper.fenceForBudgeting()
                     + "Title"
                     + "Body"
                     + "");

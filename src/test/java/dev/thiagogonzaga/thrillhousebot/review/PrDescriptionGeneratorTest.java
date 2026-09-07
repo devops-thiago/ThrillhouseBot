@@ -153,7 +153,7 @@ class PrDescriptionGeneratorTest {
             .estimateTokens(
                 PrDescribeAssistantPrompts.systemPrompt()
                     + PrSuggestionPrompts.userPrompt()
-                    + PromptTemplateEscaper.fence(" ")
+                    + PromptTemplateEscaper.fenceForBudgeting()
                     + "Title"
                     + "Body"
                     + "");

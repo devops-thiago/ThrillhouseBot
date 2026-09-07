@@ -233,12 +233,13 @@ public abstract class AbstractPrSuggestionGenerator {
    * dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService.PromptInputs)} assembles the review
    * path's overhead: both prompt templates, the per-call fence scaffolding, and each non-diff
    * section — omitting any of them would let "in-budget" batches overshoot the model's real input
-   * limit.
+   * limit. The scaffolding is the fixed-width stand-in, not a live fence, so the estimate — and the
+   * plan built on it — is the same for the same inputs (#604).
    */
   protected String sharedPromptOverhead(String systemPrompt, String userPrompt, Inputs inputs) {
     return systemPrompt
         + userPrompt
-        + PromptTemplateEscaper.fence(" ")
+        + PromptTemplateEscaper.fenceForBudgeting()
         + PromptTemplateEscaper.escape(inputs.title())
         + PromptTemplateEscaper.escape(inputs.body())
         + PromptTemplateEscaper.escape(inputs.instructions());

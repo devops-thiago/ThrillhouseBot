@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -574,6 +575,44 @@ class DiffBudgetPlannerTest {
     assertTrue(plan.budgeted());
     assertEquals(1, plan.batches().size());
     assertFalse(plan.truncated());
+  }
+
+  @Test
+  void planningTheSameInputRepeatedlyGivesTheSameBatches() {
+    // #604: fence() mints a CSPRNG token per call, and a 32-hex token has no fixed BPE width: the
+    // two fence lines ran 51 to 87 tokens over 200,000 draws. The overhead used to be sized from a
+    // live draw, so the diff budget for one input landed anywhere in that window and the same PR
+    // could batch differently on two runs. Sized from a fixed-width fence, a plan is a function of
+    // its input.
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var inputs = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    // Room for both sections less 30 tokens: inside the window a live draw swept, so the plan
+    // flipped between one batch and two; against a fixed-width overhead it is two every time.
+    budget(overhead + sectionTokens(f1) + sectionTokens(f2) - 30);
+
+    var shapes = new HashSet<String>();
+    for (var i = 0; i < 200; i++) {
+      var plan = planner.plan(List.of(f1, f2), inputs);
+      shapes.add(
+          plan.batches().size()
+              + " batch(es), covered "
+              + coveredFilenames(plan)
+              + ", clipped "
+              + plan.clippedFiles());
+    }
+
+    assertEquals(1, shapes.size(), "one input, one plan: " + shapes);
+    assertEquals(Set.of("2 batch(es), covered [dir/f1.java, dir/f2.java], clipped []"), shapes);
   }
 
   @Test

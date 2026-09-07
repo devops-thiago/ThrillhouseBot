@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import org.junit.jupiter.api.Test;
 
 class PromptTemplateEscaperTest {
@@ -101,5 +102,39 @@ class PromptTemplateEscaperTest {
   void fenceReturnsEmptyUnchangedSoConditionalsStayFalsy() {
     assertEquals("", PromptTemplateEscaper.fence(""));
     assertNull(PromptTemplateEscaper.fence(null));
+  }
+
+  @Test
+  void fenceForBudgetingIsFixedAndShapedLikeARealFence() {
+    // #604: the budgeters size the fence scaffolding from this stand-in, so it must be the same
+    // string on every call and carry the shape of a real fence around a single space.
+    var standIn = PromptTemplateEscaper.fenceForBudgeting();
+
+    assertEquals(standIn, PromptTemplateEscaper.fenceForBudgeting());
+    String[] lines = standIn.split("\n", -1);
+    assertEquals(3, lines.length);
+    assertEquals(lines[0], lines[2], "the two fence lines must be identical");
+    assertEquals(" ", lines[1]);
+    assertTrue(lines[0].startsWith(PromptTemplateEscaper.fencePrefix()), "fence prefix");
+    assertEquals(
+        PromptTemplateEscaper.fence(" ").length(),
+        standIn.length(),
+        "the same shape as a real fence around a space, character for character");
+  }
+
+  @Test
+  void fenceForBudgetingIsAtLeastAsWideAsAnyRealFence() {
+    // The stand-in's token is 32 single-character chunks under cl100k's pre-tokenizer, one token
+    // each, and a chunk never costs more tokens than it has characters, so no draw can outrun it
+    // (51 to 87 tokens over 200,000 draws against its 93). Checked against a fresh sample so a
+    // change to the token or the tokenizer that broke the bound fails here rather than as a flake.
+    var counter = new TokenCounter();
+    var widest = counter.estimateTokens(PromptTemplateEscaper.fenceForBudgeting());
+
+    assertEquals(93, widest);
+    for (var i = 0; i < 2000; i++) {
+      var real = counter.estimateTokens(PromptTemplateEscaper.fence(" "));
+      assertTrue(real <= widest, "a live fence of " + real + " tokens outran the stand-in");
+    }
   }
 }

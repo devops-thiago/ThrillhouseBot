@@ -397,13 +397,14 @@ public class DiffBudgetPlanner {
     // a fiction. boundPreviousFindings is idempotent, so the caller applying it first is a no-op
     // here.
     var bounded = boundPreviousFindings(inputs);
-    // fence(" ") produces the two real fence lines (fence of empty content is a no-op by design),
-    // counting the per-review scaffolding the pipeline wraps each batch in — small, but the safety
-    // margin should absorb estimate error, not known constants.
+    // The two fence lines the pipeline wraps each batch in are counted too — small, but the safety
+    // margin should absorb estimate error, not known constants. Sized from the fixed-width stand-in
+    // rather than a live fence(" "): a random token's BPE width varies by tens of tokens, which
+    // made the diff budget for one input a random variable and the plan non-reproducible (#604).
     var sharedOverhead =
         PrReviewPrompts.SYSTEM
             + PrReviewPrompts.USER
-            + PromptTemplateEscaper.fence(" ")
+            + PromptTemplateEscaper.fenceForBudgeting()
             + bounded.prContext()
             + bounded.baseComparison()
             + bounded.projectStack()

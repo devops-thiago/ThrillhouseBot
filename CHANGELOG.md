@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A batch plan is the same for the same input** (#604): the shared prompt overhead the planner subtracts from the per-call budget was sized from a live `fence(" ")`, and a fence carries a fresh 32-character random token whose BPE width is not fixed: over 200,000 draws the two fence lines ran 51 to 87 tokens. The diff budget for one input therefore landed anywhere in that window, the same pull request could batch differently on two runs, and the tests that set a small `max-input-tokens` failed about once in 1500 runs on commits that touched nothing near them (#586, then `DocGenerationServiceTest` on #596). The overhead is now sized from a fixed-width stand-in whose token alternates digit and letter, which costs one token per character and is the widest a draw can be; the emitted prompt still gets a fresh random fence. A plan now follows from its input alone, and the estimate errs by at most the difference, on the side of a smaller batch
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
