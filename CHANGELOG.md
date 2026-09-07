@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A file GitHub returned no content for holds approval and is named when budgeting is disabled** (#785): #783 gave patchless files their own disclosure class, but the classification ran only on the budgeted path. With `max-input-tokens=0` the planner packed such a file as a reviewed section, the plan carried no patchless list, and the verdict's legacy lane read no file class from the plan at all, so a binary or a text diff too large to display was never disclosed and never held APPROVE: the bot could approve a pull request containing a file it had not read. The check now runs ahead of the budget branch, the unbudgeted plan carries the class, and the legacy verdict lane adds it to the line-cap count and names it under the same wording as the budgeted lane. The line-cap count itself, which that lane knows only as a number, keeps its own sentence beside the named files instead of being swallowed by them
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.

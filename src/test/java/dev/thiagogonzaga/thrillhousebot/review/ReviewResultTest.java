@@ -791,6 +791,63 @@ class ReviewResultTest {
   }
 
   @Test
+  void coverageGapClauseKeepsTheLegacyCountForTheFilesTheDetailDoesNotName() {
+    // #785: the legacy lane names its patchless files but knows its line-cap omissions only as a
+    // count. A named class must not swallow the count of the files it does not name — the reader
+    // would be told about the binary and never that two more files went unreviewed.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            List.of(),
+            List.of(),
+            List.of(),
+            SummaryDegradation.NONE,
+            VerificationCoverage.EMPTY);
+
+    var clause = ReviewResult.coverageGapClause(3, detail);
+
+    assertTrue(
+        clause.contains("2 file(s) were omitted because the diff exceeded the size budget"),
+        clause);
+    assertTrue(clause.contains("(assets/logo.png)"), clause);
+  }
+
+  @Test
+  void coverageGapBriefKeepsTheLegacyCountForTheFilesTheDetailDoesNotName() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            3,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of(),
+                List.of(),
+                List.of("assets/logo.png"),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.NONE,
+                VerificationCoverage.EMPTY));
+
+    var brief = result.coverageGapBrief();
+
+    assertEquals("2 file(s) omitted, 1 file(s) without diff content from GitHub", brief);
+  }
+
+  @Test
   void truncationDetailNormalizesNullListsToEmpty() {
     var detail = new ReviewResult.TruncationDetail(null, null, null, null, null, null);
     assertTrue(detail.isEmpty());

@@ -315,6 +315,21 @@ public record ReviewResult(
           || !responseCutFileNames.isEmpty()
           || !callFailedFileNames.isEmpty();
     }
+
+    /**
+     * How many files the six classes name in total. A caller's omitted count can exceed it: the
+     * legacy lane knows its line-cap omissions only as a count while naming its patchless files
+     * (#785), so the clause and the brief render the difference under the numeric wording rather
+     * than letting a named class swallow the count of the files it does not name.
+     */
+    public int namedFileGaps() {
+      return omittedFileNames.size()
+          + clippedFileNames.size()
+          + patchlessFileNames.size()
+          + spendCeilingSkippedFileNames.size()
+          + responseCutFileNames.size()
+          + callFailedFileNames.size();
+    }
   }
 
   /** How many findings the PR summary lists under "Key Findings". */
@@ -642,9 +657,13 @@ public record ReviewResult(
     }
     // A detail carrying only a summary degradation still owes the reader the legacy omitted-file
     // count (#659): nothing below the fallback reads the int, so the count vanished whenever the
-    // summary also degraded — the coverage disclosure this class exists to guarantee.
-    if (!detail.hasFileGaps() && omittedFiles > 0) {
-      clauses.add(omittedFilesClause(omittedFiles));
+    // summary also degraded — the coverage disclosure this class exists to guarantee. The same
+    // holds for the files a partial detail does not name (#785): the legacy lane names its
+    // patchless files and knows its line-cap omissions only as a count, so the remainder past the
+    // named classes keeps the numeric clause instead of disappearing behind the named one.
+    var unnamed = omittedFiles - detail.namedFileGaps();
+    if (unnamed > 0) {
+      clauses.add(omittedFilesClause(unnamed));
     }
     // A summary degradation affects prose, not findings: the findings are complete, but the
     // summary call either had its response cut at the length cap and was salvaged (or replaced by
@@ -744,8 +763,13 @@ public record ReviewResult(
       return String.format("%d file(s) omitted", omittedFiles);
     }
     var parts = new ArrayList<String>(3);
-    if (!truncation.omittedFileNames().isEmpty()) {
-      parts.add(String.format("%d file(s) omitted", truncation.omittedFileNames().size()));
+    // Omissions the detail does not name (the legacy line cap alongside a named patchless file,
+    // #785) share the plain omitted label the empty-detail fallback above uses.
+    var omittedCount =
+        truncation.omittedFileNames().size()
+            + Math.max(0, omittedFiles - truncation.namedFileGaps());
+    if (omittedCount > 0) {
+      parts.add(String.format("%d file(s) omitted", omittedCount));
     }
     if (!truncation.clippedFileNames().isEmpty()) {
       parts.add(
