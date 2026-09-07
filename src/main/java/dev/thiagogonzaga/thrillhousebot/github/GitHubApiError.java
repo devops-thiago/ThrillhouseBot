@@ -372,9 +372,10 @@ public final class GitHubApiError {
   /**
    * Whether this is a throttle whose body says something is blocked in words {@link
    * #CONTENT_CREATION_BLOCK} does not know (#784). The repeat is kept, but the floor that makes the
-   * budget outlast the measured block is lost with the wording, so the linear backoff spends the
-   * whole budget inside the window — the #722 failure in different words. Reported for the same
-   * reason as {@link #hasUnrecognisedThrottleWording()}.
+   * budget outlast the measured block is lost with the wording: the wait is whatever {@code
+   * Retry-After}, the reset instant or the linear backoff gave, unlifted, and every one of those
+   * undershoots the block — the #722 failure in different words. Reported for the same reason as
+   * {@link #hasUnrecognisedThrottleWording()}.
    */
   public boolean hasUnrecognisedBlockWording() {
     return isThrottled()

@@ -300,9 +300,9 @@ public final class GitHubWriteRetry {
     } else if (error.hasUnrecognisedBlockWording()) {
       log.warn(
           "GitHub throttled {} with wording that names a block but matched no known"
-              + " content-creation wording — retried on the linear backoff without the {}s floor;"
-              + " if this is the content-creation block, its wording needs adding to"
-              + " GitHubApiError. {}",
+              + " content-creation wording — retried, but without the {}s floor that block is"
+              + " sized against; if this is the content-creation block, its wording needs adding"
+              + " to GitHubApiError. {}",
           operation,
           GitHubApiError.CONTENT_CREATION_BLOCK_MIN_DELAY.toSeconds(),
           error.diagnostics());
