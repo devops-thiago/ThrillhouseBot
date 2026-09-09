@@ -80,7 +80,7 @@ class VerdictBuilderTest {
               return statuses == null ? List.of() : statuses;
             });
     lenient()
-        .when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+        .when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
         .thenAnswer(
             inv -> {
               List<?> statuses = inv.getArgument(1);

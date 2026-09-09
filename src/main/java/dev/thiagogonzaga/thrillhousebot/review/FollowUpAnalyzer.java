@@ -718,8 +718,9 @@ public class FollowUpAnalyzer {
    *   <li>the count is of <em>distinct</em> dispositioned findings ({@link #isSameFinding}), so one
    *       finding carried across rounds cannot reach the limit on its own;
    *   <li>a disposition means a maintainer acted — a reply on the finding's thread, or an {@code
-   *       @thrillhousebot resolved} comment naming it on the PR conversation, which is the only
-   *       hatch a threadless finding has (#548). The bot's own rounds never raise the count.
+   *       @thrillhousebot resolved} or {@code declined} comment naming it on the PR conversation,
+   *       which are the only hatches a threadless finding has (#548, #709). The bot's own rounds
+   *       never raise the count.
    * </ul>
    *
    * <p>The trade it accepts: if the code under a twice-litigated anchor genuinely changes, a new
@@ -772,8 +773,9 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * Every prior finding a maintainer answered on its thread or cleared from the PR conversation.
-   * Rounds carry no nulls ({@code ReviewContext} copies its list), so none is filtered here.
+   * Every prior finding a maintainer answered on its thread, or cleared or declined from the PR
+   * conversation. Rounds carry no nulls ({@code ReviewContext} copies its list), so none is
+   * filtered here.
    */
   private static List<ReviewResponse.Finding> dispositionedFindings(
       List<ReviewResponse> priorRounds,
@@ -781,10 +783,11 @@ public class FollowUpAnalyzer {
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity) {
     var dispositioned = new ArrayList<ReviewResponse.Finding>();
+    var directives = maintainerDeclines(conversationComments, botIdentity);
     for (var round : priorRounds) {
       for (var prior : round.findings()) {
         if (answeredRootComment(prior, inlineComments, botIdentity) != null
-            || clearedInConversation(prior, conversationComments, botIdentity)) {
+            || dispositionedInConversation(prior, conversationComments, directives, botIdentity)) {
           dispositioned.add(prior);
         }
       }
@@ -885,8 +888,8 @@ public class FollowUpAnalyzer {
 
   /**
    * Package-private rather than private so {@link MaintainerReplyService} can acknowledge a clear
-   * directive against the very gate that will decide it. The acknowledgment is written before any
-   * review runs, and the two used to disagree: the mention path admits a login on the
+   * or decline directive against the very gate that will decide it. The acknowledgment is written
+   * before any review runs, and the two used to disagree: the mention path admits a login on the
    * manual-trigger allowlist whatever its association, while {@link #clearedInConversation}
    * requires a write-capable one, so an allowlist-only commenter was promised a closure that never
    * came.
@@ -903,6 +906,15 @@ public class FollowUpAnalyzer {
    * with {@link MaintainerReplyService}.
    */
   private static final Map<BotIdentity, Pattern> CLEAR_DIRECTIVES = new ConcurrentHashMap<>();
+
+  /** Compiled decline directives, cached per {@link BotIdentity} exactly as the clear ones are. */
+  private static final Map<BotIdentity, Pattern> DECLINE_DIRECTIVES = new ConcurrentHashMap<>();
+
+  /** The word that makes a mention the clearing directive ({@link #clearDirective}). */
+  private static final String CLEAR_WORD = "resolved";
+
+  /** The word that makes a mention the decline directive ({@link #declineDirective}). */
+  private static final String DECLINE_WORD = "declined";
 
   /**
    * The directive a maintainer writes in a PR conversation comment to clear findings the review
@@ -937,16 +949,31 @@ public class FollowUpAnalyzer {
    */
   private static Pattern clearDirective(BotIdentity botIdentity) {
     return CLEAR_DIRECTIVES.computeIfAbsent(
-        botIdentity,
-        identity -> {
-          String mentions =
-              identity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
-          return Pattern.compile(
-              "(?:^|[^\\w@])@(?:"
-                  + mentions
-                  + ")[\\s\\p{Zs}]+resolved\\b(?![\\s\\p{Zs}\\p{Cf}]*\\?)",
-              Pattern.CASE_INSENSITIVE);
-        });
+        botIdentity, identity -> directive(identity, CLEAR_WORD));
+  }
+
+  /**
+   * The directive a maintainer writes in a PR conversation comment to <em>decline</em> a finding
+   * the review threads cannot reach, with the reason on the lines that follow (#709). It is the
+   * clearing directive's sibling — the same mention, the same anchoring, the same interrogative
+   * guard — under a different word, so the two read as the two decisions they are: {@code resolved}
+   * closes a finding with no re-check, {@code declined} records it justified and hands its reason
+   * to the same re-check a reply on a thread gets ({@link #recheckDeclines}). {@code declined}
+   * rather than {@code decline} for the reason {@code resolved} is not {@code resolve}: it is a
+   * statement about the finding, not a command to run, and no slash command spells it.
+   */
+  private static Pattern declineDirective(BotIdentity botIdentity) {
+    return DECLINE_DIRECTIVES.computeIfAbsent(
+        botIdentity, identity -> directive(identity, DECLINE_WORD));
+  }
+
+  /** The directive pattern for one bot identity and one directive word; see the two callers. */
+  private static Pattern directive(BotIdentity identity, String word) {
+    String mentions =
+        identity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
+    return Pattern.compile(
+        "(?:^|[^\\w@])@(?:" + mentions + ")[\\s\\p{Zs}]+" + word + "\\b(?![\\s\\p{Zs}\\p{Cf}]*\\?)",
+        Pattern.CASE_INSENSITIVE);
   }
 
   /** Fenced code blocks, dropped before a conversation comment is read as a directive. */
@@ -974,6 +1001,28 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Note recorded on a finding a maintainer declined from the PR conversation and whose reason the
+   * re-check did not contradict — the conversation counterpart of the model's own {@code justified}
+   * note for a decline on a thread.
+   */
+  static String conversationDeclinedNote(BotIdentity botIdentity) {
+    return "Declined by a maintainer's @"
+        + botIdentity.primaryMention()
+        + " declined comment on the PR conversation.";
+  }
+
+  /**
+   * Sentence appended to a contradiction note when the decline came from the PR conversation. The
+   * note's own closing line says to reply again; a finding declined this way has no thread to reply
+   * on, so it names the reply that ends the re-check for it.
+   */
+  private static String conversationRecheckHint(BotIdentity botIdentity) {
+    return " A second @"
+        + botIdentity.primaryMention()
+        + " declined comment naming this finding is that reply.";
+  }
+
+  /**
    * Whether {@code body} <em>uses</em> the clearing directive, as opposed to quoting it. Shared
    * with {@link MaintainerReplyService} so the conversational-reply path recognizes exactly the
    * text this analyzer acts on.
@@ -986,6 +1035,123 @@ public class FollowUpAnalyzer {
    */
   static boolean isClearDirective(String body, BotIdentity botIdentity) {
     return body != null && clearDirective(botIdentity).matcher(directiveText(body)).find();
+  }
+
+  /**
+   * Whether {@code body} <em>uses</em> the decline directive rather than quoting it — the same
+   * reading as {@link #isClearDirective}, for the same reasons, over {@link #declineDirective}.
+   */
+  static boolean isDeclineDirective(String body, BotIdentity botIdentity) {
+    return body != null && declineDirective(botIdentity).matcher(directiveText(body)).find();
+  }
+
+  /**
+   * One use of the decline directive in a comment: the line(s) the directive itself spans, which is
+   * where it names the finding, and the reason written below it.
+   *
+   * <p>The naming is confined to the directive's own line(s) and the reason to the lines that
+   * follow, up to the next directive, for two reasons a whole-comment reading cannot serve. The
+   * directive line names the finding by its title, and the title is the bot's own text about the
+   * defect — "check-then-insert race", say — not the maintainer's premise, so it must never reach
+   * {@link RebuttalContradiction} as the reason, or a finding argues against itself. And one
+   * comment may decline several findings, each with its own reason: a reason read as "the whole
+   * comment minus the directive lines" would hand finding A's re-check the claim made for finding
+   * B, and a contradiction in B's reason would re-open A. Quoted blocks and inline code are not
+   * dropped from the reason: the re-check strips them itself, in the same way it strips them from a
+   * reply on a thread, so the two paths read one text.
+   *
+   * @param naming the directive's own line(s) as {@link #namingText}, matched against the finding
+   * @param reason the lines below the directive up to the next one, stripped; empty when none
+   */
+  record ConversationDecline(String naming, String reason) {}
+
+  /**
+   * Every use of the decline directive in {@code body}, in order. The directive is located over the
+   * body with its quoted text blanked in place ({@link #quotedTextBlanked}) rather than dropped, so
+   * a match's offsets are offsets into the body itself and the lines it spans can be told from the
+   * lines around it. A match may span two lines — the separator between the mention and the word
+   * admits a line feed — and a directive may wrap once more after the word ({@link #namingLine});
+   * every line it touches is the directive's, none of them the reason's, so the finding's title
+   * cannot survive into the reason on a line break.
+   */
+  static List<ConversationDecline> conversationDeclines(String body, BotIdentity botIdentity) {
+    var masked = quotedTextBlanked(body);
+    var lines = List.of(body.split("\n", -1));
+    var spans = new ArrayList<int[]>();
+    var matches = declineDirective(botIdentity).matcher(masked);
+    while (matches.find()) {
+      // The match opens on the character before the '@' (or at the start of the text), which for a
+      // directive that begins a line is the previous line's feed; the directive's first line is
+      // the mention's own.
+      var at = masked.indexOf('@', matches.start());
+      spans.add(new int[] {lineAt(body, at), namingLine(body, lines, matches.end())});
+    }
+    var declines = new ArrayList<ConversationDecline>(spans.size());
+    for (var i = 0; i < spans.size(); i++) {
+      var first = spans.get(i)[0];
+      var afterLast = spans.get(i)[1] + 1;
+      // Two directives on one line share it: the second opens where the first's line ends.
+      var next = i + 1 < spans.size() ? Math.max(afterLast, spans.get(i + 1)[0]) : lines.size();
+      declines.add(
+          new ConversationDecline(
+              namingText(String.join("\n", lines.subList(first, afterLast))),
+              String.join("\n", lines.subList(afterLast, next)).strip()));
+    }
+    return declines;
+  }
+
+  /**
+   * The last line of a directive whose word ends at {@code wordEnd}: the word's own line, or, when
+   * nothing follows the word on it, the next line with text. A maintainer who wraps after the word
+   * puts the {@code path:line} and title on that line, and it is the directive's — the naming is
+   * read from it and the reason begins below it — the same way the line before the word is the
+   * directive's when the wrap comes before it. Without this the wrapped naming fell into the
+   * reason, the directive named nothing and did nothing, and the acknowledgement, which sees the
+   * locator wherever it sits in the comment, had promised a decline the review then never applied.
+   */
+  private static int namingLine(String body, List<String> lines, int wordEnd) {
+    var lineEnd = body.indexOf('\n', wordEnd);
+    var last = lineAt(body, wordEnd - 1);
+    if (!body.substring(wordEnd, lineEnd < 0 ? body.length() : lineEnd).isBlank()) {
+      return last;
+    }
+    var next = last + 1;
+    while (next < lines.size() && lines.get(next).isBlank()) {
+      next++;
+    }
+    return next < lines.size() ? next : last;
+  }
+
+  /** The 0-based line {@code index} falls on in {@code text}: the line feeds before it. */
+  private static int lineAt(String text, int index) {
+    var line = 0;
+    for (var i = 0; i < index; i++) {
+      if (text.charAt(i) == '\n') {
+        line++;
+      }
+    }
+    return line;
+  }
+
+  /**
+   * {@code body} with fenced code, blockquote lines and inline code spans overwritten by spaces,
+   * one per character, line feeds kept — the text {@link #directiveText} finds the directive in, at
+   * the body's own offsets. The three passes run in the order {@link #directiveText} applies them,
+   * each over the text the previous one blanked.
+   */
+  private static String quotedTextBlanked(String body) {
+    var masked = new StringBuilder(body);
+    for (var quoted : List.of(FENCED_CODE, BLOCKQUOTE_LINE, INLINE_CODE)) {
+      var found = quoted.matcher(masked.toString());
+      while (found.find()) {
+        for (var i = found.start(); i < found.end(); i++) {
+          if (masked.charAt(i) != '\n') {
+            masked.setCharAt(i, ' ');
+          }
+        }
+      }
+    }
+    return masked.toString();
   }
 
   /**
@@ -1155,8 +1321,7 @@ public class FollowUpAnalyzer {
       }
       // The naming may sit in backticks (the shape the summary prints); only the directive token
       // may not — see isClearDirective.
-      String body = namingText(comment.body());
-      if (namesLocator(body, locator, anchor) && body.contains(anchor)) {
+      if (namesFinding(namingText(comment.body()), locator, anchor)) {
         Log.infof(
             "Clearing previous finding '%s' (%s) — a maintainer named it in an"
                 + " @thrillhousebot resolved comment on the PR conversation",
@@ -1168,6 +1333,81 @@ public class FollowUpAnalyzer {
       }
     }
     return false;
+  }
+
+  /**
+   * Every use of the decline directive by a maintainer on the PR conversation, in comment order —
+   * the non-bot, write-capable authorship gate of {@link #isMaintainerConversationComment}, the
+   * same one {@link #clearedInConversation} applies, because naming a finding wrongly costs the
+   * same whichever decision follows (#709). Parsed once per pass and handed to every per-finding
+   * match, since the parse depends on the comment and the bot identity alone; parsing inside the
+   * per-finding loop repeated it once per finding held or reported.
+   */
+  private static List<ConversationDecline> maintainerDeclines(
+      List<GitHubCommentClient.IssueComment> conversationComments, BotIdentity botIdentity) {
+    if (conversationComments == null || conversationComments.isEmpty()) {
+      return List.of();
+    }
+    var declines = new ArrayList<ConversationDecline>();
+    for (var comment : conversationComments) {
+      if (isMaintainerConversationComment(comment, botIdentity)) {
+        declines.addAll(conversationDeclines(comment.body(), botIdentity));
+      }
+    }
+    return declines;
+  }
+
+  /**
+   * The reasons a maintainer declined this finding with on the PR conversation: one entry per
+   * directive in {@code directives} ({@link #maintainerDeclines}) that names the finding, in
+   * comment order, each carrying the reason written below that directive. Empty when none does,
+   * which is what every guard below yields.
+   *
+   * <p>A list rather than a flag because the count is the "one push-back, then defer" rule: {@link
+   * #recheckDeclines} re-checks a lone decline's reason and defers to a second one, exactly as it
+   * counts a thread's maintainer replies.
+   */
+  private static List<String> conversationDeclineReasons(
+      ReviewResponse.Finding finding, List<ConversationDecline> directives) {
+    if (directives.isEmpty() || finding.file() == null) {
+      return List.of();
+    }
+    String anchor = ownContentAnchor(finding);
+    if (anchor == null) {
+      return List.of();
+    }
+    String locator = finding.file() + ":" + finding.line();
+    var reasons = new ArrayList<String>();
+    for (var decline : directives) {
+      if (namesFinding(decline.naming(), locator, anchor)) {
+        reasons.add(decline.reason());
+      }
+    }
+    return reasons;
+  }
+
+  /**
+   * Whether a maintainer dispositioned this finding from the PR conversation by either directive. A
+   * decline is as much a maintainer acting on the finding as a clear is, and for a finding with no
+   * thread the two directives are the only actions there are (#709).
+   *
+   * @param directives the conversation's decline directives, parsed once by the caller
+   */
+  private static boolean dispositionedInConversation(
+      ReviewResponse.Finding finding,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      List<ConversationDecline> directives,
+      BotIdentity botIdentity) {
+    return clearedInConversation(finding, conversationComments, botIdentity)
+        || !conversationDeclineReasons(finding, directives).isEmpty();
+  }
+
+  /**
+   * Whether {@code namingText} names the finding by both its whole locator and its own content —
+   * the two-part naming both conversation directives require.
+   */
+  private static boolean namesFinding(String namingText, String locator, String anchor) {
+    return namesLocator(namingText, locator, anchor) && namingText.contains(anchor);
   }
 
   /**
@@ -1649,6 +1889,20 @@ public class FollowUpAnalyzer {
    * exactly like a model-reported unresolved status and are never re-posted as new findings, so the
    * maintainer is not asked to answer the same comment twice.
    *
+   * <p>A decline reaches this step by one of two surfaces. On a finding's review thread it is the
+   * maintainer's reply, which the model reads and reports as {@code justified}; that is the path
+   * above. A finding published with no thread — collapsed under "Things to double-check", or listed
+   * as unanchored — has no such reply to give, and the model never sees the PR conversation, so a
+   * decline written there as an {@code @thrillhousebot declined path:line — title} comment ({@link
+   * #declineDirective}) arrives here as a model-reported {@code unresolved} and is applied by
+   * {@link #declineNamedInConversation} after the thread pass: the finding is recorded {@code
+   * justified}, unless the comment's reason fails the very same re-check, under the very same
+   * one-push-back rule counted in directives instead of replies (#709). The two passes touch
+   * disjoint statuses — one rewrites {@code justified}, the other {@code unresolved} — so their
+   * order cannot change an outcome.
+   *
+   * @param conversationComments the PR conversation, read for decline directives naming findings
+   *     the model still reports unresolved
    * @param reviewedCode supplies the diff text the review call saw; resolved lazily because most
    *     rounds have no declined finding at all
    */
@@ -1656,11 +1910,25 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity,
       Supplier<String> reviewedCode) {
     if (statuses == null || statuses.isEmpty()) {
       return statuses == null ? List.of() : statuses;
     }
+    var rechecked =
+        recheckThreadDeclines(previous, statuses, inlineComments, botIdentity, reviewedCode);
+    return declineNamedInConversation(
+        previous, rechecked, conversationComments, botIdentity, reviewedCode);
+  }
+
+  /** The review-thread half of {@link #recheckDeclines}: the model's {@code justified} statuses. */
+  private List<ReviewResponse.PreviousFindingStatus> recheckThreadDeclines(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      Supplier<String> reviewedCode) {
     if (!declineRecheckEnabled || !hasDecline(statuses)) {
       return statuses;
     }
@@ -1691,6 +1959,90 @@ public class FollowUpAnalyzer {
   /** Whether any status is a maintainer decline — the only kind this re-check looks at. */
   private static boolean hasDecline(List<ReviewResponse.PreviousFindingStatus> statuses) {
     return statuses.stream().anyMatch(s -> STATUS_JUSTIFIED.equalsIgnoreCase(s.status()));
+  }
+
+  /**
+   * The conversation half of {@link #recheckDeclines}: rewrites a model-reported {@code unresolved}
+   * whose finding a maintainer declined with the decline directive on the PR conversation ({@link
+   * #conversationDeclineReasons}). Only {@code unresolved} entries with an id inside the prior
+   * round are touched — a {@code resolved}, {@code justified} or {@code superseded} entry is
+   * already settled, and an unplaceable id names nothing.
+   *
+   * <p>The code is resolved once, and only when at least one finding was declined this way: the
+   * supplier concatenates every batch the review saw, and most rounds never need it.
+   */
+  private List<ReviewResponse.PreviousFindingStatus> declineNamedInConversation(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity,
+      Supplier<String> reviewedCode) {
+    var directives = maintainerDeclines(conversationComments, botIdentity);
+    if (previous == null || directives.isEmpty()) {
+      return statuses;
+    }
+    var declines = new LinkedHashMap<Integer, List<String>>();
+    for (var at = 0; at < statuses.size(); at++) {
+      var status = statuses.get(at);
+      var id = status.id();
+      if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status()) || id < 1 || id > previous.size()) {
+        continue;
+      }
+      var reasons = conversationDeclineReasons(previous.get(id - 1), directives);
+      if (!reasons.isEmpty()) {
+        declines.put(at, reasons);
+      }
+    }
+    if (declines.isEmpty()) {
+      return statuses;
+    }
+    String code = declineRecheckEnabled && reviewedCode != null ? reviewedCode.get() : null;
+    var rewritten = new ArrayList<>(statuses);
+    for (var entry : declines.entrySet()) {
+      var id = statuses.get(entry.getKey()).id();
+      rewritten.set(
+          entry.getKey(),
+          conversationDeclineStatus(id, previous.get(id - 1), entry.getValue(), code, botIdentity));
+    }
+    return rewritten;
+  }
+
+  /**
+   * The status a conversation decline leaves on its finding. One push-back, then defer: a lone
+   * directive's reason is re-checked against the code exactly as a lone thread reply is, and a
+   * contradiction keeps the finding {@code unresolved} for one more round under the same note; a
+   * second directive naming the finding is the maintainer answering that push-back and always wins,
+   * as does a disabled re-check or a round with no reviewed code to check against. The reason is
+   * handed to {@link RebuttalContradiction} raw, which strips quoted material itself; only the
+   * clipped claim it returns is logged, and through {@link LogSafe} like every other maintainer- or
+   * model-supplied value.
+   */
+  private static ReviewResponse.PreviousFindingStatus conversationDeclineStatus(
+      int id,
+      ReviewResponse.Finding finding,
+      List<String> reasons,
+      String reviewedCode,
+      BotIdentity botIdentity) {
+    var contradiction =
+        reasons.size() == 1 && reviewedCode != null && !reviewedCode.isBlank()
+            ? RebuttalContradiction.find(finding, reasons.get(0), reviewedCode).orElse(null)
+            : null;
+    if (contradiction == null) {
+      Log.infof(
+          "Recording previous finding #%d '%s' (%s) justified — a maintainer declined it in an"
+              + " @thrillhousebot declined comment on the PR conversation",
+          id,
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file() + ":" + finding.line()));
+      return new ReviewResponse.PreviousFindingStatus(
+          id, STATUS_JUSTIFIED, conversationDeclinedNote(botIdentity));
+    }
+    Log.infof(
+        "Re-opening previous finding #%d: the maintainer's conversation decline claims '%s' but the"
+            + " reviewed code shows '%s'",
+        id, LogSafe.oneLine(contradiction.claim()), LogSafe.oneLine(contradiction.evidence()));
+    return new ReviewResponse.PreviousFindingStatus(
+        id, STATUS_UNRESOLVED, contradiction.note() + conversationRecheckHint(botIdentity));
   }
 
   /**
@@ -1943,12 +2295,14 @@ public class FollowUpAnalyzer {
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
     var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
+    var directives = maintainerDeclines(conversationComments, botIdentity);
     for (var cluster : clusters) {
       OpenFinding target =
           holdableTarget(
               cluster,
               inlineComments,
               conversationComments,
+              directives,
               lineResolver,
               botIdentity,
               renameTargets);
@@ -1965,11 +2319,12 @@ public class FollowUpAnalyzer {
 
   /**
    * The first still-present member of the cluster to hold, or {@code null} when its code is gone, a
-   * maintainer has replied on its thread, or a maintainer cleared it from the PR conversation
-   * ({@link #clearedInConversation} — the only hatch a finding with no thread has, #548). The reply
-   * is located by the round-relative marker ({@link OpenFinding#id()}) plus the finding's own
-   * content rather than by title, so a null-title finding's thread is still seen and a thread-less
-   * finding cannot bind to a different finding that reused the same marker index in another round.
+   * maintainer has replied on its thread, or a maintainer cleared or declined it from the PR
+   * conversation ({@link #dispositionedInConversation} — the only hatches a finding with no thread
+   * has, #548, #709). The reply is located by the round-relative marker ({@link OpenFinding#id()})
+   * plus the finding's own content rather than by title, so a null-title finding's thread is still
+   * seen and a thread-less finding cannot bind to a different finding that reused the same marker
+   * index in another round.
    *
    * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
    * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
@@ -1979,6 +2334,7 @@ public class FollowUpAnalyzer {
       List<OpenFinding> cluster,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
+      List<ConversationDecline> directives,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
@@ -1990,7 +2346,7 @@ public class FollowUpAnalyzer {
         target = member;
       }
       if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null
-          || clearedInConversation(finding, conversationComments, botIdentity)) {
+          || dispositionedInConversation(finding, conversationComments, directives, botIdentity)) {
         answered = true;
       }
     }

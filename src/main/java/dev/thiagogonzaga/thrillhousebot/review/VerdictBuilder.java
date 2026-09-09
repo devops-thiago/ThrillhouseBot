@@ -209,12 +209,15 @@ public class VerdictBuilder {
               settledIds);
     }
     // A maintainer's decline is a claim, not ground truth: a "justified" whose stated reason the
-    // reviewed code plainly contradicts goes back to "unresolved" for one more round (#169).
+    // reviewed code plainly contradicts goes back to "unresolved" for one more round (#169). A
+    // decline written on the PR conversation — the only place a finding with no thread can be
+    // declined — is applied and re-checked the same way here (#709).
     effectiveStatuses =
         followUpAnalyzer.recheckDeclines(
             ctx.previousFindingsList(),
             effectiveStatuses,
             ctx.inlineComments(),
+            ctx.conversationComments(),
             botIdentity,
             () -> reviewedCode(ctx, plan));
     // A finding that never posted inline has no thread to reply on, so the only maintainer action
