@@ -26,6 +26,16 @@ public final class PromptTemplateEscaper {
   private static final String FENCE_SUFFIX = "]]";
   private static final SecureRandom RANDOM = new SecureRandom();
 
+  /**
+   * The token {@link #fenceForBudgeting} carries: 32 hex characters alternating digit and letter.
+   * cl100k's pre-tokenizer cuts a run of letters, or of up to three digits, into one chunk and BPE
+   * merges only within a chunk, so this token is 32 single-character chunks and costs one token per
+   * character — 46 a fence line, 93 for the two lines around a space. No draw can cost more: a
+   * chunk never costs more tokens than it has characters, and a random token's longer runs only
+   * merge further. Measured over 200,000 draws the same two lines ran 51 to 87 tokens (#604).
+   */
+  private static final String WIDEST_FENCE_HEX = "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d";
+
   private PromptTemplateEscaper() {}
 
   /** The fixed prefix of a diff fence line, named in the prompts so the model recognizes it. */
@@ -49,7 +59,26 @@ public final class PromptTemplateEscaper {
     }
     var bytes = new byte[16];
     RANDOM.nextBytes(bytes);
-    String fenceLine = FENCE_PREFIX + HexFormat.of().formatHex(bytes) + FENCE_SUFFIX;
+    return fenceWith(HexFormat.of().formatHex(bytes), content);
+  }
+
+  /**
+   * The fence scaffolding a token budget is sized from: the two fence lines around a single space,
+   * shaped exactly as {@link #fence} emits them, with {@link #WIDEST_FENCE_HEX} in place of the
+   * random one. Sizing the shared prompt overhead from a live draw made the diff budget for a given
+   * input a random variable — a draw's BPE width varies by tens of tokens — so the same PR could
+   * batch differently on two runs, and the small-budget tests that assert a plan shape flaked on it
+   * about once in 1500 runs (#586, #604). The width is what a budget needs, not the value: the
+   * emitted prompt still gets a fresh draw from {@link #fence}, and this stand-in never reaches a
+   * model. Being the widest a draw can be, the estimate errs by at most the difference, on the side
+   * of a smaller batch.
+   */
+  public static String fenceForBudgeting() {
+    return fenceWith(WIDEST_FENCE_HEX, " ");
+  }
+
+  private static String fenceWith(String token, String content) {
+    String fenceLine = FENCE_PREFIX + token + FENCE_SUFFIX;
     return fenceLine + "\n" + content + "\n" + fenceLine;
   }
 
