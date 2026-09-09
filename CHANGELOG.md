@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A length stop with no content is repeated once with reasoning disabled instead of failing the review** (#839): a streamed review call that ends with `finish_reason=length` and an empty content body spent its whole output allowance on reasoning and never began the answer. Three production reviews in a row failed that way at `AI_REASONING_EFFORT=max`, each billed for 65536 output tokens of nothing, and the maintainer got "could not be completed". The retry loop treated every length stop as deterministic and gave up after one attempt, which is right for an answer that outgrew the cap and wrong for one that never started. The two shapes are now told apart by the content length. A stop with content keeps the no-retry salvage path. A stop with none is repeated once with `reasoning_effort=none` for that call only, the step-down is logged at WARN with the input and output token counts, and the review's scope note says it ran with reasoning disabled. The repeat goes straight to reasoning off rather than one tier down: on the provider where this was measured the tiers barely change the reasoning length, so a tier down burns the cap again. The configured effort is not changed and the next review starts at it; a repeat that also stops at the cap fails as before. The final summary call shares the loop and gets the same treatment; the blocking verifier and reply calls do not stream through it and keep their fail-open handling
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.

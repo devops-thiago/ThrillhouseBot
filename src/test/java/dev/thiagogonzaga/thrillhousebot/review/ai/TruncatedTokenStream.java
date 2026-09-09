@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.ToolExecution;
@@ -29,16 +30,39 @@ import java.util.function.Consumer;
  * Emits a body cut mid-JSON with {@code finish_reason: length} — what a provider actually returns
  * when the response hits {@code max_tokens}. Counts its own starts so a test can assert how many
  * calls a truncation cost.
+ *
+ * <p>{@link #reasoningExhausted} is the other shape a length stop takes (#839): no content at all,
+ * the reasoning field carrying everything the model produced, and a usage report showing the whole
+ * output allowance spent — the production signature of a reasoning tail that never reached the
+ * answer.
  */
 final class TruncatedTokenStream implements TokenStream {
 
   private final String partialText;
+  private final String reasoning;
+  private final TokenUsage usage;
   private final AtomicInteger starts;
   private Consumer<ChatResponse> completeHandler;
 
   TruncatedTokenStream(String partialText, AtomicInteger starts) {
+    this(partialText, null, null, starts);
+  }
+
+  private TruncatedTokenStream(
+      String partialText, String reasoning, TokenUsage usage, AtomicInteger starts) {
     this.partialText = partialText;
+    this.reasoning = reasoning;
+    this.usage = usage;
     this.starts = starts;
+  }
+
+  /** A length stop with an empty content body: the model spent its output allowance reasoning. */
+  static TruncatedTokenStream reasoningExhausted(AtomicInteger starts) {
+    return new TruncatedTokenStream(
+        "",
+        "Let me look at the diff again before I decide what to report...",
+        new TokenUsage(30_000, 65_536),
+        starts);
   }
 
   @Override
@@ -78,8 +102,9 @@ final class TruncatedTokenStream implements TokenStream {
     if (completeHandler != null) {
       completeHandler.accept(
           ChatResponse.builder()
-              .aiMessage(AiMessage.from(partialText))
+              .aiMessage(AiMessage.builder().text(partialText).thinking(reasoning).build())
               .finishReason(FinishReason.LENGTH)
+              .tokenUsage(usage)
               .build());
     }
   }
