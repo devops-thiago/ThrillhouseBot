@@ -250,6 +250,7 @@ public class VerdictBuilder {
             ReviewDiffFormatter.formatPureRenameRollup(
                 ReviewDiffFormatter.pureRenameFiles(ctx.files())),
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
+            PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried())),
         unresolvedPrevious,
         ciEvaluation,
@@ -503,13 +504,15 @@ public class VerdictBuilder {
 
   /**
    * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, the
-   * unmatched-ignore-glob note, and the superseded-run carry-over note. The notes share the
-   * review-scope blockquote — each answers "what did this review look at, or not, and why".
+   * unmatched-ignore-glob note, the refused-coverage-artifact note, and the superseded-run
+   * carry-over note. The notes share the review-scope blockquote — each answers "what did this
+   * review look at, or not, and why".
    */
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       String pureRenameRollup,
       String unmatchedIgnoreGlobs,
+      String coverageArtifactNotRead,
       String carriedFromSupersededRun) {}
 
   ReviewResult buildResult(
@@ -524,7 +527,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", ""),
+        new SummaryInputs(changedFiles, "", "", "", ""),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -665,9 +668,10 @@ public class VerdictBuilder {
    * blockquote, so a reader meets one scope caveat rather than competing banners.
    */
   private static String reviewScopeNote(SummaryInputs summaryInputs) {
-    var notes = new ArrayList<String>(3);
+    var notes = new ArrayList<String>(4);
     addScopeNote(notes, summaryInputs.pureRenameRollup());
     addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
+    addScopeNote(notes, summaryInputs.coverageArtifactNotRead());
     addScopeNote(notes, summaryInputs.carriedFromSupersededRun());
     return String.join("\n>\n> ", notes);
   }

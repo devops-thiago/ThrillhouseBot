@@ -1476,6 +1476,66 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
   }
 
+  /**
+   * #813 — a coverage artifact the reader refused is disclosed in the same review-scope blockquote
+   * as an ignore glob that matched nothing: the maintainer configured it, and the review did not
+   * read it. Without this the only trace was a log line.
+   */
+  @Test
+  void aRefusedCoverageArtifactIsDisclosedInTheReviewScopeNote() {
+    var ctx = contextWithCoverageRefusal("it holds more than 512 `.xml` entries");
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** the configured coverage artifact was not read:"
+                    + " it holds more than 512 `.xml` entries\n\n"),
+        result.summaryMarkdown());
+  }
+
+  /** The three config-shaped notes are separate paragraphs of one blockquote, in a fixed order. */
+  @Test
+  void everyScopeNoteSharesOneBlockquoteInAFixedOrder() {
+    var carried =
+        new SupersededFindingsCarryover.Carried(
+            "23e277100000000",
+            "c957198",
+            List.of(new ReviewResponse.Finding("high", "high", "a.java", 1, "t", "d", null, null)));
+    var ctx = scopedContext(List.of("payments/"), carried, "it could not be read as a zip archive");
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 ignore glob declared in this repository's"
+                    + " ThrillhouseBot config matched no file in this pull request (`payments/`)"
+                    + "\n>\n> the configured coverage artifact was not read: it could not be read"
+                    + " as a zip archive"
+                    + "\n>\n> 1 finding from the review of superseded head `23e2771`, abandoned"
+                    + " when the pull request head moved, was carried into this review as"
+                    + " previous findings and re-checked against the current head\n\n"),
+        result.summaryMarkdown());
+  }
+
   @Test
   void aReviewWhoseDeclaredGlobsAllMatchedCarriesNoScopeNote() {
     var realSummaryBuilder =
@@ -1501,6 +1561,19 @@ class VerdictBuilderTest {
   /** The same one-file context, also carrying a superseded run's findings (#806). */
   private static ReviewContextLoader.ReviewContext contextCarrying(
       List<String> unmatched, SupersededFindingsCarryover.Carried carried) {
+    return scopedContext(unmatched, carried, "");
+  }
+
+  /** The same one-file context, carrying only a refused coverage artifact's reason (#813). */
+  private static ReviewContextLoader.ReviewContext contextWithCoverageRefusal(String refusal) {
+    return scopedContext(List.of(), SupersededFindingsCarryover.Carried.NONE, refusal);
+  }
+
+  /** A one-file context carrying every input the review-scope blockquote is built from. */
+  private static ReviewContextLoader.ReviewContext scopedContext(
+      List<String> unmatched,
+      SupersededFindingsCarryover.Carried carried,
+      String coverageArtifactRefusal) {
     var changed = new FileDiff("src/Main.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x");
     return new ReviewContextLoader.ReviewContext(
         List.of(changed),
@@ -1527,7 +1600,8 @@ class VerdictBuilderTest {
         null,
         List.of(),
         unmatched,
-        carried);
+        carried,
+        coverageArtifactRefusal);
   }
 
   @Test

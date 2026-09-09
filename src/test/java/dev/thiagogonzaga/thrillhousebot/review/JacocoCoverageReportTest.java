@@ -28,6 +28,11 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -80,6 +85,57 @@ class JacocoCoverageReportTest {
       }
     }
     return bytes.toByteArray();
+  }
+
+  /** What {@code action} answered, and every line the reader logged while answering it. */
+  private record Captured<T>(T value, List<String> lines) {}
+
+  /**
+   * Runs {@code action} with the reader's log lines captured, formatted as the log manager would.
+   */
+  private static <T> Captured<T> capturing(Supplier<T> action) {
+    var records = new CopyOnWriteArrayList<LogRecord>();
+    var handler =
+        new Handler() {
+          @Override
+          public void publish(LogRecord logRecord) {
+            records.add(logRecord);
+          }
+
+          @Override
+          public void flush() {
+            // Nothing buffered.
+          }
+
+          @Override
+          public void close() {
+            // Nothing to release.
+          }
+        };
+    var logger =
+        org.jboss.logmanager.LogContext.getLogContext()
+            .getLogger(JacocoCoverageReport.class.getName());
+    var previousLevel = logger.getLevel();
+    logger.addHandler(handler);
+    logger.setLevel(Level.ALL);
+    T value;
+    try {
+      value = action.get();
+    } finally {
+      logger.removeHandler(handler);
+      logger.setLevel(previousLevel);
+    }
+    var lines =
+        records.stream()
+            .map(
+                r ->
+                    r.getLevel()
+                        + " "
+                        + (r.getParameters() != null && r.getParameters().length > 0
+                            ? String.format(r.getMessage(), r.getParameters())
+                            : r.getMessage()))
+            .toList();
+    return new Captured<>(value, lines);
   }
 
   @Nested
@@ -321,6 +377,7 @@ class JacocoCoverageReportTest {
                   "src/main/java/dev/thiagogonzaga/thrillhousebot/review/CiStatusEvaluator.java")
               .isEmpty(),
           "the report entry must be found regardless of its path inside the archive");
+      assertNull(report.refusal(), "an archive read to the end has nothing to disclose");
     }
 
     @Test
@@ -346,12 +403,81 @@ class JacocoCoverageReportTest {
 
       var padded = new LinkedHashMap<String, String>();
       for (var i = 0; i < JacocoCoverageReport.MAX_ZIP_ENTRIES + 5; i++) {
-        padded.put("pad" + i + ".txt", "x");
+        padded.put("pad" + i + ".xml", "<x/>");
       }
       padded.put("jacoco.xml", REPORT);
       assertTrue(
           JacocoCoverageReport.fromArtifactZip(zipOf(padded)).isEmpty(),
-          "the walk stops at the entry cap instead of reading an unbounded archive");
+          "the walk stops at the entry cap instead of parsing an unbounded number of documents");
+    }
+
+    /**
+     * #813 — the usual coverage upload is the whole {@code target/site/jacoco/} tree: one {@code
+     * .html} per class plus the stylesheet, images and script, with {@code jacoco.xml} beside them.
+     * Charging every file to the entry cap refused that shape whole on a project of a few hundred
+     * classes, so the one report inside was never read. Only an entry that can carry a report
+     * counts; the rest is still drained against the aggregate budget.
+     */
+    @Test
+    void readsTheReportOutOfAnHtmlSiteTreeLargerThanTheEntryCap() throws IOException {
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        for (var i = 0; i < 600; i++) {
+          zip.putNextEntry(new ZipEntry("site/jacoco/dev.example/Class" + i + ".html"));
+          zip.write("<html></html>".getBytes(StandardCharsets.UTF_8));
+          zip.closeEntry();
+        }
+        zip.putNextEntry(new ZipEntry("site/jacoco/jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+
+      var report = JacocoCoverageReport.fromArtifactZip(bytes.toByteArray());
+
+      assertFalse(
+          report.isEmpty(),
+          "600 .html entries beside one jacoco.xml is the ordinary target/site/jacoco upload and"
+              + " must be read");
+      assertNull(report.refusal(), "nothing was refused, so nothing is disclosed");
+    }
+
+    @Test
+    void refusesAnArchiveWithMoreXmlEntriesThanTheCapAndSaysSoAtWarn() throws IOException {
+      // One .xml past the cap: 512 surefire reports ahead of the one jacoco.xml, the shape a whole
+      // target/ upload takes. Every .xml costs a slot whether or not it is JaCoCo, because the cap
+      // bounds how many documents the merge parses — and the archive is refused whole, never
+      // merged as far as the cap allowed (#789).
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        for (var i = 0; i < JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
+          zip.putNextEntry(new ZipEntry("surefire-reports/TEST-Case" + i + ".xml"));
+          zip.write("<testsuite name=\"x\"/>".getBytes(StandardCharsets.UTF_8));
+          zip.closeEntry();
+        }
+        zip.putNextEntry(new ZipEntry("site/jacoco/jacoco.xml"));
+        zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+
+      var captured = capturing(() -> JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()));
+
+      assertTrue(
+          captured.value().isEmpty(),
+          "513 .xml entries is past the cap whatever else the archive holds");
+      assertEquals(
+          JacocoCoverageReport.Refusal.ENTRY_CAP,
+          captured.value().refusal(),
+          "the empty report says why, so the review can disclose it");
+      assertTrue(
+          captured.lines().stream()
+              .anyMatch(
+                  line ->
+                      line.startsWith("WARN ")
+                          && line.contains(
+                              "more than " + JacocoCoverageReport.MAX_ZIP_ENTRIES + " .xml")),
+          "a refusal nobody runs production at DEBUG to see is a coverage section that went quiet"
+              + " for no written reason: "
+              + captured.lines());
     }
 
     @Test
@@ -393,9 +519,14 @@ class JacocoCoverageReportTest {
       var whole = zipOf(Map.of("jacoco.xml", REPORT));
       var truncated = java.util.Arrays.copyOf(whole, whole.length / 2);
 
+      var report = JacocoCoverageReport.fromArtifactZip(truncated);
+
       assertTrue(
-          JacocoCoverageReport.fromArtifactZip(truncated).isEmpty(),
-          "a half-downloaded archive must degrade, not throw out of the review");
+          report.isEmpty(), "a half-downloaded archive must degrade, not throw out of the review");
+      assertEquals(
+          JacocoCoverageReport.Refusal.UNREADABLE,
+          report.refusal(),
+          "the artifact was there and could not be read, which the maintainer should hear");
     }
 
     @Test
@@ -428,10 +559,47 @@ class JacocoCoverageReportTest {
         zip.closeEntry();
       }
 
+      var captured = capturing(() -> JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()));
+
       assertTrue(
-          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
+          captured.value().isEmpty(),
           "an archive inflating past the aggregate cap must be refused, not walked to the report"
               + " hidden behind the bomb");
+      assertEquals(
+          JacocoCoverageReport.Refusal.INFLATION_BUDGET,
+          captured.value().refusal(),
+          "the bomb refusal is disclosed like the entry-cap refusal");
+      assertTrue(
+          captured.lines().stream()
+              .anyMatch(line -> line.startsWith("WARN ") && line.contains("aggregate cap")),
+          "the bomb refusal is logged at WARN with counts only: " + captured.lines());
+    }
+
+    @Test
+    void refusesABombWearingAReportName() throws IOException {
+      // The same padding as above, named .xml: each entry costs a report slot and is collected for
+      // parsing, and the aggregate budget still has to refuse the archive from inside a report
+      // entry — the cap on report entries bounds how many documents are parsed, never how much any
+      // of them inflates.
+      var perEntry = JacocoCoverageReport.MAX_ENTRY_BYTES / 2;
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        var zeros = new byte[64 * 1024];
+        var inflated = 0L;
+        for (var i = 0; inflated <= JacocoCoverageReport.MAX_TOTAL_INFLATED_BYTES; i++) {
+          zip.putNextEntry(new ZipEntry("module" + i + "/jacoco.xml"));
+          for (var written = 0; written < perEntry; written += zeros.length) {
+            zip.write(zeros);
+          }
+          zip.closeEntry();
+          inflated += perEntry;
+        }
+      }
+
+      var report = JacocoCoverageReport.fromArtifactZip(bytes.toByteArray());
+
+      assertTrue(report.isEmpty(), "a bomb is a bomb whatever its entries are called");
+      assertEquals(JacocoCoverageReport.Refusal.INFLATION_BUDGET, report.refusal());
     }
 
     @Test
@@ -494,15 +662,18 @@ class JacocoCoverageReportTest {
         zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
         zip.closeEntry();
         for (var i = 0; i <= JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
-          zip.putNextEntry(new ZipEntry("pad" + i + ".txt"));
-          zip.write(new byte[] {'x'});
+          zip.putNextEntry(new ZipEntry("pad" + i + ".xml"));
+          zip.write("<x/>".getBytes(StandardCharsets.UTF_8));
           zip.closeEntry();
         }
       }
 
+      var report = JacocoCoverageReport.fromArtifactZip(bytes.toByteArray());
+
       assertTrue(
-          JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
-          "an archive longer than the entry cap yields EMPTY, not the prefix that fit");
+          report.isEmpty(),
+          "an archive with more .xml entries than the cap yields EMPTY, not the prefix that fit");
+      assertEquals(JacocoCoverageReport.Refusal.ENTRY_CAP, report.refusal());
     }
 
     @Test
@@ -515,15 +686,15 @@ class JacocoCoverageReportTest {
         zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
         zip.closeEntry();
         for (var i = 0; i < JacocoCoverageReport.MAX_ZIP_ENTRIES - 1; i++) {
-          zip.putNextEntry(new ZipEntry("pad" + i + ".txt"));
-          zip.write(new byte[] {'x'});
+          zip.putNextEntry(new ZipEntry("pad" + i + ".xml"));
+          zip.write("<x/>".getBytes(StandardCharsets.UTF_8));
           zip.closeEntry();
         }
       }
 
       assertFalse(
           JacocoCoverageReport.fromArtifactZip(bytes.toByteArray()).isEmpty(),
-          "an archive that fits inside the cap is still read");
+          "an archive whose .xml entries exactly fill the cap is still read");
     }
 
     @Test
@@ -692,9 +863,11 @@ class JacocoCoverageReportTest {
           JacocoCoverageReport.fromArtifactZip("this is not a zip".getBytes(StandardCharsets.UTF_8))
               .isEmpty(),
           "a body that is not a zip must degrade, not throw");
-      assertTrue(
-          JacocoCoverageReport.fromArtifactZip(zipOf(Map.of("README.md", "hi"))).isEmpty(),
-          "an archive with no XML entry carries no coverage");
+      var noReport = JacocoCoverageReport.fromArtifactZip(zipOf(Map.of("README.md", "hi")));
+      assertTrue(noReport.isEmpty(), "an archive with no XML entry carries no coverage");
+      assertNull(
+          noReport.refusal(),
+          "nothing usable is the designed quiet path, not a refusal to disclose");
     }
   }
 }
