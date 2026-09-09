@@ -1390,4 +1390,178 @@ class RebuttalContradictionTest {
             .isPresent(),
         "a backslash before the closing backtick is literal in " + path);
   }
+
+  /**
+   * #814. A Kotlin raw string has no escapes, so a backslash right before its closer is literal and
+   * the closer closes it. Read with the escape a Java text block has, {@code \"} stepped over the
+   * first quote of the closer, the literal stayed open for the rest of the hunk, and the dispatch
+   * on the next line was blanked — the under-fire that lets a wrong decline stand. The diff header
+   * names the file, and a Kotlin extension turns the escape off for the {@code """} row.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"kt", "kts"})
+  void readsABackslashAsLiteralInsideAKotlinRawString(String extension) {
+    var diff =
+        "diff --git a/src/a."
+            + extension
+            + " b/src/a."
+            + extension
+            + "\n@@ -1,3 +1,5 @@\n"
+            + "+    val dir = \"\"\"C:\\Users\\\"\"\"\n"
+            + "+    executor.submit(task)\n";
+
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the raw string closes on its own line, so the dispatch below it is live in a ."
+            + extension
+            + " file");
+    assertEquals("executor.submit(task)", contradiction.get().evidence());
+  }
+
+  /**
+   * Everything that is not Kotlin keeps the escape on the {@code """} row, and so does a fragment
+   * that names no file: a Java text block that quotes {@code \"""} stays quoted past it, which is
+   * the reading the escape exists for, and the Kotlin shape blanks its hunk as it always has —
+   * under-fire, the direction every unnamed ambiguity resolves toward.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "diff --git a/src/a.java b/src/a.java\n",
+        "diff --git a/src/a.py b/src/a.py\n",
+        "diff --git a/src/Makefile b/src/Makefile\n",
+        ""
+      })
+  void keepsTheTextBlockEscapeOutsideKotlin(String header) {
+    var textBlock =
+        header
+            + "@@ -1,3 +1,5 @@\n"
+            + "+    var s = \"\"\"a \\\"\"\" hand work to .submit( here\"\"\"; var n = 1;\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", textBlock)
+            .isEmpty(),
+        "the escaped quote does not close the text block, so its body is not live code under: "
+            + header);
+
+    var rawString =
+        header
+            + "@@ -1,3 +1,5 @@\n"
+            + "+    val dir = \"\"\"C:\\Users\\\"\"\"\n"
+            + "+    executor.submit(task)\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", rawString)
+            .isEmpty(),
+        "without a Kotlin extension the escape stays on and the literal stays open under: "
+            + header);
+  }
+
+  /**
+   * #814. The closer rule holds only where the opener must end its line (JLS 3.10.6). Kotlin and
+   * Python let a triple-quoted body follow the opener, so a body that starts with a terminator and
+   * runs past its line was read as a closer and scanned as live code, and the dispatch words quoted
+   * inside it overruled a decline that was right — the expensive direction. The diff header names
+   * the file, and a Kotlin or Python extension turns the rule off for the {@code """} row.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"kt", "kts", "py"})
+  void doesNotReadATerminatorLedTripleQuoteAsACloserInKotlinOrPython(String extension) {
+    var diff =
+        "diff --git a/src/a."
+            + extension
+            + " b/src/a."
+            + extension
+            + "\n@@ -1,3 +1,5 @@\n"
+            + "+    s = \"\"\"; hand work to executor.submit(task)\n"
+            + "+    and more\"\"\"\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
+        "the dispatch text sits inside the literal, so it is not live code in a ."
+            + extension
+            + " file");
+  }
+
+  /**
+   * The rule the Java measurement keeps (57 blanked statement lines without it) does not move: a
+   * hunk that starts inside a Java text block shows its closer with a terminator after it, and that
+   * closer still ends a literal rather than opening one — in a Java file, in a file with no
+   * extension, and in a fragment that names no file.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "diff --git a/src/a.java b/src/a.java\n",
+        "diff --git a/src/Makefile b/src/Makefile\n",
+        ""
+      })
+  void keepsTheTextBlockCloserRuleOutsideKotlinAndPython(String header) {
+    var diff =
+        header
+            + "@@ -340,6 +385,10 @@ public record ReviewResult(\n"
+            + "       \"\"\";\n"
+            + "+    executor.submit(() -> run(ctx));\n";
+
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the hunk opens inside a text block, so its first delimiter closes one under: " + header);
+    assertEquals("executor.submit(() -> run(ctx));", contradiction.get().evidence());
+  }
+
+  /**
+   * What turning the rule off costs, kept explicit: a Kotlin or Python hunk that starts inside a
+   * triple-quoted literal shows only its closer, which now reads as an opener and blanks the rest
+   * of the hunk. That is the under-fire direction — a decline that stands is this class's default
+   * outcome — and the same side the Go raw string resolves toward.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"kt", "py"})
+  void blanksTheHunkWhenOnlyAKotlinOrPythonTripleQuoteCloserIsVisible(String extension) {
+    var diff =
+        "diff --git a/src/a."
+            + extension
+            + " b/src/a."
+            + extension
+            + "\n@@ -10,4 +10,6 @@\n"
+            + "     hand work to executor.submit here\n"
+            + "   \"\"\";\n"
+            + "+    executor.submit(task)\n";
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", diff).isEmpty(),
+        "a lone triple quote has no safe reading both ways in a ."
+            + extension
+            + " file, so it blanks and keeps the decline");
+  }
+
+  /**
+   * The reviewed code the bot actually re-checks is {@code ReviewDiffFormatter}'s output, where a
+   * file is named by its {@code ### path (status, +N -M)} section heading and the GitHub patch
+   * under it starts at {@code @@} — there is no {@code diff --git} line in it at all. The heading
+   * has to name the file to the scanner, or the profile never applies outside a bare patch.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"### src/a.kt (modified, +2 -0)", "### src/a.kt"})
+  void readsTheFileFromTheFormattedSectionHeading(String heading) {
+    var formatted =
+        heading
+            + "\n```diff\n"
+            + "@@ -1,3 +1,5 @@\n"
+            + "+    val dir = \"\"\"C:\\Users\\\"\"\"\n"
+            + "+    executor.submit(task)\n"
+            + "```\n";
+
+    var contradiction =
+        RebuttalContradiction.find(RACE_FINDING, "Declining: this runs serially.", formatted);
+
+    assertTrue(
+        contradiction.isPresent(),
+        "the section heading names a Kotlin file, so its raw string closes and the dispatch below"
+            + " it is live: "
+            + heading);
+    assertEquals("executor.submit(task)", contradiction.get().evidence());
+  }
 }

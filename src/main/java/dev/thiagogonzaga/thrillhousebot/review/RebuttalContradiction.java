@@ -223,18 +223,22 @@ final class RebuttalContradiction {
    * lines that reset it are the ones that are not code in the first place: the {@code diff --git}
    * and {@code @@} headers, the {@code ### file} heading and the ```` ```diff ```` fence {@code
    * ReviewDiffFormatter} wraps each patch in — whose backticks would otherwise open a template
-   * literal over the hunk beneath it.
+   * literal over the hunk beneath it. The two that name a file also hand it to the scanner.
    *
    * <p><b>What the scan still cannot decide.</b> Two residues need to know the language, which a
    * union-of-delimiters scan does not (#651). Python's {@code //} floor division reads as a comment
    * start and cuts the line, which loses evidence and keeps the decline — the safe direction. A
    * {@code #} comment is not a comment to this scan at all, so a dispatch named in one still reads
    * as live code, which is the expensive direction; stripping {@code #} everywhere is not the fix,
-   * since it would cut a C {@code #include} and a CSS colour. The next step for either is a
-   * per-extension profile keyed off the diff header — a language hint the caller does not always
-   * have, since {@code find} is also handed bare patch fragments. The header already settles one
-   * fact where it is present: whether a backslash escapes inside a backtick literal ({@link
-   * LiveCodeScanner#fileNamed}).
+   * since it would cut a C {@code #include} and a CSS colour. Either needs a per-language comment
+   * model, which is more than the per-file profile of delimiter facts the scanner does keep ({@link
+   * LiveCodeScanner#fileNamed}): whether a backslash escapes inside a backtick or a triple quote,
+   * and whether a terminator after a triple quote marks a closer (#791, #814). That profile is read
+   * off the file the diff names — the {@code diff --git} header of a bare patch, or the {@code ###
+   * path (…)} heading {@code ReviewDiffFormatter} puts over each file section, which is the text
+   * the bot actually re-checks against: a GitHub patch starts at its first {@code @@} and carries
+   * no {@code diff --git} line, so without the heading the profile never applied outside a bare
+   * fragment. A fragment that names no file keeps the reading the table always had.
    */
   private static String rightSideCode(String reviewedCode) {
     var scanner = new LiveCodeScanner();
@@ -253,6 +257,8 @@ final class RebuttalContradiction {
       }
       if (line.startsWith("diff --git ")) {
         scanner.fileNamed(line);
+      } else if (line.startsWith("### ")) {
+        scanner.fileNamed(sectionPath(line));
       }
       kept.add(scanner.scanLine(added ? line.substring(1) : line));
       if (!body) {
@@ -260,6 +266,18 @@ final class RebuttalContradiction {
       }
     }
     return String.join("\n", kept);
+  }
+
+  /**
+   * The path a {@code ### path (status, +N -M)} section heading names, the shape {@code
+   * ReviewDiffFormatter.formatFileSection} writes over every file. The status suffix is cut at its
+   * last {@code " ("}, as {@code FindingQuoteValidator} cuts it; a heading without one is the path
+   * whole.
+   */
+  private static String sectionPath(String heading) {
+    var path = heading.substring(4);
+    var suffix = path.lastIndexOf(" (");
+    return suffix < 0 ? path : path.substring(0, suffix);
   }
 
   /**
