@@ -248,9 +248,6 @@ public final class GitHubWriteRetry {
       error.ifPresent(refusal -> warnIfWordingWasMissed(operation, refusal));
       return Optional.empty();
     }
-    if (attempt == 1) {
-      warnIfWordingWasMissed(operation, error.get());
-    }
     if (attempt >= MAX_ATTEMPTS) {
       if (log.isWarnEnabled()) {
         log.warn(
@@ -291,39 +288,6 @@ public final class GitHubWriteRetry {
    * write is retried, and a write the review's budget stops is not, so asking before the budget
    * would have the log say both (#734). Behind a level check for the reason the give-up line above
    * is.
-   */
-  private void warnIfWordingWasMissed(String operation, GitHubApiError error) {
-    if (!log.isWarnEnabled()) {
-      return;
-    }
-    if (error.hasUnrecognisedThrottleWording()) {
-      log.warn(
-          "GitHub refused {} with a 403 that reads like a rate limit but matched no known throttle"
-              + " wording — not retried, so the generated content is lost; if this is a throttle,"
-              + " its wording needs adding to GitHubApiError. {}",
-          operation,
-          error.diagnostics());
-    } else if (error.hasUnrecognisedBlockWording()) {
-      log.warn(
-          "GitHub throttled {} with wording that names a block but matched no known"
-              + " content-creation wording — retried, but without the {}s floor that block is"
-              + " sized against; if this is the content-creation block, its wording needs adding"
-              + " to GitHubApiError. {}",
-          operation,
-          GitHubApiError.CONTENT_CREATION_BLOCK_MIN_DELAY.toSeconds(),
-          error.diagnostics());
-    }
-  }
-
-  /**
-   * Writes down a 403 whose body reads like a throttle but matched no known wording (#784). The
-   * classification is a whitelist of the phrases GitHub is known to send, and a miss used to be
-   * silent in both directions: a refusal-shaped miss failed fast exactly like a permission 403, and
-   * a block-shaped miss kept the repeat but lost the floor the budget is sized by. Neither decision
-   * changes here — a hint this loose must not spend repeats — but the body is named, so the next
-   * wording GitHub adopts is added on evidence rather than guessed at under review. Once per call:
-   * the throttled path asks on the first attempt only, since the body does not change between
-   * attempts. Behind a level check for the reason the give-up line above is.
    */
   private void warnIfWordingWasMissed(String operation, GitHubApiError error) {
     if (!log.isWarnEnabled()) {
