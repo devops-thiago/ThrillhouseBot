@@ -26,6 +26,7 @@ import jakarta.ws.rs.core.Response;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -35,6 +36,8 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -805,6 +808,178 @@ class GitHubWriteRetryTest {
 
       assertEquals(Duration.ofSeconds(90), budget);
       assertEquals(Duration.ofSeconds(90), derivedFromTheBounds);
+    }
+  }
+
+  /**
+   * #784. The throttle classification is a whitelist of GitHub's wording, and a 403 that matched
+   * none of it used to be silent: it failed fast exactly like a permission refusal, so a reworded
+   * block cost the generated content on the first refusal and left nothing in the log to say the
+   * body had looked like a throttle. The decision is unchanged here — the whitelist is not widened
+   * by a hint — but a miss is written down, with the body, so the next one is a one-line fix.
+   */
+  @Nested
+  class WordingThatMatchedNoClassification {
+
+    private static final String REWORDED_THROTTLE_BODY =
+        "{\"message\":\"You are being rate limited on this endpoint. Please slow down.\"}";
+
+    private static final String REWORDED_BLOCK_BODY =
+        "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
+            + " from creating comments.\"}";
+
+    private final List<LogRecord> logged = new CopyOnWriteArrayList<>();
+    private final Logger julLogger = Logger.getLogger(GitHubWriteRetry.class.getName());
+    private final Handler capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            logged.add(entry);
+          }
+
+          @Override
+          public void flush() {
+            // Nothing is buffered.
+          }
+
+          @Override
+          public void close() {
+            // Nothing to release.
+          }
+        };
+    private Level originalLevel;
+
+    @BeforeEach
+    void captureLogging() {
+      originalLevel = julLogger.getLevel();
+      julLogger.setLevel(Level.ALL);
+      julLogger.addHandler(capture);
+    }
+
+    @AfterEach
+    void restoreLogging() {
+      julLogger.removeHandler(capture);
+      julLogger.setLevel(originalLevel);
+    }
+
+    private List<String> warnings() {
+      return logged.stream()
+          .filter(entry -> entry.getLevel().intValue() >= Level.WARNING.intValue())
+          .map(entry -> entry.getMessage() + " " + Arrays.toString(entry.getParameters()))
+          .toList();
+    }
+
+    @Test
+    void aRefusalWordedLikeAThrottleStillFailsFastButSaysSo() {
+      var calls = new AtomicInteger();
+      var refusal = failure(403, REWORDED_THROTTLE_BODY);
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  retry.call(
+                      "a comment on o/r #7",
+                      () -> {
+                        calls.incrementAndGet();
+                        throw refusal;
+                      }));
+
+      // Not retried: the hint decides nothing about the call. What it decides is that the log
+      // names the body that matched no wording, instead of reading like a permission refusal.
+      assertSame(refusal, thrown);
+      assertEquals(1, calls.get());
+      assertEquals(List.of(), slept);
+      var warnings = warnings();
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(
+          warnings.getFirst().contains("matched no known throttle wording"), warnings.toString());
+      assertTrue(warnings.getFirst().contains("a comment on o/r #7"), warnings.toString());
+      assertTrue(warnings.getFirst().contains("status=403"), warnings.toString());
+      assertTrue(
+          warnings.getFirst().contains("rate limited on this endpoint"), warnings.toString());
+    }
+
+    @Test
+    void aPermissionRefusalIsNotReportedAsAMiss() {
+      var refusal = failure(403, "{\"message\":\"Resource not accessible by integration\"}");
+
+      assertThrows(
+          WebApplicationException.class,
+          () ->
+              retry.call(
+                  "a comment on o/r #7",
+                  () -> {
+                    throw refusal;
+                  }));
+
+      assertEquals(List.of(), warnings());
+    }
+
+    @Test
+    void aThrottleNamingABlockInUnknownWordsIsRepeatedUnflooredAndSaysSoOnce() {
+      var calls = new AtomicInteger();
+
+      assertThrows(
+          WebApplicationException.class,
+          () ->
+              retry.call(
+                  "a comment on o/r #7",
+                  () -> {
+                    calls.incrementAndGet();
+                    throw failure(403, REWORDED_BLOCK_BODY);
+                  }));
+
+      // Retried on the generic wording, but at the linear backoff: the block's 30-second floor was
+      // lost with the wording, which is the #722 failure in different words. Said once per call,
+      // not once per attempt, since the body does not change between them.
+      assertEquals(4, calls.get());
+      assertEquals(
+          List.of(Duration.ofSeconds(5), Duration.ofSeconds(10), Duration.ofSeconds(15)), slept);
+      var misses =
+          warnings().stream()
+              .filter(line -> line.contains("matched no known content-creation wording"))
+              .toList();
+      assertEquals(1, misses.size(), warnings().toString());
+      assertTrue(misses.getFirst().contains("blocked from creating comments"), misses.toString());
+    }
+
+    @Test
+    void aRecognisedThrottleIsNotReportedAsAMissedBlock() {
+      var calls = new AtomicInteger();
+
+      retry.call(
+          "a comment on o/r #7",
+          () -> {
+            if (calls.incrementAndGet() == 1) {
+              throw throttled();
+            }
+            return "posted";
+          });
+
+      assertTrue(
+          warnings().stream().noneMatch(line -> line.contains("matched no known")),
+          warnings().toString());
+    }
+
+    @Test
+    void aMissIsNotReportedWhenWarningsAreOff() {
+      // The report sits behind a level check, because diagnostics() builds its string eagerly.
+      julLogger.setLevel(Level.OFF);
+      var refusal = failure(403, REWORDED_THROTTLE_BODY);
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  retry.call(
+                      "a comment on o/r #7",
+                      () -> {
+                        throw refusal;
+                      }));
+
+      assertSame(refusal, thrown);
+      assertTrue(logged.isEmpty(), logged.toString());
     }
   }
 }

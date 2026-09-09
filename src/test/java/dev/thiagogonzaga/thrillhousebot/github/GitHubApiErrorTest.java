@@ -136,6 +136,143 @@ class GitHubApiErrorTest {
           GitHubApiError.from(outbound(403, PERMISSION_BODY, "Retry-After", "Wed, 21 Oct 2026 GMT"))
               .isThrottled());
     }
+
+    @Test
+    void theSecondaryLimitDocumentationAnchorIsEnoughOnItsOwn() {
+      // #784. The anchor is the one part of the body GitHub sends as a token rather than as prose,
+      // and it is the same token whichever sentence sits beside it: #secondary-rate-limits under
+      // resources-in-the-rest-api and #about-secondary-rate-limits under
+      // rate-limits-for-the-rest-api were both recorded on the content-creation block. A message
+      // reworded around it is still a secondary limit.
+      var body =
+          "{\"message\":\"Please slow down.\",\"documentation_url\":\"https://docs.github.com/rest"
+              + "/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits\"}";
+      assertTrue(GitHubApiError.from(outbound(403, body)).isThrottled());
+    }
+
+    @Test
+    void theRequestQuotaWordingIsAThrottle() {
+      // #784. "Request quota exhausted for request GET /search/issues" is a primary-limit wording
+      // GitHub sends beside "API rate limit exceeded"; it usually arrives with remaining=0, but the
+      // words are GitHub's and are honoured when the header is not there.
+      var body =
+          "{\"message\":\"Request quota exhausted for request POST /repos/o/r/issues/7/comments\"}";
+      assertTrue(GitHubApiError.from(outbound(403, body)).isThrottled());
+    }
+  }
+
+  /**
+   * #784. Both classifications are whitelists of GitHub's wording, and a 403 that matched neither
+   * used to be indistinguishable from a permission refusal: it failed fast with no repeat, or kept
+   * the repeat and lost the floor, and nothing wrote down that the body had looked like a throttle.
+   * These pin the two readings that make a miss visible without widening either whitelist.
+   */
+  @Nested
+  class WordingThatMatchedNoClassification {
+
+    private static final Instant NOW = Instant.ofEpochSecond(1_800_000_000L);
+
+    private static final String REWORDED_THROTTLE_BODY =
+        "{\"message\":\"You are being rate limited on this endpoint. Please slow down.\"}";
+
+    private static final String REWORDED_BLOCK_BODY =
+        "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
+            + " from creating comments.\"}";
+
+    @Test
+    void aRefusalThatTalksAboutRateLimitingIsReportedRatherThanTakenForAPermissionRefusal() {
+      var error = GitHubApiError.from(outbound(403, REWORDED_THROTTLE_BODY));
+
+      // The whitelist is not widened by the hint: the call still fails fast. What changes is that
+      // the miss is reported, so the wording can be added on evidence rather than guessed at.
+      assertFalse(error.isThrottled());
+      assertTrue(error.hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void aRefusalThatSaysBlockedOrAbuseIsReportedToo() {
+      assertTrue(
+          GitHubApiError.from(outbound(403, "{\"message\":\"You have been blocked.\"}"))
+              .hasUnrecognisedThrottleWording());
+      assertTrue(
+          GitHubApiError.from(outbound(403, "{\"message\":\"Abuse of this endpoint.\"}"))
+              .hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void aPermissionRefusalIsNotReported() {
+      var error = GitHubApiError.from(outbound(403, PERMISSION_BODY));
+
+      assertFalse(error.hasUnrecognisedThrottleWording());
+      assertFalse(error.hasUnrecognisedBlockWording());
+    }
+
+    @Test
+    void aRecognisedThrottleIsNotReported() {
+      assertFalse(
+          GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY))
+              .hasUnrecognisedThrottleWording());
+      assertFalse(
+          GitHubApiError.from(outbound(403, REWORDED_THROTTLE_BODY, "Retry-After", "45"))
+              .hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void isReadOffA403Only() {
+      // A 429 is a throttle whatever it says, and a 422 about rate limiting is a payload problem.
+      assertFalse(
+          GitHubApiError.from(outbound(429, REWORDED_THROTTLE_BODY))
+              .hasUnrecognisedThrottleWording());
+      assertFalse(
+          GitHubApiError.from(outbound(422, REWORDED_THROTTLE_BODY))
+              .hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void aRewordedThrottleCarryingARetryAfterIsHonouredAtThatValue() {
+      // The headers GitHub documents for a secondary limit are read before any wording is, so a
+      // reworded body that came with a deadline is still a throttle and waits exactly that long.
+      var error = GitHubApiError.from(outbound(403, REWORDED_THROTTLE_BODY, "Retry-After", "45"));
+
+      assertTrue(error.isThrottled());
+      assertEquals(Duration.ofSeconds(45), error.retryDelay(1, NOW));
+    }
+
+    @Test
+    void aThrottleNamingABlockInUnknownWordsIsReported() {
+      var error = GitHubApiError.from(outbound(403, REWORDED_BLOCK_BODY));
+
+      // Still a throttle, on the generic wording; but the block whose width the floor is sized
+      // against is not recognised, so the wait falls back to the linear backoff. That is the
+      // #722 failure with different words, and it is what the report exists to make visible.
+      assertTrue(error.isThrottled());
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
+      assertTrue(error.hasUnrecognisedBlockWording());
+      assertFalse(error.hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void theMeasuredBlockIsNotReported() {
+      assertFalse(
+          GitHubApiError.from(outbound(403, CONTENT_CREATION_BLOCK_BODY))
+              .hasUnrecognisedBlockWording());
+    }
+
+    @Test
+    void theGenericSecondaryLimitIsNotReportedAsAMissedBlock() {
+      // It names no block, so there is nothing the block wording could have missed.
+      assertFalse(
+          GitHubApiError.from(outbound(403, SECONDARY_LIMIT_BODY)).hasUnrecognisedBlockWording());
+    }
+
+    @Test
+    void aRefusalIsNeverReportedAsAMissedBlock() {
+      // "Blocked" on a body that is not a throttle at all is the other report's job.
+      var error = GitHubApiError.from(outbound(403, "{\"message\":\"You have been blocked.\"}"));
+
+      assertFalse(error.hasUnrecognisedBlockWording());
+      assertTrue(error.hasUnrecognisedThrottleWording());
+    }
   }
 
   /**
