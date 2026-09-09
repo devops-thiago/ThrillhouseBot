@@ -43,11 +43,14 @@ import java.util.Set;
  *
  * <p>The machine is deliberately one machine for every language in the corpus rather than a lexer
  * per language: the delimiter table is the union of the shapes the reviewed diffs actually carry.
- * That answers every shape whose delimiters are unambiguous across the corpus, and it cannot answer
- * the two that are genuinely ambiguous without knowing the language — Python's {@code //} floor
- * division, which reads as a comment start, and a Rust lifetime that pairs with a later apostrophe.
- * Both are left as they were, both fail by blanking rather than by matching, and both are recorded
- * in {@code RebuttalContradiction.rightSideCode} as the residue a language hint would close.
+ * Where one and the same delimiter reads differently by language — a backslash inside a backtick or
+ * a triple quote, a terminator after a triple quote — the file the diff names settles a profile of
+ * three booleans ({@link #fileNamed}) rather than a second machine. That answers every shape whose
+ * delimiters are unambiguous across the corpus, and it cannot answer the two that are genuinely
+ * ambiguous without knowing the language — Python's {@code //} floor division, which reads as a
+ * comment start, and a Rust lifetime that pairs with a later apostrophe. Both are left as they
+ * were, both fail by blanking rather than by matching, and both are recorded in {@code
+ * RebuttalContradiction.rightSideCode} as the residue a language hint would close.
  *
  * <h2>Which way it errs</h2>
  *
@@ -85,20 +88,38 @@ final class LiveCodeScanner {
   private static final int RAW_DELIMITER_LIMIT = 16;
 
   /**
+   * The {@code """} row: a Java text block, a Python triple-quoted string, a Kotlin raw string. Its
+   * escape and closer-rule columns are the reading a file the scan cannot name gets; the {@link
+   * Profile} of a named file may override both.
+   */
+  private static final Delimiter TRIPLE_QUOTE =
+      new Delimiter("\"\"\"", "\"\"\"", true, false, true, true);
+
+  /**
+   * The backtick row: a Go raw string and a JavaScript template literal share it. Only the latter
+   * interpolates, and reading {@code ${…}} as code is the direction that keeps real dispatches.
+   * Whether a backslash escapes is the file's call, not the table's: the column is the Go reading.
+   */
+  private static final Delimiter BACKTICK = new Delimiter("`", "`", false, true, true, false);
+
+  /**
    * Openers with a fixed closing token, longest first so {@code """} is not read as {@code ""}
    * followed by a third quote. {@code spansLines} marks the ones a language lets cross a line
    * break; the rest must close on the line that opens them or they were not literals at all.
    *
    * <p>The escape column says where a backslash escapes the next character: inside {@code "} and
-   * {@code '} literals, never inside a backtick one, which is a Go raw string and holds the
-   * backslash literally. Honouring it there stepped over the closing backtick of a Windows path
-   * ({@code `C:\`}) and let the real comment after it pose as live code (#647). A triple quote
-   * keeps it, which is right for a Java text block and a Python triple-quoted string and wrong for
-   * a Kotlin raw string, where a backslash is literal: {@code """C:\Users\"""} steps over the first
-   * quote of its own closer and stays open for the rest of the hunk. That residue is left as it is
-   * because the two readings fail in opposite directions and only one of them is affordable —
-   * dropping the escape blanks the Kotlin case correctly but closes a Java text block at an escaped
-   * {@code \"} run, which hands the quoted text after it to the matcher as live code.
+   * {@code '} literals, and inside a triple-quoted one, which is right for a Java text block and a
+   * Python triple-quoted string. Two rows read differently by language, and for those the column is
+   * only the reading a file the scan cannot name gets; the file's {@link Profile} settles them
+   * ({@link #fileNamed}). A backtick is a Go raw string, where a backslash is literal — honouring
+   * it stepped over the closing backtick of a Windows path ({@code `C:\`}) and let the real comment
+   * after it pose as live code (#647) — unless the file is JavaScript, whose template literal
+   * escapes with it. A triple quote in a Kotlin file is a raw string, where a backslash is literal
+   * too: read with the escape, {@code """C:\Users\"""} stepped over the first quote of its own
+   * closer and stayed open for the rest of the hunk, while dropping the escape for every file
+   * closed a Java text block at an escaped {@code \"} run and handed the quoted text after it to
+   * the matcher as live code. Neither reading was affordable for both (#791); per file there is no
+   * trade to make (#814).
    *
    * <p>The last column marks the delimiter a statement terminator can identify as a <em>closer</em>
    * rather than an opener ({@link #closesLiteralOpenedAboveTheHunk}). Only {@code """} carries it,
@@ -110,22 +131,19 @@ final class LiveCodeScanner {
    * its own closing backtick as an opener and blanked the dispatch on the next line, while {@code
    * `, …`} scanned as live text and matched dispatch words inside quoted prose (#651).
    *
-   * <p>What {@code """} still costs, since Kotlin and Python spell their literals that way too: one
-   * of theirs whose body starts with a terminator <em>and</em> runs past the end of its line is
-   * read as a closer and its body scans as live code. Keeping the column for {@code """} trades
-   * that against the 57 blanked Java statement lines measured in {@link
-   * #closesLiteralOpenedAboveTheHunk}; a language hint off the diff header is what would end the
-   * trade.
+   * <p>That column, too, is the reading an unnamed file gets. Kotlin and Python spell their
+   * literals with {@code """} as well and both let the body follow the opener, so one of theirs
+   * whose body starts with a terminator <em>and</em> runs past the end of its line read as a closer
+   * and its body scanned as live code. Keeping the rule for every file traded that against the 57
+   * blanked Java statement lines measured in {@link #closesLiteralOpenedAboveTheHunk}; the profile
+   * ends the trade by turning the rule off for a Kotlin or Python file, where it has no premise,
+   * and keeping it everywhere else (#814).
    */
   private static final List<Delimiter> DELIMITERS =
       List.of(
-          // Java text block, Kotlin raw string, Python triple-quoted string.
-          new Delimiter("\"\"\"", "\"\"\"", true, false, true, true),
+          TRIPLE_QUOTE,
           new Delimiter("'''", "'''", true, false, true, false),
-          // Go raw string and JavaScript template literal share a delimiter; only the latter
-          // interpolates, and reading ${…} as code is the direction that keeps real dispatches.
-          // Whether a backslash escapes is the file's call, not the table's: see fileNamed.
-          new Delimiter("`", "`", false, true, true, false),
+          BACKTICK,
           new Delimiter("\"", "\"", true, false, false, false),
           new Delimiter("'", "'", true, false, false, false));
 
@@ -180,8 +198,19 @@ final class LiveCodeScanner {
   private static final Set<String> TEMPLATE_LITERAL_EXTENSIONS =
       Set.of("js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte");
 
-  /** Whether a backtick literal in the file being scanned honours a backslash escape. */
-  private boolean templateEscapes;
+  /** The file extensions whose {@code """} is a Kotlin raw string, where a backslash is literal. */
+  private static final Set<String> RAW_TRIPLE_QUOTE_EXTENSIONS = Set.of("kt", "kts");
+
+  /**
+   * The file extensions whose {@code """} may be followed by its body on the same line — Kotlin and
+   * Python — so a statement terminator after it says nothing about whether it opens or closes, and
+   * the closer rule of {@link #closesLiteralOpenedAboveTheHunk} has no premise.
+   */
+  private static final Set<String> TRIPLE_QUOTE_BODY_FOLLOWS_OPENER_EXTENSIONS =
+      Set.of("kt", "kts", "py");
+
+  /** What the file being scanned settles; {@link Profile#UNNAMED} until a header names one. */
+  private Profile profile = Profile.UNNAMED;
 
   /** Forgets every open region, so the next line is scanned as live code from its first column. */
   void reset() {
@@ -193,21 +222,24 @@ final class LiveCodeScanner {
    * header naming it; only the extension is read. It outlives {@link #reset()}, which runs on every
    * hunk header of the same file.
    *
-   * <p>This is the one lexical fact the delimiter table cannot carry on its own. The backtick is
-   * both Go's raw string and JavaScript's template literal, and the two disagree on a backslash: Go
-   * takes it literally, so a Windows path may end right before the closer and honouring the escape
-   * there stepped over the closer and hid the code after it (#647); JavaScript escapes with it, so
-   * {@code \`} is an escaped backtick and reading it as the closer scans the rest of the literal as
-   * live code, the over-fire direction (#651 review). A fragment that names no file keeps the Go
-   * reading the table always had.
+   * <p>This settles the lexical facts the delimiter table cannot carry on its own, because one and
+   * the same delimiter reads differently by language — a {@link Profile} of three booleans, not the
+   * lexer per language #791 declined. The backtick is both Go's raw string and JavaScript's
+   * template literal, and the two disagree on a backslash: Go takes it literally, so a Windows path
+   * may end right before the closer and honouring the escape there stepped over the closer and hid
+   * the code after it (#647); JavaScript escapes with it, so {@code \`} is an escaped backtick and
+   * reading it as the closer scans the rest of the literal as live code, the over-fire direction
+   * (#651 review). The triple quote is Java's text block, Python's string and Kotlin's raw string,
+   * and Kotlin disagrees with the other two on the backslash, which it holds literally, and with
+   * Java on the opener, which its body may follow on the same line — as Python's may, so the closer
+   * rule is off for both (#814). A fragment that names no file keeps the reading the table always
+   * had.
    */
   void fileNamed(String path) {
     var dot = path.lastIndexOf('.');
     var slash = path.lastIndexOf('/');
-    templateEscapes =
-        dot > slash
-            && TEMPLATE_LITERAL_EXTENSIONS.contains(
-                path.substring(dot + 1).toLowerCase(Locale.ROOT));
+    var extension = dot > slash ? path.substring(dot + 1).toLowerCase(Locale.ROOT) : "";
+    profile = Profile.forExtension(extension);
   }
 
   /**
@@ -327,10 +359,8 @@ final class LiveCodeScanner {
       if (!delimiter.spansLines() && opensNoLiteral(line, i, body, delimiter)) {
         return -1;
       }
-      // The backtick is the only delimiter in the table that does not escape on its own, so the
-      // file hint only ever changes that one row.
-      var escapes = delimiter.escapes() || templateEscapes;
-      open.push(Region.quoted(delimiter.close(), escapes, delimiter.interpolates()));
+      open.push(
+          Region.quoted(delimiter.close(), profile.escapes(delimiter), delimiter.interpolates()));
       out.append(delimiter.open());
       return body;
     }
@@ -364,7 +394,9 @@ final class LiveCodeScanner {
    * {@code """;}, {@code """,}, {@code """)}, {@code """.formatted(x)} — belongs to the statement a
    * <em>closer</em> ends. That rationale is what the table's last column records, and it is why the
    * backtick is not in it: a Go raw string or a JavaScript template literal begins its body
-   * immediately, so the very same test misread both directions of the shape (#651).
+   * immediately, so the very same test misread both directions of the shape (#651). It is also why
+   * the file's {@link Profile} takes the column away from {@code """} in a Kotlin or Python file,
+   * where the body may follow the opener just the same (#814).
    *
    * <p><b>A terminator must follow.</b> The set is the punctuation that can abut a closing
    * delimiter: the statement enders {@code ;} and {@code ,}, the {@code )} of a call, the closing
@@ -377,9 +409,10 @@ final class LiveCodeScanner {
    * <p><b>No closer may follow on the same line.</b> Kotlin does allow a body right after the
    * opener, so {@code """; and more"""} is a whole literal whose body merely starts with a
    * terminator. A delimiter that finds its own closer further along the line opened that literal;
-   * only one with nothing to close against can be the closer of a literal opened above the hunk.
-   * The Kotlin literal that this does not save is the one whose terminator-led body runs past the
-   * end of its line, recorded with the rest of the trade on {@link #DELIMITERS}.
+   * only one with nothing to close against can be the closer of a literal opened above the hunk. In
+   * a named Kotlin or Python file the rule is off altogether, so the literal whose terminator-led
+   * body runs past the end of its line needs no saving there; in a fragment that names no file it
+   * still reads as a closer, recorded on {@link #DELIMITERS}.
    *
    * <p>Without the rule at all, a patch whose hunk starts inside a text block read that closer as
    * an opener and inverted every literal below it, blanking live code all the way to the next
@@ -389,9 +422,8 @@ final class LiveCodeScanner {
    * block constant. The closer reading leaves 23, every one of them the body of a text block that
    * quotes a diff or a JSON payload — which is exactly the text that must be blanked.
    */
-  private static boolean closesLiteralOpenedAboveTheHunk(
-      String line, int body, Delimiter delimiter) {
-    return delimiter.terminatorMarksCloser()
+  private boolean closesLiteralOpenedAboveTheHunk(String line, int body, Delimiter delimiter) {
+    return profile.terminatorMarksCloser(delimiter)
         && startsWithTerminator(line, body)
         && closerIndex(line, body, delimiter.close()) < 0;
   }
@@ -562,7 +594,9 @@ final class LiveCodeScanner {
    * a {@code ${…}} inside it is live code, whether it may stay open at the end of a line, and
    * whether a statement terminator after it marks it as a closer rather than an opener. The last
    * flag is meaningful only on a delimiter that spans lines — one that cannot is resolved by
-   * looking ahead for its own closer on the same line.
+   * looking ahead for its own closer on the same line. On the two rows whose reading varies by
+   * language, {@link #TRIPLE_QUOTE} and {@link #BACKTICK}, the escape and closer columns are what
+   * an unnamed file gets and the file's {@link Profile} has the last word.
    */
   private record Delimiter(
       String open,
@@ -571,6 +605,50 @@ final class LiveCodeScanner {
       boolean interpolates,
       boolean spansLines,
       boolean terminatorMarksCloser) {}
+
+  /**
+   * The lexical facts the delimiter table cannot settle on its own, because one and the same
+   * delimiter reads differently by language: whether a backslash escapes inside a backtick literal,
+   * whether it escapes inside a triple-quoted one, and whether a statement terminator after a
+   * triple quote marks it as a closer. Computed once per file from the extension the diff names
+   * ({@link #fileNamed}) — three booleans, deliberately, rather than a grammar per language.
+   */
+  private record Profile(
+      boolean templateEscapes,
+      boolean tripleQuoteEscapes,
+      boolean tripleQuoteTerminatorMarksCloser) {
+
+    /** The reading a fragment that names no file gets: what the table's own columns say. */
+    static final Profile UNNAMED =
+        new Profile(
+            BACKTICK.escapes(), TRIPLE_QUOTE.escapes(), TRIPLE_QUOTE.terminatorMarksCloser());
+
+    /** The profile of a file with the given lower-case extension, empty when it has none. */
+    static Profile forExtension(String extension) {
+      return new Profile(
+          TEMPLATE_LITERAL_EXTENSIONS.contains(extension),
+          !RAW_TRIPLE_QUOTE_EXTENSIONS.contains(extension),
+          !TRIPLE_QUOTE_BODY_FOLLOWS_OPENER_EXTENSIONS.contains(extension));
+    }
+
+    /** Whether a backslash escapes inside {@code delimiter} in this file. */
+    boolean escapes(Delimiter delimiter) {
+      if (BACKTICK.equals(delimiter)) {
+        return templateEscapes;
+      }
+      if (TRIPLE_QUOTE.equals(delimiter)) {
+        return tripleQuoteEscapes;
+      }
+      return delimiter.escapes();
+    }
+
+    /** Whether a statement terminator after {@code delimiter} marks it as a closer in this file. */
+    boolean terminatorMarksCloser(Delimiter delimiter) {
+      return TRIPLE_QUOTE.equals(delimiter)
+          ? tripleQuoteTerminatorMarksCloser
+          : delimiter.terminatorMarksCloser();
+    }
+  }
 
   /**
    * A region the scan is currently inside: a quoted run being blanked, or the live code of a
