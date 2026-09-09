@@ -113,7 +113,9 @@ public class DiffBudgetPlanner {
    * patch text (binary, or a text diff too large to display). They hold APPROVE and are disclosed
    * exactly like budget omissions, but they were never candidates for a batch — there was nothing
    * to read — so they are carried as their own class (#628): disclosing them as "exceeded the
-   * review budget" would send the operator at a knob that cannot help.
+   * review budget" would send the operator at a knob that cannot help. The class is carried on both
+   * lanes: whether a file has content to review is a property of the file, not of the budget, so an
+   * unbudgeted plan names them too (#785).
    */
   public record BudgetPlan(
       List<DiffBatch> batches,
@@ -669,8 +671,10 @@ public class DiffBudgetPlanner {
 
   /**
    * Plans batches for the already-ignore-glob-filtered {@code reviewable} files. A {@code
-   * diffBudgetTokens <= 0} disables budgeting — every file lands in a single batch (the legacy "no
-   * cap" behaviour for an explicit {@code max-input-tokens=0}); overload above never passes it.
+   * diffBudgetTokens <= 0} disables budgeting — every file with a patch lands in a single batch
+   * (the legacy "no cap" behaviour for an explicit {@code max-input-tokens=0}); overload above
+   * never passes it. A patchless file is classified on that lane as well (#785): nothing about a
+   * missing budget puts content into a diff GitHub returned none for.
    */
   BudgetPlan plan(
       List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
@@ -683,10 +687,14 @@ public class DiffBudgetPlanner {
     var rendered = renderAndSize(reviewable, diffBudgetTokens);
 
     if (!budgeted) {
+      // One uncapped batch, and no budget omission or clip can exist without a budget. The
+      // patchless class is still real here: the plan carries it so the verdict holds approval
+      // and names the file the model never read (#785).
       return new BudgetPlan(
           List.of(toBatch(rendered.sized())),
           List.of(),
           List.of(),
+          rendered.patchless(),
           false,
           null,
           null,
@@ -726,6 +734,18 @@ public class DiffBudgetPlanner {
     var rendered =
         new Rendered(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
     for (var file : ordered) {
+      if (isPatchlessWithChanges(file)) {
+        // GitHub returns a null/blank patch for binary files and for text diffs too large to
+        // display, while still reporting real additions/deletions. Its rendered section is a bare
+        // header with no ```diff``` body — there is nothing for the model to read — so packing it
+        // would count the file as fully reviewed and let an unbacked "resolved" claim through.
+        // Never packed, holds APPROVE, disclosed — but as its own class, not as a budget omission:
+        // the file did not exceed anything, GitHub simply returned no content (#628). Decided
+        // ahead of the budget branch because it is a property of the file, not of the budget:
+        // the disabled-budgeting path below used to pack such a file as reviewed (#785).
+        recordName(rendered.patchless(), file.filename());
+        continue;
+      }
       var section = formatter.formatFileSection(file, reviewableNames);
       if (diffBudgetTokens <= 0) {
         // The disabled-budgeting path never reads the estimates; skip the BPE pass entirely.
@@ -741,23 +761,14 @@ public class DiffBudgetPlanner {
    * Estimates (clipping if oversized) one file section into the rendered result. A clipped file is
    * recorded so the summary can disclose the partial coverage; a file no clip fits is recorded as
    * unclippable — content the model would never see must not count as reviewed, so it is reported
-   * by name (holds APPROVE, disclosed) instead of packing a placeholder as coverage.
+   * by name (holds APPROVE, disclosed) instead of packing a placeholder as coverage. Patchless
+   * files never reach here; {@link #renderAndSize} classifies them on both lanes.
    */
   private void sizeWithinBudget(
       GitHubPullRequestClient.FileDiff file,
       String section,
       int diffBudgetTokens,
       Rendered rendered) {
-    if (isPatchlessWithChanges(file)) {
-      // GitHub returns a null/blank patch for binary files and for text diffs too large to
-      // display, while still reporting real additions/deletions. Its rendered section is a bare
-      // header with no ```diff``` body — there is nothing for the model to read — so packing it
-      // would count the file as fully reviewed and let an unbacked "resolved" claim through.
-      // Never packed, holds APPROVE, disclosed — but as its own class, not as a budget omission:
-      // the file did not exceed anything, GitHub simply returned no content (#628).
-      recordName(rendered.patchless(), file.filename());
-      return;
-    }
     var tokens = tokenCounter.estimateTokens(section);
     if (tokens > diffBudgetTokens) {
       var clipped = clipToBudget(section, diffBudgetTokens);

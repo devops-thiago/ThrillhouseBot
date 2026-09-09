@@ -563,6 +563,30 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void configDisabledBudgetingStillClassifiesAPatchlessFile() {
+    // #785: with budgeting off (max-input-tokens=0, so the active model reports no input limit)
+    // renderAndSize packed every file as a 0-token section and never ran the patchless check that
+    // sizeWithinBudget applies. A binary or too-large-to-render file was then counted as reviewed
+    // on that path: never disclosed, never holding APPROVE. Whether a file has content to review
+    // is a property of the file, not of the budget, so the classification must run on both paths.
+    when(reviewConfig.maxInputTokens()).thenReturn(0);
+    var patchless = new FileDiff("assets/logo.png", "modified", 40, 0, 40, null);
+    var real = file("dir/f1.java", 5, patch(5));
+    var inputs = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+
+    var plan = planner.plan(List.of(patchless, real), inputs);
+
+    assertFalse(plan.budgeted());
+    assertEquals(List.of("assets/logo.png"), plan.patchlessFiles());
+    assertEquals(
+        List.of("dir/f1.java"),
+        coveredFilenames(plan),
+        "a patch-less file is never packed, budget or no budget");
+    assertTrue(plan.omittedFiles().isEmpty(), "nothing exceeded a budget that was never set");
+    assertTrue(plan.truncated(), "a file the model never read holds APPROVE");
+  }
+
+  @Test
   void configDrivenPlanSizesOverheadFromThePromptInputs() {
     when(reviewConfig.maxInputTokens()).thenReturn(200_000);
     when(reviewConfig.tokenSafetyMargin()).thenReturn(1.0);
