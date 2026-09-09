@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubWriteBudget;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -333,7 +334,23 @@ public class ReviewPublisher {
             auth, owner, repo, prNumber, commitSha, result, lineResolver, false, List.of()));
   }
 
+  /**
+   * Publishes the review's outcome under the review's write-retry budget (#734): the inline
+   * comments, their file-level fallbacks and the review body all run inside one ledger, so a review
+   * GitHub refuses throughout stops waiting once the budget is spent rather than holding its pull
+   * request's dispatcher slot for the sum of every route's backoff. A write refused after that
+   * point takes the path a write GitHub outlasted already takes — the next route, then the review
+   * body — and {@link #unanchoredFindingsBody} says the budget is why. The ceiling is {@code
+   * thrillhousebot.github.write-retry-budget}; zero turns it off.
+   */
   void postReview(PostReviewRequest post) {
+    GitHubWriteBudget.within(
+        post.owner() + "/" + post.repo() + " #" + post.prNumber(),
+        config.github().writeRetryBudget(),
+        () -> publishReview(post));
+  }
+
+  private void publishReview(PostReviewRequest post) {
     var auth = post.auth();
     var owner = post.owner();
     var repo = post.repo();
@@ -476,12 +493,27 @@ public class ReviewPublisher {
    * diff and a post GitHub simply refused, and on the round-7 corpus it was overwhelmingly the
    * second. Two independent scorers read it as a line-attribution defect and went looking for an
    * off-by-N that was not there, so the text now states only what happened.
+   *
+   * <p>One cause is named, because it is the one the maintainer can act on (#734): when the review
+   * spent its write-retry budget, the writes after that point were given up on without a repeat,
+   * and a re-run posts what they carried. Stated once for the section rather than per finding — the
+   * budget is the review's, and every finding below it that was refused after the crossing shares
+   * the reason.
    */
   private static String unanchoredFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
-        .append(" issue(s) GitHub accepted no review thread for:\n\n");
+        .append(" issue(s) GitHub accepted no review thread for");
+    GitHubWriteBudget.exhausted()
+        .ifPresent(
+            budget ->
+                sb.append(" — this review spent its ")
+                    .append(budget.toSeconds())
+                    .append(
+                        "s write-retry budget waiting on GitHub's rate limit, so later writes were"
+                            + " not retried; re-run `/review` to post them"));
+    sb.append(":\n\n");
     appendFindingList(sb, findings);
     return sb.toString();
   }

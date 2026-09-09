@@ -34,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -140,6 +141,7 @@ class ReviewOrchestratorTest {
     ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
     diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
     reviewPublisher =
         new ReviewPublisher(
