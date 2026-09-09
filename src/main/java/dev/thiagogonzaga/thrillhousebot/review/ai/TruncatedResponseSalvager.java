@@ -93,8 +93,9 @@ public class TruncatedResponseSalvager {
 
   /**
    * Salvages the complete elements of {@code partialBody}. Everything comes back empty when there
-   * is nothing to work with — no body (the blocking lanes do not buffer one), a body that does not
-   * open a JSON object, or a cut that landed before the first element closed.
+   * is nothing to work with — no body (every lane carries the text it had before the cut since
+   * #580, so a {@code null} here is a call that produced none), a body that does not open a JSON
+   * object, or a cut that landed before the first element closed.
    */
   public Salvaged salvage(String partialBody) {
     var findings = new ArrayList<ReviewResponse.Finding>();
