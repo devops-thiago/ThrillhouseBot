@@ -107,6 +107,8 @@ public class ReviewOrchestrator {
 
   private final SupersededFindingsCarryover carryover;
 
+  private final CiHoldRegistry ciHoldRegistry;
+
   private final ExecutorService reviewExecutor;
 
   /**
@@ -224,6 +226,7 @@ public class ReviewOrchestrator {
       FindingFeedbackCaptureService findingFeedbackCapture,
       ReviewSkipEmitter skipEmitter,
       SupersededFindingsCarryover carryover,
+      CiHoldRegistry ciHoldRegistry,
       @ReviewExecutor ExecutorService reviewExecutor) {
     this.config = config;
     this.authClient = authClient;
@@ -240,6 +243,7 @@ public class ReviewOrchestrator {
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.skipEmitter = skipEmitter;
     this.carryover = carryover;
+    this.ciHoldRegistry = ciHoldRegistry;
     this.reviewExecutor = reviewExecutor;
   }
 
@@ -268,6 +272,8 @@ public class ReviewOrchestrator {
     var req = request;
     var checkRunId = -1L;
     var resultSurfaced = false;
+    var tracked = false;
+    var heldOnCi = false;
     try {
       var resolved = contextLoader.resolveMissingPrDetails(auth, request);
       req = resolved;
@@ -279,6 +285,11 @@ public class ReviewOrchestrator {
               s.setCommitSha(resolved.commitSha());
             });
       }
+      // Tracked before the CI gate is read (#825): CI that completes during the model call
+      // completes after that read, and its event must still find this pull request so a recheck
+      // can be queued behind this run.
+      ciHoldRegistry.track(req.owner(), req.repo(), req.prNumber(), req.commitSha());
+      tracked = true;
 
       checkRunId =
           checkRunManager.createCheckRun(
@@ -348,6 +359,7 @@ public class ReviewOrchestrator {
       resultSurfaced = true;
       final var doneReq = req;
       final var concludedCheckRunId = checkRunId;
+      heldOnCi = holdVerdictOnCi(doneReq, session, concludedCheckRunId, result);
       runPostResultStep(
           doneReq,
           "conclude the check run",
@@ -403,8 +415,38 @@ public class ReviewOrchestrator {
       } else {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
+    } finally {
+      // Every outcome but a CI hold — a verdict with findings, a failure, a superseded run — is
+      // final for this head, so a CI completion for it has nothing to revisit. A run that failed
+      // before it tracked its head leaves whatever the pull request held alone.
+      if (tracked && !heldOnCi) {
+        ciHoldRegistry.release(req.owner(), req.repo(), req.prNumber());
+      }
     }
     return resultSurfaced;
+  }
+
+  /**
+   * Records the verdict when the strict CI gate was all that kept it from APPROVE (#825), so the CI
+   * completion for this head can post the approval without another review.
+   *
+   * @return whether the verdict was held
+   */
+  private boolean holdVerdictOnCi(
+      ReviewRequest req, ReviewSession session, long checkRunId, ReviewResult result) {
+    if (!result.heldOnCiOnly()) {
+      return false;
+    }
+    ciHoldRegistry.hold(
+        req.owner(),
+        req.repo(),
+        req.prNumber(),
+        new CiHoldRegistry.HeldVerdict(
+            req.commitSha(), req.baseRef(), checkRunId, sessionUrl(session)));
+    Log.infof(
+        "Holding the approval of %s/%s #%d on CI for %s — re-evaluated when its checks complete",
+        req.owner(), req.repo(), req.prNumber(), req.commitSha());
+    return true;
   }
 
   /** SKIPPED check-run title when the finished run's post was abandoned (#704). */
@@ -561,12 +603,8 @@ public class ReviewOrchestrator {
    * carried on the request, not the model response.
    */
   private CiStatusEvaluator.CiEvaluation resolveCiEvaluation(String auth, ReviewRequest req) {
-    List<String> requiredContexts =
-        ciStatusEvaluator
-            .resolveRequiredContexts(auth, req.owner(), req.repo(), req.baseRef())
-            .orElse(null);
-    return ciStatusEvaluator.evaluateCiChecks(
-        auth, req.owner(), req.repo(), req.commitSha(), requiredContexts);
+    return ciStatusEvaluator.evaluate(
+        auth, req.owner(), req.repo(), req.commitSha(), req.baseRef());
   }
 
   /**

@@ -130,6 +130,8 @@ class ReviewOrchestratorTest {
 
   private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
 
+  private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
+
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   private ReviewOrchestrator orchestrator;
@@ -250,23 +252,7 @@ class ReviewOrchestratorTest {
         sessionPersistence,
         new CiStatusEvaluator(checkRunClient, BOT_ID),
         new CheckRunManager(checkRunClient),
-        new ReviewContextLoader(
-            prClient,
-            reviewClient,
-            commentClient,
-            instructionsResolver,
-            repoSettingsResolver,
-            projectStackResolver,
-            diffFormatter,
-            labeler,
-            followUpAnalyzer,
-            new BugFixContextResolver(commentClient),
-            new ConfigKeyContextResolver(prClient),
-            mock(PatchCoverageResolver.class),
-            sessionPersistence,
-            BOT_ID,
-            new ActiveModelSettings(config, "m"),
-            carryover),
+        newContextLoader(),
         new ReviewPromptAssembler(config, labeler, diffFormatter),
         new DiffBudgetPlanner(
             diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
@@ -276,7 +262,40 @@ class ReviewOrchestratorTest {
         mock(FindingFeedbackCaptureService.class),
         skipEmitter,
         carryover,
+        ciHoldRegistry,
         reviewExecutor);
+  }
+
+  private ReviewContextLoader newContextLoader() {
+    return new ReviewContextLoader(
+        prClient,
+        reviewClient,
+        commentClient,
+        instructionsResolver,
+        repoSettingsResolver,
+        projectStackResolver,
+        diffFormatter,
+        labeler,
+        followUpAnalyzer,
+        new BugFixContextResolver(commentClient),
+        new ConfigKeyContextResolver(prClient),
+        mock(PatchCoverageResolver.class),
+        sessionPersistence,
+        BOT_ID,
+        new ActiveModelSettings(config, "m"),
+        carryover);
+  }
+
+  /** The CI-completion path wired to the same GitHub mocks as the orchestrator (#825). */
+  private CiHoldRevisit newCiHoldRevisit() {
+    return new CiHoldRevisit(
+        authClient,
+        newContextLoader(),
+        new CiStatusEvaluator(checkRunClient, BOT_ID),
+        verdictBuilder,
+        new CheckRunManager(checkRunClient),
+        reviewPublisher,
+        ciHoldRegistry);
   }
 
   private DiffLineResolver resolverFor(GitHubPullRequestClient.FileDiff... files) {
@@ -6740,6 +6759,158 @@ class ReviewOrchestratorTest {
           123L,
           false,
           "main");
+    }
+
+    private static GitHubCheckRunClient.CheckRunsResponse buildCheck(
+        String status, String conclusion) {
+      return new GitHubCheckRunClient.CheckRunsResponse(
+          1,
+          List.of(
+              new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                  1L, "build", status, conclusion, null)));
+    }
+
+    private ReviewSession sessionWithPublicId() {
+      var session = mock(ReviewSession.class);
+      session.id = 1L;
+      when(session.getRepository()).thenReturn("owner/repo");
+      when(session.getPrNumber()).thenReturn(42);
+      when(session.getPublicId()).thenReturn("test-public-id");
+      when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      return session;
+    }
+
+    @Test
+    void reviewShouldHoldTheVerdictWhileRequiredChecksArePending() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+
+        orchestrator.review(request());
+
+        var held = ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh");
+        assertTrue(held.isPresent());
+        assertEquals(1L, held.get().checkRunId());
+        assertEquals("main", held.get().baseRef());
+        assertEquals(SESSION_URL, held.get().detailsUrl());
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(),
+                anyString(),
+                eq("owner"),
+                eq("repo"),
+                eq(1L),
+                argThat(update -> "neutral".equals(update.conclusion())));
+      }
+    }
+
+    @Test
+    void reviewShouldNotHoldTheVerdictWhenRequiredChecksPass() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+
+        orchestrator.review(request());
+
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isEmpty());
+        assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
+      }
+    }
+
+    @Test
+    void reviewShouldReleaseTheTrackedHeadWhenItFails() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenThrow(new RuntimeException("model down"));
+
+        orchestrator.review(request());
+
+        assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
+      }
+    }
+
+    @Test
+    void ciCompletionPostsTheHeldApprovalWithoutASecondModelCall() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+        orchestrator.review(request());
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isPresent());
+        verify(reviewClient, never())
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+
+        when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+            .thenReturn(buildCheck("completed", "success").checkRuns());
+        newCiHoldRevisit()
+            .revisit(new CiHoldRevisit.Recheck("owner", "repo", 42, "abcdefgh", 123L));
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event()) && "abcdefgh".equals(req.commitId())));
+        verify(aiReviewService, times(1)).review(any(ReviewSession.class), any());
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(),
+                anyString(),
+                eq("owner"),
+                eq("repo"),
+                eq(1L),
+                argThat(update -> "success".equals(update.conclusion())));
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isEmpty());
+      }
+    }
+
+    @Test
+    void ciCompletionWithAFailedCheckKeepsTheHold() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+        orchestrator.review(request());
+
+        when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+            .thenReturn(buildCheck("completed", "failure").checkRuns());
+        newCiHoldRevisit()
+            .revisit(new CiHoldRevisit.Recheck("owner", "repo", 42, "abcdefgh", 123L));
+
+        verify(reviewClient, never())
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+        verify(aiReviewService, times(1)).review(any(ReviewSession.class), any());
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isPresent());
+      }
     }
 
     @Test

@@ -30,7 +30,12 @@ public record WebhookPayload(
     Issue issue,
     Comment comment,
     @JsonProperty("check_run") CheckRun checkRun,
-    @JsonProperty("check_suite") CheckSuite checkSuite) {
+    @JsonProperty("check_suite") CheckSuite checkSuite,
+    // Fields below are populated only on status events (a commit status reported through the
+    // legacy Commit Status API); null otherwise.
+    String sha,
+    String state,
+    String context) {
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record PullRequest(
@@ -119,7 +124,9 @@ public record WebhookPayload(
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record CheckSuite(
-      @JsonProperty("head_sha") String headSha, @JsonProperty("head_branch") String headBranch) {}
+      @JsonProperty("head_sha") String headSha,
+      @JsonProperty("head_branch") String headBranch,
+      App app) {}
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)

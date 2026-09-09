@@ -354,6 +354,20 @@ public record ReviewResult(
     return reviewState != ReviewState.APPROVE && (!offendingCiChecks.isEmpty() || ciUnreadable);
   }
 
+  /**
+   * True when the CI gate was the only thing between this verdict and APPROVE (#825): no finding,
+   * no unresolved previous finding, the whole diff reviewed, and a fail-closed hold on pending,
+   * failing or unreadable CI. Such a verdict is held rather than final — once CI reports green on
+   * the same head, the APPROVE it already earned can be posted without another review.
+   */
+  public boolean heldOnCiOnly() {
+    return reviewState == ReviewState.COMMENT
+        && ciHoldsApproval()
+        && !hasIssues()
+        && unresolvedPreviousCount() == 0
+        && !truncated();
+  }
+
   /** True when the line budget dropped whole files, so this review covers only part of the diff. */
   public boolean truncated() {
     return omittedFiles > 0;

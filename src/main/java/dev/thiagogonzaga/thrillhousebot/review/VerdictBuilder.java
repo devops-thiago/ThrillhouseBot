@@ -256,6 +256,17 @@ public class VerdictBuilder {
         backstopUnresolved);
   }
 
+  /**
+   * Whether CI alone keeps a clean verdict from APPROVE under the configured gating mode: an
+   * offending (pending, failing or missing) check, or a CI source that could not be read, and only
+   * when the mode fails closed. The verdict and the CI-hold re-evaluation (#825) share this one
+   * decision, so the completion that lifts a hold is judged exactly as the review that placed it.
+   */
+  boolean ciHoldsApproval(CiStatusEvaluator.CiEvaluation ciEvaluation) {
+    return ciGating.holdsApproval()
+        && (!ciEvaluation.offendingChecks().isEmpty() || ciEvaluation.unreadable());
+  }
+
   static String conclusionForResult(ReviewResult result) {
     return result.reviewState().checkRunConclusion();
   }
@@ -566,9 +577,7 @@ public class VerdictBuilder {
       state = ReviewState.COMMENT;
     }
 
-    if (state == ReviewState.APPROVE
-        && ciGating.holdsApproval()
-        && (!offendingCiChecks.isEmpty() || ciUnreadable)) {
+    if (state == ReviewState.APPROVE && ciHoldsApproval(ciEvaluation)) {
       state = ReviewState.COMMENT;
     }
 

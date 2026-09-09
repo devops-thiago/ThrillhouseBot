@@ -257,7 +257,7 @@ Create a GitHub App before starting the bot; you'll need its credentials for `.e
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
 | Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit Statuses: Read |
-| Subscribe to Events | Pull Request, Issue comment, Pull request review comment |
+| Subscribe to Events | Pull Request, Issue comment, Pull request review comment, Check suite, Status |
 | Identifying & authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
 
@@ -504,6 +504,30 @@ If you switch to a different `AI_MODEL`, add a matching
 `thrillhousebot.ai.pricing.<model>.*` pair so the dashboard can compute cost.
 Without an entry the bot still records tokens, but warns once and flags sessions
 as "no pricing" instead of showing `$0`.
+
+### CI gating
+
+With `REVIEW_CI_GATING=strict` (the default), a review that finds nothing while a
+required check is still pending, failing or unreadable ends as a `COMMENT` with a
+neutral check run instead of an `APPROVE`. That verdict is held, not final: the bot
+subscribes to `check_suite` and `status` events, and when CI reports on the head the
+review was held on it re-reads the CI gate and nothing else. If the required checks
+are now green it posts the `APPROVE` the review already earned and concludes its
+check run `success`, with no model call. If a check failed, the hold stays and the
+check run's summary says so; a re-run that turns green lifts it. A push to the PR
+supersedes the hold, since the new head gets its own review. A verdict with findings
+is not held: it is complete, and CI would not change it.
+
+Held verdicts are kept in memory, like the other single-process state listed under
+Known limitations, so after a restart a PR that was held before it still needs a
+manual `/review`.
+
+Apps registered before these events were part of the manifest must subscribe to
+them by hand: on GitHub, open **Settings → Developer settings → GitHub Apps → your
+app → Permissions & events → Subscribe to events** (under the organization's
+settings for an organization-owned app), tick **Check suite** and **Status**, and
+save. The `Checks: Read & write` and `Commit statuses: Read` permissions the app
+already has cover both events; nothing else changes.
 
 ### Per-model AI settings
 
@@ -867,10 +891,11 @@ This is still an early-stage project; the current constraints are:
   overview still lists a short rollup (`N pure renames omitted…`). Rename-plus-edit
   (non-empty patch) stays in the budget.
 - **Single process** — OAuth login sessions, the live WebSocket replay buffer, the
-  per-PR auto-review rate-limit window, and the verified findings a review that stood
-  down for a moved head hands to its replacement are in-memory (lost on restart / not
-  shared across replicas). Review history and cost totals persist in PostgreSQL.
-  Multiple replicas are unsupported.
+  per-PR auto-review rate-limit window, the verified findings a review that stood
+  down for a moved head hands to its replacement, and the verdicts held on pending
+  CI (see [CI gating](#ci-gating)) are in-memory (lost on restart / not shared across
+  replicas). Review history and cost totals persist in PostgreSQL. Multiple replicas
+  are unsupported.
 - **Dashboard access** — GitHub OAuth required. Only the app account owner and
   collaborators on installed repos can use the dashboard; no admin UI or guest mode.
   If the app owner cannot be resolved from GitHub, the dashboard fails closed (denies all access) until

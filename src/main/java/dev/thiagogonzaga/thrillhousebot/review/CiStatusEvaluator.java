@@ -191,6 +191,17 @@ public class CiStatusEvaluator {
   }
 
   /**
+   * The whole gate read for one head: the required contexts of the base branch, then the checks on
+   * the commit against them. The verdict path and the CI-hold re-evaluation (#825) both go through
+   * here, so a hold and the completion that lifts it are decided on the same data.
+   */
+  CiEvaluation evaluate(String auth, String owner, String repo, String commitSha, String baseRef) {
+    List<String> requiredContexts =
+        resolveRequiredContexts(auth, owner, repo, baseRef).orElse(null);
+    return evaluateCiChecks(auth, owner, repo, commitSha, requiredContexts);
+  }
+
+  /**
    * Evaluates the CI checks on {@code commitSha}: the <em>offending</em> ones — pending, failing,
    * or (when required) missing entirely — plus whether either CI source could not be read. Passing
    * checks are deliberately excluded so the caller can gate APPROVE on a non-empty result; a
