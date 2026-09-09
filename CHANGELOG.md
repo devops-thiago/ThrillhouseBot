@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A missing repository config is read as "no config" again, not as a failed read** (#836): #481 kept a 404 out of the transient-failure path by catching `NotFoundException`, but the REST client never throws that; its 404 is a `ClientWebApplicationException` with the status on its response, so every review of a repository without `.github/thrillhousebot.yml` fetched both candidate paths, warned three times that the config "could not be read", and never wrote the negative cache. The status decides now: a 404 from any `WebApplicationException` is "no config" and cached as before, every other status stays a read that failed and is asked again on the next review
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
