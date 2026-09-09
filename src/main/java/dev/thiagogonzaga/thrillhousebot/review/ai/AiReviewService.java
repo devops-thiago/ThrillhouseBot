@@ -150,7 +150,10 @@ public class AiReviewService {
    * down burns the cap a second time. The step-down is per call — the configured effort is not
    * touched, the next call sends it again — and it is noted on the review's ledger entry so the
    * posted summary discloses that the review ran with reasoning off. A repeat that also stops at
-   * the cap propagates as before: two calls is the ceiling.
+   * the cap propagates as before, so the cap is hit at most twice per logical call; a transient
+   * failure on either pass keeps the ordinary {@code max-ai-retries} budget, because a provider
+   * error on the repeat is the same kind of failure it is on any other call and is retried on the
+   * same terms.
    *
    * <p>The repeat's calls are bound as reasoning-disabled on the thread that starts them (see
    * {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads that binding and sends

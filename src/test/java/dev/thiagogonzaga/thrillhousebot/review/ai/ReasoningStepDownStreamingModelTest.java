@@ -151,17 +151,24 @@ class ReasoningStepDownStreamingModelTest {
         "the two-argument bind is an ordinary call at the configured effort");
   }
 
+  /** The delegate above records the request and never calls back, so the handler has no work. */
   private static StreamingChatResponseHandler handler() {
     return new StreamingChatResponseHandler() {
       @Override
-      public void onPartialResponse(String partialResponse) {}
+      public void onPartialResponse(String partialResponse) {
+        // never invoked: the recording delegate does not stream
+      }
 
       @Override
       public void onCompleteResponse(
-          dev.langchain4j.model.chat.response.ChatResponse completeResponse) {}
+          dev.langchain4j.model.chat.response.ChatResponse completeResponse) {
+        // never invoked: the recording delegate does not complete
+      }
 
       @Override
-      public void onError(Throwable error) {}
+      public void onError(Throwable error) {
+        // never invoked: the recording delegate does not fail
+      }
     };
   }
 }
