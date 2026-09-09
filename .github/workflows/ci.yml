@@ -15,15 +15,21 @@ permissions:
   actions: read
 
 jobs:
-  # Did this push change anything other than docs (*.md, docs/**)? The native build and image
+  # Did this change touch anything other than docs (*.md, docs/**)? The native build and image
   # publish (main only) are skipped for docs-only commits. Fails open — anything uncertain
   # (first push, missing parent, a multi-file change) counts as code, so a real change is never
   # skipped. Note: a docs-only main commit then has no per-SHA image, so do not cut a release
   # from one (the release workflow verifies the image exists).
+  #
+  # `native` narrows `code` to the inputs the native image is built from: pom.xml, main sources
+  # and resources (reflection, resource loading and serialization fail natively before they fail
+  # on the JVM), the Dockerfiles, and this workflow, which holds the build command. A pull
+  # request builds the native image only when it touches one of those (#792); main always does.
   changes:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      native: ${{ steps.filter.outputs.native }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,19 +37,37 @@ jobs:
       - id: filter
         env:
           BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
           SHA: ${{ github.sha }}
         run: |
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
-            || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+          # A push diffs the pushed range. A pull request diffs its merge commit against the base
+          # tip, which is the pull request's own change set: event.before is unset on `opened`,
+          # and on `synchronize` names the previous head, whose diff to the new merge commit also
+          # carries everything the base branch gained in between.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            from="$BASE"
+            range=("${BASE}...${SHA}")
+          else
+            from="$BEFORE"
+            range=("$BEFORE" "$SHA")
+          fi
+          if [ -z "$from" ] || [ "$from" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${from}^{commit}" 2>/dev/null; then
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "native=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed=$(git diff --name-only "$BEFORE" "$SHA")
-          if [ -z "$changed" ] || printf '%s\n' "$changed" | grep -qvE '(\.md$|^docs/)'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
+          changed=$(git diff --name-only "${range[@]}")
+          code=true
+          native=true
+          if [ -n "$changed" ]; then
+            printf '%s\n' "$changed" | grep -qvE '(\.md$|^docs/)' || code=false
+            printf '%s\n' "$changed" \
+              | grep -qE '^(pom\.xml$|src/main/(java|resources|docker)/|\.github/workflows/ci\.yml$)' \
+              || native=false
           fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "native=${native}" >> "$GITHUB_OUTPUT"
 
   format:
     runs-on: ubuntu-latest
@@ -154,9 +178,17 @@ jobs:
           name: frontend-dist
           path: frontend/out/
 
+  # main builds on every code change, since the image publish below consumes the binaries. A
+  # pull request builds when it touches something the native image is made from (#792), so a
+  # change that links on the JVM and fails natively is caught before it reaches main. The gate
+  # is a job-level `if`, like every other conditional job here: a skipped run reports a
+  # `skipped` conclusion, which satisfies a required check.
   native-build:
     needs: [frontend, changes]
-    if: github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true'
+    if: >-
+      needs.changes.outputs.code == 'true' &&
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true'))
     strategy:
       matrix:
         include:
@@ -181,7 +213,10 @@ jobs:
           name: frontend-dist
           path: src/main/resources/META-INF/resources/dashboard/
       - run: ./mvnw package -Pnative -DskipTests -Dquarkus.native.container-build=true
+      # Only the main-branch image publish consumes the binaries; a pull request build proves
+      # the link and keeps nothing.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
         with:
           name: native-binary-${{ matrix.arch }}
           path: target/*-runner

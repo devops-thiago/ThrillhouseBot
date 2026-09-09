@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Changed
+
+- **A pull request that touches the native image's inputs builds the native image** (#792): `native-build` ran only on `main`, so the only image a pull request ever built was the JVM one, and a change that links on the JVM and fails under GraalVM (reflection, resource loading, serialization, a swapped YAML engine) reached `main` before anything built it. The `changes` job now also reports whether the pull request's own diff touches `pom.xml`, `src/main/java`, `src/main/resources`, `src/main/docker` or the CI workflow, and `native-build` runs on a pull request when it does. Pushes to `main` build as before. A pull request build keeps no binary, and a skipped run reports a `skipped` conclusion, so the job can be made a required check without blocking a docs or test-only change. The build proves the image links; there are no `@QuarkusIntegrationTest` classes, so a failure that only shows when the code path runs, such as a missing reflection registration, is still not covered (#671)
+
 ## [0.6.7] — 2026-09-07
 
 Two production reviews drove this one: a pull request that was approved after most of the model's answer was thrown away, and one that was pushed to while under review and lost every finding to the push. The rest is hardening found by auditing the merged pull requests and by dogfooding the repository configuration. No configuration changes; upgrading is a redeploy. The one behaviour a deployment may notice is that `ignored-files` globs now match the way the documentation always said they did, so a pattern that was silently doing nothing starts excluding files.
