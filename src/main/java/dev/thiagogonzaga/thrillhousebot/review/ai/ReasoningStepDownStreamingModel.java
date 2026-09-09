@@ -76,7 +76,10 @@ final class ReasoningStepDownStreamingModel implements StreamingChatModel {
 
   /**
    * {@code request} with {@code reasoning_effort=none} on an OpenAI-typed copy of its parameters,
-   * so the provider model's merge keeps the effort and every other value the request carried.
+   * so the provider model's merge keeps the effort and every other value the request carried. Only
+   * the call's own parameters are copied here; the delegate's builder-level defaults are not part
+   * of the rewrite, and the provider model merges them in afterwards, when it applies the call's
+   * parameters over its defaults.
    */
   static ChatRequest withReasoningDisabled(ChatRequest request) {
     return request.toBuilder()
