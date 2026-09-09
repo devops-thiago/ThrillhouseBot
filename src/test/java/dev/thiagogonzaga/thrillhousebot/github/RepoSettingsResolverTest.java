@@ -948,6 +948,47 @@ class RepoSettingsResolverTest {
       assertEquals(1, resolver.cache.size(), "a 404 is a real answer and stays cacheable");
     }
 
+    /**
+     * #836. The RESTEasy Reactive client never throws {@code NotFoundException}: a 404 arrives as
+     * {@code ClientWebApplicationException} carrying the status on its response. #481's catch read
+     * that as a transient failure, so a repository with no config was fetched on every review and
+     * warned about three times, and the negative cache was never written.
+     */
+    @Test
+    void theClientsOwn404IsNoConfigAndIsCachedLikeOne() {
+      for (var path : java.util.List.of(YML, YAML)) {
+        when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
+            .thenThrow(
+                new org.jboss.resteasy.reactive.ClientWebApplicationException(
+                    Response.status(404).build()));
+      }
+      var resolver = resolver();
+
+      assertEquals(
+          RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+      assertEquals(1, resolver.cache.size(), "the client's 404 is a real answer and is cached");
+      verify(prClient, times(1))
+          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+    }
+
+    /** The status decides, not the subclass: the client's 503 is still a read that failed. */
+    @Test
+    void theClientsOwn503IsStillAFailedReadAndIsNotCached() {
+      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+          .thenThrow(
+              new org.jboss.resteasy.reactive.ClientWebApplicationException(
+                  Response.status(503).build()));
+      stubMissing(YAML);
+      var resolver = resolver();
+
+      assertEquals(
+          RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+      assertEquals(0, resolver.cache.size(), "a 503 said nothing about the repository");
+    }
+
     @Test
     void sweepDropsExpiredEntriesOnceTheCacheIsLarge() {
       stubMissing(YML);
