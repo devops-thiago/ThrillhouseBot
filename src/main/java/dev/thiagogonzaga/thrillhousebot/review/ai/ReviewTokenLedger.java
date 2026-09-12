@@ -20,6 +20,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -45,12 +46,25 @@ import java.util.concurrent.atomic.LongAdder;
  * timed-out attempt whose response still arrives) is counted: those tokens were billed, which is
  * exactly what the ceiling meters. Counters are {@link LongAdder}s in a {@link ConcurrentHashMap}
  * because parallel map-reduce batches record from concurrent virtual threads.
+ *
+ * <p>The entry also notes whether one of the review's calls had to run with reasoning disabled
+ * (#839): a call whose reasoning tail spent the whole output allowance is repeated with reasoning
+ * off, and the posted summary must say so. The note lives here rather than on the response because
+ * it is per review, not per call — any batch or the summary can take the step-down — and this is
+ * the one per-review record that exists exactly while the calls are made. The review path copies it
+ * onto its plan before clearing the entry.
  */
 @ApplicationScoped
 public class ReviewTokenLedger {
 
-  private final ConcurrentHashMap<Long, LongAdder> spentBySession = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<Long, Entry> entries = new ConcurrentHashMap<>();
   private final long maxTokensPerReview;
+
+  /** One review's row: tokens spent so far, and whether a call ran with reasoning disabled. */
+  private static final class Entry {
+    private final LongAdder spent = new LongAdder();
+    private final AtomicBoolean reasoningSteppedDown = new AtomicBoolean();
+  }
 
   @Inject
   public ReviewTokenLedger(ThrillhouseConfig config) {
@@ -59,7 +73,7 @@ public class ReviewTokenLedger {
 
   /** Opens the ledger entry for a review so its calls' usage is accumulated. Idempotent. */
   public void open(long sessionId) {
-    spentBySession.computeIfAbsent(sessionId, id -> new LongAdder());
+    entries.computeIfAbsent(sessionId, id -> new Entry());
   }
 
   /**
@@ -67,18 +81,38 @@ public class ReviewTokenLedger {
    * a side of the usage) count as zero; a session with no open entry is ignored (see class doc).
    */
   public void recordUsage(long sessionId, Integer inputTokens, Integer outputTokens) {
-    var spent = spentBySession.get(sessionId);
-    if (spent == null) {
+    var entry = entries.get(sessionId);
+    if (entry == null) {
       return;
     }
-    spent.add(
+    entry.spent.add(
         (inputTokens == null ? 0L : inputTokens) + (outputTokens == null ? 0L : outputTokens));
+  }
+
+  /**
+   * Notes that one of the review's calls stopped at the response-length cap with no content and was
+   * repeated with reasoning disabled (#839). Dropped for a session with no open entry, like {@link
+   * #recordUsage}: a note nobody can read must not create a row nobody clears.
+   */
+  public void recordReasoningStepDown(long sessionId) {
+    var entry = entries.get(sessionId);
+    if (entry != null) {
+      entry.reasoningSteppedDown.set(true);
+    }
+  }
+
+  /**
+   * Whether any of the review's calls so far ran with reasoning disabled after a no-content cap.
+   */
+  public boolean reasoningSteppedDown(long sessionId) {
+    var entry = entries.get(sessionId);
+    return entry != null && entry.reasoningSteppedDown.get();
   }
 
   /** Total tokens (input + output) recorded for this review so far; 0 when nothing is open. */
   public long tokensSpent(long sessionId) {
-    var spent = spentBySession.get(sessionId);
-    return spent == null ? 0L : spent.sum();
+    var entry = entries.get(sessionId);
+    return entry == null ? 0L : entry.spent.sum();
   }
 
   /** The configured ceiling in tokens; {@code <= 0} means the ceiling is off. */
@@ -123,6 +157,6 @@ public class ReviewTokenLedger {
 
   /** Drops the review's entry. Recording for the session stops until it is opened again. */
   public void clear(long sessionId) {
-    spentBySession.remove(sessionId);
+    entries.remove(sessionId);
   }
 }

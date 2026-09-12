@@ -200,6 +200,39 @@ class PrDescriptionGeneratorTest {
   }
 
   @Test
+  void staysSilentWithoutLoadingThePrWhenNoChangedFileIsReviewable() {
+    // #474: "is there anything to work from" is answered by the reviewable-file list. A PR whose
+    // every changed file is out of scope has nothing to describe, so the command stops there — the
+    // title, body and instructions it would load next are only inputs to a call it will not make.
+    var ignoringEverything = new ReviewDiffFormatter(List.of("**/*.java"), 5000);
+    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+        .thenReturn(List.of(foo(), otherFile()));
+
+    assertNull(
+        generatorWith(ignoringEverything).generate("owner", "repo", 7, "main", 12345L, AUTH));
+
+    verifyNoInteractions(describeAssistant);
+    verify(prClient, never()).getPullRequest(any(), any(), any(), any(), anyInt());
+    verifyNoInteractions(instructionsResolver);
+  }
+
+  @Test
+  void neverRendersTheWholePrDiff() {
+    // #474: since #457 every batch is rendered from the file list, so the whole-PR render — the
+    // one max-diff-lines caps, up to hundreds of kilobytes on a large PR — went to nobody. It was
+    // still built on every call and read only for an emptiness check. It must not be built at all.
+    var formatter = spy(diffFormatter);
+    prWithFiles(foo(), otherFile());
+    describeReturns("### Suggested title\n`x`");
+
+    assertNotNull(generatorWith(formatter).generate("owner", "repo", 7, "main", 12345L, AUTH));
+
+    verify(formatter, never()).buildDiffStringWithStats(anyList(), anyList());
+    verify(formatter, never()).buildDiffStringWithStats(anyList());
+    verify(formatter, never()).buildDiffString(anyList());
+  }
+
+  @Test
   void returnsNullWhenAssistantProducesBlank() {
     prWithFiles(foo());
     describeReturns("   ");

@@ -54,6 +54,23 @@ class ReviewTokenLedgerTest {
     assertEquals(10L, ledger.tokensSpent(2L));
   }
 
+  /** #839 — the step-down note follows the entry's lifecycle exactly as the usage does. */
+  @Test
+  void notesAReasoningStepDownForAnOpenSessionOnly() {
+    var ledger = ledger(0);
+    ledger.open(1L);
+
+    assertFalse(ledger.reasoningSteppedDown(1L), "nothing has stepped down yet");
+    ledger.recordReasoningStepDown(1L);
+    assertTrue(ledger.reasoningSteppedDown(1L));
+
+    ledger.recordReasoningStepDown(2L);
+    assertFalse(ledger.reasoningSteppedDown(2L), "a session never opened keeps no note");
+
+    ledger.clear(1L);
+    assertFalse(ledger.reasoningSteppedDown(1L), "the note goes with the entry");
+  }
+
   @Test
   void treatsNullUsageCountsAsZero() {
     var ledger = ledger(0);

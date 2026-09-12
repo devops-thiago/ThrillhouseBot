@@ -35,8 +35,10 @@ final class ReviewSessionContext {
   /**
    * @param attempt retry attempt within one logical AI call (1-based), for dashboard/logging
    * @param callId unique id for this stream invocation, used to gate stale callbacks
+   * @param reasoningDisabled whether this call is the repeat with reasoning off after a no-content
+   *     length stop (#839); read by {@link ReasoningStepDownStreamingModel} when the stream starts
    */
-  record Binding(long sessionId, int attempt, long callId) {}
+  record Binding(long sessionId, int attempt, long callId, boolean reasoningDisabled) {}
 
   /**
    * Registers a new stream invocation for {@code sessionId} and binds it to the calling thread.
@@ -54,8 +56,13 @@ final class ReviewSessionContext {
    * half that was missed.
    */
   static void bind(long sessionId, int attempt) {
+    bind(sessionId, attempt, false);
+  }
+
+  /** {@link #bind(long, int)} for a call that goes out with reasoning disabled (#839). */
+  static void bind(long sessionId, int attempt, boolean reasoningDisabled) {
     var callId = NEXT_CALL_ID.incrementAndGet();
-    BINDING.set(new Binding(sessionId, attempt, callId));
+    BINDING.set(new Binding(sessionId, attempt, callId, reasoningDisabled));
     ACTIVE_CALLS.compute(
         sessionId,
         (id, calls) -> {
@@ -106,6 +113,12 @@ final class ReviewSessionContext {
   static Long currentCallId() {
     var binding = BINDING.get();
     return binding != null ? binding.callId() : null;
+  }
+
+  /** Whether the call bound to this thread goes out with reasoning disabled (#839). */
+  static boolean reasoningDisabledForCurrentCall() {
+    var binding = BINDING.get();
+    return binding != null && binding.reasoningDisabled();
   }
 
   static boolean isActiveCall(long sessionId, long callId) {
