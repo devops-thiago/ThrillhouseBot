@@ -245,7 +245,12 @@ public class FindingPipeline {
     // entry exists exactly while its provider callbacks may land and never outlives the review.
     tokenLedger.open(ledgerSessionId(session));
     try {
-      return runWithLedger(session, promptInputs, ctx, plan, lineResolver);
+      var response = runWithLedger(session, promptInputs, ctx, plan, lineResolver);
+      // A call that had to run with reasoning disabled (#839) is noted on the ledger entry while
+      // the calls are in flight; the verdict reads the plan after that entry is cleared, so the
+      // note is copied over here, before the entry goes.
+      plan.recordReasoningStepDown(tokenLedger.reasoningSteppedDown(ledgerSessionId(session)));
+      return response;
     } finally {
       tokenLedger.clear(ledgerSessionId(session));
     }

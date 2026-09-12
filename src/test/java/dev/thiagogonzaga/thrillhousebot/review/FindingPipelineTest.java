@@ -383,6 +383,30 @@ class FindingPipelineTest {
         "a third lower-confidence item on the twice-dispositioned anchor must not be raised");
   }
 
+  /**
+   * #839 — a step-down noted on the ledger while the calls ran is copied onto the plan before the
+   * ledger entry is cleared, which is where the verdict reads it from.
+   */
+  @Test
+  void aReasoningStepDownNotedOnTheLedgerIsCopiedOntoThePlan() {
+    var session = persistedSession();
+    var ctx = litigatedContext(List.of(), List.of());
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(),
+                new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "does things", List.of())));
+    when(tokenLedger.reasoningSteppedDown(42L)).thenReturn(true);
+
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    assertTrue(plan.reasoningSteppedDown(), "the ledger's note must reach the plan");
+    verify(tokenLedger).clear(42L);
+  }
+
   @Test
   void aHighConfidenceFindingOnATwiceDispositionedAnchorStillPosts() {
     // Control for the convergence rule: it passes before and after, and pins the boundary the rule
