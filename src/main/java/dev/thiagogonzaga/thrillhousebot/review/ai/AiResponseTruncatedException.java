@@ -39,11 +39,19 @@ import java.util.Optional;
  * output it already holds. Carrying it on the exception keeps the no-retry contract intact: the
  * detection site still throws, nothing re-enters the retry lane, and only the disclose step gains
  * an input it previously threw away.
+ *
+ * <p>The streaming lane also attaches the cut call's provider-reported token counts ({@link
+ * #inputTokens()}, {@link #outputTokens()}): a length stop with an empty body is the reasoning tail
+ * spending the whole output allowance (#839), and the step-down that repeats such a call with
+ * reasoning off logs the counts that show it. Plain counts rather than the provider's usage object,
+ * so the exception stays serializable and free of client types.
  */
 public class AiResponseTruncatedException extends AiReviewException {
 
   private final String partialBody;
   private final boolean conciseModelImplicated;
+  private final Integer inputTokens;
+  private final Integer outputTokens;
 
   public AiResponseTruncatedException(String message) {
     this(message, null, false);
@@ -58,14 +66,40 @@ public class AiResponseTruncatedException extends AiReviewException {
    */
   public AiResponseTruncatedException(
       String message, String partialBody, boolean conciseModelImplicated) {
+    this(message, partialBody, conciseModelImplicated, null, null);
+  }
+
+  /**
+   * @param inputTokens the cut call's provider-reported input token count, or {@code null} when the
+   *     lane does not carry it (the blocking assistants) or the provider reported none
+   * @param outputTokens the cut call's provider-reported output token count, same terms
+   */
+  public AiResponseTruncatedException(
+      String message,
+      String partialBody,
+      boolean conciseModelImplicated,
+      Integer inputTokens,
+      Integer outputTokens) {
     super(message, 1, null);
     this.partialBody = partialBody;
     this.conciseModelImplicated = conciseModelImplicated;
+    this.inputTokens = inputTokens;
+    this.outputTokens = outputTokens;
   }
 
   /** The buffered text received before the cut; {@code null} when the lane does not buffer it. */
   public String partialBody() {
     return partialBody;
+  }
+
+  /** The cut call's provider-reported input tokens; {@code null} when not carried or reported. */
+  public Integer inputTokens() {
+    return inputTokens;
+  }
+
+  /** The cut call's provider-reported output tokens; {@code null} when not carried or reported. */
+  public Integer outputTokens() {
+    return outputTokens;
   }
 
   /** Whether the truncated call ran on the {@code concise} named model. */
@@ -81,7 +115,8 @@ public class AiResponseTruncatedException extends AiReviewException {
     if (conciseModelImplicated) {
       return this;
     }
-    return new AiResponseTruncatedException(getMessage(), partialBody, true);
+    return new AiResponseTruncatedException(
+        getMessage(), partialBody, true, inputTokens, outputTokens);
   }
 
   /**

@@ -459,6 +459,37 @@ class DiffBudgetPlannerTest {
         "mutating the snapshot must not touch the live slot");
   }
 
+  /** #839 — the reasoning step-down rides its own slot, recorded live and read by the verdict. */
+  @Test
+  void reasoningStepDownStartsFalseAndIsRecordedLive() {
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    assertFalse(plan.reasoningSteppedDown(), "no call has stepped down on a fresh plan");
+
+    plan.recordReasoningStepDown(true);
+
+    assertTrue(plan.reasoningSteppedDown());
+    assertFalse(plan.truncated(), "a step-down is not a coverage gap and must not hold approval");
+    var snapshot = plan.reasoningStepDownRef();
+    snapshot.set(false);
+    assertTrue(plan.reasoningSteppedDown(), "mutating the snapshot must not touch the live slot");
+  }
+
+  @Test
+  void aPlanBuiltWithItsOwnStepDownSlotKeepsThatInstanceLive() {
+    var live = new java.util.concurrent.atomic.AtomicBoolean(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), List.of(), true, null, null, null, null, null, live);
+
+    assertTrue(plan.reasoningSteppedDown());
+    assertNotSame(live, plan.reasoningStepDownRef(), "the accessor returns a defensive snapshot");
+
+    live.set(false);
+    assertFalse(plan.reasoningSteppedDown(), "the plan reads the slot it was built with");
+  }
+
   @Test
   void aPlanBuiltWithItsOwnDegradationSlotKeepsThatInstanceLive() {
     var live = new java.util.concurrent.atomic.AtomicReference<>(SummaryDegradation.RESPONSE_CUT);
