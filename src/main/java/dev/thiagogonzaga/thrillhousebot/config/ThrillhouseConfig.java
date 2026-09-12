@@ -588,8 +588,15 @@ public interface ThrillhouseConfig {
      * than following {@link #effort()} — see that method for why.
      */
     interface ReasoningConfig {
+      /**
+       * The tier that asks the model not to reason at all. Named because it is also the value one
+       * call steps down to on its own when the reasoning tail spends the whole output allowance
+       * (#839), so the step-down and the configured value can never disagree on the spelling.
+       */
+      String EFFORT_NONE = "none";
+
       /** Effort values accepted by {@link #effort()}, in ascending cost/quality order. */
-      List<String> ALLOWED_EFFORTS = List.of("none", "low", "medium", "high", "xhigh", "max");
+      List<String> ALLOWED_EFFORTS = List.of(EFFORT_NONE, "low", "medium", "high", "xhigh", "max");
 
       /**
        * Ceiling applied to the concise lane when {@link #conciseEffort()} is unset. {@code low} and
