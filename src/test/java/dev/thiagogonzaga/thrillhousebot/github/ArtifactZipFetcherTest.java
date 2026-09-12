@@ -28,6 +28,7 @@ import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -48,7 +49,8 @@ class ArtifactZipFetcherTest {
   private HttpServer server;
 
   @AfterEach
-  void stopServer() {
+  void stopServerAndFetcher() {
+    fetcher.shutdown();
     if (server != null) {
       server.stop(0);
       server = null;
@@ -154,6 +156,57 @@ class ArtifactZipFetcherTest {
   }
 
   @Nested
+  class SharedClient {
+
+    /**
+     * #478 — one client per bean, not per download. Observed on the wire rather than by identity: a
+     * client that outlives the call keeps its HTTP/1.1 connection pooled, so the second download
+     * arrives on the same TCP connection as the first; a client built and closed per call cannot
+     * hold one, so each download opened a fresh connection (and, in production, a fresh TLS
+     * handshake) from a new ephemeral port.
+     */
+    @Test
+    void twoDownloadsShareOneClientAndItsPooledConnection() throws IOException {
+      var payload = "PK pretend zip".getBytes(StandardCharsets.UTF_8);
+      var remotePorts = new CopyOnWriteArrayList<Integer>();
+      var uri =
+          serve(
+              exchange -> {
+                remotePorts.add(exchange.getRemoteAddress().getPort());
+                respond(exchange, 200, payload);
+              });
+
+      assertArrayEquals(payload, fetcher.transfer(uri));
+      assertArrayEquals(payload, fetcher.transfer(uri));
+
+      assertEquals(2, remotePorts.size(), "both downloads reached the server");
+      assertEquals(
+          remotePorts.get(0),
+          remotePorts.get(1),
+          "a second download on the same bean must reuse the first one's pooled connection, which"
+              + " only a client that outlives the call can hold");
+    }
+
+    /**
+     * The bean's {@code @PreDestroy}: once the application is stopping, a download that still
+     * reaches the fetcher degrades to no bytes like every other failure, and nothing propagates.
+     */
+    @Test
+    void aDownloadAfterShutdownDegradesInsteadOfPropagating() throws IOException {
+      var uri = serve(exchange -> respond(exchange, 200, "late".getBytes(StandardCharsets.UTF_8)));
+      var stopping = new ArtifactZipFetcher();
+
+      stopping.shutdown();
+
+      assertEquals(
+          0,
+          stopping.transfer(uri).length,
+          "a shut-down client refuses the request; the fetcher must turn that into no coverage");
+      assertDoesNotThrow(stopping::shutdown, "shutting down twice is harmless");
+    }
+  }
+
+  @Nested
   class EnvironmentEdges {
 
     @Test
@@ -161,14 +214,20 @@ class ArtifactZipFetcherTest {
       var payload = "no proxy configured".getBytes(StandardCharsets.UTF_8);
       var uri = serve(exchange -> respond(exchange, 200, payload));
       var original = ProxySelector.getDefault();
+      ArtifactZipFetcher builtWithoutSelector = null;
       try {
         // ProxySelector.setDefault(null) is legal and HttpClient.Builder.proxy(null) is not, so
-        // the guard is what keeps a JVM with no selector from failing every download.
+        // the guard is what keeps a JVM with no selector from failing every download. The selector
+        // is read when the bean is built (#478), so the fetcher has to be built inside the window.
         ProxySelector.setDefault(null);
+        builtWithoutSelector = new ArtifactZipFetcher();
 
-        assertArrayEquals(payload, fetcher.transfer(uri));
+        assertArrayEquals(payload, builtWithoutSelector.transfer(uri));
       } finally {
         ProxySelector.setDefault(original);
+        if (builtWithoutSelector != null) {
+          builtWithoutSelector.shutdown();
+        }
       }
     }
 
