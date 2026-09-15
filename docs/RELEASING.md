@@ -13,7 +13,9 @@ against an existing tag. The jobs run in order:
    confirms the CI-built images for that commit already exist in GHCR.
 2. **scan** — Trivy-scans both image variants, gating on CRITICAL/HIGH.
 3. **promote** — retags the commit images to `:vX.Y.Z` (and `:latest` when the
-   tag is the highest release), signs them with cosign, and attests provenance.
+   tag is the highest `vX.Y.Z` release; a pre-release or floating tag such as
+   `v0.6.8-rc1` or `nightly` does not count), signs them with cosign, and attests
+   provenance. The promotion decision is written to the run summary either way.
 4. **release** — extracts native binaries, signs the tarballs, pulls notes from
    `CHANGELOG.md`, and creates the GitHub release.
 5. **bump-version** — opens a PR moving `main` to the next `-SNAPSHOT` version.
@@ -65,6 +67,13 @@ tag after the release is created, gated on the release being the highest one so
 a patch on an older line cannot republish the site from its tag.
 `workflow_dispatch` is exempt from the recursion guard. The declared trigger is
 kept because a release published by hand in the UI does fire it.
+
+Only `vX.Y.Z` releases count towards "highest". `sort -V` ranks `v0.6.8-rc1` and
+`nightly` above `v0.6.8`, so a repository carrying such a release would otherwise
+read a legitimate release as older than the highest one and skip the deploy
+with nothing said. When the gate is false, the `promote` job records the
+decision and the version it lost to in the run summary and as a notice
+annotation, since the skipped `publish-docs` job cannot say anything itself.
 
 The job then **waits for the run it dispatched** and fails with it. `gh workflow
 run` returns as soon as GitHub accepts the dispatch, so a job that stopped there

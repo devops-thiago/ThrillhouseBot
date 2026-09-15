@@ -70,6 +70,10 @@ class ReviewContextLoaderTest {
     // Default: budgeting off so existing formatter-driven assertions keep the line-capped path.
     when(activeModel.maxInputTokens()).thenReturn(0);
     lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
+    // A bare mock would answer null for the resolution record; the quiet default is a real NONE.
+    lenient()
+        .when(patchCoverageResolver.resolve(any(), any(), any(), anyList()))
+        .thenReturn(PatchCoverageResolver.Resolution.NONE);
     loader =
         new ReviewContextLoader(
             prClient,
@@ -639,14 +643,42 @@ class ReviewContextLoaderTest {
       var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       when(patchCoverageResolver.resolve(eq("auth"), any(), eq(settings), anyList()))
-          .thenReturn("### uncovered");
+          .thenReturn(new PatchCoverageResolver.Resolution("### uncovered", ""));
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
 
       assertEquals("### uncovered", ctx.patchCoverage());
+      assertEquals("", ctx.coverageArtifactRefusal(), "a report that was read discloses nothing");
       verify(patchCoverageResolver).resolve("auth", request(), settings, ctx.reviewableFiles());
       assertFalse(ctx.reviewableFiles().contains(ignored));
       verify(repoSettingsResolver, times(1)).resolve("owner", "repo", "main", 99L);
+    }
+
+    /**
+     * #813 — a coverage artifact the reader refused contributes no prompt section, and the reason
+     * rides the context to the summary's review-scope note, so the maintainer who configured the
+     * artifact learns it was not read instead of wondering why the coverage section went quiet.
+     */
+    @Test
+    void aRefusedCoverageArtifactReachesTheContextForTheSummaryToDisclose() {
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
+      stubCommonLoadDeps(files);
+      var settings =
+          new RepoSettings(List.of(), List.of(), "coverage-report", ".github/thrillhousebot.yml");
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L)).thenReturn(settings);
+      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+      when(patchCoverageResolver.resolve(eq("auth"), any(), eq(settings), anyList()))
+          .thenReturn(
+              new PatchCoverageResolver.Resolution("", "it holds more than 512 `.xml` entries"));
+
+      var ctx = loader.load("auth", request(), session, "owner/repo");
+
+      assertEquals("", ctx.patchCoverage(), "a refused artifact adds nothing to the prompt");
+      assertEquals("it holds more than 512 `.xml` entries", ctx.coverageArtifactRefusal());
     }
   }
 

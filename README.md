@@ -751,6 +751,13 @@ Nothing about coverage is ever inferred from the diff, and a line's *absence* fr
 list is explicitly not evidence that a test covers it. Files the ignore list already
 excluded are never reported as under-tested.
 
+Uploading the whole `target/site/jacoco/` tree, with the HTML report beside `jacoco.xml`,
+is fine: only `.xml` entries count toward the archive's 512-entry cap. An artifact the
+bot found but refused to read — more `.xml` entries than that, or one that inflates past
+128 MB — is named in the review summary's scope note the way an ignore glob that matched
+nothing is. An artifact that was never uploaded, has expired, or holds no JaCoCo XML is
+still the quiet case above: nothing was refused, so nothing is disclosed.
+
 The file is read from the repository's default branch on each review and cached for
 five minutes. YAML anchors, aliases and merge keys are resolved; a document that is
 oversized, nested absurdly deep, or built on a runaway alias expansion is refused whole.
