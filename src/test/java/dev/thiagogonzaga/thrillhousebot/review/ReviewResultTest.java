@@ -847,6 +847,43 @@ class ReviewResultTest {
     assertEquals("2 file(s) omitted, 1 file(s) without diff content from GitHub", brief);
   }
 
+  /**
+   * #785 review: the unnamed remainder is clamped at zero, not subtracted into the named omissions.
+   * With clipped files the six classes can name more files than the omitted count holds, and
+   * computing the omitted figure as {@code omittedFiles - (namedFileGaps() - omitted names)} would
+   * then report fewer omitted files than the detail itself names.
+   */
+  @Test
+  void coverageGapBriefKeepsTheNamedOmissionsWhenClippedFilesOutnumberTheCount() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            2,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of("a.java", "b.java"),
+                List.of("x.java", "y.java"),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.NONE,
+                VerificationCoverage.EMPTY));
+
+    assertEquals("2 file(s) omitted, 2 file(s) partially analyzed", result.coverageGapBrief());
+  }
+
   @Test
   void truncationDetailNormalizesNullListsToEmpty() {
     var detail = new ReviewResult.TruncationDetail(null, null, null, null, null, null);

@@ -317,10 +317,12 @@ public record ReviewResult(
     }
 
     /**
-     * How many files the six classes name in total. A caller's omitted count can exceed it: the
-     * legacy lane knows its line-cap omissions only as a count while naming its patchless files
-     * (#785), so the clause and the brief render the difference under the numeric wording rather
-     * than letting a named class swallow the count of the files it does not name.
+     * How many files the six gap classes name in total, the omitted names included. A caller's
+     * omitted count can exceed it: the legacy lane knows its line-cap omissions only as a count
+     * while naming its patchless files (#785). The clause and the brief render that difference, and
+     * only the difference, under the numeric wording, clamped at zero, so a named class never
+     * swallows the count of the files it does not name and clipped files never cancel named
+     * omissions.
      */
     public int namedFileGaps() {
       return omittedFileNames.size()
