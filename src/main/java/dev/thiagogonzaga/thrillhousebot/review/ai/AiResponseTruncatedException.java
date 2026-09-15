@@ -32,19 +32,26 @@ import java.util.Optional;
  * AiReviewService#asAiReviewException(java.util.concurrent.ExecutionException)} with its identity
  * intact — that unwrapper returns an {@code AiReviewException} cause as-is.
  *
- * <p>The exception also carries the {@linkplain #partialBody() buffered partial body} when the
- * failing lane has it (the streaming review path buffers every token it received before the cut).
- * The body is well-formed up to the cut, so the caller that decides what a truncation costs — the
- * pipeline's disclose step — can salvage the complete leading elements instead of discarding paid
- * output it already holds. Carrying it on the exception keeps the no-retry contract intact: the
- * detection site still throws, nothing re-enters the retry lane, and only the disclose step gains
- * an input it previously threw away.
+ * <p>The exception also carries the {@linkplain #partialBody() partial body}: the text the call had
+ * produced before the cut, on every lane. The streaming review path buffers each token it received;
+ * the blocking lanes hand over {@code Result#content()}, which holds the same thing (#580). The
+ * body is well-formed up to the cut, so the caller that decides what a truncation costs — the
+ * pipeline's disclose step, the verifier's salvage — can recover the complete leading elements
+ * instead of discarding paid output it already holds. Carrying it on the exception keeps the
+ * no-retry contract intact: the detection site still throws, nothing re-enters the retry lane, and
+ * only the consumer gains an input it previously threw away.
  *
  * <p>The streaming lane also attaches the cut call's provider-reported token counts ({@link
  * #inputTokens()}, {@link #outputTokens()}): a length stop with an empty body is the reasoning tail
  * spending the whole output allowance (#839), and the step-down that repeats such a call with
  * reasoning off logs the counts that show it. Plain counts rather than the provider's usage object,
  * so the exception stays serializable and free of client types.
+ *
+ * <p>The message's remedy and the {@linkplain #conciseModelImplicated() concise flag} are set
+ * together at construction by {@link AiResponses.ModelLane#truncation}, the one source for both, so
+ * they cannot disagree (#581). There is deliberately no way to re-mark the flag afterwards: the
+ * method that did so kept the message as it was, which is how a summary-lane truncation once told
+ * the operator to raise a knob its own flag said did not apply (#600).
  */
 public class AiResponseTruncatedException extends AiReviewException {
 
@@ -58,8 +65,8 @@ public class AiResponseTruncatedException extends AiReviewException {
   }
 
   /**
-   * @param partialBody the response text received before the cut, or {@code null} when the failing
-   *     lane does not buffer it (the blocking assistants)
+   * @param partialBody the response text received before the cut — the streaming buffer, or the
+   *     blocking call's {@code Result#content()} — or {@code null} when the call produced none
    * @param conciseModelImplicated whether the truncated call ran on the {@code concise} named
    *     model, whose cap is {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} rather than the active model's
    *     {@code max-output-tokens} — rendered copy names the knob that actually applies
@@ -87,7 +94,7 @@ public class AiResponseTruncatedException extends AiReviewException {
     this.outputTokens = outputTokens;
   }
 
-  /** The buffered text received before the cut; {@code null} when the lane does not buffer it. */
+  /** The text received before the cut, on any lane; {@code null} when the call produced none. */
   public String partialBody() {
     return partialBody;
   }
@@ -105,18 +112,6 @@ public class AiResponseTruncatedException extends AiReviewException {
   /** Whether the truncated call ran on the {@code concise} named model. */
   public boolean conciseModelImplicated() {
     return conciseModelImplicated;
-  }
-
-  /**
-   * This truncation, marked as coming from the {@code concise} named model — same message, same
-   * partial body. Returns {@code this} when already marked.
-   */
-  public AiResponseTruncatedException implicatingConciseModel() {
-    if (conciseModelImplicated) {
-      return this;
-    }
-    return new AiResponseTruncatedException(
-        getMessage(), partialBody, true, inputTokens, outputTokens);
   }
 
   /**
