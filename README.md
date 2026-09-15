@@ -507,7 +507,7 @@ as "no pricing" instead of showing `$0`.
 
 ### CI gating
 
-With `REVIEW_CI_GATING=strict` (the default), a review that finds nothing while a
+With `REVIEW_CI_GATING=strict` (the default; the other values are `warn`, which never holds approval and only notes pending CI, and `off`, which leaves CI out of the verdict), a review that finds nothing while a
 required check is still pending, failing or unreadable ends as a `COMMENT` with a
 neutral check run instead of an `APPROVE`. That verdict is held, not final: the bot
 subscribes to `check_suite` and `status` events, and when CI reports on the head the
