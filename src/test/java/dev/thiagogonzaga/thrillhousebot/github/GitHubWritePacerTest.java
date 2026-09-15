@@ -19,6 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.quarkus.runtime.configuration.DurationConverter;
+import io.smallrye.config.PropertiesConfigSource;
+import io.smallrye.config.SmallRyeConfigBuilder;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -162,6 +166,45 @@ class GitHubWritePacerTest {
   @Test
   void theDefaultCeilingMatchesTheBackoffBudgetItIsDocumentedAgainst() {
     assertEquals(GitHubWriteRetry.TOTAL_BUDGET, GitHubWritePacer.DEFAULT_MAX_WAIT);
+  }
+
+  /**
+   * The literal above is the fallback for a build with no {@code application.properties}; the
+   * packaged bot reads the ceiling from the shipped property, so the pin only means something if
+   * the property's own default carries the same number. It shipped as 60 seconds after #723 had
+   * widened the backoff budget to 90, and the pin guarded a value production never used (#830).
+   */
+  @Test
+  void theShippedPropertyDefaultCarriesTheSameCeiling() throws Exception {
+    var shipped =
+        new SmallRyeConfigBuilder()
+            .addDefaultInterceptors()
+            .withConverter(Duration.class, 100, new DurationConverter())
+            .withValidateUnknown(false)
+            .withSources(
+                new PropertiesConfigSource(
+                    Paths.get("src/main/resources/application.properties").toUri().toURL()))
+            .build();
+
+    assertEquals(
+        GitHubWritePacer.DEFAULT_MAX_WAIT,
+        shipped.getValue(GitHubWritePacer.MAX_WAIT_KEY, Duration.class));
+  }
+
+  /**
+   * The third copy of the same number: {@code ThrillhouseConfig} declares the key too, and its
+   * {@code @WithDefault} is what a build without {@code application.properties} would bind. It had
+   * stayed at 60 seconds with the shipped property (#830 review), so it is pinned the same way.
+   */
+  @Test
+  void theConfigInterfaceDefaultCarriesTheSameCeiling() throws Exception {
+    var declared =
+        dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.GitHubConfig.class
+            .getMethod("writeMaxWait")
+            .getAnnotation(io.smallrye.config.WithDefault.class)
+            .value();
+
+    assertEquals(GitHubWritePacer.DEFAULT_MAX_WAIT, new DurationConverter().convert(declared));
   }
 
   @AfterEach
