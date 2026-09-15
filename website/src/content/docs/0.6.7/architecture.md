@@ -1,5 +1,11 @@
-# Architecture
-<!-- docs:architecture:start -->
+---
+slug: 0.6.7/architecture
+title: Architecture
+description: One-page overview of how the bot is structured and how a review flows through it.
+---
+
+
+
 
 One-page overview of how the bot is structured and how a review flows through it.
 
@@ -204,7 +210,7 @@ sequenceDiagram
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
-| `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, re-reads CI for a verdict held on pending CI when a `check_suite` or `status` event reports on its head, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
+| `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
 | `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverage`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
 | `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
 | `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
@@ -230,9 +236,7 @@ single-call review (or N+N+1 under budgeting) in the traces and in the
 dashboard's session totals. Multi-call reviews do not stream tokens to the
 dashboard; they emit `review.batch` progress events instead. Batches run
 concurrently on virtual threads; a failed batch is retried once after the
-parallel pass completes. `AI_MAX_CONCURRENT_CALLS` caps the model calls in
-flight across the whole process, streamed and blocking alike; a call past it
-waits for a slot rather than reaching a provider that limits concurrent requests.
+parallel pass completes.
 
 **Cost ceiling** — `REVIEW_MAX_TOKENS_PER_REVIEW` bounds the tokens one review may
 spend across every call it makes, counting retries, the verifier and the summary.
@@ -241,9 +245,7 @@ summary degrades to counts rather than making further calls. `0`, the default,
 leaves it unbounded. The summary, the verifier and maintainer replies run on a
 separate `concise` model binding with its own response cap
 (`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`) and its own reasoning effort, so they never
-share a cap sized for batch review output. A summary call that fails all its
-retries also leaves a counts-only summary, since every batch was already paid for,
-and the posted review says the summary could not be generated.
+share a cap sized for batch review output.
 
 **Coverage honesty** — a file the review never read does not pass silently. A
 file GitHub reported with changes but no patch text, a file that did not fit any
@@ -293,4 +295,5 @@ model's input cap and generation parameters, and `AI_REASONING_ENABLED` /
 `AI_REASONING_EFFORT` when the model supports reasoning. See the
 [provider table](https://devops-thiago.github.io/ThrillhouseBot/providers/) and
 the [configuration reference](https://devops-thiago.github.io/ThrillhouseBot/configuration/).
-<!-- docs:architecture:end -->
+
+
