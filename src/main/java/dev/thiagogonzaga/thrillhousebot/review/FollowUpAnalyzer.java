@@ -28,6 +28,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -1077,6 +1078,7 @@ public class FollowUpAnalyzer {
   static List<ConversationDecline> conversationDeclines(String body, BotIdentity botIdentity) {
     var masked = quotedTextBlanked(body);
     var lines = List.of(body.split("\n", -1));
+    var lineStarts = lineStarts(body);
     var spans = new ArrayList<int[]>();
     var matches = declineDirective(botIdentity).matcher(masked);
     while (matches.find()) {
@@ -1084,7 +1086,8 @@ public class FollowUpAnalyzer {
       // directive that begins a line is the previous line's feed; the directive's first line is
       // the mention's own.
       var at = masked.indexOf('@', matches.start());
-      spans.add(new int[] {lineAt(body, at), namingLine(body, lines, matches.end())});
+      spans.add(
+          new int[] {lineAt(lineStarts, at), namingLine(body, lines, lineStarts, matches.end())});
     }
     var declines = new ArrayList<ConversationDecline>(spans.size());
     for (var i = 0; i < spans.size(); i++) {
@@ -1109,9 +1112,9 @@ public class FollowUpAnalyzer {
    * reason, the directive named nothing and did nothing, and the acknowledgement, which sees the
    * locator wherever it sits in the comment, had promised a decline the review then never applied.
    */
-  private static int namingLine(String body, List<String> lines, int wordEnd) {
+  private static int namingLine(String body, List<String> lines, int[] lineStarts, int wordEnd) {
     var lineEnd = body.indexOf('\n', wordEnd);
-    var last = lineAt(body, wordEnd - 1);
+    var last = lineAt(lineStarts, wordEnd - 1);
     if (!body.substring(wordEnd, lineEnd < 0 ? body.length() : lineEnd).isBlank()) {
       return last;
     }
@@ -1123,14 +1126,26 @@ public class FollowUpAnalyzer {
   }
 
   /** The 0-based line {@code index} falls on in {@code text}: the line feeds before it. */
-  private static int lineAt(String text, int index) {
-    var line = 0;
-    for (var i = 0; i < index; i++) {
+  private static int lineAt(int[] lineStarts, int index) {
+    var found = Arrays.binarySearch(lineStarts, index);
+    return found >= 0 ? found : -found - 2;
+  }
+
+  /**
+   * The offset each line of {@code text} starts at, in order. Built once per comment so {@link
+   * #lineAt} is a binary search: counting line feeds from the start of the body for every directive
+   * made a comment dense with directives quadratic in its length, and a maintainer's comment is not
+   * bounded by the diff (#823 review).
+   */
+  private static int[] lineStarts(String text) {
+    var starts = new ArrayList<Integer>();
+    starts.add(0);
+    for (var i = 0; i < text.length(); i++) {
       if (text.charAt(i) == '\n') {
-        line++;
+        starts.add(i + 1);
       }
     }
-    return line;
+    return starts.stream().mapToInt(Integer::intValue).toArray();
   }
 
   /**

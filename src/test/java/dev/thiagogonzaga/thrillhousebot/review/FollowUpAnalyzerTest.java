@@ -2920,6 +2920,35 @@ class FollowUpAnalyzerTest {
     assertEquals(List.of(new FollowUpAnalyzer.ConversationDecline(naming, reason)), declines, name);
   }
 
+  /**
+   * #823 review: line numbers come from an index built once per comment rather than a count from
+   * the start of the body per directive. A directive far down a long comment, after a wrapped one
+   * and on the line straight after another, still reads its own naming and its own reason.
+   */
+  @Test
+  void conversationDeclinesShouldMapDirectivesDeepInALongCommentToTheirOwnLines() {
+    var filler = "context line\n".repeat(400);
+    var body =
+        filler
+            + "@thrillhousebot declined\n`src/A.java:10` — SQL injection\nfirst reason\n"
+            + filler
+            + "@thrillhousebot declined `src/B.java:5` — Missing null check\nsecond reason\n"
+            + "@thrillhousebot declined `src/C.java:7` — Race\nthird reason";
+
+    var declines = FollowUpAnalyzer.conversationDeclines(body, BOT_ID);
+
+    assertEquals(
+        List.of(
+            new FollowUpAnalyzer.ConversationDecline(
+                "@thrillhousebot declined\n`src/A.java:10` — SQL injection",
+                "first reason\n" + filler.strip()),
+            new FollowUpAnalyzer.ConversationDecline(
+                "@thrillhousebot declined `src/B.java:5` — Missing null check", "second reason"),
+            new FollowUpAnalyzer.ConversationDecline(
+                "@thrillhousebot declined `src/C.java:7` — Race", "third reason")),
+        declines);
+  }
+
   static Stream<Arguments> wrapsAfterTheWord() {
     return Stream.of(
         arguments(
