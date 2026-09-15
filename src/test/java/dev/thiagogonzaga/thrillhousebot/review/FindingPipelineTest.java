@@ -770,7 +770,8 @@ class FindingPipelineTest {
     var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
 
     verify(aiReviewService, times(1)).summarize(eq(session), any());
-    assertEquals(List.of("A", "B"), result.findings().stream().map(f -> f.title()).toList());
+    assertEquals(
+        List.of("A", "B"), result.findings().stream().map(ReviewResponse.Finding::title).toList());
     assertNull(result.summary(), "counts-only shape: no model summary");
     assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
     assertEquals(
@@ -818,14 +819,13 @@ class FindingPipelineTest {
               throw interrupted;
             });
     var plan = multiBatchPlan();
+    var ctx = reviewContext();
+    var resolver = new DiffLineResolver(Map.of());
 
     try {
       var thrown =
           assertThrows(
-              AiReviewException.class,
-              () ->
-                  pipeline.run(
-                      session, template, reviewContext(), plan, new DiffLineResolver(Map.of())));
+              AiReviewException.class, () -> pipeline.run(session, template, ctx, plan, resolver));
       assertSame(interrupted, thrown);
     } finally {
       assertTrue(Thread.interrupted(), "the interrupt flag must survive for the caller to see");
@@ -849,13 +849,12 @@ class FindingPipelineTest {
             new AiReviewException("AI review interrupted", 1, new InterruptedException()));
     when(aiReviewService.summarize(eq(session), any())).thenThrow(failure);
     var plan = multiBatchPlan();
+    var ctx = reviewContext();
+    var resolver = new DiffLineResolver(Map.of());
 
     var thrown =
         assertThrows(
-            AiReviewException.class,
-            () ->
-                pipeline.run(
-                    session, template, reviewContext(), plan, new DiffLineResolver(Map.of())));
+            AiReviewException.class, () -> pipeline.run(session, template, ctx, plan, resolver));
 
     assertSame(failure, thrown);
     assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
@@ -873,13 +872,13 @@ class FindingPipelineTest {
     var stale = new ReviewContextLoader.StaleReviewException("sha", "newer");
     when(aiReviewService.summarize(eq(session), any())).thenThrow(stale);
     var plan = multiBatchPlan();
+    var ctx = reviewContext();
+    var resolver = new DiffLineResolver(Map.of());
 
     var thrown =
         assertThrows(
             ReviewContextLoader.StaleReviewException.class,
-            () ->
-                pipeline.run(
-                    session, template, reviewContext(), plan, new DiffLineResolver(Map.of())));
+            () -> pipeline.run(session, template, ctx, plan, resolver));
 
     assertSame(stale, thrown);
     assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
