@@ -54,14 +54,23 @@ import javax.xml.stream.XMLStreamReader;
  * says or reports nothing.
  *
  * <p>The bytes come from a workflow artifact uploaded by an arbitrary repository, so parsing is
- * defensive throughout — external entities and DTD loading are off, the archive's entry count and
- * its <em>aggregate</em> inflated size are both capped against a zip bomb (see {@link
- * #MAX_TOTAL_INFLATED_BYTES}), and every failure yields an {@link #EMPTY} report rather than an
- * exception.
+ * defensive throughout — external entities and DTD loading are off, the archive's report-entry
+ * count and its <em>aggregate</em> inflated size are both capped against a zip bomb (see {@link
+ * #MAX_TOTAL_INFLATED_BYTES}), and every failure yields an empty report rather than an exception.
+ * An archive the walk refused says why on that empty report ({@link #refusal}), so the review can
+ * tell a maintainer who configured the artifact that it was not read (#813).
  */
 final class JacocoCoverageReport {
 
-  /** Entries walked in the artifact archive before the rest are ignored. */
+  /**
+   * Ceiling on the entries that can carry a report — names ending in {@code .xml} — before the
+   * archive is refused whole. Nothing else counts: the usual upload is the whole {@code
+   * target/site/jacoco/} tree, one {@code .html} per class beside the one {@code jacoco.xml}, and a
+   * cap that charged every file refused that shape on a project of a few hundred classes with a
+   * single legitimate report inside (#813). The entries left uncounted are still drained against
+   * {@link #MAX_TOTAL_INFLATED_BYTES}, and {@code ArtifactZipFetcher.MAX_BYTES} bounds how many of
+   * them a download can hold at all.
+   */
   static final int MAX_ZIP_ENTRIES = 512;
 
   /**
@@ -99,15 +108,60 @@ final class JacocoCoverageReport {
    */
   private static final String BINARY_PACKAGE_SEPARATOR = "/";
 
-  /** No coverage data — the value every failure path degrades to. */
-  static final JacocoCoverageReport EMPTY = new JacocoCoverageReport(Map.of());
+  /**
+   * No coverage data and nothing refused — what a read that found nothing usable degrades to. A
+   * refused archive degrades to its own empty report instead, carrying the {@link Refusal}, so
+   * {@code isEmpty()} rather than identity with this constant is the test for "no coverage".
+   */
+  static final JacocoCoverageReport EMPTY = new JacocoCoverageReport(Map.of(), null);
+
+  /**
+   * Why {@link #fromArtifactZip} gave up on an archive, carried on the empty report it returns so
+   * the review can say so (#813). Each reason is phrased for the summary's review-scope note, where
+   * it follows "the configured coverage artifact was not read:". An archive that was merely
+   * unhelpful — no {@code .xml} entry, nothing that parsed as JaCoCo — is not refused and carries
+   * no reason: that is the designed quiet path for a repository publishing nothing usable.
+   */
+  enum Refusal {
+    /**
+     * More {@code .xml} entries than {@link JacocoCoverageReport#MAX_ZIP_ENTRIES}. Merging the
+     * prefix that fit would let whoever built the archive choose which reports the review saw.
+     */
+    ENTRY_CAP("it holds more than " + MAX_ZIP_ENTRIES + " `.xml` entries"),
+    /**
+     * Inflation past {@link JacocoCoverageReport#MAX_TOTAL_INFLATED_BYTES}: a zip bomb, or an
+     * upload far larger than any coverage report.
+     */
+    INFLATION_BUDGET(
+        "it inflates past the " + (MAX_TOTAL_INFLATED_BYTES >> 20) + " MB decompression limit"),
+    /** The bytes broke mid-walk — a truncated download, or a body that is not a zip at all. */
+    UNREADABLE("it could not be read as a zip archive");
+
+    private final String reason;
+
+    Refusal(String reason) {
+      this.reason = reason;
+    }
+
+    /** The reason in the summary's words, without the lead-in. */
+    String reason() {
+      return reason;
+    }
+  }
 
   /** Uncovered lines per report source path, indexed by that path's file name for lookup. */
   private final Map<String, List<SourceFile>> byFileName;
 
+  /**
+   * Why the archive walk gave up, or {@code null} for a report read to the end — {@link #EMPTY}
+   * included, since an archive that held nothing usable was not refused.
+   */
+  private final Refusal refusal;
+
   private record SourceFile(String path, NavigableSet<Integer> uncoveredLines) {}
 
-  private JacocoCoverageReport(Map<String, NavigableSet<Integer>> uncoveredLinesByPath) {
+  private JacocoCoverageReport(
+      Map<String, NavigableSet<Integer>> uncoveredLinesByPath, Refusal refusal) {
     var index = new HashMap<String, List<SourceFile>>();
     uncoveredLinesByPath.forEach(
         (path, lines) ->
@@ -115,10 +169,25 @@ final class JacocoCoverageReport {
                 .computeIfAbsent(fileName(path), unused -> new ArrayList<>())
                 .add(new SourceFile(path, lines)));
     this.byFileName = index;
+    this.refusal = refusal;
+  }
+
+  /** An empty report that also says why the archive it came from was not read. */
+  private static JacocoCoverageReport refused(Refusal refusal) {
+    return new JacocoCoverageReport(Map.of(), refusal);
   }
 
   boolean isEmpty() {
     return byFileName.isEmpty();
+  }
+
+  /**
+   * Why {@link #fromArtifactZip} refused the archive, or {@code null} when nothing was refused. An
+   * empty report with no refusal is the common "nothing usable was published" case and is not
+   * disclosed; a refused one is, because the artifact was there and this reader would not read it.
+   */
+  Refusal refusal() {
+    return refusal;
   }
 
   /**
@@ -259,21 +328,21 @@ final class JacocoCoverageReport {
    * agree on nothing about is dropped outright rather than reaching callers as a file with an empty
    * line set.
    *
-   * <p>{@link #EMPTY} when the bytes are not a readable zip, hold no such entry, hold nothing this
-   * parser understands — or when the walk gave up part-way, per the paragraph below. At most {@link
-   * #MAX_ZIP_ENTRIES} file entries are read. Directory entries are not counted against that cap,
-   * but they are not trusted either: a name ending in a slash may still carry a payload, so each
-   * one is drained against the same aggregate budget as a file and refused the same way when it
-   * blows it. An archive with more file entries than the cap is refused whole rather than merged as
-   * far as the cap allowed.
+   * <p>{@link #EMPTY} when the bytes hold no {@code .xml} entry or nothing this parser understands;
+   * an empty report carrying a {@link Refusal} when the walk gave up part-way, per the paragraph
+   * below. At most {@link #MAX_ZIP_ENTRIES} {@code .xml} entries are read, and an archive with more
+   * is refused whole rather than merged as far as the cap allowed. No other entry counts toward
+   * that cap — not the HTML report beside the XML, not a directory name — but none is trusted
+   * either: a name ending in a slash may still carry a payload, so every entry is drained against
+   * the same aggregate budget and refused the same way when it blows it.
    *
    * <p>Every entry — not only the {@code .xml} we want — is inflated through a counting copy
    * bounded by {@link #MAX_TOTAL_INFLATED_BYTES}. Reading only the entries we care about is not
    * enough: the next {@link ZipInputStream#getNextEntry()} implicitly inflates the whole of an
    * unread entry to reach the following header, which is exactly the path a maximally-compressed
    * archive takes to gigabytes. The moment that aggregate budget is blown — or the stream breaks
-   * mid-walk — the archive is abandoned and <em>everything</em> already merged is discarded for
-   * {@link #EMPTY}: the surviving prefix is chosen by whoever built the archive rather than by the
+   * mid-walk — the archive is abandoned and <em>everything</em> already merged is discarded for an
+   * empty report: the surviving prefix is chosen by whoever built the archive rather than by the
    * build, so returning it would report as uncovered whatever the unread remainder covers. No
    * partial answer leaves this method; the abort itself carries the full reasoning.
    */
@@ -282,49 +351,54 @@ final class JacocoCoverageReport {
       return EMPTY;
     }
     var merged = new HashMap<String, NavigableSet<Integer>>();
-    var aborted = false;
+    Refusal refusal;
     try (var zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
-      aborted = walkRefused(zip, merged);
+      refusal = walkRefused(zip, merged);
     } catch (IOException | RuntimeException e) {
-      Log.debugf(e, "Could not read the coverage artifact archive");
-      aborted = true;
+      Log.warn("Could not read the coverage artifact archive; refusing it", e);
+      refusal = Refusal.UNREADABLE;
     }
     // A walk that gave up carries no partial answer out. Whatever merged before the abort is a
     // prefix chosen by the archive, not by the build: an attacker who appends a bomb entry after a
     // benign report would otherwise decide which reports the merge sees, and the truncated result
     // reads as complete coverage — lines the rest of the artifact covers come back "uncovered".
     // The same holds for an IOException mid-walk, where the prefix is chosen by where the stream
-    // broke. This is what the class javadoc means by every failure yielding EMPTY.
-    if (aborted) {
-      return EMPTY;
+    // broke. This is what the class javadoc means by every failure yielding an empty report; the
+    // refusal rides along so the review can say the artifact was there and was not read.
+    if (refusal != null) {
+      return refused(refusal);
     }
     // An intersection that emptied out says every report disagreed about that file, which is not
     // coverage data; the rest of the class may assume a present path has at least one line.
     merged.values().removeIf(NavigableSet::isEmpty);
-    return merged.isEmpty() ? EMPTY : new JacocoCoverageReport(merged);
+    return merged.isEmpty() ? EMPTY : new JacocoCoverageReport(merged, null);
   }
 
   /**
-   * Inflates one archive entry within {@code budgetLeft} and merges it into {@code merged} when it
-   * turns out to be a JaCoCo report, answering how many bytes it cost — or {@code -1} when the
-   * aggregate budget is gone and the archive must be abandoned.
-   *
-   * <p>Every entry is drained through the counting copy, a report to collect and anything else to
-   * discard, because leaving an entry partly read hands the implicit inflation back to the next
-   * {@code getNextEntry()}. Only the aggregate budget stops the drain.
+   * Whether an entry can carry a report and so counts toward {@link #MAX_ZIP_ENTRIES}: a name
+   * ending in {@code .xml}. A directory name ends in a slash, so it can never pass; a non-report
+   * XML (a surefire report, say) does pass and costs a slot, because the cap bounds how many
+   * documents the merge will parse, not how many of them turn out to be JaCoCo.
    */
-  private static long readEntryInto(
+  private static boolean isReport(ZipEntry entry) {
+    return entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
+  }
+
+  /**
+   * Inflates one {@code .xml} entry within {@code budgetLeft} and merges it into {@code merged}
+   * when it turns out to be a JaCoCo report, answering how many bytes it cost — or {@code -1} when
+   * the aggregate budget is gone and the archive must be abandoned. A report larger than {@link
+   * #MAX_ENTRY_BYTES} is drained in full but contributes nothing, per {@link #inflateEntry}.
+   */
+  private static long readReportInto(
       ZipInputStream zip,
       ZipEntry entry,
       long budgetLeft,
       Map<String, NavigableSet<Integer>> merged)
       throws IOException {
-    // Directories never reach here: walkRefused steps over them before charging the cap, so the
-    // only question left is whether this file entry is a report.
-    var isReport = entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml");
-    var sink = isReport ? new ByteArrayOutputStream() : null;
+    var sink = new ByteArrayOutputStream();
     var read = inflateEntry(zip, budgetLeft, MAX_ENTRY_BYTES, sink);
-    if (read < 0 || sink == null || sink.size() == 0) {
+    if (read < 0 || sink.size() == 0) {
       return read;
     }
     var one = parseToMap(new ByteArrayInputStream(sink.toByteArray()));
@@ -408,7 +482,7 @@ final class JacocoCoverageReport {
   /** Parses one JaCoCo XML document, or {@link #EMPTY} when it is not one / cannot be read. */
   static JacocoCoverageReport parse(InputStream xml) {
     var map = parseToMap(xml);
-    return map.isEmpty() ? EMPTY : new JacocoCoverageReport(map);
+    return map.isEmpty() ? EMPTY : new JacocoCoverageReport(map, null);
   }
 
   /**
@@ -530,7 +604,8 @@ final class JacocoCoverageReport {
   }
 
   /**
-   * Walks the archive's entries into {@code merged}, and reports whether it gave up.
+   * Walks the archive's entries into {@code merged}, and reports why it gave up — or {@code null}
+   * when it read the archive to the end.
    *
    * <p>Each refusal leaves by returning rather than by breaking, which keeps the two limits reading
    * as the two answers they are. It also matters mechanically: a {@code continue} here would run
@@ -538,58 +613,59 @@ final class JacocoCoverageReport {
    * is leaving — so skipping past a bomb entry would pay exactly the cost the aggregate budget
    * exists to refuse.
    *
-   * <p>The cap counts file entries, report or not. Directories are drained against the aggregate
-   * budget like everything else but not charged to the cap, so a tree-shaped artifact is judged by
-   * how much content it holds rather than by how deeply it is nested.
+   * <p>The cap counts only entries that can carry a report ({@link #isReport}), because it exists
+   * to bound how many documents the merge parses, not how many files the archive holds (#813): the
+   * usual upload is the whole {@code target/site/jacoco/} tree, one {@code .html} per class beside
+   * the one {@code jacoco.xml}, and a cap that charged every file refused that shape on a project
+   * of a few hundred classes with a single legitimate report inside. Every other entry is drained
+   * in full against the aggregate budget and refused the same way when it blows it, so nothing left
+   * uncounted can smuggle inflation. A directory name in particular is not a promise of zero data:
+   * nothing in the local-header format stops a crafted entry called {@code bomb/} carrying
+   * megabytes of deflate, and leaving it to the loop's {@code getNextEntry()} would inflate that
+   * payload uncharged, since the stream must dispose of the current entry before it can reach the
+   * next header. A real directory costs one immediate EOF read.
    *
-   * @return {@code true} when a limit stopped the walk, so whatever merged is a prefix the archive
-   *     chose and no report may be built from it
+   * <p>Both refusals are logged at WARN — a coverage section that goes quiet with only a DEBUG line
+   * behind it is a reason nobody ever reads (#813) — and with counts only, never an entry name,
+   * since the names are whoever built the archive's to choose.
+   *
+   * @return why a limit stopped the walk, so whatever merged is a prefix the archive chose and no
+   *     report may be built from it; {@code null} when nothing stopped it
    */
-  private static boolean walkRefused(ZipInputStream zip, Map<String, NavigableSet<Integer>> merged)
+  private static Refusal walkRefused(ZipInputStream zip, Map<String, NavigableSet<Integer>> merged)
       throws IOException {
-    var seen = 0;
+    var walked = 0;
+    var reports = 0;
     var inflatedTotal = 0L;
     for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
-      if (entry.isDirectory()) {
-        // A name ending in '/' is not a promise of zero data: nothing in the local-header format
-        // stops a crafted entry called bomb/ carrying megabytes of deflate. Leaving it to the
-        // loop's
-        // getNextEntry() would inflate that payload uncharged, since the stream must dispose of the
-        // current entry before it can reach the next header. So the entry is drained here, against
-        // the same aggregate budget as everything else, and refused the same way when it blows it.
-        // A real directory costs one immediate EOF read. It is still not charged to the entry cap:
-        // a coverage artifact is usually a whole target/ tree, and its directories alone can push
-        // a handful of jacoco.xml files past a cap that bounds how much content is read.
-        var drained = inflateEntry(zip, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, 0, null);
-        if (drained < 0) {
-          Log.debugf(
-              "Coverage artifact inflates past the %d-byte aggregate cap inside a directory entry;"
-                  + " refusing it as a zip bomb",
-              MAX_TOTAL_INFLATED_BYTES);
-          return true;
+      walked++;
+      var budgetLeft = MAX_TOTAL_INFLATED_BYTES - inflatedTotal;
+      long read;
+      if (isReport(entry)) {
+        if (reports++ >= MAX_ZIP_ENTRIES) {
+          // Padding an archive past the cap would otherwise let whoever built it decide which
+          // reports the merge saw, while the result still reads as this build's coverage: lines
+          // the unread reports cover come back uncovered, against a diff the model is told to
+          // treat as fact.
+          Log.warnf(
+              "Coverage artifact holds more than %d .xml entries (%d entries walked, %d bytes"
+                  + " inflated); refusing it rather than merging the prefix that fit",
+              MAX_ZIP_ENTRIES, walked, inflatedTotal);
+          return Refusal.ENTRY_CAP;
         }
-        inflatedTotal += drained;
-        continue;
+        read = readReportInto(zip, entry, budgetLeft, merged);
+      } else {
+        read = inflateEntry(zip, budgetLeft, 0, null);
       }
-      if (seen++ >= MAX_ZIP_ENTRIES) {
-        // Padding an archive past the cap would otherwise let whoever built it decide which reports
-        // the merge saw, while the result still reads as this build's coverage: lines the unread
-        // reports cover come back uncovered, against a diff the model is told to treat as fact.
-        Log.debugf(
-            "Coverage artifact carries more than %d entries; refusing it rather than merging the"
-                + " prefix that fit",
-            MAX_ZIP_ENTRIES);
-        return true;
-      }
-      var read = readEntryInto(zip, entry, MAX_TOTAL_INFLATED_BYTES - inflatedTotal, merged);
       if (read < 0) {
-        Log.debugf(
-            "Coverage artifact inflates past the %d-byte aggregate cap; refusing it as a zip bomb",
-            MAX_TOTAL_INFLATED_BYTES);
-        return true;
+        Log.warnf(
+            "Coverage artifact inflates past the %d-byte aggregate cap (%d entries walked, %d of"
+                + " them .xml); refusing it as a zip bomb",
+            MAX_TOTAL_INFLATED_BYTES, walked, reports);
+        return Refusal.INFLATION_BUDGET;
       }
       inflatedTotal += read;
     }
-    return false;
+    return null;
   }
 }
