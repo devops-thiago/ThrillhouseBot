@@ -29,11 +29,11 @@ import java.util.function.Supplier;
 
 /**
  * Shared loading <em>and batch planning</em> for the on-request "suggestion from the diff" commands
- * ({@code /describe}, {@code /changelog}, {@code /improve}). They all load the same inputs — the PR
- * diff, its current title/body, and the resolved repository instructions — before handing them to
- * their own assistant, so that fetch-and-degrade logic lives here once. Every fetch fails soft: a
- * failure degrades to empty context (or, for the diff, to {@code null} so the caller posts nothing)
- * rather than a noisy error on the PR.
+ * ({@code /describe}, {@code /changelog}, {@code /improve}). They all load the same inputs — the
+ * PR's reviewable files, its current title/body, and the resolved repository instructions — before
+ * handing them to their own assistant, so that fetch-and-degrade logic lives here once. Every fetch
+ * fails soft: a failure degrades to empty context (or, for the file list, to {@code null} so the
+ * caller posts nothing) rather than a noisy error on the PR.
  *
  * <p>Coverage is planned the way the review path has planned it since #53: {@link
  * #planBatches(List, Inputs, String, String, int)} splits the <em>file list</em> into
@@ -52,15 +52,18 @@ public abstract class AbstractPrSuggestionGenerator {
 
   /**
    * The PR context a suggestion is generated from. {@code headSha} and {@code reviewableFiles} are
-   * the head commit and the ignore-filtered files behind that diff — carried here (rather than
+   * the head commit and the ignore-filtered files behind the diff — carried here (rather than
    * re-fetched) for the commands that anchor their suggestions back onto the diff.
    *
-   * <p>{@code diff} is the whole-PR render, and is now only the "is there anything to work from"
-   * signal: no command sends it to a model. Each sends {@link DiffBudgetPlanner.DiffBatch#text()}
-   * instead, so the render's {@code max-diff-lines} cap no longer decides what a command covers.
+   * <p>There is deliberately no whole-PR diff render here. Since #457 every command sends {@link
+   * DiffBudgetPlanner.DiffBatch#text()}, rendered per batch from {@code reviewableFiles}, and the
+   * whole-PR render survived only as the "is there anything to work from" signal — a {@code
+   * max-diff-lines}-capped string, hundreds of kilobytes on a large PR, built on every call and
+   * read once for {@code isBlank()} (#474). {@code reviewableFiles} answers that question directly,
+   * and a field whose meaning had come to depend on which command built it (empty was "abort" here,
+   * "normal" for {@code /add-docs}) is better absent than documented.
    */
   protected record Inputs(
-      String diff,
       String title,
       String body,
       String instructions,
@@ -112,9 +115,15 @@ public abstract class AbstractPrSuggestionGenerator {
   }
 
   /**
-   * Loads the diff, current title/body, and resolved instructions for a PR, or {@code null} when
-   * there is no diff to work from (so the caller posts nothing). {@code command} labels the
-   * operation in logs (e.g. {@code "/describe"}).
+   * Loads the reviewable files, current title/body, and resolved instructions for a PR, or {@code
+   * null} when there is nothing to work from (so the caller posts nothing). {@code command} labels
+   * the operation in logs (e.g. {@code "/describe"}).
+   *
+   * <p>"Nothing to work from" is an empty reviewable-file list: the files could not be fetched, the
+   * PR changes none, or every changed file is ignored or a pure rename. The last case used to pass
+   * this check — the whole-PR render it read is non-blank whenever the raw list is — and reach the
+   * same outcome one step later, from an empty batch plan, after loading a title, body and
+   * instructions for a call that was never going to be made (#474).
    */
   protected Inputs loadInputs(
       String owner,
@@ -126,10 +135,10 @@ public abstract class AbstractPrSuggestionGenerator {
       String command) {
     var files = SoftLoaders.files(prClient, auth, owner, repo, prNumber, command);
     var reviewable = diffFormatter.reviewableFiles(files);
-    var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
-    String diff = formatted.text();
-    if (diff == null || diff.isBlank() || "(no changes detected)".equals(diff)) {
-      Log.debugf("No diff for %s on %s/%s #%d — posting nothing", command, owner, repo, prNumber);
+    if (reviewable == null || reviewable.isEmpty()) {
+      Log.debugf(
+          "No reviewable file for %s on %s/%s #%d — posting nothing",
+          command, owner, repo, prNumber);
       return null;
     }
     var details = SoftLoaders.pullRequest(prClient, auth, owner, repo, prNumber, command);
@@ -140,7 +149,7 @@ public abstract class AbstractPrSuggestionGenerator {
         SoftLoaders.instructions(
                 instructionsResolver, owner, repo, defaultBranch, installationId, command)
             .content();
-    return new Inputs(diff, title, body, instructions, headSha, reviewable);
+    return new Inputs(title, body, instructions, headSha, reviewable);
   }
 
   /**

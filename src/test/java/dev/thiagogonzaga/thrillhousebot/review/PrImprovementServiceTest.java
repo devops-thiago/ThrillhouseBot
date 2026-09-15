@@ -46,8 +46,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.NullSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -240,17 +238,15 @@ class PrImprovementServiceTest {
 
   @Test
   void doesNotDiscloseTruncationForTheLineCapWhenTheBudgetCoveredEverything() {
-    // The line cap no longer decides coverage, so its omitted count must no longer drive the
-    // disclosure. A formatter reporting 48 line-omitted files, against a plan that batched every
-    // file within budget, is full coverage — claiming otherwise would be a false partial warning.
-    var lineCapReports48 = mock(ReviewDiffFormatter.class);
+    // The line cap no longer decides coverage, so its omitted count must not drive the disclosure:
+    // a plan that batched every file within budget is full coverage, and claiming otherwise would
+    // be a false partial warning. Since #474 the render that reported that count is not built at
+    // all, which is what makes the count unable to leak in.
+    var formatter = mock(ReviewDiffFormatter.class);
     var foo = foo();
-    when(lineCapReports48.reviewableFiles(anyList())).thenReturn(List.of(foo));
-    when(lineCapReports48.buildDiffStringWithStats(anyList(), anyList()))
-        .thenReturn(new ReviewDiffFormatter.FormattedDiff("## Overview\n(truncated)", 48));
-    when(lineCapReports48.patchesByReviewableFiles(anyList()))
-        .thenReturn(Map.of("src/Foo.java", PATCH));
-    when(lineCapReports48.formatFileSection(any(), any())).thenReturn(PATCH);
+    when(formatter.reviewableFiles(anyList())).thenReturn(List.of(foo));
+    when(formatter.patchesByReviewableFiles(anyList())).thenReturn(Map.of("src/Foo.java", PATCH));
+    when(formatter.formatFileSection(any(), any())).thenReturn(PATCH);
     prWithFiles(foo);
     assistantReturns(
         """
@@ -260,10 +256,11 @@ class PrImprovementServiceTest {
         "suggestion_new":"try (var in = Files.newInputStream(path)) {"}]}
         """);
 
-    serviceWith(lineCapReports48).handle(task(), AUTH);
+    serviceWith(formatter).handle(task(), AUTH);
 
+    verify(formatter, never()).buildDiffStringWithStats(anyList(), anyList());
     var summary = postedSummary();
-    assertFalse(summary.contains("48 file(s) were omitted"), summary);
+    assertFalse(summary.contains("were omitted"), summary);
     assertFalse(summary.contains("partial coverage"), summary);
   }
 
@@ -465,29 +462,28 @@ class PrImprovementServiceTest {
     assertTrue(postedSummary().contains("could not be pinned to the diff"), postedSummary());
   }
 
-  @ParameterizedTest(name = "a {0} rendered diff posts the no-changes notice")
-  @NullSource
-  @ValueSource(strings = {"   \n ", "(no changes detected)"})
-  void postsTheNoChangesNoticeWhenThereIsNothingToRender(String renderedDiff) {
-    var emptyFormatter = mock(ReviewDiffFormatter.class);
-    when(emptyFormatter.reviewableFiles(anyList())).thenReturn(List.of(foo()));
-    when(emptyFormatter.buildDiffStringWithStats(anyList(), anyList()))
-        .thenReturn(new ReviewDiffFormatter.FormattedDiff(renderedDiff, 0));
+  @Test
+  void postsTheNoChangesNoticeWithoutRenderingWhenNothingIsReviewable() {
+    // #474: an empty reviewable list is the whole "nothing to work from" signal. The whole-PR
+    // render used to be built here and read only for its emptiness, so a PR with nothing in scope
+    // paid for a render (and the PR-details and instructions fetches after it) to learn nothing.
+    var nothingReviewable = mock(ReviewDiffFormatter.class);
+    when(nothingReviewable.reviewableFiles(anyList())).thenReturn(List.of());
     prWithFiles(foo());
 
-    serviceWith(emptyFormatter).handle(task(), AUTH);
+    serviceWith(nothingReviewable).handle(task(), AUTH);
 
+    verify(nothingReviewable, never()).buildDiffStringWithStats(anyList(), anyList());
     assertEquals(PrImprovementService.NO_CHANGES, postedSummary());
     verifyNoInteractions(improveAssistant);
+    verify(prClient, never()).getPullRequest(any(), any(), any(), any(), anyInt());
   }
 
   @Test
   void toleratesAFormatterThatYieldsNoReviewableFileList() {
-    // The reviewable list only drives line anchoring; a null must degrade to copy-paste, not NPE.
+    // A null reviewable list is nothing to work from, and must read as that rather than NPE.
     var nullListFormatter = mock(ReviewDiffFormatter.class);
     when(nullListFormatter.reviewableFiles(anyList())).thenReturn(null);
-    when(nullListFormatter.buildDiffStringWithStats(anyList(), any()))
-        .thenReturn(new ReviewDiffFormatter.FormattedDiff("## Overview\ndiff", 0));
     when(nullListFormatter.patchesByReviewableFiles(anyList())).thenReturn(Map.of());
     prWithFiles(foo());
     assistantReturns(
@@ -500,8 +496,8 @@ class PrImprovementServiceTest {
 
     serviceWith(nullListFormatter).handle(task(), AUTH);
 
-    // With no reviewable files there is nothing to plan batches over, so the run reports that
-    // rather than calling the model or NPE-ing on the null list.
+    // With no reviewable files there is nothing to work from, so the run reports that rather than
+    // calling the model or NPE-ing on the null list.
     verify(reviewClient, never())
         .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
     assertEquals(PrImprovementService.NO_CHANGES, postedSummary());
