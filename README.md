@@ -288,7 +288,7 @@ will change per provider:
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
 | `GITHUB_BOT_LOGINS` | Comma-separated bot account login(s) the bot skips to avoid replying to itself; override when deployed under a different App slug (`<app-slug>[bot]`) | `thrillhousebot[bot],thrillhouse-bot[bot]` |
 | `GITHUB_WRITE_MIN_INTERVAL` | Duration spacing two content-creating GitHub calls (comments, review comments, thread replies, reviews), shared process-wide. GitHub secondary-rate-limits rapid content creation and answers `403`; pacing keeps the bot inside that envelope instead of discovering it by rejection — its published guidance is no more than one such request per second. `0` disables pacing | `1s` |
-| `GITHUB_WRITE_MAX_WAIT` | Duration ceiling on how long one caller waits for its content-creation slot. Past it the call goes out unpaced and the bounded backoff handles a refusal, so a long queue never parks a finished command | `60s` |
+| `GITHUB_WRITE_MAX_WAIT` | Duration ceiling on how long one caller waits for its content-creation slot. Past it the call goes out unpaced and the bounded backoff handles a refusal, so a long queue never parks a finished command. Ships equal to the write backoff's total budget | `90s` |
 | `WEBHOOK_DEDUP_TTL` | Webhook deduplication time-to-live for GitHub redeliveries | `24h` |
 | `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated allowlist of logins permitted to run the slash commands without repo access; does not extend to the `@thrillhousebot resolved` directive, which always requires write access | _(empty)_ |
 | `MANUAL_TRIGGER_AUTH_TIMEOUT` | Upper bound on the manual-trigger write-access check on the webhook ACK thread; fails closed (denies) if GitHub is slower | `5s` |
@@ -810,6 +810,13 @@ fails, or the report is in another format: the section is omitted rather than gu
 Nothing about coverage is ever inferred from the diff, and a line's *absence* from the
 list is explicitly not evidence that a test covers it. Files the ignore list already
 excluded are never reported as under-tested.
+
+Uploading the whole `target/site/jacoco/` tree, with the HTML report beside `jacoco.xml`,
+is fine: only `.xml` entries count toward the archive's 512-entry cap. An artifact the
+bot found but refused to read — more `.xml` entries than that, or one that inflates past
+128 MB — is named in the review summary's scope note the way an ignore glob that matched
+nothing is. An artifact that was never uploaded, has expired, or holds no JaCoCo XML is
+still the quiet case above: nothing was refused, so nothing is disclosed.
 
 The file is read from the repository's default branch on each review and cached for
 five minutes. YAML anchors, aliases and merge keys are resolved; a document that is
