@@ -65,7 +65,7 @@ Prefer to register the app by hand? Create it at
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook Secret | Random string |
 | Repository Permissions | Pull Requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit Statuses: Read |
-| Subscribe to Events | Pull Request, Issue comment, Pull request review comment |
+| Subscribe to Events | Pull Request, Issue comment, Pull request review comment, Check suite, Status |
 | Identifying & authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
 

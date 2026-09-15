@@ -2036,4 +2036,59 @@ class VerdictBuilderTest {
             < markdown.indexOf(CONFIDENCE_HOLD_HEADLINE),
         markdown);
   }
+
+  private static final CiStatusEvaluator.CiEvaluation CI_PENDING =
+      new CiStatusEvaluator.CiEvaluation(
+          List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null)), false);
+
+  /**
+   * #825 review: a revisit may only post the approval a review held on CI alone. VerdictBuilder
+   * turns a findings-free verdict into anything but APPROVE in exactly three ways — an unresolved
+   * previous finding, the CI gate, a truncated diff — and {@code heldOnCiOnly} excludes the other
+   * two. A confidence hold is not a fourth: it counts outstanding findings, so the verdict it
+   * shapes carries one and is never held on CI alone.
+   */
+  @Test
+  void aConfidenceHoldWithPendingCiIsNotHeldOnCiAlone() {
+    var clean =
+        builder.buildResult(
+            CLEAN_RESPONSE, true, ONE_FILE, List.of(), List.of(), CI_PENDING, List.of());
+    var hedged =
+        builder.buildResult(
+            responseWithFindings(aiFinding("high", "medium")),
+            true,
+            ONE_FILE,
+            List.of(),
+            List.of(),
+            CI_PENDING,
+            List.of());
+
+    assertTrue(clean.heldOnCiOnly(), "a clean verdict held by pending CI is held on CI alone");
+    assertEquals(ReviewState.COMMENT, hedged.reviewState());
+    assertTrue(
+        hedged.blockingWithheldByConfidence() > 0, "the finding's confidence withheld its block");
+    assertFalse(
+        hedged.heldOnCiOnly(),
+        "a verdict the confidence hold shaped is not held on CI alone, so no revisit approves it");
+  }
+
+  @Test
+  void strictGateHoldsApprovalOnPendingOrUnreadableCiOnly() {
+    assertTrue(builder.ciHoldsApproval(CI_PENDING));
+    assertTrue(builder.ciHoldsApproval(CI_UNREADABLE));
+    assertFalse(builder.ciHoldsApproval(CI_CLEAR));
+  }
+
+  @Test
+  void warnGateNeverHoldsApproval() {
+    var warn =
+        new VerdictBuilder(
+            summaryGenerator,
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            CiGatingMode.WARN);
+
+    assertFalse(warn.ciHoldsApproval(CI_PENDING));
+    assertFalse(warn.ciHoldsApproval(CI_UNREADABLE));
+  }
 }

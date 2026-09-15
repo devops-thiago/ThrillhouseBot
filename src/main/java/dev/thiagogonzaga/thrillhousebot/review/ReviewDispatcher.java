@@ -27,7 +27,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Dispatches PR reviews on a dedicated executor with per-PR serialization. Rapid webhook events for
  * the same PR are coalesced so only the latest head SHA is reviewed after the in-flight run
- * completes.
+ * completes. A CI re-evaluation of a held verdict (#825) rides the same per-PR worker, after any
+ * review in flight, so it can never race a review of the pull request.
  */
 @ApplicationScoped
 public final class ReviewDispatcher {
@@ -38,6 +39,7 @@ public final class ReviewDispatcher {
   private final ReviewOrchestrator orchestrator;
   private final AutoReviewRateLimiter autoReviewRateLimiter;
   private final ReviewSkipEmitter skipEmitter;
+  private final CiHoldRevisit ciHoldRevisit;
 
   private final ConcurrentHashMap<PrKey, PerPrState> states = new ConcurrentHashMap<>();
 
@@ -46,11 +48,13 @@ public final class ReviewDispatcher {
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewOrchestrator orchestrator,
       AutoReviewRateLimiter autoReviewRateLimiter,
-      ReviewSkipEmitter skipEmitter) {
+      ReviewSkipEmitter skipEmitter,
+      CiHoldRevisit ciHoldRevisit) {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
     this.autoReviewRateLimiter = autoReviewRateLimiter;
     this.skipEmitter = skipEmitter;
+    this.ciHoldRevisit = ciHoldRevisit;
   }
 
   /**
@@ -94,6 +98,56 @@ public final class ReviewDispatcher {
     }
   }
 
+  /**
+   * Queues a CI re-evaluation for the pull request's held verdict (#825), serialized with its
+   * reviews: the worker runs every queued review first and the re-evaluation after them. It is
+   * never dropped for a queued review, because a queued review is not guaranteed to read the CI
+   * gate — the rate-limit re-check in {@link #runReviewBatch} can skip it, and a review can fail
+   * before its gate read — and a re-evaluation that finds the review already released or replaced
+   * the hold is a cheap no-op. Repeated completions for the same pull request collapse into one
+   * pending re-evaluation.
+   *
+   * @return {@code true} if the re-evaluation was queued or coalesced; {@code false} if the
+   *     executor rejected the task, so the caller can roll back the webhook dedup state and a
+   *     redelivery can retry.
+   */
+  public boolean dispatchCiRecheck(CiHoldRevisit.Recheck task) {
+    var key = new PrKey(task.owner(), task.repo(), task.prNumber());
+
+    while (true) {
+      var state = states.computeIfAbsent(key, ignored -> new PerPrState());
+      var outcome = state.onRecheck(task);
+      if (outcome == PerPrState.RecheckOutcome.RETRY) {
+        states.remove(key, state);
+        continue;
+      }
+      if (log.isInfoEnabled()) {
+        log.info(
+            "CI re-evaluation for {}/{} #{} (sha: {}): {}",
+            task.owner(),
+            task.repo(),
+            task.prNumber(),
+            abbreviateSha(task.headSha()),
+            outcome);
+      }
+      if (outcome == PerPrState.RecheckOutcome.STARTED) {
+        try {
+          reviewExecutor.execute(() -> runSerialized(key, state));
+        } catch (RejectedExecutionException e) {
+          log.warn(
+              "Failed to queue CI re-evaluation for {}/{} #{} — executor rejected task",
+              task.owner(),
+              task.repo(),
+              task.prNumber(),
+              e);
+          retire(key, state);
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
   private void runSerialized(PrKey key, PerPrState state) {
     var completed = false;
     try {
@@ -116,27 +170,43 @@ public final class ReviewDispatcher {
 
   private void drainReviews(PrKey key, PerPrState state) {
     while (true) {
-      var batch = state.takeNextReview();
-
-      // Re-check after dispatch: a request can pass the controller gate then reach here once the
-      // window closed (coalesce or recordCompletion gap).
-      var req = batch.request();
-      if (!req.isManualTrigger()
-          && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
-        skipEmitter.recordSkip(
-            ReviewSkipReason.RATE_LIMITED,
-            req.owner(),
-            req.repo(),
-            req.prNumber(),
-            "within the auto-review rate window after dispatch (manual /review bypasses)");
+      var next = state.takeNext();
+      if (next.recheck() != null) {
+        recheckCi(next.recheck());
       } else {
-        reviewBatch(batch);
+        runReviewBatch(next.review());
       }
 
       if (state.tryRetireIfIdle()) {
         states.remove(key, state);
         return;
       }
+    }
+  }
+
+  private void runReviewBatch(PerPrState.ReviewBatch batch) {
+    // Re-check after dispatch: a request can pass the controller gate then reach here once the
+    // window closed (coalesce or recordCompletion gap).
+    var req = batch.request();
+    if (!req.isManualTrigger()
+        && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
+      skipEmitter.recordSkip(
+          ReviewSkipReason.RATE_LIMITED,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          "within the auto-review rate window after dispatch (manual /review bypasses)");
+    } else {
+      reviewBatch(batch);
+    }
+  }
+
+  private void recheckCi(CiHoldRevisit.Recheck task) {
+    try {
+      ciHoldRevisit.revisit(task);
+    } catch (RuntimeException e) {
+      log.error(
+          "CI re-evaluation failed for {}/{} #{}", task.owner(), task.repo(), task.prNumber(), e);
     }
   }
 
@@ -234,6 +304,10 @@ public final class ReviewDispatcher {
   static final class PerPrState {
     private final Object lock = new Object();
     ReviewOrchestrator.ReviewRequest latestRequest;
+
+    /** At most one CI re-evaluation waits per PR; it runs after every queued review (#825). */
+    CiHoldRevisit.Recheck pendingRecheck;
+
     boolean running = false;
     boolean retired = false;
     int coalesced = 0;
@@ -242,6 +316,18 @@ public final class ReviewDispatcher {
     record DispatchResult(boolean removeAndRetry, boolean startWorker, int coalescedCount) {}
 
     record ReviewBatch(ReviewOrchestrator.ReviewRequest request, int coalesced, long queueWaitMs) {}
+
+    /** What the worker runs next: a review batch, or a CI re-evaluation when no review waits. */
+    record Next(ReviewBatch review, CiHoldRevisit.Recheck recheck) {}
+
+    enum RecheckOutcome {
+      /** The state was retired under the caller; look the PR up again. */
+      RETRY,
+      /** No worker was running; the caller starts one. */
+      STARTED,
+      /** A worker is running; the re-evaluation runs after it and any review it has queued. */
+      QUEUED
+    }
 
     DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req) {
       synchronized (lock) {
@@ -261,20 +347,40 @@ public final class ReviewDispatcher {
       }
     }
 
-    ReviewBatch takeNextReview() {
+    RecheckOutcome onRecheck(CiHoldRevisit.Recheck task) {
       synchronized (lock) {
+        if (retired) {
+          return RecheckOutcome.RETRY;
+        }
+        pendingRecheck = task;
+        if (running) {
+          return RecheckOutcome.QUEUED;
+        }
+        running = true;
+        queuedAtMs = System.currentTimeMillis();
+        return RecheckOutcome.STARTED;
+      }
+    }
+
+    Next takeNext() {
+      synchronized (lock) {
+        if (latestRequest == null) {
+          var task = pendingRecheck;
+          pendingRecheck = null;
+          return new Next(null, task);
+        }
         var req = latestRequest;
         latestRequest = null;
         var batch = new ReviewBatch(req, coalesced, System.currentTimeMillis() - queuedAtMs);
         coalesced = 0;
         queuedAtMs = System.currentTimeMillis();
-        return batch;
+        return new Next(batch, null);
       }
     }
 
     boolean tryRetireIfIdle() {
       synchronized (lock) {
-        if (latestRequest != null) {
+        if (latestRequest != null || pendingRecheck != null) {
           return false;
         }
         retired = true;

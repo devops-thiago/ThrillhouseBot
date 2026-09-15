@@ -54,6 +54,96 @@ class ReviewResultTest {
     assertFalse(result.hasIssues());
   }
 
+  private static final List<ReviewResult.CiCheck> PENDING_BUILD =
+      List.of(new ReviewResult.CiCheck("build", "check-run", "pending", null));
+
+  private static ReviewResult cleanCommentHeldBy(
+      List<ReviewResult.CiCheck> offending, boolean unreadable, int omittedFiles) {
+    return new ReviewResult(
+        List.of(),
+        0,
+        0,
+        0,
+        0,
+        null,
+        ReviewState.COMMENT,
+        true,
+        "",
+        List.of(),
+        offending,
+        omittedFiles,
+        unreadable);
+  }
+
+  @Test
+  void heldOnCiOnlyWhenAPendingCheckIsAllThatHoldsACleanVerdict() {
+    assertTrue(cleanCommentHeldBy(PENDING_BUILD, false, 0).heldOnCiOnly());
+  }
+
+  @Test
+  void heldOnCiOnlyWhenUnreadableCiIsAllThatHoldsACleanVerdict() {
+    assertTrue(cleanCommentHeldBy(List.of(), true, 0).heldOnCiOnly());
+  }
+
+  @Test
+  void notHeldOnCiWhenTheVerdictIsApproved() {
+    var approved =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    assertFalse(approved.heldOnCiOnly());
+  }
+
+  @Test
+  void notHeldOnCiWhenNothingAboutCiHeldIt() {
+    assertFalse(cleanCommentHeldBy(List.of(), false, 0).heldOnCiOnly());
+  }
+
+  @Test
+  void notHeldOnCiWhenTheDiffWasTruncated() {
+    assertFalse(cleanCommentHeldBy(PENDING_BUILD, false, 2).heldOnCiOnly());
+  }
+
+  @Test
+  void notHeldOnCiWhenFindingsAlsoHoldIt() {
+    var withFinding =
+        new ReviewResult(
+            List.of(new Finding(RiskLevel.LOW, "f", 1, "t", "d", null, null)),
+            0,
+            0,
+            0,
+            1,
+            RiskLevel.LOW,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            PENDING_BUILD,
+            0);
+
+    assertFalse(withFinding.heldOnCiOnly());
+  }
+
+  @Test
+  void notHeldOnCiWhenAPreviousFindingIsUnresolved() {
+    var unresolved =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            false,
+            "",
+            List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", null)),
+            PENDING_BUILD,
+            0);
+
+    assertFalse(unresolved.heldOnCiOnly());
+  }
+
   @Test
   void keyFindingsShouldExcludeLowConfidenceFindingsRoutedToDoubleCheck() {
     var inline = new Finding(RiskLevel.HIGH, Confidence.HIGH, "a", 1, "Inline", "", null, null);
