@@ -6838,6 +6838,122 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void reviewShouldApproveFromAReReadWhenCiTurnsGreenDuringTheModelCall() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+        // #853: the early read sees the check running; it completes before the model answers.
+        when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+            .thenReturn(
+                buildCheck("in_progress", null).checkRuns(),
+                buildCheck("completed", "success").checkRuns());
+
+        orchestrator.review(request());
+
+        verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(),
+                anyString(),
+                eq("owner"),
+                eq("repo"),
+                eq(1L),
+                argThat(update -> "success".equals(update.conclusion())));
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isEmpty());
+        assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
+      }
+    }
+
+    @Test
+    void reviewShouldApproveFromAReReadWhenAnUnreadableCiSourceReadsCleanly() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+        when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("status API down"))
+            .thenReturn(List.of());
+
+        orchestrator.review(request());
+
+        verify(checkRunClient, times(2)).getAllCombinedStatus(any(), any(), any(), any(), any());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isEmpty());
+      }
+    }
+
+    @Test
+    void reviewShouldStillHoldWhenTheReReadIsPendingToo() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+
+        orchestrator.review(request());
+
+        verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+        verify(reviewClient, never())
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(),
+                anyString(),
+                eq("owner"),
+                eq("repo"),
+                eq(1L),
+                argThat(update -> "neutral".equals(update.conclusion())));
+        var held = ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh");
+        assertTrue(held.isPresent());
+        assertEquals(1L, held.get().checkRunId());
+        assertEquals("main", held.get().baseRef());
+      }
+    }
+
+    @Test
+    void reviewShouldNotReReadCiWhenTheEarlyReadingDoesNotHoldApproval() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+
+        orchestrator.review(request());
+
+        verify(checkRunClient, times(1)).getAllCheckRuns(any(), any(), any(), any(), any());
+        verify(checkRunClient, times(1)).getAllCombinedStatus(any(), any(), any(), any(), any());
+      }
+    }
+
+    @Test
     void reviewShouldReleaseTheTrackedHeadWhenItFails() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = sessionWithPublicId();
