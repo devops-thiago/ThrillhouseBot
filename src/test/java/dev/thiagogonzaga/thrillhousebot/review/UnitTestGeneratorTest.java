@@ -148,7 +148,7 @@ class UnitTestGeneratorTest {
             .estimateTokens(
                 UnitTestAssistantPrompts.systemPrompt()
                     + UnitTestAssistantPrompts.userPrompt()
-                    + PromptTemplateEscaper.fence(" ")
+                    + PromptTemplateEscaper.fenceForBudgeting()
                     + "title"
                     + "body"
                     + "");
@@ -792,7 +792,7 @@ class UnitTestGeneratorTest {
         counter.estimateTokens(
             UnitTestAssistantPrompts.systemPrompt()
                 + UnitTestAssistantPrompts.userPrompt()
-                + PromptTemplateEscaper.fence(" "));
+                + PromptTemplateEscaper.fenceForBudgeting());
     when(activeModel.maxInputTokens()).thenReturn(overhead + 900);
     when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
