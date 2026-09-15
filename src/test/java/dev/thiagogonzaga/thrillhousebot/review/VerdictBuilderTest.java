@@ -1476,6 +1476,66 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
   }
 
+  /**
+   * #839 — a review whose model call had to be repeated with reasoning disabled says so in the
+   * review-scope blockquote: it ran at less than the configured effort, and a maintainer weighing
+   * its findings should know.
+   */
+  @Test
+  void aReasoningStepDownIsDisclosedInTheReviewScopeNote() {
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordReasoningStepDown(true);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result =
+        realSummaryBuilder.build(
+            contextWithUnmatchedGlobs(List.of()), CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** this review ran with reasoning disabled after the"
+                    + " model spent its whole output allowance reasoning and produced no answer at"
+                    + " the configured effort\n\n"),
+        result.summaryMarkdown());
+    assertEquals(ReviewState.APPROVE, result.reviewState(), "a step-down never holds approval");
+  }
+
+  /** #839 — the step-down note is the last paragraph of a shared scope blockquote. */
+  @Test
+  void aReasoningStepDownFollowsTheOtherScopeNotesInTheSameBlockquote() {
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordReasoningStepDown(true);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result =
+        realSummaryBuilder.build(
+            contextWithUnmatchedGlobs(List.of("payments/")), CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains(
+                " (`payments/`)\n>\n> this review ran with reasoning disabled after the model"),
+        result.summaryMarkdown());
+  }
+
   @Test
   void aReviewWhoseDeclaredGlobsAllMatchedCarriesNoScopeNote() {
     var realSummaryBuilder =
