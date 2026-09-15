@@ -191,6 +191,22 @@ class GitHubWritePacerTest {
         shipped.getValue(GitHubWritePacer.MAX_WAIT_KEY, Duration.class));
   }
 
+  /**
+   * The third copy of the same number: {@code ThrillhouseConfig} declares the key too, and its
+   * {@code @WithDefault} is what a build without {@code application.properties} would bind. It had
+   * stayed at 60 seconds with the shipped property (#830 review), so it is pinned the same way.
+   */
+  @Test
+  void theConfigInterfaceDefaultCarriesTheSameCeiling() throws Exception {
+    var declared =
+        dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.GitHubConfig.class
+            .getMethod("writeMaxWait")
+            .getAnnotation(io.smallrye.config.WithDefault.class)
+            .value();
+
+    assertEquals(GitHubWritePacer.DEFAULT_MAX_WAIT, new DurationConverter().convert(declared));
+  }
+
   @AfterEach
   void clearProbe() {
     System.clearProperty(PROBE_KEY);
