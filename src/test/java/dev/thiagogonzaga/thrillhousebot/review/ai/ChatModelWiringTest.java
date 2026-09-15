@@ -24,6 +24,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.ChatResponseMetadata;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
@@ -157,11 +158,16 @@ class ChatModelWiringTest {
   void reviewRequestsCarryOnlyTheCurrentUserMessage() throws Exception {
     var requests = new CopyOnWriteArrayList<List<ChatMessage>>();
     QuarkusMock.installMockForType(
-        new CapturingStreamingChatModel(requests), StreamingChatModel.class);
+        new CapturingStreamingChatModel(requests, new CopyOnWriteArrayList<>()),
+        StreamingChatModel.class);
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      executor.submit(() -> streamOneReview("diff-of-the-first-pr")).get(30, TimeUnit.SECONDS);
-      executor.submit(() -> streamOneReview("diff-of-the-second-pr")).get(30, TimeUnit.SECONDS);
+      executor
+          .submit(() -> streamOneReview("diff-of-the-first-pr", false))
+          .get(30, TimeUnit.SECONDS);
+      executor
+          .submit(() -> streamOneReview("diff-of-the-second-pr", false))
+          .get(30, TimeUnit.SECONDS);
     }
 
     assertEquals(2, requests.size(), "both review calls must reach the model");
@@ -183,14 +189,51 @@ class ChatModelWiringTest {
         "a review request must not carry another review's diff");
   }
 
-  private Void streamOneReview(String diff) {
+  /**
+   * #839 — a call bound as reasoning-disabled on the thread that starts it goes out with {@code
+   * reasoning_effort=none}, and the next call goes out at the configured effort again. Runs through
+   * the real AI-service wiring, so this pins the whole path the step-down relies on: the supplier
+   * on {@link PrReviewer} puts {@link ReasoningStepDownStreamingModel} in front of the model bean,
+   * the binding is visible when the stream starts, and the rewritten parameters survive the
+   * provider model's merge over its defaults.
+   */
+  @Test
+  void aCallBoundAsReasoningDisabledGoesOutWithEffortNoneAndTheNextOneDoesNot() throws Exception {
+    var parameters = new CopyOnWriteArrayList<ChatRequestParameters>();
+    QuarkusMock.installMockForType(
+        new CapturingStreamingChatModel(new CopyOnWriteArrayList<>(), parameters),
+        StreamingChatModel.class);
+
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      executor.submit(() -> streamOneReview("diff", true)).get(30, TimeUnit.SECONDS);
+      executor.submit(() -> streamOneReview("diff", false)).get(30, TimeUnit.SECONDS);
+    }
+
+    assertEquals(2, parameters.size(), "both review calls must reach the model");
+    var stepped = assertInstanceOf(OpenAiChatRequestParameters.class, parameters.get(0));
+    assertEquals("none", stepped.reasoningEffort(), "the stepped-down call sends none");
+    var next = assertInstanceOf(OpenAiChatRequestParameters.class, parameters.get(1));
+    assertEquals("medium", next.reasoningEffort(), "the next call sends the configured effort");
+  }
+
+  /**
+   * Streams one review on the calling thread under a session binding, the way {@code
+   * AiReviewService.streamOnce} does; {@code reasoningDisabled} is the step-down flag (#839).
+   */
+  private Void streamOneReview(String diff, boolean reasoningDisabled) {
     var done = new CompletableFuture<Void>();
-    prReviewer
-        .reviewStream(diff, "prContext", "baseComparison", "stack", "tests", "previous", "instr")
-        .onPartialResponse(token -> {})
-        .onCompleteResponse(response -> done.complete(null))
-        .onError(done::completeExceptionally)
-        .start();
+    ReviewSessionContext.bind(7L, 1, reasoningDisabled);
+    try {
+      prReviewer
+          .reviewStream(diff, "prContext", "baseComparison", "stack", "tests", "previous", "instr")
+          .onPartialResponse(token -> {})
+          .onCompleteResponse(response -> done.complete(null))
+          .onError(done::completeExceptionally)
+          .start();
+    } finally {
+      ReviewSessionContext.invalidate(7L);
+      ReviewSessionContext.clear();
+    }
     try {
       done.get(30, TimeUnit.SECONDS);
     } catch (InterruptedException e) {
@@ -206,13 +249,26 @@ class ChatModelWiringTest {
     return messages.stream().map(m -> m.type().toString()).toList().toString();
   }
 
-  /** Records the messages of every request instead of calling a provider. */
-  private record CapturingStreamingChatModel(List<List<ChatMessage>> requests)
+  /**
+   * Records the messages and effective parameters of every request instead of calling a provider.
+   * Its defaults are OpenAI-typed and carry the profile's configured effort, as the real streaming
+   * model's are after {@link ChatModelCustomizers}: the interface's {@code chat} merges a call's
+   * parameters over those defaults before {@code doChat}, and only OpenAI-typed defaults keep the
+   * OpenAI-specific fields through that merge — the same merge the production model runs.
+   */
+  private record CapturingStreamingChatModel(
+      List<List<ChatMessage>> requests, List<ChatRequestParameters> parameters)
       implements StreamingChatModel {
+
+    @Override
+    public ChatRequestParameters defaultRequestParameters() {
+      return OpenAiChatRequestParameters.builder().reasoningEffort("medium").build();
+    }
 
     @Override
     public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
       requests.add(List.copyOf(request.messages()));
+      parameters.add(request.parameters());
       handler.onPartialResponse("{}");
       handler.onCompleteResponse(
           ChatResponse.builder()

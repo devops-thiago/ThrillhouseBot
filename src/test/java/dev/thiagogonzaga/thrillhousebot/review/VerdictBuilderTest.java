@@ -1503,7 +1503,41 @@ class VerdictBuilderTest {
         result.summaryMarkdown());
   }
 
-  /** The three config-shaped notes are separate paragraphs of one blockquote, in a fixed order. */
+  /**
+   * #839 — a review whose model call had to be repeated with reasoning disabled says so in the
+   * review-scope blockquote: it ran at less than the configured effort, and a maintainer weighing
+   * its findings should know.
+   */
+  @Test
+  void aReasoningStepDownIsDisclosedInTheReviewScopeNote() {
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordReasoningStepDown(true);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result =
+        realSummaryBuilder.build(
+            contextWithUnmatchedGlobs(List.of()), CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** this review ran with reasoning disabled after the"
+                    + " model spent its whole output allowance reasoning and produced no answer at"
+                    + " the configured effort\n\n"),
+        result.summaryMarkdown());
+    assertEquals(ReviewState.APPROVE, result.reviewState(), "a step-down never holds approval");
+  }
+
+  /** The config-shaped notes are separate paragraphs of one blockquote, in a fixed order. */
   @Test
   void everyScopeNoteSharesOneBlockquoteInAFixedOrder() {
     var carried =
@@ -1512,6 +1546,10 @@ class VerdictBuilderTest {
             "c957198",
             List.of(new ReviewResponse.Finding("high", "high", "a.java", 1, "t", "d", null, null)));
     var ctx = scopedContext(List.of("payments/"), carried, "it could not be read as a zip archive");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordReasoningStepDown(true);
     var realSummaryBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false),
@@ -1519,7 +1557,7 @@ class VerdictBuilderTest {
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             BlockingStrictness.BALANCED);
 
-    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertTrue(
         result
@@ -1532,7 +1570,10 @@ class VerdictBuilderTest {
                     + " as a zip archive"
                     + "\n>\n> 1 finding from the review of superseded head `23e2771`, abandoned"
                     + " when the pull request head moved, was carried into this review as"
-                    + " previous findings and re-checked against the current head\n\n"),
+                    + " previous findings and re-checked against the current head"
+                    + "\n>\n> this review ran with reasoning disabled after the model spent its"
+                    + " whole output allowance reasoning and produced no answer at the configured"
+                    + " effort\n\n"),
         result.summaryMarkdown());
   }
 
