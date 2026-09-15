@@ -36,7 +36,11 @@ import jakarta.enterprise.context.ApplicationScoped;
 @ApplicationScoped
 @RegisterAiService(
     modelName = "concise",
-    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class,
+    // The concise streaming model, behind the per-call reasoning step-down (#839), exactly as
+    // PrReviewer sits behind the default one. modelName still names the lane for the extension's
+    // bookkeeping; the model itself comes from the supplier.
+    streamingChatLanguageModelSupplier = ReasoningStepDownStreamingModel.ConciseSupplier.class)
 public interface PrSummarizer {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

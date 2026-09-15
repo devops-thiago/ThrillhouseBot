@@ -259,11 +259,8 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
               task.defaultBranch(),
               task.installationId(),
               COMMAND);
-      // The whole-PR render is deliberately absent: nothing is sent to a model from it, and this
-      // command establishes "is there anything to work from" from the reviewable file list above.
       var inputs =
           new Inputs(
-              "",
               orEmpty(pr.title()),
               orEmpty(pr.body()),
               buildInstructionsSection(task),
