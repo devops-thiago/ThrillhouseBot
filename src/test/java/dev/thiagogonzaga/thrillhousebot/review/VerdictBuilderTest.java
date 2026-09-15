@@ -1562,6 +1562,33 @@ class VerdictBuilderTest {
   }
 
   /**
+   * #813 — a coverage artifact the reader refused is disclosed in the same review-scope blockquote
+   * as an ignore glob that matched nothing: the maintainer configured it, and the review did not
+   * read it. Without this the only trace was a log line.
+   */
+  @Test
+  void aRefusedCoverageArtifactIsDisclosedInTheReviewScopeNote() {
+    var ctx = contextWithCoverageRefusal("it holds more than 512 `.xml` entries");
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** the configured coverage artifact was not read:"
+                    + " it holds more than 512 `.xml` entries\n\n"),
+        result.summaryMarkdown());
+  }
+
+  /**
    * #839 — a review whose model call had to be repeated with reasoning disabled says so in the
    * review-scope blockquote: it ran at less than the configured effort, and a maintainer weighing
    * its findings should know.
@@ -1595,9 +1622,15 @@ class VerdictBuilderTest {
     assertEquals(ReviewState.APPROVE, result.reviewState(), "a step-down never holds approval");
   }
 
-  /** #839 — the step-down note is the last paragraph of a shared scope blockquote. */
+  /** The config-shaped notes are separate paragraphs of one blockquote, in a fixed order. */
   @Test
-  void aReasoningStepDownFollowsTheOtherScopeNotesInTheSameBlockquote() {
+  void everyScopeNoteSharesOneBlockquoteInAFixedOrder() {
+    var carried =
+        new SupersededFindingsCarryover.Carried(
+            "23e277100000000",
+            "c957198",
+            List.of(new ReviewResponse.Finding("high", "high", "a.java", 1, "t", "d", null, null)));
+    var ctx = scopedContext(List.of("payments/"), carried, "it could not be read as a zip archive");
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), true, null, null, null, null);
@@ -1609,15 +1642,23 @@ class VerdictBuilderTest {
             BotIdentity.from(List.of("thrillhousebot[bot]")),
             BlockingStrictness.BALANCED);
 
-    var result =
-        realSummaryBuilder.build(
-            contextWithUnmatchedGlobs(List.of("payments/")), CLEAN_RESPONSE, CI_CLEAR, plan);
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     assertTrue(
         result
             .summaryMarkdown()
-            .contains(
-                " (`payments/`)\n>\n> this review ran with reasoning disabled after the model"),
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 ignore glob declared in this repository's"
+                    + " ThrillhouseBot config matched no file in this pull request (`payments/`)"
+                    + "\n>\n> the configured coverage artifact was not read: it could not be read"
+                    + " as a zip archive"
+                    + "\n>\n> 1 finding from the review of superseded head `23e2771`, abandoned"
+                    + " when the pull request head moved, was carried into this review as"
+                    + " previous findings and re-checked against the current head"
+                    + "\n>\n> this review ran with reasoning disabled after the model spent its"
+                    + " whole output allowance reasoning and produced no answer at the configured"
+                    + " effort\n\n"),
         result.summaryMarkdown());
   }
 
@@ -1646,6 +1687,19 @@ class VerdictBuilderTest {
   /** The same one-file context, also carrying a superseded run's findings (#806). */
   private static ReviewContextLoader.ReviewContext contextCarrying(
       List<String> unmatched, SupersededFindingsCarryover.Carried carried) {
+    return scopedContext(unmatched, carried, "");
+  }
+
+  /** The same one-file context, carrying only a refused coverage artifact's reason (#813). */
+  private static ReviewContextLoader.ReviewContext contextWithCoverageRefusal(String refusal) {
+    return scopedContext(List.of(), SupersededFindingsCarryover.Carried.NONE, refusal);
+  }
+
+  /** A one-file context carrying every input the review-scope blockquote is built from. */
+  private static ReviewContextLoader.ReviewContext scopedContext(
+      List<String> unmatched,
+      SupersededFindingsCarryover.Carried carried,
+      String coverageArtifactRefusal) {
     var changed = new FileDiff("src/Main.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x");
     return new ReviewContextLoader.ReviewContext(
         List.of(changed),
@@ -1672,7 +1726,8 @@ class VerdictBuilderTest {
         null,
         List.of(),
         unmatched,
-        carried);
+        carried,
+        coverageArtifactRefusal);
   }
 
   @Test

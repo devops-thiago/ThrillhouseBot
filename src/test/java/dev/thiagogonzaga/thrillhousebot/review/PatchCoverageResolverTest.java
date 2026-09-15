@@ -137,8 +137,11 @@ class PatchCoverageResolverTest {
         .thenReturn(response);
   }
 
+  /** The prompt section alone; the tests that care about a refusal read the whole resolution. */
   private String resolve(boolean enabled, String artifact) {
-    return resolver(enabled).resolve("token", request(), settingsNaming(artifact), changedFile());
+    return resolver(enabled)
+        .resolve("token", request(), settingsNaming(artifact), changedFile())
+        .section();
   }
 
   @Nested
@@ -154,7 +157,7 @@ class PatchCoverageResolverTest {
     @Test
     void contributesNothingAndCallsNoApiWhenTheRepositoryNamesNoArtifact() {
       assertEquals(
-          "",
+          PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", request(), RepoSettings.EMPTY, changedFile()),
           "the common case: a repository that declares nothing gets no coverage context");
 
@@ -164,7 +167,8 @@ class PatchCoverageResolverTest {
     @Test
     void contributesNothingWhenThereAreNoReviewableFiles() {
       assertEquals(
-          "", resolver(true).resolve("token", request(), settingsNaming(ARTIFACT), List.of()));
+          PatchCoverageResolver.Resolution.NONE,
+          resolver(true).resolve("token", request(), settingsNaming(ARTIFACT), List.of()));
 
       verifyNoInteractions(actionsClient, zipFetcher);
     }
@@ -180,11 +184,12 @@ class PatchCoverageResolverTest {
           new ReviewOrchestrator.ReviewRequest(
               "o", "r", 7, "  ", "title", "body", "basesha", "main", 1L, false, "main", false);
       assertEquals(
-          "",
+          PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", noSha, settingsNaming(ARTIFACT), changedFile()),
           "without a head SHA there is no revision to attribute coverage to");
       assertEquals(
-          "", resolver(true).resolve("token", blankSha, settingsNaming(ARTIFACT), changedFile()));
+          PatchCoverageResolver.Resolution.NONE,
+          resolver(true).resolve("token", blankSha, settingsNaming(ARTIFACT), changedFile()));
 
       verifyNoInteractions(actionsClient, zipFetcher);
     }
@@ -197,7 +202,7 @@ class PatchCoverageResolverTest {
       var injected = new PatchCoverageResolver(actionsClient, zipFetcher, config);
 
       assertEquals(
-          "",
+          PatchCoverageResolver.Resolution.NONE,
           injected.resolve("token", request(), settingsNaming(ARTIFACT), changedFile()),
           "the CDI constructor must wire thrillhousebot.review.patch-coverage.enabled");
       verifyNoInteractions(actionsClient, zipFetcher);
@@ -291,8 +296,43 @@ class PatchCoverageResolverTest {
       givenRunWithArtifact(ARTIFACT);
       givenDownloadRedirectsTo(null);
 
-      assertEquals("", resolve(true, ARTIFACT));
+      assertEquals(
+          PatchCoverageResolver.Resolution.NONE,
+          resolver(true).resolve("token", request(), settingsNaming(ARTIFACT), changedFile()),
+          "an artifact that was never downloaded was not refused, so there is nothing to"
+              + " disclose");
       verifyNoInteractions(zipFetcher);
+    }
+
+    /**
+     * #813 — an artifact that was found, downloaded and then refused by the reader is the one "no
+     * section" the maintainer must hear about: they configured it, the run uploaded it, and the
+     * review chose not to read it. The reason travels out beside the (empty) section.
+     */
+    @Test
+    void disclosesAnArtifactTheReaderRefusedInsteadOfGoingQuiet() {
+      givenRunWithArtifact(ARTIFACT);
+      givenDownloadRedirectsTo(BLOB);
+      var bytes = new ByteArrayOutputStream();
+      try (var zip = new ZipOutputStream(bytes)) {
+        for (var i = 0; i <= JacocoCoverageReport.MAX_ZIP_ENTRIES; i++) {
+          zip.putNextEntry(new ZipEntry("module" + i + "/jacoco.xml"));
+          zip.write(REPORT.getBytes(StandardCharsets.UTF_8));
+          zip.closeEntry();
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+      when(zipFetcher.fetch(BLOB)).thenReturn(bytes.toByteArray());
+
+      var resolution =
+          resolver(true).resolve("token", request(), settingsNaming(ARTIFACT), changedFile());
+
+      assertEquals(
+          new PatchCoverageResolver.Resolution(
+              "", "it holds more than " + JacocoCoverageReport.MAX_ZIP_ENTRIES + " `.xml` entries"),
+          resolution,
+          "a refused artifact yields no section and says why");
     }
 
     @Test
@@ -430,6 +470,16 @@ class PatchCoverageResolverTest {
 
   @Nested
   class Rendering {
+
+    @Test
+    void formatsARefusalAsAReviewScopeNoteAndNothingOtherwise() {
+      assertEquals("", PatchCoverageResolver.formatScopeNote(""), "nothing refused, no note");
+      assertEquals("", PatchCoverageResolver.formatScopeNote(null), "a null reason is no note");
+      assertEquals(
+          "the configured coverage artifact was not read: it holds more than 512 `.xml` entries",
+          PatchCoverageResolver.formatScopeNote("it holds more than 512 `.xml` entries"),
+          "the note names the artifact the repository configured and carries the reader's reason");
+    }
 
     @Test
     void collapsesConsecutiveLinesAndCapsTheRanges() {

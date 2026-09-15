@@ -182,6 +182,14 @@ public class RepoSettingsResolver {
     }
   }
 
+  /**
+   * The HTTP status a {@link WebApplicationException} carries. Every constructor of the class
+   * builds a response when it is handed none, so there is always one to read.
+   */
+  private static int statusOf(WebApplicationException e) {
+    return e.getResponse().getStatus();
+  }
+
   /** Fetches and parses one candidate path; see {@link Fetched} for what each outcome means. */
   private Fetched fetchAndParse(
       String auth, String owner, String repo, String defaultBranch, String path) {
@@ -194,13 +202,21 @@ public class RepoSettingsResolver {
       var content =
           new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
       return Fetched.found(RepoSettingsParser.parse(content, path));
-    } catch (NotFoundException _) {
-      log.debug("Repository config file not found: {}", path);
-      return Fetched.ABSENT;
-    } catch (WebApplicationException | ProcessingException e) {
-      // NotFoundException's siblings are not "no config": ServerErrorException (500/502/503) and
-      // ClientErrorException (the 403 secondary rate limit) are transient, and treating them as a
-      // 404 pinned "this repo has no config" in the cache for a minute of reviews (#481).
+    } catch (WebApplicationException e) {
+      // The status decides, not the subclass. The RESTEasy Reactive client never throws
+      // NotFoundException: its 404 is a ClientWebApplicationException carrying the status on the
+      // response, and a catch keyed on the subclass read every missing config as a transient
+      // failure, warned three times per review and never wrote the negative cache (#836). The
+      // other statuses are not "no config": a 5xx and the 403 secondary rate limit are transient,
+      // and treating them as a 404 pinned "this repo has no config" for a minute of reviews (#481).
+      if (e instanceof NotFoundException || statusOf(e) == 404) {
+        log.debug("Repository config file not found: {}", path);
+        return Fetched.ABSENT;
+      }
+      log.warn(
+          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
+      return Fetched.READ_FAILED;
+    } catch (ProcessingException e) {
       log.warn(
           "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
       return Fetched.READ_FAILED;
