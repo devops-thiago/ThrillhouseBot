@@ -6303,7 +6303,7 @@ class ReviewOrchestratorTest {
             .thenAnswer(inv -> inv.getArgument(1));
         when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any()))
             .thenAnswer(inv -> inv.getArgument(1));
-        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
             .thenReturn(
                 List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "reopened")));
         when(followUpAnalyzer.matchFindingThreads(
@@ -7379,7 +7379,7 @@ class ReviewOrchestratorTest {
                       inv.getArgument(2),
                       inv.getArgument(3),
                       inv.getArgument(4)));
-      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
           .thenAnswer(inv -> inv.getArgument(1));
       when(followUpAnalyzer.unresolvedFindings(
               ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))

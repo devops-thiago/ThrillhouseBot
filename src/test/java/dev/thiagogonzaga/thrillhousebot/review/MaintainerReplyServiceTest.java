@@ -775,6 +775,116 @@ class MaintainerReplyServiceTest {
     }
   }
 
+  /**
+   * The decline directive is an instruction the review path acts on, exactly like the clear
+   * directive (#709): it draws a deterministic acknowledgement, never an assistant answer that
+   * could overstate or contradict what the next review does with it.
+   */
+  @Test
+  void declineDirectiveIsAcknowledgedDeterministicallyWithoutTheAssistant() {
+    authorize();
+
+    service.handle(
+        mentionTask(
+            """
+            @thrillhousebot declined `src/A.java:10` — SQL injection
+
+            The column name comes from an allow-list, never from the request.
+            """));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(MaintainerReplyService.DECLINE_DIRECTIVE_ACK, body.getValue().body());
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void declineDirectiveNamingNoLocatorSaysNothingWillBeDeclined() {
+    authorize();
+
+    service.handle(mentionTask("@thrillhousebot declined the null check thing, it's by design"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        MaintainerReplyService.declineDirectiveNoLocatorAck(BotIdentity.from(null)),
+        body.getValue().body());
+    assertTrue(
+        body.getValue().body().contains("nothing will be declined"),
+        "the maintainer must not read this as a confirmation");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void declineDirectiveReadingAsARangeNamesTheAmbiguityInsteadOfDenyingTheNaming() {
+    authorize();
+
+    service.handle(
+        mentionTask("@thrillhousebot declined src/A.java:1 — 2 call sites of this SQL injection"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        MaintainerReplyService.DECLINE_DIRECTIVE_AMBIGUOUS_RANGE_ACK, body.getValue().body());
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void declineDirectiveFromACommenterWhoCannotDeclineSaysNothingWillBeDeclined() {
+    authorize();
+
+    service.handle(
+        mentionTask("@thrillhousebot declined `src/A.java:10` — SQL injection", "CONTRIBUTOR"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        MaintainerReplyService.declineDirectiveUnauthorizedAck(BotIdentity.from(null)),
+        body.getValue().body());
+    assertTrue(
+        body.getValue().body().contains("nothing will be declined"),
+        "the commenter must not read this as a promise the decline is recorded");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void declineDirectiveIsRecognizedUnderACustomBotLogin() {
+    authorize();
+    var identity = BotIdentity.of("my-review-bot[bot]");
+    var customService = serviceWith(diffFormatter, identity);
+
+    customService.handle(mentionTask("@my-review-bot declined, it is by design"));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        MaintainerReplyService.declineDirectiveNoLocatorAck(identity), body.getValue().body());
+    assertTrue(
+        body.getValue().body().contains("`@my-review-bot declined"),
+        "the ack must spell the directive with the configured mention name");
+    verifyNoInteractions(replyAssistant, prClient);
+  }
+
+  @Test
+  void declineDirectiveAckNeverClaimsADeclineAlreadyHappened() {
+    for (var ack :
+        List.of(
+            MaintainerReplyService.DECLINE_DIRECTIVE_ACK,
+            MaintainerReplyService.declineDirectiveNoLocatorAck(BotIdentity.from(null)),
+            MaintainerReplyService.DECLINE_DIRECTIVE_AMBIGUOUS_RANGE_ACK,
+            MaintainerReplyService.declineDirectiveUnauthorizedAck(BotIdentity.from(null)))) {
+      assertFalse(ack.startsWith("Noted"), ack);
+      assertFalse(ack.contains("has been declined"), ack);
+      assertFalse(ack.contains("is declined"), ack);
+      assertFalse(ack.contains("reason holds"), ack);
+    }
+  }
+
   @Test
   void anOrdinaryMentionStillGetsAnAssistantAnswer() {
     authorize();

@@ -258,31 +258,47 @@ public class MaintainerReplyService {
         + " resolved path/to/File.java:42 — <title>` directive.";
   }
 
+  /**
+   * Acknowledgement for an {@code @thrillhousebot declined} comment that names at least one locator
+   * — the decline directive's counterpart of {@link #CLEAR_DIRECTIVE_ACK}, under the same limit
+   * (#709): it says what the next review will evaluate, never that a decline was recorded or that
+   * its reason passed, because neither is knowable before a review has loaded the round.
+   */
+  static final String DECLINE_DIRECTIVE_ACK =
+      "The next review will record every previous finding this comment names by its `path:line`"
+          + " and title as declined, checking the reason written below each against the reviewed"
+          + " code; anything it does not name stays open.";
+
+  /** The decline counterpart of {@link #clearDirectiveNoLocatorAck}. */
+  static String declineDirectiveNoLocatorAck(BotIdentity botIdentity) {
+    return "That comment names no finding, so nothing will be declined. Name each one by its"
+        + " `path:line` and title exactly as the summary prints it, with the reason on the lines"
+        + " that follow — for example `@"
+        + botIdentity.primaryMention()
+        + " declined src/main/java/com/example/Widget.java:42 — Missing null check`.";
+  }
+
+  /** The decline counterpart of {@link #CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK}. */
+  static final String DECLINE_DIRECTIVE_AMBIGUOUS_RANGE_ACK =
+      "A line number followed by a spaced separator and another number reads as a line range, and"
+          + " a range names no single finding. The one exception is the summary's own row: when an"
+          + " em dash (—) after the line number is followed by the finding's full title exactly as"
+          + " the summary prints it, the next review will still record that finding as declined."
+          + " Anything else — a real range, a shortened title, or a dotted spelling — declines"
+          + " nothing; name each finding by its `path:line` and full title as printed.";
+
+  /** The decline counterpart of {@link #clearDirectiveUnauthorizedAck}. */
+  static String declineDirectiveUnauthorizedAck(BotIdentity botIdentity) {
+    return "Declining a finding takes write access on this repository, so nothing will be declined"
+        + " by that comment. Ask someone with write access to post the same `@"
+        + botIdentity.primaryMention()
+        + " declined path/to/File.java:42 — <title>` directive.";
+  }
+
   private void handleMention(String auth, ReplyTask task) {
-    if (FollowUpAnalyzer.isClearDirective(task.question(), botIdentity)) {
-      boolean mayClear = FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation());
-      boolean named = FollowUpAnalyzer.namesALocator(task.question());
-      String ack;
-      if (!mayClear) {
-        ack = clearDirectiveUnauthorizedAck(botIdentity);
-      } else if (named) {
-        ack = CLEAR_DIRECTIVE_ACK;
-      } else if (FollowUpAnalyzer.namesOnlyAmbiguousRanges(task.question())) {
-        ack = CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK;
-      } else {
-        ack = clearDirectiveNoLocatorAck(botIdentity);
-      }
-      commentClient.createComment(
-          auth,
-          ACCEPT,
-          task.owner(),
-          task.repo(),
-          task.prNumber(),
-          new GitHubCommentClient.CreateCommentRequest(ack));
-      Log.infof(
-          "Acknowledged a maintainer clear directive on %s/%s #%d (names a locator: %b, may clear:"
-              + " %b)",
-          task.owner(), task.repo(), task.prNumber(), named, mayClear);
+    boolean clear = FollowUpAnalyzer.isClearDirective(task.question(), botIdentity);
+    if (clear || FollowUpAnalyzer.isDeclineDirective(task.question(), botIdentity)) {
+      acknowledgeDirective(auth, task, clear);
       return;
     }
     var diff = fetchDiff(auth, task);
@@ -308,6 +324,43 @@ public class MaintainerReplyService {
     Log.infof(
         "Posted conversational reply to mention on %s/%s #%d",
         task.owner(), task.repo(), task.prNumber());
+  }
+
+  /**
+   * Posts the deterministic acknowledgement for a clear or decline directive. The four outcomes are
+   * decided by the same two facts for both verbs — whether the author can be honoured at all
+   * ({@link FollowUpAnalyzer#mayHoldWriteAccess}) and what, if anything, the comment names — and
+   * only the prose differs, so one decision serves both (#709).
+   */
+  private void acknowledgeDirective(String auth, ReplyTask task, boolean clear) {
+    boolean mayAct = FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation());
+    boolean named = FollowUpAnalyzer.namesALocator(task.question());
+    String ack;
+    if (!mayAct) {
+      ack =
+          clear
+              ? clearDirectiveUnauthorizedAck(botIdentity)
+              : declineDirectiveUnauthorizedAck(botIdentity);
+    } else if (named) {
+      ack = clear ? CLEAR_DIRECTIVE_ACK : DECLINE_DIRECTIVE_ACK;
+    } else if (FollowUpAnalyzer.namesOnlyAmbiguousRanges(task.question())) {
+      ack = clear ? CLEAR_DIRECTIVE_AMBIGUOUS_RANGE_ACK : DECLINE_DIRECTIVE_AMBIGUOUS_RANGE_ACK;
+    } else {
+      ack =
+          clear
+              ? clearDirectiveNoLocatorAck(botIdentity)
+              : declineDirectiveNoLocatorAck(botIdentity);
+    }
+    commentClient.createComment(
+        auth,
+        ACCEPT,
+        task.owner(),
+        task.repo(),
+        task.prNumber(),
+        new GitHubCommentClient.CreateCommentRequest(ack));
+    Log.infof(
+        "Acknowledged a maintainer %s directive on %s/%s #%d (names a locator: %b, may act: %b)",
+        clear ? "clear" : "decline", task.owner(), task.repo(), task.prNumber(), named, mayAct);
   }
 
   /** Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. */
