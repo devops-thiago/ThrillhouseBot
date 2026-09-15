@@ -20,13 +20,13 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 /**
  * How (if at all) the review's summary prose was degraded. The findings themselves are complete in
  * every state — only the summary is affected — so none of these holds approval; they exist so the
- * posted review can disclose the degradation and name the knob to raise instead of staying
- * log-only. At most one degradation can occur per review: the summary call either had its response
- * cut at the model's length cap ({@link #RESPONSE_CUT}, #500 scope A), was skipped (or refused
- * mid-call) at the review's token spend ceiling ({@link #SKIPPED_AT_CEILING}, #518), or failed all
- * its retries ({@link #SUMMARY_FAILED}, #851) — the three are reached on disjoint control paths,
- * and a single enum keeps the impossible both-at-once state unrepresentable where a set of booleans
- * would allow it.
+ * posted review can disclose the degradation, naming the knob to raise where one exists, instead of
+ * staying log-only. At most one degradation can occur per review: the summary call either had its
+ * response cut at the model's length cap ({@link #RESPONSE_CUT}, #500 scope A), was skipped (or
+ * refused mid-call) at the review's token spend ceiling ({@link #SKIPPED_AT_CEILING}, #518), or
+ * failed all its retries ({@link #SUMMARY_FAILED}, #851) — the three are reached on disjoint
+ * control paths, and a single enum keeps the impossible both-at-once state unrepresentable where a
+ * set of booleans would allow it.
  */
 @RegisterForReflection
 public enum SummaryDegradation {
