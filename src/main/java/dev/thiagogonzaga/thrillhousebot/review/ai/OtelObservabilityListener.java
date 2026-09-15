@@ -35,6 +35,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,6 +59,7 @@ public class OtelObservabilityListener implements ChatModelListener {
   private final DoubleHistogram durationHistogram;
   private final DoubleCounter costCounter;
   private final Set<String> modelsWarnedForMissingPricing = ConcurrentHashMap.newKeySet();
+  private final AtomicBoolean warnedForMissingUsage = new AtomicBoolean();
 
   @Inject
   public OtelObservabilityListener(
@@ -123,9 +125,16 @@ public class OtelObservabilityListener implements ChatModelListener {
 
   @Override
   public void onResponse(ChatModelResponseContext ctx) {
-    var response = ctx.chatResponse();
-    var usage = response.tokenUsage();
-    var model = response.modelName();
+    // A stream can complete without its usage chunk even with include_usage requested, and a usage
+    // object can carry one side only (#857). A missing count stays null here: the ledger already
+    // counts it as 0, the session row adds 0, and the metrics leave that sample out.
+    var usage = ctx.chatResponse().tokenUsage();
+    var inputTokens = usage == null ? null : usage.inputTokenCount();
+    var outputTokens = usage == null ? null : usage.outputTokenCount();
+    var model = modelNameOf(ctx);
+    if (inputTokens == null || outputTokens == null) {
+      warnOnceAboutMissingUsage(model);
+    }
     var startNanos = (long) ctx.attributes().get(ATTR_START_NANOS);
     var durationSeconds = (System.nanoTime() - startNanos) / 1_000_000_000.0;
 
@@ -136,22 +145,19 @@ public class OtelObservabilityListener implements ChatModelListener {
     // concise named model included — so summary/retry calls are all metered.
     var ledgerSessionId = (Long) ctx.attributes().get(ATTR_SESSION_ID);
     if (ledgerSessionId != null) {
-      tokenLedger.recordUsage(ledgerSessionId, usage.inputTokenCount(), usage.outputTokenCount());
+      tokenLedger.recordUsage(ledgerSessionId, inputTokens, outputTokens);
     }
 
-    var cost = 0.0;
-    var pricing = config.ai().pricing().get(model);
+    var pricing = pricingFor(model);
     var pricingMissing = pricing == null;
-    if (pricingMissing) {
-      warnOnceAboutMissingPricing(model);
-    } else {
-      cost =
-          ModelPricing.cost(
-              pricing.inputPer1k(),
-              pricing.outputPer1k(),
-              usage.inputTokenCount(),
-              usage.outputTokenCount());
-    }
+    var cost =
+        pricingMissing
+            ? 0.0
+            : ModelPricing.cost(
+                pricing.inputPer1k(),
+                pricing.outputPer1k(),
+                countOf(inputTokens),
+                countOf(outputTokens));
 
     var attrs =
         Attributes.of(
@@ -164,17 +170,13 @@ public class OtelObservabilityListener implements ChatModelListener {
             stringKey("gen_ai.operation.name"),
             "chat");
 
-    tokenHistogram.record(
-        usage.inputTokenCount(), attrs.toBuilder().put("gen_ai.token.type", "input").build());
-    tokenHistogram.record(
-        usage.outputTokenCount(), attrs.toBuilder().put("gen_ai.token.type", "output").build());
+    Span span = Span.current();
+    recordTokenCount(span, "input", inputTokens, attrs);
+    recordTokenCount(span, "output", outputTokens, attrs);
     durationHistogram.record(durationSeconds, attrs);
     costCounter.add(cost, attrs);
 
-    Span span = Span.current();
     span.setAttribute(GEN_AI_PROVIDER_NAME, providerName);
-    span.setAttribute("gen_ai.usage.input_tokens", usage.inputTokenCount());
-    span.setAttribute("gen_ai.usage.output_tokens", usage.outputTokenCount());
     span.setAttribute("gen_ai.usage.cost", cost);
     span.setAttribute("gen_ai.response.model", model);
     span.setAttribute("gen_ai.operation.name", "chat");
@@ -182,9 +184,8 @@ public class OtelObservabilityListener implements ChatModelListener {
     if (shouldPersistSessionUsage(ctx.attributes())) {
       var sessionId = (Long) ctx.attributes().get(ATTR_SESSION_ID);
       var durationMs = (long) (durationSeconds * 1000);
-      var inputTokens = usage.inputTokenCount();
-      var outputTokens = usage.outputTokenCount();
-      var totalTokens = usage.totalTokenCount();
+      var persistedInput = countOf(inputTokens);
+      var persistedOutput = countOf(outputTokens);
       var recordedCost = cost;
       var recordedPricingMissing = pricingMissing;
       runOnWorker(
@@ -193,8 +194,8 @@ public class OtelObservabilityListener implements ChatModelListener {
               sessionUpdater.recordModelUsage(
                   sessionId,
                   model,
-                  inputTokens,
-                  outputTokens,
+                  persistedInput,
+                  persistedOutput,
                   recordedCost,
                   recordedPricingMissing,
                   durationMs),
@@ -204,8 +205,67 @@ public class OtelObservabilityListener implements ChatModelListener {
             recordedPricingMissing
                 ? "cost unknown (no pricing for model)"
                 : "$" + String.format("%.6f", recordedCost);
-        log.info("Session persisted: {} tokens, {}", totalTokens, costLabel);
+        log.info("Session persisted: {} tokens, {}", persistedInput + persistedOutput, costLabel);
       }
+    }
+  }
+
+  /**
+   * The model the response names, else the one the request asked for. A stream whose chunks never
+   * carry {@code model} completes with a null name, and a null would overwrite the session's model
+   * and could not key the pricing lookup or the missing-pricing warning (#857).
+   */
+  private static String modelNameOf(ChatModelResponseContext ctx) {
+    var reported = ctx.chatResponse().modelName();
+    return reported != null ? reported : ctx.chatRequest().modelName();
+  }
+
+  /**
+   * The configured pricing for the model, or null when there is none. A call that names no model
+   * anywhere is priced as missing without the warning, which has no pricing key to point the
+   * operator at.
+   */
+  private ModelPricing pricingFor(String model) {
+    if (model == null) {
+      return null;
+    }
+    var pricing = config.ai().pricing().get(model);
+    if (pricing == null) {
+      warnOnceAboutMissingPricing(model);
+    }
+    return pricing;
+  }
+
+  /**
+   * Records one side of the call's usage on the token histogram and the span. A side the provider
+   * did not report is left out rather than recorded as 0, which would pull the token distribution
+   * toward calls that never happened that way (#857).
+   */
+  private void recordTokenCount(Span span, String type, Integer count, Attributes attrs) {
+    if (count == null) {
+      return;
+    }
+    tokenHistogram.record(count, attrs.toBuilder().put("gen_ai.token.type", type).build());
+    span.setAttribute("gen_ai.usage." + type + "_tokens", count);
+  }
+
+  private static int countOf(Integer count) {
+    return count == null ? 0 : count;
+  }
+
+  /**
+   * Warns once for the process lifetime that the provider completed a call without reporting its
+   * token usage (#857). The call is still recorded, but its missing counts reach the spend ceiling
+   * and the dashboard as 0, so the operator needs to know the ceiling can be exceeded unseen; a
+   * provider that does this does it routinely, and a per-call warning would say nothing new.
+   */
+  private void warnOnceAboutMissingUsage(String model) {
+    if (warnedForMissingUsage.compareAndSet(false, true)) {
+      log.warn(
+          "The AI provider completed a call to model '{}' without reporting its token usage. The"
+              + " missing counts are recorded as 0, so thrillhousebot.review.max-tokens-per-review"
+              + " and the dashboard under-count such calls; later ones are not logged again.",
+          model);
     }
   }
 
