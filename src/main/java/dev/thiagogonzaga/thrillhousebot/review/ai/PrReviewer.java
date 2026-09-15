@@ -39,7 +39,11 @@ import jakarta.enterprise.context.ApplicationScoped;
  */
 @ApplicationScoped
 @RegisterAiService(
-    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class,
+    // The default streaming model, behind the per-call reasoning step-down (#839). A supplier
+    // rather than the extension's own binding because a TokenStream call carries no per-call
+    // request parameters through quarkus-langchain4j 1.13 — see ReasoningStepDownStreamingModel.
+    streamingChatLanguageModelSupplier = ReasoningStepDownStreamingModel.ActiveSupplier.class)
 public interface PrReviewer {
 
   // {{repoInstructions}} carries the pre-rendered trailing guidance: available repository labels

@@ -18,7 +18,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.version>3.39.1</quarkus.platform.version>
+        <quarkus.platform.version>3.39.2</quarkus.platform.version>
         <quarkus-langchain4j.version>1.13.1</quarkus-langchain4j.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
@@ -30,7 +30,7 @@
         <surefire-plugin.version>3.6.0</surefire-plugin.version>
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
         <argLine></argLine>
-        <spotless.version>3.10.1</spotless.version>
+        <spotless.version>3.10.2</spotless.version>
         <google-java-format.version>1.33.0</google-java-format.version>
 
         <!-- SonarCloud Configuration -->
@@ -332,7 +332,7 @@
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
-                <version>4.10.4.0</version>
+                <version>4.10.4.1</version>
                 <configuration>
                     <effort>Max</effort>
                     <threshold>Low</threshold>
@@ -399,7 +399,7 @@
             <plugin>
                 <groupId>org.sonarsource.scanner.maven</groupId>
                 <artifactId>sonar-maven-plugin</artifactId>
-                <version>5.7.0.6970</version>
+                <version>5.8.0.7211</version>
             </plugin>
         </plugins>
     </build>

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
 
 /**
@@ -80,7 +81,22 @@ public final class AiResponses {
      * on the streaming one (#580) — and stays {@code null} only for a caller that holds none.
      */
     AiResponseTruncatedException truncation(String detail, String partialBody) {
-      return new AiResponseTruncatedException(detail + " " + remedy, partialBody, this == CONCISE);
+      return truncation(detail, partialBody, null);
+    }
+
+    /**
+     * Same as {@link #truncation(String, String)}, carrying the cut call's provider-reported usage
+     * for the lanes that have it — the streaming path reads it off its {@code ChatResponse}, and
+     * the no-content step-down (#839) logs it.
+     */
+    AiResponseTruncatedException truncation(
+        String detail, String partialBody, TokenUsage tokenUsage) {
+      return new AiResponseTruncatedException(
+          detail + " " + remedy,
+          partialBody,
+          this == CONCISE,
+          tokenUsage == null ? null : tokenUsage.inputTokenCount(),
+          tokenUsage == null ? null : tokenUsage.outputTokenCount());
     }
   }
 
