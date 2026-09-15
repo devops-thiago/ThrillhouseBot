@@ -181,7 +181,7 @@ jobs:
           # TAG to that shape, so the new version always takes part. sed rather than grep: under
           # pipefail a filter that matches nothing (first release) must not fail the step.
           UPDATE_LATEST=true
-          HIGHEST_VER=$(gh release list --limit 200 --exclude-drafts --json tagName -q '.[].tagName' \
+          HIGHEST_VER=$(gh release list --limit 1000 --exclude-drafts --json tagName -q '.[].tagName' \
             | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' \
             | sort -V \
             | tail -1)
