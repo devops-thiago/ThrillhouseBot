@@ -747,6 +747,144 @@ class FindingPipelineTest {
   }
 
   @Test
+  void multiCallKeepsTheFindingsWhenTheSummaryCallFailsItsRetries() {
+    // #851: every batch call succeeded and was billed, then the summary call failed all its
+    // retries (the parser refused the response each time). Like a cut or ceiling-refused summary,
+    // that must degrade to the counts-only summary with the findings kept and the failure recorded
+    // for disclosure, not fail the whole review.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(
+            new AiReviewException(
+                "AI review failed after 5 attempts",
+                5,
+                new AiReviewException("Model response is not valid review JSON", 1, null)));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(1)).summarize(eq(session), any());
+    assertEquals(
+        List.of("A", "B"), result.findings().stream().map(ReviewResponse.Finding::title).toList());
+    assertNull(result.summary(), "counts-only shape: no model summary");
+    assertNotNull(session.getAiResponseJson(), "the paid findings must still be persisted");
+    assertEquals(
+        SummaryDegradation.SUMMARY_FAILED,
+        plan.summaryDegradation(),
+        "the failed summary must be recorded on the plan so the posted review discloses it");
+  }
+
+  @Test
+  void summarizeWithoutReviewDegradesToCountsOnlyWhenTheSummaryCallFails() {
+    // The degenerate all-omitted plan's only AI call is the summary: its failure must still let
+    // the review post with its omission disclosures and the failed summary named.
+    var session = persistedSession();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("a.java", "b.java"), List.of(), true, null, null, null, null);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiReviewException("AI review timed out after PT5M", 1, null));
+
+    var result =
+        pipeline.run(session, template, reviewContext(), plan, new DiffLineResolver(Map.of()));
+
+    assertTrue(result.findings().isEmpty());
+    assertNull(result.summary());
+    assertNotNull(session.getAiResponseJson());
+    assertEquals(SummaryDegradation.SUMMARY_FAILED, plan.summaryDegradation());
+  }
+
+  @Test
+  void anInterruptedSummaryCallStillPropagates() {
+    // An interruption reaches here wrapped as an AiReviewException with the thread's interrupt
+    // flag restored. It is the worker being stopped, not the summary call failing, so it must not
+    // be degraded into a posted counts-only review.
+    var session = persistedSession();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var interrupted = new AiReviewException("Retry delay interrupted", 1, null);
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenAnswer(
+            inv -> {
+              Thread.currentThread().interrupt();
+              throw interrupted;
+            });
+    var plan = multiBatchPlan();
+    var ctx = reviewContext();
+    var resolver = new DiffLineResolver(Map.of());
+
+    try {
+      var thrown =
+          assertThrows(
+              AiReviewException.class, () -> pipeline.run(session, template, ctx, plan, resolver));
+      assertSame(interrupted, thrown);
+    } finally {
+      assertTrue(Thread.interrupted(), "the interrupt flag must survive for the caller to see");
+    }
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
+    assertNull(session.getAiResponseJson(), "an interrupted review must not be persisted");
+  }
+
+  @Test
+  void aSummaryFailureCausedByAnInterruptionStillPropagates() {
+    // Same stop signal when the flag has already been consumed: the retry loop's final failure
+    // carries the interrupted attempt as its cause.
+    var session = persistedSession();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var failure =
+        new AiReviewException(
+            "AI review failed after 1 attempts",
+            1,
+            new AiReviewException("AI review interrupted", 1, new InterruptedException()));
+    when(aiReviewService.summarize(eq(session), any())).thenThrow(failure);
+    var plan = multiBatchPlan();
+    var ctx = reviewContext();
+    var resolver = new DiffLineResolver(Map.of());
+
+    var thrown =
+        assertThrows(
+            AiReviewException.class, () -> pipeline.run(session, template, ctx, plan, resolver));
+
+    assertSame(failure, thrown);
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
+    assertNull(session.getAiResponseJson());
+  }
+
+  @Test
+  void aStaleHeadSignalFromTheSummaryCallStillPropagates() {
+    // Only the summary call's own AI failure is recoverable: a head-moved signal is not an
+    // AiReviewException and must reach the orchestrator exactly as it did before #851.
+    var session = persistedSession();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var stale = new ReviewContextLoader.StaleReviewException("sha", "newer");
+    when(aiReviewService.summarize(eq(session), any())).thenThrow(stale);
+    var plan = multiBatchPlan();
+    var ctx = reviewContext();
+    var resolver = new DiffLineResolver(Map.of());
+
+    var thrown =
+        assertThrows(
+            ReviewContextLoader.StaleReviewException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver));
+
+    assertSame(stale, thrown);
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
+  }
+
+  @Test
   void multiCallSurvivesACyclicCauseChainOnAFailedBatch() {
     // The truncation check walks the cause chain, and a cycle (here A caused-by B caused-by A)
     // would spin forever on the review thread if the walk were unbounded. The batch must instead

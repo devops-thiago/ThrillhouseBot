@@ -362,9 +362,9 @@ public class VerdictBuilder {
 
   /**
    * The coverage suffix of the check-run summary: the partial-review brief when file coverage was
-   * truncated (that brief already folds a summary cut or skip in as one of its counts), the
-   * summary-only marker when just the summary response was cut — or skipped at the token spend
-   * ceiling (#518) — and empty otherwise.
+   * truncated (that brief already folds a summary degradation in as one of its counts), the
+   * summary-only marker when just the summary response was cut, skipped at the token spend ceiling
+   * (#518) or lost to a summary call that failed its retries (#851), and empty otherwise.
    */
   private static String truncationSuffixFor(ReviewResult result) {
     if (result.truncated()) {
@@ -376,6 +376,8 @@ public class VerdictBuilder {
         switch (result.truncation().summaryDegradation()) {
           case RESPONSE_CUT -> " The summary was shortened (response cut at the length cap).";
           case SKIPPED_AT_CEILING -> " The summary was skipped (token spend ceiling reached).";
+          case SUMMARY_FAILED ->
+              " The summary was not generated (summary call failed after its retries).";
           case NONE -> "";
         };
     // The truncated() branch above already carries the verification counts inside the coverage
@@ -654,11 +656,13 @@ public class VerdictBuilder {
     } else {
       // Summary-only degradation (no file gap): the findings are complete, so the partial-review
       // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
-      // banner names the cut, or the token spend ceiling (#518), without holding the verdict.
+      // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
+      // without holding the verdict.
       summaryMarkdown =
           switch (diffStats.truncation().summaryDegradation()) {
             case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
             case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
+            case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
             case NONE -> summaryMarkdown;
           };
       // Verification-only degradation (#623): the findings post either way — the verifier fails
