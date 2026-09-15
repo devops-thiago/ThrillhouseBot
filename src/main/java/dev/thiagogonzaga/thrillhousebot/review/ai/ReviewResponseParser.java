@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.quarkus.logging.Log;
@@ -53,25 +54,71 @@ public class ReviewResponseParser {
 
   private final ObjectMapper mapper;
 
+  /**
+   * The JSON names of {@link ReviewResponse.Summary}'s fields, read from the mapper that maps the
+   * record, so the summary lane's fold (#850) follows the record's {@code @JsonProperty} names and
+   * a field added to it is folded without a change here.
+   */
+  private final List<String> summaryFields;
+
   @Inject
   public ReviewResponseParser(ObjectMapper mapper) {
     this.mapper = mapper;
+    this.summaryFields =
+        mapper
+            .getDeserializationConfig()
+            .introspect(mapper.constructType(ReviewResponse.Summary.class))
+            .findProperties()
+            .stream()
+            .map(BeanPropertyDefinition::getName)
+            .toList();
   }
 
+  /**
+   * Reads one review batch's response. A root with no {@code findings} node is refused (#805): on
+   * this lane the absence can be a set of findings that never arrived, and reading it as empty is
+   * how a pull request was approved with nothing recorded.
+   */
   public ReviewResponse parse(String raw) {
+    return parse(raw, false);
+  }
+
+  /**
+   * Reads the final summary call's response, which {@code FindingPipeline} takes only the summary
+   * from: the merged review's findings come from the batches. Two shapes the batch lane refuses or
+   * loses are read here (#850). A root with no {@code findings} node reads as an empty list, since
+   * nothing is lost with it and a refusal only buys a full-price retry of a summary already in
+   * hand. A root that writes the summary's fields with no {@code summary} object around them has
+   * them folded into one by {@link #foldSummaryFields}.
+   */
+  public ReviewResponse parseSummary(String raw) {
+    return parse(raw, true);
+  }
+
+  private ReviewResponse parse(String raw, boolean summaryLane) {
     if (raw == null || raw.isBlank()) {
       throw new IllegalArgumentException("Model returned an empty response");
     }
     var root = readDocuments(extractJson(raw));
+    if (summaryLane) {
+      foldSummaryFields(root);
+    }
     normalizePreviousFindingsStatus(root);
     normalizeDescriptionGaps(root);
     normalizeFileSummaries(root);
     if (!root.hasNonNull(FINDINGS)) {
-      // Absent is not the same as empty. A review that found nothing says "findings": [] — both
-      // prompts require it — so a root without the node is a response that never delivered the
-      // review, and the salvage below would have read it as a clean approval (#805).
-      throw new IllegalArgumentException(
-          "Model response has no findings node; a clean review states \"findings\": []");
+      if (!summaryLane) {
+        // Absent is not the same as empty. A review that found nothing says "findings": [] — both
+        // prompts require it — so a root without the node is a response that never delivered the
+        // review, and the salvage below would have read it as a clean approval (#805).
+        throw new IllegalArgumentException(
+            "Model response has no findings node; a clean review states \"findings\": []");
+      }
+      Log.infof(
+          "Summary response had no findings node among its %d top-level field(s); read it as an"
+              + " empty list, since only the summary is taken from this call",
+          root.size());
+      root.set(FINDINGS, mapper.createArrayNode());
     }
     try {
       return mapper.treeToValue(root, ReviewResponse.class);
@@ -262,6 +309,37 @@ public class ReviewResponseParser {
           cause);
     }
     return new IllegalArgumentException("Model response is not valid review JSON", cause);
+  }
+
+  /**
+   * Models sometimes write the summary's fields straight onto the root with no {@code summary}
+   * object around them: 24 of the 34 summary responses production refused in one window (#850).
+   * Jackson maps none of those fields onto {@link ReviewResponse}, so the summary reads as null and
+   * the walkthrough degrades to counts only. When the root holds no {@code summary} object but does
+   * carry fields {@link ReviewResponse.Summary} declares, move them into one. A root that already
+   * holds a {@code summary} object keeps it whole: the fields beside it are a second answer that
+   * may disagree with the first, so they are not merged in and are ignored like any other unknown
+   * root field. Summary lane only, and run ahead of the other normalizers so a folded summary is
+   * normalized exactly as a wrapped one is.
+   */
+  private void foldSummaryFields(ObjectNode root) {
+    if (root.get(SUMMARY) instanceof ObjectNode) {
+      return;
+    }
+    var summary = mapper.createObjectNode();
+    for (var name : summaryFields) {
+      if (root.has(name)) {
+        summary.set(name, root.remove(name));
+      }
+    }
+    if (summary.isEmpty()) {
+      return;
+    }
+    Log.infof(
+        "Summary response wrote %d summary field(s) on its root with no summary object; folded them"
+            + " into one",
+        summary.size());
+    root.set(SUMMARY, summary);
   }
 
   /**

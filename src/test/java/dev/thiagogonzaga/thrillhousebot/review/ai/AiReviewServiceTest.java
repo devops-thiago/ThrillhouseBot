@@ -199,12 +199,15 @@ class AiReviewServiceTest {
     when(prSummarizer.summarizeStream(
             anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
-    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(parser.parseSummary(anyString()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
     var response =
         service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
 
     assertNotNull(response);
+    // #850: the summary is read with the summary lane's tolerances, never the batch refusal.
+    verify(parser, never()).parse(anyString());
     verify(prSummarizer)
         .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
     var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
@@ -475,6 +478,8 @@ class AiReviewServiceTest {
 
     assertNotNull(response);
     verify(parser).parse("{\"findings\":[]}");
+    // #850: a review batch keeps the #805 refusal; the summary lane's tolerances never reach it.
+    verify(parser, never()).parseSummary(anyString());
   }
 
   @Test
@@ -1351,7 +1356,7 @@ class AiReviewServiceTest {
                   : new FakeTokenStream("{\"findings\":[]}");
             });
     var parsed = new ReviewResponse(List.of(), List.of(), null);
-    when(parser.parse("{\"findings\":[]}")).thenReturn(parsed);
+    when(parser.parseSummary("{\"findings\":[]}")).thenReturn(parsed);
 
     var response =
         service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
