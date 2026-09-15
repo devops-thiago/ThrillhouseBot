@@ -569,7 +569,8 @@ class OtelObservabilityListenerTest {
   void onResponseShouldFlagPricingMissingWhenNoModelIsNamedAnywhere() {
     var ctx = responseContext(requestAttributes(42L, 1));
     when(ctx.chatResponse().modelName()).thenReturn(null);
-    when(ctx.chatRequest()).thenReturn(mock(ChatRequest.class));
+    var request = mock(ChatRequest.class);
+    when(ctx.chatRequest()).thenReturn(request);
 
     listener.onResponse(ctx);
 
