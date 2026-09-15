@@ -52,19 +52,22 @@ class ChangelogEntryGeneratorTest {
    *
    * <p>The batching tests below assert a <em>plan shape</em> — one file per batch, nothing clipped
    * — that the planner decides by comparing each file section's token estimate against the diff
-   * budget. That budget is only approximate, and not because of the estimator: {@link
-   * PromptTemplateEscaper#fence} mints a fresh CSPRNG token per call, so the shared-prompt overhead
-   * {@link #budgetFor} sizes from one draw and the overhead the planner subtracts from another draw
-   * differ by however much the two random tokens differ in BPE width — around 30 tokens, either
-   * way. The effective diff budget therefore lands in a window that wide around the requested one.
+   * budget. That budget used to be only approximate, and not because of the estimator: {@link
+   * PromptTemplateEscaper#fence} mints a fresh CSPRNG token per call, and until #604 the
+   * shared-prompt overhead {@link #budgetFor} sized from one draw and the overhead the planner
+   * subtracted from another, differing by however much the two random tokens differed in BPE width
+   * — around 30 tokens, either way. The effective diff budget therefore landed in a window that
+   * wide around the requested one.
    *
-   * <p>So every margin here has to be wider than that window. With the original three-line patches
-   * a section was ~50 tokens against a 40-token request, leaving a ~10-token margin the swing
-   * cleared often enough to flip the plan about once in 1500 runs — #586, seen once in CI and never
+   * <p>So every margin here was made wider than that window. With the original three-line patches a
+   * section was ~50 tokens against a 40-token request, leaving a ~10-token margin the swing cleared
+   * often enough to flip the plan about once in 1500 runs — #586, seen once in CI and never
    * locally. Padding the sections to a few hundred tokens (and {@link #ROOM_FOR_ONE_FILE} with
-   * them) makes the fence swing a rounding error rather than the deciding term. {@link
-   * #batchingFixturesLeaveMarginWiderThanTheFenceJitter} pins the margins so shrinking either one
-   * fails loudly instead of flaking.
+   * them) made the fence swing a rounding error rather than the deciding term. Both sides now size
+   * the scaffolding from {@link PromptTemplateEscaper#fenceForBudgeting}, so the room is exact and
+   * the padding is slack rather than a requirement. It stays, with {@link
+   * #batchingFixturesLeaveMarginWiderThanTheFenceJitter} pinning the margins, so a live draw
+   * creeping back into either overhead would fail loudly instead of flaking.
    */
   private static final int PAD_LINES = 30;
 
@@ -73,7 +76,8 @@ class ChangelogEntryGeneratorTest {
    * fence wraps its content in two identical lines whose only variable part is a 32-character hex
    * token, so 64 characters vary across the pair — and no BPE token covers fewer than one
    * character, so no two draws can differ by more than 64 tokens. Every batching margin below is
-   * required to exceed this.
+   * required to exceed this, which keeps the fixtures safe should a live draw ever return to the
+   * overhead (#604).
    */
   private static final int FENCE_JITTER_TOKENS = 64;
 
@@ -190,15 +194,14 @@ class ChangelogEntryGeneratorTest {
   }
 
   /**
-   * A per-call input budget of about the shared prompt overhead plus {@code diffTokens}. Derived
-   * from {@code /changelog}'s own prompts rather than hardcoded, so editing a prompt cannot
-   * silently turn these tests into no-ops by making every file overflow — and so a regression that
-   * sized the overhead from another command's prompts would show up here.
+   * A per-call input budget of the shared prompt overhead plus {@code diffTokens}. Derived from
+   * {@code /changelog}'s own prompts rather than hardcoded, so editing a prompt cannot silently
+   * turn these tests into no-ops by making every file overflow — and so a regression that sized the
+   * overhead from another command's prompts would show up here.
    *
-   * <p><em>About</em>, not exactly: the fence line this counts is drawn from a CSPRNG here and
-   * again inside the planner, and the two draws differ in BPE width, so the diff room the planner
-   * actually ends up with is {@code diffTokens} give or take ~30 tokens. Callers must leave margins
-   * wider than that — see {@link #PAD_LINES}.
+   * <p>Exact since #604: the fence scaffolding this counts is the fixed-width stand-in the
+   * generator sizes its own overhead from, so the diff room the planner ends up with is {@code
+   * diffTokens} to the token. The margins on {@link #PAD_LINES} predate that and are kept.
    */
   private static int budgetFor(int diffTokens) {
     var overhead =
@@ -206,7 +209,7 @@ class ChangelogEntryGeneratorTest {
             .estimateTokens(
                 ChangelogAssistantPrompts.systemPrompt()
                     + PrSuggestionPrompts.userPrompt()
-                    + PromptTemplateEscaper.fence(" ")
+                    + PromptTemplateEscaper.fenceForBudgeting()
                     + "Title"
                     + "Body"
                     + "");
@@ -399,9 +402,10 @@ class ChangelogEntryGeneratorTest {
   @Test
   void batchingFixturesLeaveMarginWiderThanTheFenceJitter() {
     // #586: every batching test below asserts a plan shape the planner decides by comparing a file
-    // section's tokens against the diff room, and that room is only accurate to a fence draw (see
-    // PAD_LINES). Pin the three margins that shape rests on here, so shrinking a fixture or a room
-    // constant fails on this one test rather than as a rare flake spread across the whole class.
+    // section's tokens against the diff room, and that room was only accurate to a fence draw
+    // until #604 (see PAD_LINES). Pin the three margins that shape rests on here, so shrinking a
+    // fixture or a room constant fails on this one test rather than as a rare flake spread across
+    // the whole class.
     var tokenCounter = new TokenCounter();
     var names = ReviewDiffFormatter.namesOf(List.of(foo(), otherFile()));
     var biggestSection = 0;
