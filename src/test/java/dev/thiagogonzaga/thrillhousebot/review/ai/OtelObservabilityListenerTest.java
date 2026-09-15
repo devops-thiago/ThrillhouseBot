@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import dev.langchain4j.model.chat.listener.ChatModelErrorContext;
 import dev.langchain4j.model.chat.listener.ChatModelRequestContext;
 import dev.langchain4j.model.chat.listener.ChatModelResponseContext;
+import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
@@ -473,6 +474,108 @@ class OtelObservabilityListenerTest {
     listener.onResponse(responseContext(attrs));
 
     assertEquals(0L, tokenLedger.tokensSpent(42L));
+  }
+
+  @Test
+  void onResponseShouldRecordWhatItKnowsWhenTheProviderOmitsUsage() {
+    // #857: a stream can complete without a usage chunk even with include_usage requested. The
+    // call must still reach the ledger, the session row and the duration/cost metrics; only the
+    // token samples it has no value for are left out.
+    var ledger = mock(ReviewTokenLedger.class);
+    var local = new OtelObservabilityListener(otel, config, sessionUpdater, vertx, ledger);
+    ModelPricing modelPricing = mock(ModelPricing.class);
+    when(modelPricing.inputPer1k()).thenReturn(0.14);
+    when(modelPricing.outputPer1k()).thenReturn(0.28);
+    when(aiConfig.pricing()).thenReturn(Map.of("deepseek-chat", modelPricing));
+
+    for (var sessionId = 42L; sessionId <= 43L; sessionId++) {
+      var ctx = responseContext(requestAttributes(local, sessionId, 1));
+      when(ctx.chatResponse().tokenUsage()).thenReturn(null);
+      local.onResponse(ctx);
+    }
+
+    verify(ledger).recordUsage(42L, null, null);
+    verify(ledger).recordUsage(43L, null, null);
+    verify(sessionUpdater)
+        .recordModelUsage(
+            eq(42L), eq("deepseek-chat"), eq(0), eq(0), eq(0.0), eq(false), anyLong());
+    verify(tokenHistogram, never()).record(anyLong(), any());
+    verify(durationHistogram, times(2)).record(anyDouble(), any());
+    verify(costCounter, times(2)).add(eq(0.0), any());
+  }
+
+  @Test
+  void onResponseShouldRecordTheReportedSideWhenUsageOmitsOneCount() {
+    ModelPricing modelPricing = mock(ModelPricing.class);
+    when(modelPricing.inputPer1k()).thenReturn(0.14);
+    when(modelPricing.outputPer1k()).thenReturn(0.28);
+    when(aiConfig.pricing()).thenReturn(Map.of("deepseek-chat", modelPricing));
+    tokenLedger.open(42L);
+    var ctx = responseContext(requestAttributes(42L, 1));
+    when(ctx.chatResponse().tokenUsage()).thenReturn(new TokenUsage(1000, null));
+
+    listener.onResponse(ctx);
+
+    assertEquals(1000L, tokenLedger.tokensSpent(42L));
+    var costCaptor = ArgumentCaptor.forClass(Double.class);
+    verify(sessionUpdater)
+        .recordModelUsage(
+            eq(42L),
+            eq("deepseek-chat"),
+            eq(1000),
+            eq(0),
+            costCaptor.capture(),
+            eq(false),
+            anyLong());
+    assertEquals(0.14, costCaptor.getValue(), 0.001);
+    var typeCaptor = ArgumentCaptor.forClass(Attributes.class);
+    verify(tokenHistogram).record(eq(1000L), typeCaptor.capture());
+    assertEquals("input", typeCaptor.getValue().get(AttributeKey.stringKey("gen_ai.token.type")));
+  }
+
+  @Test
+  void onResponseShouldRecordTheOutputSideWhenUsageOmitsTheInputCount() {
+    var ctx = responseContext(requestAttributes(42L, 1));
+    when(ctx.chatResponse().tokenUsage()).thenReturn(new TokenUsage(null, 70));
+
+    listener.onResponse(ctx);
+
+    verify(sessionUpdater)
+        .recordModelUsage(
+            eq(42L), eq("deepseek-chat"), eq(0), eq(70), eq(0.0), eq(true), anyLong());
+    var typeCaptor = ArgumentCaptor.forClass(Attributes.class);
+    verify(tokenHistogram).record(eq(70L), typeCaptor.capture());
+    assertEquals("output", typeCaptor.getValue().get(AttributeKey.stringKey("gen_ai.token.type")));
+  }
+
+  @Test
+  void onResponseShouldFallBackToTheRequestModelWhenTheResponseNamesNone() {
+    // A stream whose chunks never carry "model" completes with a null model name; the request
+    // names the model it asked for.
+    var ctx = responseContext(requestAttributes(42L, 1));
+    when(ctx.chatResponse().modelName()).thenReturn(null);
+    var request = mock(ChatRequest.class);
+    when(request.modelName()).thenReturn("deepseek-chat");
+    when(ctx.chatRequest()).thenReturn(request);
+
+    listener.onResponse(ctx);
+
+    verify(sessionUpdater)
+        .recordModelUsage(
+            eq(42L), eq("deepseek-chat"), eq(100), eq(50), anyDouble(), anyBoolean(), anyLong());
+  }
+
+  @Test
+  void onResponseShouldFlagPricingMissingWhenNoModelIsNamedAnywhere() {
+    var ctx = responseContext(requestAttributes(42L, 1));
+    when(ctx.chatResponse().modelName()).thenReturn(null);
+    var request = mock(ChatRequest.class);
+    when(ctx.chatRequest()).thenReturn(request);
+
+    listener.onResponse(ctx);
+
+    verify(sessionUpdater)
+        .recordModelUsage(eq(42L), isNull(), eq(100), eq(50), eq(0.0), eq(true), anyLong());
   }
 
   @Test
