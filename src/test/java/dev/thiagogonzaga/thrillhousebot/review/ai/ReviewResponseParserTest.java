@@ -878,4 +878,143 @@ class ReviewResponseParserTest {
     assertEquals(1, response.findings().size());
     assertEquals("café — réussi 🚀 日本語", response.summary().prPurpose());
   }
+
+  /**
+   * #850, the first production shape: the summary call's object with its {@code summary} wrapper
+   * and no {@code findings} key. The pipeline takes only the summary from this call, so the refusal
+   * #805 put on the batch lane protects nothing here and cost a full-price retry each time.
+   */
+  @Test
+  void shouldReadASummaryResponseWithNoFindingsNodeOnTheSummaryLane() {
+    var response =
+        parser.parseSummary(
+            """
+            {"summary": {"total_findings": 2, "critical": 0, "high": 1, "medium": 1, "low": 0,
+              "overall_assessment": "Two issues in the retry path.",
+              "pr_purpose": "Retry the upload on a throttled response",
+              "description_gaps": [],
+              "suggested_labels": ["bug"],
+              "file_summaries": [{"path": "src/Upload.java", "summary": "adds the retry"}]},
+             "previous_findings_status": [{"id": 1, "status": "resolved", "note": "fixed"}]}
+            """);
+
+    assertTrue(response.findings().isEmpty());
+    assertNotNull(response.summary());
+    assertEquals(2, response.summary().totalFindings());
+    assertEquals("Retry the upload on a throttled response", response.summary().prPurpose());
+    assertEquals(1, response.summary().fileSummaries().size());
+    assertEquals(1, response.previousFindingsStatus().size());
+  }
+
+  /**
+   * #850, the second production shape and the more common one (24 of 34): every field of the
+   * summary written straight onto the root, with no {@code summary} object and no {@code findings}.
+   * Every field the record declares is present so a name the fold does not know shows up here, and
+   * the {@code file_summaries} entries use the {@code file}/{@code description} keys so the fold is
+   * shown to run ahead of the file-summary normalizer.
+   */
+  @Test
+  void shouldFoldSummaryFieldsWrittenOnTheRootIntoTheSummaryOnTheSummaryLane() {
+    var response =
+        parser.parseSummary(
+            """
+            {"total_findings": 3, "critical": 1, "high": 1, "medium": 0, "low": 1,
+             "overall_assessment": "One critical issue in the token check.",
+             "pr_purpose": "Validate webhook signatures before dispatch",
+             "description_gaps": [{"claim": "adds tests", "code": "no test changed"}],
+             "suggested_labels": ["security"],
+             "file_summaries": [{"file": "src/Webhook.java", "description": "checks the HMAC"}],
+             "walkthrough_diagram": "graph TD; A-->B"}
+            """);
+
+    assertTrue(response.findings().isEmpty());
+    assertEquals(
+        new ReviewResponse.Summary(
+            3,
+            1,
+            1,
+            0,
+            1,
+            "One critical issue in the token check.",
+            "Validate webhook signatures before dispatch",
+            java.util.List.of("adds tests: no test changed"),
+            java.util.List.of("security"),
+            java.util.List.of(
+                new ReviewResponse.FileSummary("src/Webhook.java", "checks the HMAC")),
+            "graph TD; A-->B"),
+        response.summary());
+  }
+
+  @Test
+  void shouldKeepTheSummaryObjectOverFieldsWrittenBesideItOnTheSummaryLane() {
+    // The object is the schema's answer and wins whole; fields beside it are not merged in, so the
+    // summary is never assembled from two answers that may disagree. The leftover root fields are
+    // ignored the way the application's mapper ignores any unknown property.
+    var lenient =
+        new ReviewResponseParser(
+            new ObjectMapper()
+                .configure(
+                    com.fasterxml.jackson.databind.DeserializationFeature
+                        .FAIL_ON_UNKNOWN_PROPERTIES,
+                    false));
+
+    var response =
+        lenient.parseSummary(
+            """
+            {"summary": {"total_findings": 1, "pr_purpose": "from the object"},
+             "total_findings": 7, "pr_purpose": "from the root",
+             "walkthrough_diagram": "graph TD; X-->Y"}
+            """);
+
+    assertEquals(1, response.summary().totalFindings());
+    assertEquals("from the object", response.summary().prPurpose());
+    assertNull(response.summary().walkthroughDiagram());
+  }
+
+  @Test
+  void shouldFoldSummaryFieldsOverASummaryThatIsNotAnObjectOnTheSummaryLane() {
+    // A textual summary cannot map and would be dropped by the salvage, taking the fields beside
+    // it along; the fold replaces it with the object those fields make.
+    var response =
+        parser.parseSummary(
+            """
+            {"summary": "Looks fine overall", "total_findings": 0, "pr_purpose": "Bump the parent"}
+            """);
+
+    assertEquals("Bump the parent", response.summary().prPurpose());
+  }
+
+  @Test
+  void shouldKeepAFindingsNodeTheSummaryResponseDidSendOnTheSummaryLane() {
+    var response =
+        parser.parseSummary(
+            """
+            {"findings": [{"risk": "low", "file": "f", "line": 1, "title": "t", "description": "d"}],
+             "summary": {"total_findings": 1, "pr_purpose": "p"}}
+            """);
+
+    assertEquals(1, response.findings().size());
+    assertEquals("p", response.summary().prPurpose());
+  }
+
+  @Test
+  void shouldLeaveASummaryLaneRootWithNoSummaryFieldsWithoutASummary() {
+    var response = parser.parseSummary("{\"previous_findings_status\": []}");
+
+    assertTrue(response.findings().isEmpty());
+    assertNull(response.summary());
+  }
+
+  @Test
+  void shouldStillRefuseSummaryFieldsOnTheRootWithNoFindingsOnTheBatchLane() {
+    // Neither tolerance reaches a batch: there a root with no findings node may be findings lost.
+    IllegalArgumentException ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> parser.parse("{\"total_findings\": 0, \"overall_assessment\": \"clean\"}"));
+
+    assertEquals(
+        "Model response has no findings node; a clean review states \"findings\": []",
+        ex.getMessage());
+  }
 }
