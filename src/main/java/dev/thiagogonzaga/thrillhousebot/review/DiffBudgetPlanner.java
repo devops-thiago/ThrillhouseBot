@@ -116,6 +116,11 @@ public class DiffBudgetPlanner {
    * review budget" would send the operator at a knob that cannot help. The class is carried on both
    * lanes: whether a file has content to review is a property of the file, not of the budget, so an
    * unbudgeted plan names them too (#785).
+   *
+   * <p>{@code reasoningStepDownRef} records whether one of the review's model calls had to run with
+   * reasoning disabled after a length stop with no content (#839). Like the summary degradation it
+   * is written by the review pass onto this shared instance and read by the verdict, which
+   * discloses it in the summary's review-scope note.
    */
   public record BudgetPlan(
       List<DiffBatch> batches,
@@ -127,7 +132,8 @@ public class DiffBudgetPlanner {
       List<String> spendCeilingSkippedFiles,
       List<String> responseCutFiles,
       java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef,
-      java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef) {
+      java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef,
+      java.util.concurrent.atomic.AtomicBoolean reasoningStepDownRef) {
     public BudgetPlan {
       batches = List.copyOf(batches);
       omittedFiles = List.copyOf(omittedFiles);
@@ -150,6 +156,41 @@ public class DiffBudgetPlanner {
           verificationCoverageRef == null
               ? new java.util.concurrent.atomic.AtomicReference<>(VerificationCoverage.EMPTY)
               : verificationCoverageRef;
+      reasoningStepDownRef =
+          reasoningStepDownRef == null
+              ? new java.util.concurrent.atomic.AtomicBoolean()
+              : reasoningStepDownRef;
+    }
+
+    /**
+     * Convenience constructor for plans built before the reasoning step-down slot existed (the
+     * planner and tests): no call has stepped down yet, so the slot starts false and is set through
+     * {@link #recordReasoningStepDown} exactly as with the canonical constructor's {@code null}.
+     */
+    @SuppressWarnings("java:S107")
+    public BudgetPlan(
+        List<DiffBatch> batches,
+        List<String> omittedFiles,
+        List<String> clippedFiles,
+        List<String> patchlessFiles,
+        boolean budgeted,
+        List<String> runtimeUncoveredFiles,
+        List<String> spendCeilingSkippedFiles,
+        List<String> responseCutFiles,
+        java.util.concurrent.atomic.AtomicReference<SummaryDegradation> summaryDegradationRef,
+        java.util.concurrent.atomic.AtomicReference<VerificationCoverage> verificationCoverageRef) {
+      this(
+          batches,
+          omittedFiles,
+          clippedFiles,
+          patchlessFiles,
+          budgeted,
+          runtimeUncoveredFiles,
+          spendCeilingSkippedFiles,
+          responseCutFiles,
+          summaryDegradationRef,
+          verificationCoverageRef,
+          null);
     }
 
     /**
@@ -249,6 +290,30 @@ public class DiffBudgetPlanner {
     /** How the summary prose degraded, if at all — the disclosure names the flavor. */
     public SummaryDegradation summaryDegradation() {
       return summaryDegradationRef.get();
+    }
+
+    /**
+     * Records whether a review call ran with reasoning disabled after a length stop with no content
+     * (#839), so the summary's review-scope note discloses that the review ran at less than the
+     * configured effort. Written once by the review pass, from the ledger's note, when its calls
+     * are done.
+     */
+    void recordReasoningStepDown(boolean steppedDown) {
+      reasoningStepDownRef.set(steppedDown);
+    }
+
+    /** Whether a review call ran with reasoning disabled after a no-content length stop (#839). */
+    public boolean reasoningSteppedDown() {
+      return reasoningStepDownRef.get();
+    }
+
+    /**
+     * Defensive snapshot, like {@link #summaryDegradationRef()}: the live slot is only written
+     * through {@link #recordReasoningStepDown} and read through {@link #reasoningSteppedDown()}.
+     */
+    @Override
+    public java.util.concurrent.atomic.AtomicBoolean reasoningStepDownRef() {
+      return new java.util.concurrent.atomic.AtomicBoolean(reasoningStepDownRef.get());
     }
 
     /** Defensive copy: the mutable runtime-gap backing must never escape the plan. */
