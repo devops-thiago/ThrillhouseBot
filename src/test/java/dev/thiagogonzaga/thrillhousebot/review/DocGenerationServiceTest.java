@@ -138,7 +138,7 @@ class DocGenerationServiceTest {
             .estimateTokens(
                 DocGeneratorPrompts.systemPrompt()
                     + DocGeneratorPrompts.userPrompt()
-                    + PromptTemplateEscaper.fence(" ")
+                    + PromptTemplateEscaper.fenceForBudgeting()
                     + "Title"
                     + "Body"
                     + "");

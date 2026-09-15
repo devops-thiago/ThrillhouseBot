@@ -92,7 +92,7 @@ public interface ThrillhouseConfig {
      * command while it holds its per-PR dispatcher slot.
      */
     @WithName("write-max-wait")
-    @WithDefault("60s")
+    @WithDefault("90s")
     Duration writeMaxWait();
   }
 
