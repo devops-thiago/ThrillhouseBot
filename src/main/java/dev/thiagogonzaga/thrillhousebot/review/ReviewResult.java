@@ -181,10 +181,11 @@ public record ReviewResult(
    * counts-only fallback ({@link SummaryDegradation#RESPONSE_CUT}), or the call was skipped (or
    * refused mid-call) because the review's token spend ceiling ({@code
    * REVIEW_MAX_TOKENS_PER_REVIEW}) was reached ({@link SummaryDegradation#SKIPPED_AT_CEILING},
-   * #518). {@code verification} marks how much of the finding set the second-pass verification
-   * audit covered (#623): like the summary degradation it is not a file-coverage gap — the verifier
-   * fails open by design, so every finding posts either way — but a finding set the audit never (or
-   * only partially) screened must say so instead of reading exactly like a verified one. The file
+   * #518), or the call failed all its retries ({@link SummaryDegradation#SUMMARY_FAILED}, #851).
+   * {@code verification} marks how much of the finding set the second-pass verification audit
+   * covered (#623): like the summary degradation it is not a file-coverage gap — the verifier fails
+   * open by design, so every finding posts either way — but a finding set the audit never (or only
+   * partially) screened must say so instead of reading exactly like a verified one. The file
    * classes and the summary degradation are all empty on the legacy line-cap path, where only a
    * count is known — the rendered copy then falls back to the numeric clause — but {@code
    * verification} is carried on that lane too: the legacy uncapped single call verifies its
@@ -513,6 +514,21 @@ public record ReviewResult(
       """;
 
   /**
+   * The failure sibling of {@link #SUMMARY_CUT_NOTICE} (#851): the summary call failed all its
+   * retries (a response the parser refused, a timeout, a dropped connection) after every batch was
+   * reviewed. The findings are complete, so the partial-review banner would overstate the damage;
+   * no knob is named, because no setting prevents the failure. When a file-coverage gap exists as
+   * well, {@link #coverageGapClause(int, TruncationDetail)} folds the failure in as one more clause
+   * and this banner is not used.
+   */
+  static final String SUMMARY_FAILED_NOTICE =
+      """
+      > ⚠️ **Summary unavailable.** The summary call failed after its retries, so only the\
+       finding counts are shown — the findings themselves are complete.
+
+      """;
+
+  /**
    * True when at least one outstanding finding was severe enough to block but its confidence, not
    * its risk, is why this review is not requesting changes.
    */
@@ -683,9 +699,9 @@ public record ReviewResult(
     }
     // A summary degradation affects prose, not findings: the findings are complete, but the
     // summary call either had its response cut at the length cap and was salvaged (or replaced by
-    // the counts-only fallback), or was skipped outright at the token spend ceiling (#518) — the
-    // two flavors of the same degradation, disclosed with the same shape so neither lane stays
-    // log-only.
+    // the counts-only fallback), was skipped outright at the token spend ceiling (#518), or failed
+    // all its retries (#851) — three flavors of the same degradation, disclosed with the same
+    // shape so no lane stays log-only.
     switch (detail.summaryDegradation()) {
       case RESPONSE_CUT ->
           clauses.add(
@@ -697,6 +713,10 @@ public record ReviewResult(
               "the summary was skipped because the review's token spend ceiling"
                   + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
                   + " complete");
+      case SUMMARY_FAILED ->
+          clauses.add(
+              "the summary was not generated because the summary call failed after its retries —"
+                  + " the findings themselves are complete");
       case NONE -> {
         // Nothing to disclose.
       }
@@ -818,6 +838,8 @@ public record ReviewResult(
     switch (truncation.summaryDegradation()) {
       case RESPONSE_CUT -> parts.add("summary shortened (response cut at the length cap)");
       case SKIPPED_AT_CEILING -> parts.add("summary skipped (token spend ceiling reached)");
+      case SUMMARY_FAILED ->
+          parts.add("summary not generated (summary call failed after its retries)");
       case NONE -> {
         // Nothing to disclose.
       }

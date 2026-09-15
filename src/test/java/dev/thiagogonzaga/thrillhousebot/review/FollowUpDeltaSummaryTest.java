@@ -283,6 +283,38 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
+  void aFailedSummaryAlongsideFileGapsIsNamedInTheDeltaComment() {
+    // #851: the delta comment carries summary degradations inside its partial-coverage clause, so
+    // a failed summary on a review with a file gap is named there like the other two flavors.
+    var truncation =
+        new ReviewResult.TruncationDetail(
+            List.of("b.java"), List.of(), List.of(), List.of(), SummaryDegradation.SUMMARY_FAILED);
+    var result =
+        new ReviewResult(
+            List.of(finding("a.java")),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            true,
+            "summary",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            truncation);
+
+    var body = render(result).orElseThrow();
+
+    assertTrue(body.contains("Large PR — partial coverage"), body);
+    assertTrue(
+        body.contains("the summary was not generated because the summary call failed"), body);
+  }
+
+  @Test
   void ceilingSkippedSummaryOnlyMustNotClaimPartialDiffCoverageInTheDeltaComment() {
     // #518's flag gets the same treatment as the summary cut (#516): a summary skipped at the
     // token spend ceiling leaves the findings — and this comment's counts — covering the whole

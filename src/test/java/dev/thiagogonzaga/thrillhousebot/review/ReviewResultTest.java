@@ -1186,6 +1186,65 @@ class ReviewResultTest {
   }
 
   @Test
+  void aFailedSummaryIsASummaryDegradationWithNoFileGap() {
+    // #851: like the cut and ceiling flavors, it defeats the EMPTY guards without claiming a gap.
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of(), List.of(), List.of(), List.of(), SummaryDegradation.SUMMARY_FAILED);
+    assertFalse(detail.isEmpty());
+    assertFalse(detail.hasFileGaps());
+    assertEquals("", ReviewResult.truncationDisclosure(0, detail));
+  }
+
+  @Test
+  void coverageGapClauseNamesTheFailedSummaryAlongsideFileGaps() {
+    var detail =
+        new ReviewResult.TruncationDetail(
+            List.of("a.java"), List.of(), List.of(), List.of(), SummaryDegradation.SUMMARY_FAILED);
+
+    var clause = ReviewResult.coverageGapClause(1, detail);
+
+    assertTrue(clause.contains("1 file(s) were omitted entirely (a.java)"), clause);
+    assertTrue(
+        clause.contains(
+            "the summary was not generated because the summary call failed after its retries —"
+                + " the findings themselves are complete"),
+        clause);
+  }
+
+  @Test
+  void coverageGapBriefMarksTheFailedSummary() {
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            1,
+            false,
+            true,
+            new ReviewResult.TruncationDetail(
+                List.of("a.java"),
+                List.of(),
+                List.of(),
+                List.of(),
+                SummaryDegradation.SUMMARY_FAILED));
+
+    var brief = result.coverageGapBrief();
+
+    assertTrue(brief.contains("1 file(s) omitted"), brief);
+    assertTrue(
+        brief.contains("summary not generated (summary call failed after its retries)"), brief);
+  }
+
+  @Test
   void truncationDisclosureTreatsACeilingSkipFlagOnlyDetailAsEmpty() {
     // #516's guard must hold for the ceiling flavor too: no file gap means no partial-coverage
     // framing, whichever summary flag is set.
