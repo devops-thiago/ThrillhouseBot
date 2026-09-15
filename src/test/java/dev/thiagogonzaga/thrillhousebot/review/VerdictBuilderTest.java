@@ -474,6 +474,63 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void aFailedSummaryIsDisclosedWithoutHoldingApproval() {
+    // #851: every batch succeeded and the summary call failed its retries. The findings are
+    // complete, so approval is not held, but the counts-only summary must say why it is one.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SUMMARY_FAILED);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertFalse(result.truncated());
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertEquals(SummaryDegradation.SUMMARY_FAILED, result.truncation().summaryDegradation());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains(
+                "> ⚠️ **Summary unavailable.** The summary call failed after its retries, so"
+                    + " only the finding counts are shown — the findings themselves are"
+                    + " complete."),
+        result.summaryMarkdown());
+    assertFalse(result.summaryMarkdown().contains("partial review"), result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains(
+            "The summary was not generated (summary call failed after its retries)."),
+        checkSummary);
+  }
+
+  @Test
+  void aFailedSummaryAlongsideFileGapsFoldsIntoTheCoverageClause() {
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SUMMARY_FAILED);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(result.truncated());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains(
+                "the summary was not generated because the summary call failed after its"
+                    + " retries — the findings themselves are complete"),
+        result.summaryMarkdown());
+    assertFalse(
+        result.summaryMarkdown().contains("**Summary unavailable.**"), result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("summary not generated (summary call failed after its retries)"),
+        checkSummary);
+  }
+
+  @Test
   void anUnverifiedFindingSetIsDisclosedWithoutHoldingApproval() {
     // #623: verification failed open (empty body or cut response) and the findings posted anyway
     // — correct — but nothing on any surface said no second stage had screened them. The posted

@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -500,6 +501,11 @@ public class FindingPipeline {
       // salvage the summary object if it closed before the cut, else degrade to the same
       // counts-only shape as the ceiling-tripped path above. Never re-enters the retry lane.
       return salvagedOrCountsOnlySummary(session, refined, plan, e);
+    } catch (AiReviewException e) {
+      // #851: the same reasoning holds for every other way the summary call can fail its retries
+      // (a response the parser refused, a timeout, a connection reset): the batches are paid for,
+      // so the review keeps them under the counts-only summary instead of failing.
+      return failedSummary(session, refined, plan, e);
     }
 
     var merged =
@@ -568,6 +574,42 @@ public class FindingPipeline {
             + " object could be salvaged; keeping the %d paid findings with a counts-only summary",
         ledgerSessionId(session), refined.findings().size());
     return persistWithSummary(session, refined, null);
+  }
+
+  /**
+   * The summary degradation for a summary call that failed all its retries for a reason neither
+   * sibling handles (#851) — a response the parser refused on every attempt, a timeout, a
+   * connection reset: the review keeps its paid findings with the {@link #countsOnlySummary
+   * counts-only} shape and records its own flavor on the plan, so the posted review says why the
+   * summary is counts-only. An interruption is not a failure of the summary: it reaches here
+   * wrapped as the same exception type, and degrading it would post a review from a worker that was
+   * told to stop, so it is rethrown untouched. Only counts are logged — the failure's message can
+   * carry provider text.
+   */
+  private ReviewResponse failedSummary(
+      ReviewSession session,
+      ReviewResponse refined,
+      DiffBudgetPlanner.BudgetPlan plan,
+      AiReviewException failure) {
+    if (isInterruption(failure)) {
+      throw failure;
+    }
+    plan.recordSummaryDegradation(SummaryDegradation.SUMMARY_FAILED);
+    Log.warnf(
+        "Summary call for session %d failed after %d attempt(s); keeping the %d paid findings"
+            + " with a counts-only summary",
+        ledgerSessionId(session), failure.attempts(), refined.findings().size());
+    return persistWithSummary(session, refined, null);
+  }
+
+  /**
+   * Whether an AI failure is the calling thread being interrupted rather than the call failing. The
+   * AI service restores the interrupt flag before wrapping the {@link InterruptedException}, but a
+   * later attempt can consume the flag, so the cause chain is read as well.
+   */
+  private static boolean isInterruption(AiReviewException failure) {
+    return Thread.currentThread().isInterrupted()
+        || Throwables.findCause(failure, InterruptedException.class).isPresent();
   }
 
   /** Persists and returns the refined findings/statuses under the given (possibly null) summary. */
@@ -826,6 +868,10 @@ public class FindingPipeline {
       // fail on a deterministic truncation.
       return salvagedOrCountsOnlySummary(
           session, new ReviewResponse(List.of(), List.of(), null), plan, e);
+    } catch (AiReviewException e) {
+      // Same degradation as the multi-call summary seam (#851): the review still posts with its
+      // omission disclosures rather than failing on the summary call alone.
+      return failedSummary(session, new ReviewResponse(List.of(), List.of(), null), plan, e);
     }
     var merged = new ReviewResponse(List.of(), List.of(), summaryResponse.summary());
     persistAiResponse(session, merged);

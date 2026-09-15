@@ -22,10 +22,11 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
  * every state — only the summary is affected — so none of these holds approval; they exist so the
  * posted review can disclose the degradation and name the knob to raise instead of staying
  * log-only. At most one degradation can occur per review: the summary call either had its response
- * cut at the model's length cap ({@link #RESPONSE_CUT}, #500 scope A) or was skipped (or refused
- * mid-call) at the review's token spend ceiling ({@link #SKIPPED_AT_CEILING}, #518) — the two are
- * reached on disjoint control paths, and a single enum keeps the impossible both-at-once state
- * unrepresentable where a pair of booleans would allow it.
+ * cut at the model's length cap ({@link #RESPONSE_CUT}, #500 scope A), was skipped (or refused
+ * mid-call) at the review's token spend ceiling ({@link #SKIPPED_AT_CEILING}, #518), or failed all
+ * its retries ({@link #SUMMARY_FAILED}, #851) — the three are reached on disjoint control paths,
+ * and a single enum keeps the impossible both-at-once state unrepresentable where a set of booleans
+ * would allow it.
  */
 @RegisterForReflection
 public enum SummaryDegradation {
@@ -43,5 +44,12 @@ public enum SummaryDegradation {
    * The summary call was skipped (or refused mid-call) because the review's token spend ceiling
    * (REVIEW_MAX_TOKENS_PER_REVIEW) was reached; the counts-only fallback stands in for the prose.
    */
-  SKIPPED_AT_CEILING
+  SKIPPED_AT_CEILING,
+
+  /**
+   * The summary call failed all its retries for any other reason — a response the parser refused, a
+   * timeout, a dropped connection — after every batch was reviewed; the counts-only fallback stands
+   * in for the prose. No setting prevents it, so no knob is named.
+   */
+  SUMMARY_FAILED
 }
