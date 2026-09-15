@@ -35,6 +35,7 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
+import org.slf4j.helpers.MessageFormatter;
 
 class ModelCallGateTest {
 
@@ -193,16 +194,9 @@ class ModelCallGateTest {
     return logged;
   }
 
+  /** The record's message with its {@code {}} placeholders filled, as the logger would print it. */
   private static String formatted(LogRecord entry) {
-    var params = entry.getParameters();
-    var message = entry.getMessage();
-    if (params == null) {
-      return message;
-    }
-    for (var param : params) {
-      message = message.replaceFirst("\\{}", String.valueOf(param));
-    }
-    return message;
+    return MessageFormatter.arrayFormat(entry.getMessage(), entry.getParameters()).getMessage();
   }
 
   private static void awaitCondition(BooleanSupplier condition) {
