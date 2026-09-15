@@ -41,8 +41,7 @@ class AbstractPrSuggestionGeneratorTest {
     // from a fixed-width stand-in now, so the overhead, and with it the plan, follows from the
     // inputs alone.
     var generator = new ProxyShape();
-    var inputs =
-        new AbstractPrSuggestionGenerator.Inputs("diff", "Title", "Body", "", "sha", List.of());
+    var inputs = new AbstractPrSuggestionGenerator.Inputs("Title", "Body", "", "sha", List.of());
 
     assertEquals(
         generator.sharedPromptOverhead("system", "user", inputs),

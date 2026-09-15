@@ -30,9 +30,12 @@ public final class PromptTemplateEscaper {
    * The token {@link #fenceForBudgeting} carries: 32 hex characters alternating digit and letter.
    * cl100k's pre-tokenizer cuts a run of letters, or of up to three digits, into one chunk and BPE
    * merges only within a chunk, so this token is 32 single-character chunks and costs one token per
-   * character — 46 a fence line, 93 for the two lines around a space. No draw can cost more: a
-   * chunk never costs more tokens than it has characters, and a random token's longer runs only
-   * merge further. Measured over 200,000 draws the same two lines ran 51 to 87 tokens (#604).
+   * character — 46 a fence line, 93 for the two lines around a space. Under that tokenizer, as
+   * jtokkit 1.1.0 ships it, no draw can cost more: a chunk never costs more tokens than it has
+   * characters, and a random token's longer runs only merge further. Measured over 200,000 draws
+   * the same two lines ran 51 to 87 tokens (#604). The bound belongs to the tokenizer rather than
+   * to this class, which is why the test pins the 93 itself: a tokenizer change that moved it fails
+   * there instead of as a rare budgeting flake.
    */
   private static final String WIDEST_FENCE_HEX = "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d";
 
