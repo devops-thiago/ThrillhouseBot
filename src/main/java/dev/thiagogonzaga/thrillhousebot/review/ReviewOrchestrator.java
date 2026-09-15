@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -311,7 +312,7 @@ public class ReviewOrchestrator {
 
       var aiResponse = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver);
 
-      CiStatusEvaluator.CiEvaluation ciEvaluation = ciFuture.join();
+      CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
 
       var result = verdictBuilder.build(ctx, aiResponse, ciEvaluation, plan);
 
@@ -600,11 +601,46 @@ public class ReviewOrchestrator {
    * Resolves the CI evaluation for a request: the required-context lookup unioned across rulesets
    * and classic protection, then the per-check evaluation on the head commit. Runs off the review
    * executor concurrently with the blocking AI call — it depends only on the commit and base branch
-   * carried on the request, not the model response.
+   * carried on the request, not the model response — and again after the call when that early
+   * reading held approval ({@link #rereadCiIfHeld}).
    */
   private CiStatusEvaluator.CiEvaluation resolveCiEvaluation(String auth, ReviewRequest req) {
     return ciStatusEvaluator.evaluate(
         auth, req.owner(), req.repo(), req.commitSha(), req.baseRef());
+  }
+
+  /**
+   * The CI reading the verdict is built from (#853). The early reading is taken concurrently with a
+   * model call that routinely runs for minutes, so a required check that was pending, failing or
+   * unreadable then may well have finished green by the time the verdict is built. When the early
+   * reading holds approval under the configured gating — the same decision the verdict makes — CI
+   * is read once more and the fresh reading wins; otherwise the early reading stands and nothing
+   * else is fetched. A fresh reading that still holds leads to the CI hold (#825) exactly as the
+   * early one did, and one that no longer holds lets the verdict approve without placing a hold.
+   */
+  private CiStatusEvaluator.CiEvaluation rereadCiIfHeld(
+      String auth, ReviewRequest req, CiStatusEvaluator.CiEvaluation early) {
+    if (!verdictBuilder.ciHoldsApproval(early)) {
+      return early;
+    }
+    var fresh = resolveCiEvaluation(auth, req);
+    if (!verdictBuilder.ciHoldsApproval(fresh)) {
+      Log.infof(
+          "CI for %s/%s #%d no longer holds approval after the model call — building the verdict"
+              + " from the re-read (held earlier by: %s)",
+          req.owner(), req.repo(), req.prNumber(), heldByNames(early));
+    }
+    return fresh;
+  }
+
+  /** The check names an early CI reading held approval on, flattened for one log line. */
+  private static String heldByNames(CiStatusEvaluator.CiEvaluation evaluation) {
+    if (evaluation.offendingChecks().isEmpty()) {
+      return "an unreadable CI source";
+    }
+    return String.join(
+        ", ",
+        evaluation.offendingChecks().stream().map(check -> LogSafe.oneLine(check.name())).toList());
   }
 
   /**
