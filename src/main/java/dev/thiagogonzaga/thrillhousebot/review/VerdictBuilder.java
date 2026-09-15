@@ -117,7 +117,10 @@ public class VerdictBuilder {
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       DiffBudgetPlanner.BudgetPlan plan) {
     // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
-    // into the omitted set (effective*); legacy: line-cap count — never sum both. Files skipped at
+    // into the omitted set (effective*); legacy: line-cap count — never sum both. Patchless files
+    // are the one class both lanes carry (#785): the line cap counts sections it dropped, and a
+    // file GitHub returned no content for is a gap whether or not its bare header fit, so the
+    // legacy lane adds that class to its count rather than losing it. Files skipped at
     // the token spend ceiling gate approval through the same omitted set but are pulled out into
     // their own class here, so the disclosure names the ceiling — a different cause with a
     // different fix — instead of blaming the diff budget (and never lists a file twice). Files
@@ -152,6 +155,7 @@ public class VerdictBuilder {
             : new ReviewResult.TruncationDetail(
                 List.of(),
                 List.of(),
+                plan.patchlessFiles(),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -163,7 +167,7 @@ public class VerdictBuilder {
                 + clipped.size()
                 + responseCut.size()
                 + plan.patchlessFiles().size()
-            : ctx.omittedFiles();
+            : ctx.omittedFiles() + plan.patchlessFiles().size();
     // GitHub PR-level totals when available; ignore-glob drops can undercount diff-derived stats.
     // Pure renames are excluded from reviewableFiles for AI budget (#386) but still belong in the
     // fallback file count / walkthrough when PR totals could not be fetched.
