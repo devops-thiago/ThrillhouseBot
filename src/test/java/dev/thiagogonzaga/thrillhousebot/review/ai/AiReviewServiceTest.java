@@ -19,6 +19,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.langchain4j.exception.HttpException;
+import dev.langchain4j.exception.InternalServerException;
+import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
@@ -28,16 +31,22 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -60,6 +69,10 @@ class AiReviewServiceTest {
   @Mock private SessionEventBroadcaster broadcaster;
 
   @Mock private ReviewTokenLedger tokenLedger;
+
+  /** No ceiling, the shipped default; the #838 tests build their own gate with one. */
+  @Spy
+  private ModelCallGate callGate = new ModelCallGate(0, Duration.ofSeconds(5), System::nanoTime);
 
   private static final AiReviewService.PromptInputs PROMPT_INPUTS =
       new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "");
@@ -871,7 +884,8 @@ class AiReviewServiceTest {
         .thenReturn(new HangingTokenStream());
     StreamingHandle handle = mock(StreamingHandle.class);
     var cancellableService =
-        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger) {
+        new AiReviewService(
+            prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, callGate) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -923,7 +937,8 @@ class AiReviewServiceTest {
     StreamingHandle handle = mock(StreamingHandle.class);
     doThrow(new IllegalStateException("already closed")).when(handle).cancel();
     var cancellableService =
-        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger) {
+        new AiReviewService(
+            prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, callGate) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -1019,7 +1034,8 @@ class AiReviewServiceTest {
     realLedger.open(42L);
     realLedger.recordUsage(42L, 900_000, 100_000);
     var uncappedService =
-        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, realLedger);
+        new AiReviewService(
+            prReviewer, prSummarizer, parser, config, broadcaster, realLedger, callGate);
     when(prReviewer.reviewStream(
             anyString(),
             anyString(),
@@ -1057,7 +1073,8 @@ class AiReviewServiceTest {
     var realLedger = new ReviewTokenLedger(config);
     realLedger.open(42L);
     var cappedService =
-        new AiReviewService(prReviewer, prSummarizer, parser, config, broadcaster, realLedger);
+        new AiReviewService(
+            prReviewer, prSummarizer, parser, config, broadcaster, realLedger, callGate);
     when(reviewConfig.maxAiRetries()).thenReturn(5);
     when(prReviewer.reviewStream(
             anyString(),
@@ -1492,6 +1509,283 @@ class AiReviewServiceTest {
         thrown.getMessage());
     assertFalse(
         thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"), thrown.getMessage());
+  }
+
+  /** The body Ollama cloud answers with when no concurrent request slot freed in time (#838). */
+  private static final String SLOT_REFUSAL =
+      "{\"error\":\"timed out waiting for a concurrent request slot\"}";
+
+  @Test
+  void aSecondCallWaitsForTheOnlySlotAndNeverOverlapsTheFirst() throws Exception {
+    // #838: two batches of one review (or two reviews) against a ceiling of 1. The first holds its
+    // stream open until the test ends it, so the second call's only options are to queue on the
+    // gate or to open a second stream beside it; which one happened is read, not timed.
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);
+    var limited = serviceGatedBy(gate);
+    var inFlight = new AtomicInteger();
+    var maxInFlight = new AtomicInteger();
+    var first = new ControlledTokenStream(inFlight, maxInFlight, gate::availableSlots);
+    var second = new ControlledTokenStream(inFlight, maxInFlight, gate::availableSlots);
+    stubReviewStreams(first, second);
+    var session = reviewSession();
+
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var firstCall = executor.submit(() -> limited.reviewBatch(session, PROMPT_INPUTS, 1, 2));
+      assertTrue(first.started().await(10, TimeUnit.SECONDS), "the first call must open a stream");
+      var secondCall = executor.submit(() -> limited.reviewBatch(session, PROMPT_INPUTS, 2, 2));
+
+      awaitCondition(() -> gate.queuedCalls() > 0 || second.hasStarted());
+      assertFalse(
+          second.hasStarted(),
+          "the second call opened its stream while the first held the only slot");
+
+      first.complete("{\"findings\":[]}");
+      assertNotNull(firstCall.get(10, TimeUnit.SECONDS));
+      assertTrue(
+          second.started().await(10, TimeUnit.SECONDS),
+          "the freed slot must go to the waiting call");
+      second.complete("{\"findings\":[]}");
+      assertNotNull(secondCall.get(10, TimeUnit.SECONDS));
+    }
+    assertEquals(1, maxInFlight.get(), "no two streams may be open at once under a ceiling of 1");
+    assertEquals(1, gate.availableSlots(), "both calls must return the slot");
+  }
+
+  @Test
+  void aCallHoldsItsSlotWhileItRunsAndReturnsItWhenTheStreamFails() {
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);
+    var slotsWhileRunning = new AtomicInteger(-1);
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(
+            invocation -> {
+              slotsWhileRunning.set(gate.availableSlots());
+              return new ErrorTokenStream(new RuntimeException("provider down"));
+            });
+    var limited = serviceGatedBy(gate);
+    var session = reviewSession();
+
+    assertThrows(AiReviewException.class, () -> limited.review(session, PROMPT_INPUTS));
+
+    assertEquals(0, slotsWhileRunning.get(), "the call must hold the only slot while it runs");
+    assertEquals(1, gate.availableSlots(), "a failed call must return its slot");
+  }
+
+  @Test
+  void aCallThatTimesOutReturnsItsSlot() {
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);
+    var hanging =
+        new ControlledTokenStream(new AtomicInteger(), new AtomicInteger(), gate::availableSlots);
+    stubReviewStreams(hanging);
+    var limited = serviceGatedBy(gate);
+    var session = reviewSession();
+
+    assertThrows(AiReviewException.class, () -> limited.reviewBatch(session, PROMPT_INPUTS, 1, 1));
+
+    assertEquals(0, hanging.slotsAtStart(), "the call must hold the only slot while it runs");
+    assertEquals(1, gate.availableSlots(), "a call that timed out must return its slot");
+  }
+
+  @Test
+  void anInterruptedCallReturnsItsSlot() throws Exception {
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);
+    var hanging =
+        new ControlledTokenStream(new AtomicInteger(), new AtomicInteger(), gate::availableSlots);
+    stubReviewStreams(hanging);
+    var limited = serviceGatedBy(gate);
+    var session = reviewSession();
+    var thrown = new AtomicReference<Throwable>();
+
+    var worker =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  try {
+                    limited.reviewBatch(session, PROMPT_INPUTS, 1, 1);
+                  } catch (RuntimeException e) {
+                    thrown.set(e);
+                  }
+                });
+    assertTrue(hanging.started().await(10, TimeUnit.SECONDS), "the call must open its stream");
+    worker.interrupt();
+    worker.join(10_000);
+
+    assertFalse(worker.isAlive());
+    assertInstanceOf(AiReviewException.class, thrown.get());
+    assertEquals(0, hanging.slotsAtStart(), "the call must hold the only slot while it runs");
+    assertEquals(1, gate.availableSlots(), "an interrupted call must return its slot");
+  }
+
+  @Test
+  void aCallThatFindsNoFreeSlotInTimeIsNeverSent() {
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    var gate = new ModelCallGate(1, Duration.ofMillis(50), System::nanoTime);
+    var limited = serviceGatedBy(gate);
+    var session = reviewSession();
+
+    try (var _ = gate.acquire("a call holding the only slot")) {
+      var thrown =
+          assertThrows(AiReviewException.class, () -> limited.review(session, PROMPT_INPUTS));
+
+      verify(prReviewer, never())
+          .reviewStream(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString());
+      assertTrue(
+          thrown.getCause().getMessage().contains("AI_MAX_CONCURRENT_CALLS=1"),
+          thrown.getCause().getMessage());
+    }
+  }
+
+  @Test
+  void aConcurrentSlotRefusalWaitsTheBackoffCeilingBeforeTheNextAttempt() {
+    // #838: the provider already queued this request and gave up on it, so the slot it needs is
+    // not seconds away. The exponential schedule would retry after its base delay (1 ms here).
+    var slept =
+        retrySleepsAfter(
+            new ErrorTokenStream(new RateLimitException(new HttpException(429, SLOT_REFUSAL))));
+
+    assertEquals(List.of(Duration.ofSeconds(30)), slept);
+  }
+
+  @Test
+  void aSlotRefusalSentWithAnotherStatusIsStillAThrottle() {
+    var slot503 = new InternalServerException(new HttpException(503, SLOT_REFUSAL));
+
+    assertEquals(List.of(Duration.ofSeconds(30)), retrySleepsAfter(new ErrorTokenStream(slot503)));
+  }
+
+  @Test
+  void anyRateLimitRefusalWaitsTheBackoffCeiling() {
+    var rateLimited = new RateLimitException(new HttpException(429, "Too Many Requests"));
+
+    assertEquals(
+        List.of(Duration.ofSeconds(30)), retrySleepsAfter(new ErrorTokenStream(rateLimited)));
+  }
+
+  @Test
+  void anOrdinaryFailureKeepsTheExponentialBackoff() {
+    assertEquals(
+        List.of(Duration.ofMillis(1)),
+        retrySleepsAfter(new ErrorTokenStream(new RuntimeException("connection reset"))));
+  }
+
+  @Test
+  void aBare429IsAThrottle() {
+    assertEquals(
+        List.of(Duration.ofSeconds(30)),
+        retrySleepsAfter(new ErrorTokenStream(new HttpException(429, "Too Many Requests"))));
+  }
+
+  @Test
+  void anotherHttpErrorKeepsTheExponentialBackoff() {
+    assertEquals(
+        List.of(Duration.ofMillis(1)),
+        retrySleepsAfter(new ErrorTokenStream(new HttpException(502, "Bad Gateway"))));
+  }
+
+  @Test
+  void anInterruptDuringTheThrottleWaitEndsTheCallAndKeepsTheFlag() throws Exception {
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    stubReviewStreams(
+        new ErrorTokenStream(new RateLimitException(new HttpException(429, SLOT_REFUSAL))));
+    var sleeping = new CountDownLatch(1);
+    var spiedService = spy(service);
+    doAnswer(
+            invocation -> {
+              sleeping.countDown();
+              return invocation.callRealMethod();
+            })
+        .when(spiedService)
+        .sleep(any(Duration.class));
+    var session = reviewSession();
+    var thrown = new AtomicReference<Throwable>();
+    var stillInterrupted = new AtomicBoolean();
+
+    var worker =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  try {
+                    spiedService.review(session, PROMPT_INPUTS);
+                  } catch (RuntimeException e) {
+                    thrown.set(e);
+                    stillInterrupted.set(Thread.currentThread().isInterrupted());
+                  }
+                });
+    assertTrue(sleeping.await(10, TimeUnit.SECONDS), "the refusal must lead to a wait");
+    worker.interrupt();
+    worker.join(10_000);
+
+    assertFalse(worker.isAlive());
+    assertInstanceOf(AiReviewException.class, thrown.get());
+    assertEquals("Retry delay interrupted", thrown.get().getMessage());
+    assertTrue(stillInterrupted.get(), "the interrupt flag must survive the wrapped exception");
+  }
+
+  /** Runs a two-attempt review whose first stream is {@code failing}; returns the waits between. */
+  private List<Duration> retrySleepsAfter(TokenStream failing) {
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    stubReviewStreams(failing, new FakeTokenStream("{\"findings\":[]}"));
+    var slept = new CopyOnWriteArrayList<Duration>();
+    var spiedService = spy(service);
+    doAnswer(
+            invocation -> {
+              slept.add(invocation.getArgument(0));
+              return null;
+            })
+        .when(spiedService)
+        .sleep(any(Duration.class));
+
+    spiedService.review(reviewSession(), PROMPT_INPUTS);
+    return slept;
+  }
+
+  private AiReviewService serviceGatedBy(ModelCallGate gate) {
+    return new AiReviewService(
+        prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, gate);
+  }
+
+  private void stubReviewStreams(TokenStream first, TokenStream... then) {
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(first, then);
+  }
+
+  /**
+   * Spins until {@code condition} holds. A bounded poll on observable state rather than a timed
+   * sleep, so what the test then asserts never depends on how long a thread took to be scheduled.
+   */
+  private static void awaitCondition(BooleanSupplier condition) {
+    var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+    while (!condition.getAsBoolean()) {
+      assertTrue(System.nanoTime() < deadline, "condition not reached within 10 seconds");
+      Thread.onSpinWait();
+    }
   }
 
   private static ReviewSession reviewSession() {

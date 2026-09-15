@@ -575,6 +575,16 @@ public interface ThrillhouseConfig {
     @WithName("provider-name")
     Optional<String> providerName();
 
+    /**
+     * Ceiling on model calls in flight at once across the whole process ({@code
+     * AI_MAX_CONCURRENT_CALLS}, #838). {@code 0}, the default, leaves them unbounded; a negative
+     * value is rejected at boot. A call past the ceiling waits for a slot instead of reaching a
+     * provider that refuses requests past its own concurrency limit.
+     */
+    @WithDefault("0")
+    @WithName("max-concurrent-calls")
+    int maxConcurrentCalls();
+
     ReasoningConfig reasoning();
 
     Map<String, ModelPricing> pricing();

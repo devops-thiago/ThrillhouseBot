@@ -32,7 +32,9 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  * at the exact sink the review flagged. Empty when the PR has no prior review round.
  */
 @RegisterAiService(
-    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class,
+    // The default model behind the process-wide model call ceiling (#838). See BoundedChatModel.
+    chatLanguageModelSupplier = BoundedChatModel.ActiveSupplier.class)
 public interface UnitTestAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
