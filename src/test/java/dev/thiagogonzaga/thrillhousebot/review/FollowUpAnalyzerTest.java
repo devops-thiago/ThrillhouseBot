@@ -2998,9 +2998,12 @@ class FollowUpAnalyzerTest {
     var shared = FollowUpAnalyzer.conversationDeclines(oneLine, BOT_ID);
 
     assertEquals(2, shared.size(), "two directives on one line are two directives");
-    assertEquals(oneLine, shared.get(0).naming());
+    assertEquals(
+        "@thrillhousebot declined `src/A.java:10` — t1 and",
+        shared.get(0).naming(),
+        "the first is named by its own part of the line, not the second's locator and title");
     assertEquals("", shared.get(0).reason(), "nothing lies below the first");
-    assertEquals(oneLine, shared.get(1).naming());
+    assertEquals("@thrillhousebot declined `src/B.java:5` — t2", shared.get(1).naming());
     assertEquals("", shared.get(1).reason(), "nor below the second");
     assertEquals(
         List.of(),
@@ -3235,6 +3238,73 @@ class FollowUpAnalyzerTest {
         rechecked.get(1),
         "the conversation decline is applied");
     assertEquals(statuses.get(2), rechecked.get(2), "the entry nobody named is untouched");
+  }
+
+  /**
+   * #823 review: two directives on one line each decline only their own finding. The reason below
+   * the line belongs to the directive that ends it, so that finding is re-checked against it — it
+   * used to collect a reason from each directive on the line and skip the re-check as a second
+   * answer the maintainer never gave.
+   */
+  @Test
+  void aDeclineSharingItsLineIsReCheckedAgainstItsOwnReason() {
+    var other =
+        new ReviewResponse.Finding(
+            "low", "low", "src/B.java", 5, "Missing null check", "may NPE", null, null);
+    var previous = List.of(RACE_PREVIOUS.get(0), other);
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"));
+    var conversation =
+        List.of(
+            declines(
+                902L,
+                "@thrillhousebot declined `src/B.java:5` — Missing null check and "
+                    + DECLINES_RACE
+                    + "\n"
+                    + ASYNC_AFTER_ACK));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            previous, statuses, List.of(), conversation, BOT_ID, () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        "unresolved",
+        rechecked.get(0).status(),
+        "the race decline is re-checked against the reason under it, and the code contradicts it");
+    assertEquals(
+        "justified",
+        rechecked.get(1).status(),
+        "the other directive on the line declines its own finding only");
+  }
+
+  /**
+   * #823 review: the two passes compose. A thread decline the code contradicts is reopened by the
+   * thread pass, and a conversation decline naming the same finding is the maintainer's second
+   * answer, so the conversation pass records it justified.
+   */
+  @Test
+  void aConversationDeclineAnswersAThreadDeclineTheCodeContradicted() {
+    var statuses =
+        List.of(new ReviewResponse.PreviousFindingStatus(1, "justified", "declined on the thread"));
+    var conversation =
+        List.of(declines(903L, DECLINES_RACE + "\n\nAccepted risk for this release."));
+
+    var rechecked =
+        analyzer.recheckDeclines(
+            RACE_PREVIOUS,
+            statuses,
+            raceThread(ASYNC_AFTER_ACK),
+            conversation,
+            BOT_ID,
+            () -> DISPATCHING_DIFF);
+
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(
+                1, "justified", FollowUpAnalyzer.conversationDeclinedNote(BOT_ID))),
+        rechecked);
   }
 
   @Test

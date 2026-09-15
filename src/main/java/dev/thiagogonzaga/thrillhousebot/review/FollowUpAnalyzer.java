@@ -1087,17 +1087,18 @@ public class FollowUpAnalyzer {
       // the mention's own.
       var at = masked.indexOf('@', matches.start());
       spans.add(
-          new int[] {lineAt(lineStarts, at), namingLine(body, lines, lineStarts, matches.end())});
+          new int[] {
+            lineAt(lineStarts, at), namingLine(body, lines, lineStarts, matches.end()), at
+          });
     }
     var declines = new ArrayList<ConversationDecline>(spans.size());
     for (var i = 0; i < spans.size(); i++) {
-      var first = spans.get(i)[0];
       var afterLast = spans.get(i)[1] + 1;
       // Two directives on one line share it: the second opens where the first's line ends.
       var next = i + 1 < spans.size() ? Math.max(afterLast, spans.get(i + 1)[0]) : lines.size();
       declines.add(
           new ConversationDecline(
-              namingText(String.join("\n", lines.subList(first, afterLast))),
+              namingText(ownNaming(body, lineStarts, spans, i)),
               String.join("\n", lines.subList(afterLast, next)).strip()));
     }
     return declines;
@@ -1129,6 +1130,31 @@ public class FollowUpAnalyzer {
   private static int lineAt(int[] lineStarts, int index) {
     var found = Arrays.binarySearch(lineStarts, index);
     return found >= 0 ? found : -found - 2;
+  }
+
+  /**
+   * The naming text of directive {@code i}: the lines its span covers, clipped to its own part of a
+   * line it shares with a neighbouring directive. Without the clip, two directives on one line were
+   * each named by the whole line, so each carried the other's locator and title, every finding on
+   * the line collected two reasons, and two reasons read as the maintainer's second answer — the
+   * re-check was skipped for a finding declined once (#823 review).
+   */
+  private static String ownNaming(String body, int[] lineStarts, List<int[]> spans, int i) {
+    var first = spans.get(i)[0];
+    var last = spans.get(i)[1];
+    var start = lineStarts[first];
+    var end = last + 1 < lineStarts.length ? lineStarts[last + 1] - 1 : body.length();
+    var clipped = false;
+    if (i > 0 && spans.get(i - 1)[1] == first) {
+      start = spans.get(i)[2];
+      clipped = true;
+    }
+    if (i + 1 < spans.size() && spans.get(i + 1)[0] == last) {
+      end = spans.get(i + 1)[2];
+      clipped = true;
+    }
+    var naming = body.substring(start, end);
+    return clipped ? naming.strip() : naming;
   }
 
   /**
@@ -1912,9 +1938,12 @@ public class FollowUpAnalyzer {
    * #declineDirective}) arrives here as a model-reported {@code unresolved} and is applied by
    * {@link #declineNamedInConversation} after the thread pass: the finding is recorded {@code
    * justified}, unless the comment's reason fails the very same re-check, under the very same
-   * one-push-back rule counted in directives instead of replies (#709). The two passes touch
-   * disjoint statuses — one rewrites {@code justified}, the other {@code unresolved} — so their
-   * order cannot change an outcome.
+   * one-push-back rule counted in directives instead of replies (#709). The passes are not
+   * independent, and the order is the rule: the thread pass runs first and the conversation pass
+   * reads its result. A finding declined on both surfaces can be rewritten twice in one round — a
+   * thread decline the code contradicts is reopened, and a conversation decline naming the same
+   * finding is then the maintainer's second answer, which records it justified unless its own
+   * reason is contradicted too.
    *
    * @param conversationComments the PR conversation, read for decline directives naming findings
    *     the model still reports unresolved
