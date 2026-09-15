@@ -82,6 +82,7 @@ class StartupConfigValidatorTest {
     private double tokenSafetyMargin = 0.9;
     private long maxTokensPerReview = 0;
     private String ciGating = "strict";
+    private int maxConcurrentCalls = 0;
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
     private Optional<String> conciseReasoningEffort = Optional.empty();
@@ -151,6 +152,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder maxConcurrentCalls(int v) {
+      this.maxConcurrentCalls = v;
+      return this;
+    }
+
     ConfigBuilder reasoningEnabled(boolean v) {
       this.reasoningEnabled = v;
       return this;
@@ -214,6 +220,7 @@ class StartupConfigValidatorTest {
       lenient().when(review.ciGating()).thenReturn(ciGating);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
+      lenient().when(ai.maxConcurrentCalls()).thenReturn(maxConcurrentCalls);
       return new StartupConfigValidator(
           config, aiApiKey, new ActiveModelSettings(config, modelName), conciseMaxOutputTokens);
     }
@@ -359,6 +366,21 @@ class StartupConfigValidatorTest {
   @Test
   void bootsWhenMaxTokensPerReviewIsPositive() {
     new ConfigBuilder().maxTokensPerReview(250_000).build().validate();
+  }
+
+  @Test
+  void failsFastWhenMaxConcurrentCallsNegative() {
+    // #838: 0 is the unbounded sentinel, so a negative ceiling is a typo, refused at boot rather
+    // than read silently as no ceiling.
+    var ex = assertFailsValidation(new ConfigBuilder().maxConcurrentCalls(-1).build());
+    assertTrue(ex.getMessage().contains("AI_MAX_CONCURRENT_CALLS"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("thrillhousebot.ai.max-concurrent-calls"), ex.getMessage());
+  }
+
+  @Test
+  void bootsWithModelCallsUnboundedOrBounded() {
+    new ConfigBuilder().maxConcurrentCalls(0).build().validate();
+    new ConfigBuilder().maxConcurrentCalls(4).build().validate();
   }
 
   @Test

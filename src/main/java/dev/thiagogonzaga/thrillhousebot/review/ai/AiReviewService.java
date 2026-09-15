@@ -15,6 +15,8 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import dev.langchain4j.exception.HttpException;
+import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.output.FinishReason;
@@ -50,6 +52,14 @@ public class AiReviewService {
   private static final long STREAM_FLUSH_INTERVAL_MS = 250;
   private static final int STREAM_FLUSH_MIN_CHARS = 512;
 
+  /** The ceiling of the retry schedule, and the whole wait after a provider throttle (#838). */
+  private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
+
+  private static final int TOO_MANY_REQUESTS = 429;
+
+  /** Wording of Ollama cloud's refusal when no concurrent request slot freed in time (#838). */
+  private static final String CONCURRENT_SLOT_REFUSAL = "concurrent request slot";
+
   /** Dashboard reason for the one repeat with reasoning disabled (#839). */
   static final String REASONING_STEP_DOWN_REASON =
       "Model spent its output allowance reasoning and returned no content; repeating the call"
@@ -64,6 +74,8 @@ public class AiReviewService {
 
   private final ReviewTokenLedger tokenLedger;
 
+  private final ModelCallGate callGate;
+
   @Inject
   public AiReviewService(
       PrReviewer prReviewer,
@@ -71,13 +83,15 @@ public class AiReviewService {
       ReviewResponseParser parser,
       ThrillhouseConfig config,
       SessionEventBroadcaster broadcaster,
-      ReviewTokenLedger tokenLedger) {
+      ReviewTokenLedger tokenLedger,
+      ModelCallGate callGate) {
     this.prReviewer = prReviewer;
     this.prSummarizer = prSummarizer;
     this.parser = parser;
     this.config = config;
     this.broadcaster = broadcaster;
     this.tokenLedger = tokenLedger;
+    this.callGate = callGate;
   }
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
@@ -236,7 +250,7 @@ public class AiReviewService {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.retry(
                 session, attempt, maxAttempts, retryFailureReason(lastFailure)));
-        sleep(backoffDelay(attempt));
+        sleep(retryDelay(session, attempt, maxAttempts, lastFailure));
       }
 
       try {
@@ -301,7 +315,37 @@ public class AiReviewService {
       String previousFindings,
       String repoInstructions) {}
 
+  /**
+   * One attempt, holding a {@link ModelCallGate} slot from before the stream opens until the
+   * attempt ends (#838). The wait comes before the session binding and the stream factory, so a
+   * call that finds no slot is never sent and binds nothing; that failure is an ordinary transient
+   * one and is retried on the usual terms.
+   *
+   * <p>The slot is returned when the attempt returns, not when the provider's stream reports its
+   * end. On success and on a stream error those are the same moment, because the attempt waits for
+   * the handler. On a timeout or an interrupt the attempt cancels the stream first, which closes
+   * the connection and frees the provider's slot with it, and only then returns the local one. A
+   * stream with no handle to cancel (a runtime other than Quarkus', or one that never started
+   * streaming) can run on after the attempt until the HTTP client's {@code AI_TIMEOUT} ends it, so
+   * the ceiling can be overshot by that stream for that long. Holding the slot until the handler
+   * fires instead would lose it for good whenever a cancelled stream never reports back, and at a
+   * ceiling of 1 that stops every model call in the process; a bounded overshoot is the lesser
+   * failure.
+   */
   private ReviewResponse streamOnce(
+      ReviewSession session,
+      Supplier<TokenStream> streamFactory,
+      int attempt,
+      boolean broadcastTokens,
+      ModelLane lane,
+      boolean reasoningDisabled) {
+    try (var _ = callGate.acquire("AI review call for session " + session.id)) {
+      return streamInSlot(
+          session, streamFactory, attempt, broadcastTokens, lane, reasoningDisabled);
+    }
+  }
+
+  private ReviewResponse streamInSlot(
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       int attempt,
@@ -510,10 +554,52 @@ public class AiReviewService {
     return Duration.ofSeconds(config.review().aiTimeoutSeconds());
   }
 
+  /**
+   * The wait before a retry. A refusal for rate or concurrency is a throttle (#838): the provider
+   * either queued the request and gave up waiting for a slot, or counted it over a limit, so the
+   * capacity the retry needs is not a couple of seconds away, and the exponential schedule's first
+   * steps would send it into the same full queue. Production on Ollama cloud saw such refusals
+   * recover on retry, but each immediate retry was a gamble on a slot freeing within the base
+   * delay. A throttle waits the schedule's ceiling, {@link #MAX_BACKOFF}, instead; every other
+   * failure keeps the exponential step. The wait goes through {@link #sleep} either way, so an
+   * interrupt ends it by restoring the flag and throwing.
+   */
+  private Duration retryDelay(
+      ReviewSession session, int attempt, int maxAttempts, RuntimeException lastFailure) {
+    if (!isThrottle(lastFailure)) {
+      return backoffDelay(attempt);
+    }
+    Log.infof(
+        "AI review attempt %d/%d for session %d follows a provider throttle (a rate limit or no"
+            + " free concurrent request slot); waiting %d s before it",
+        attempt, maxAttempts, session.id, MAX_BACKOFF.toSeconds());
+    return MAX_BACKOFF;
+  }
+
+  /**
+   * Whether a failure is the provider refusing for rate or concurrency: a langchain4j {@link
+   * RateLimitException} (how the OpenAI client maps an HTTP 429), a bare 429, or the concurrent
+   * slot refusal's wording under whatever status the provider sent it with. Visible for tests.
+   */
+  static boolean isThrottle(Throwable failure) {
+    return Throwables.findCause(failure, AiReviewService::namesAThrottle).isPresent();
+  }
+
+  private static boolean namesAThrottle(Throwable cause) {
+    if (cause instanceof RateLimitException) {
+      return true;
+    }
+    if (cause instanceof HttpException http && http.statusCode() == TOO_MANY_REQUESTS) {
+      return true;
+    }
+    var message = cause.getMessage();
+    return message != null && message.contains(CONCURRENT_SLOT_REFUSAL);
+  }
+
   private Duration backoffDelay(int attempt) {
     var baseMs = config.review().aiRetryBaseDelayMs();
     var delay = baseMs * (1L << Math.min(attempt - 2, 4));
-    return Duration.ofMillis(Math.min(delay, 30_000L));
+    return Duration.ofMillis(Math.min(delay, MAX_BACKOFF.toMillis()));
   }
 
   void sleep(Duration delay) {

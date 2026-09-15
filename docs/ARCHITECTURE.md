@@ -230,7 +230,9 @@ single-call review (or N+N+1 under budgeting) in the traces and in the
 dashboard's session totals. Multi-call reviews do not stream tokens to the
 dashboard; they emit `review.batch` progress events instead. Batches run
 concurrently on virtual threads; a failed batch is retried once after the
-parallel pass completes.
+parallel pass completes. `AI_MAX_CONCURRENT_CALLS` caps the model calls in
+flight across the whole process, streamed and blocking alike; a call past it
+waits for a slot rather than reaching a provider that limits concurrent requests.
 
 **Cost ceiling** — `REVIEW_MAX_TOKENS_PER_REVIEW` bounds the tokens one review may
 spend across every call it makes, counting retries, the verifier and the summary.

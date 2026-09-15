@@ -29,7 +29,10 @@ import io.quarkiverse.langchain4j.RegisterAiService;
  */
 @RegisterAiService(
     modelName = "concise",
-    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class)
+    chatMemoryProviderSupplier = RegisterAiService.NoChatMemoryProviderSupplier.class,
+    // The concise model behind the process-wide model call ceiling (#838); modelName still names
+    // the lane for the extension's bookkeeping. See BoundedChatModel.
+    chatLanguageModelSupplier = BoundedChatModel.ConciseSupplier.class)
 public interface ReplyAssistant {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /** The one bounded cause-chain walk shared by every layer that reacts to a wrapped failure. */
 public final class Throwables {
@@ -35,12 +36,21 @@ public final class Throwables {
    * failure arrives wrapped at depth 2 in practice), so a match is never missed for depth.
    */
   public static <T extends Throwable> Optional<T> findCause(Throwable failure, Class<T> type) {
+    return findCause(failure, type::isInstance).map(type::cast);
+  }
+
+  /**
+   * The first throwable in a failure's cause chain — the failure itself included — that {@code
+   * matches}, within the same bound as {@link #findCause(Throwable, Class)}. For a question a type
+   * alone cannot answer, such as a status code or a provider's wording (#838).
+   */
+  public static Optional<Throwable> findCause(Throwable failure, Predicate<Throwable> matches) {
     var cause = failure;
     for (var depth = 0;
         cause != null && depth < MAX_CAUSE_DEPTH;
         depth++, cause = cause.getCause()) {
-      if (type.isInstance(cause)) {
-        return Optional.of(type.cast(cause));
+      if (matches.test(cause)) {
+        return Optional.of(cause);
       }
     }
     return Optional.empty();

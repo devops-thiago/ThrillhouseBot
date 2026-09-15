@@ -123,6 +123,7 @@ public class StartupConfigValidator {
     validateActiveModelWindow(problems);
     validateReasoningEffort(problems, config.ai().reasoning());
     validateConciseResponseCap(problems);
+    validateModelCallCeiling(problems, config.ai());
 
     if (!problems.isEmpty()) {
       throw new ConfigValidationException(formatMessage(problems));
@@ -137,6 +138,21 @@ public class StartupConfigValidator {
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
             + " present.");
+  }
+
+  /**
+   * Rejects a negative {@code AI_MAX_CONCURRENT_CALLS} at boot (#838). {@code 0} is the documented
+   * way to leave model calls unbounded, so a negative value is a typo rather than a request, and it
+   * is refused instead of being read silently as no ceiling at all.
+   */
+  private static void validateModelCallCeiling(
+      List<String> problems, ThrillhouseConfig.AiPricingConfig ai) {
+    if (ai.maxConcurrentCalls() < 0) {
+      problems.add(
+          "AI_MAX_CONCURRENT_CALLS must be >= 0, where 0 leaves model calls unbounded"
+              + " (thrillhousebot.ai.max-concurrent-calls): "
+              + ai.maxConcurrentCalls());
+    }
   }
 
   /**

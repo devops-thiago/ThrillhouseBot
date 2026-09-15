@@ -71,6 +71,14 @@ API. Point `AI_BASE_URL` and `AI_MODEL` at your provider of choice:
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 | Ollama (local) | `http://localhost:11434/v1` | `llama3.2` |
 
+Ollama's cloud endpoint (`https://ollama.com/v1`) limits how many requests one
+account has in flight and refuses the rest with `timed out waiting for a
+concurrent request slot`. Reviews of different pull requests run in parallel and
+a large pull request sends its batches at once, so set `AI_MAX_CONCURRENT_CALLS`
+to the number of concurrent requests your plan allows; calls past it wait for a
+slot instead of being refused. A refusal that still gets through is retried
+after a 30-second wait rather than straight away.
+
 The default is DeepSeek, used only because it is inexpensive; nothing in the bot
 is tied to it.
 <!-- docs:providers:end -->
@@ -280,6 +288,7 @@ will change per provider:
 | `AI_MODEL` | Chat model name | `deepseek-chat` |
 | `AI_PROVIDER` | Provider label for telemetry (`gen_ai.provider.name`); derived from `AI_BASE_URL` when unset | _(derived)_ |
 | `AI_TIMEOUT` | Per-request timeout | `300s` |
+| `AI_MAX_CONCURRENT_CALLS` | Ceiling on model calls in flight at once across the whole process: review batches, the final summary, the finding verifier, maintainer replies and the on-demand commands. A call past it waits for a slot, up to `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS`, instead of being sent, and a wait over 5 seconds is logged at INFO. Set it for a provider that limits concurrent requests per account, such as Ollama cloud. A rate-limit or concurrent-slot refusal from the provider is retried after 30 seconds whether or not this is set. `0` leaves calls unbounded | `0` |
 | `AI_REASONING_ENABLED` | Send a reasoning hint to reasoning-capable models; when `false` no reasoning parameter is sent and the provider default applies | `false` |
 | `AI_REASONING_EFFORT` | Effort sent while enabled: `none`/`low`/`medium`/`high`/`xhigh`/`max` (`none` explicitly asks the model not to reason; `xhigh`/`max` are the extended tiers newer reasoning models expose above `high`); reasoning tokens are billed as output tokens | `low` |
 | `AI_REASONING_EFFORT_CONCISE` | Effort for the fixed-shape calls on the `concise` model (final summary, finding verifier, replies), which do **not** follow `AI_REASONING_EFFORT`: reasoning tokens count against `REVIEW_CONCISE_MAX_OUTPUT_TOKENS`, so a high effort there lets the verifier reason its whole allowance away and return an empty response. Same accepted values; unset means `low`, lowered to `AI_REASONING_EFFORT` when that is set below `low` | `low` |
