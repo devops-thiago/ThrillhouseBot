@@ -254,6 +254,7 @@ public class VerdictBuilder {
             ReviewDiffFormatter.formatPureRenameRollup(
                 ReviewDiffFormatter.pureRenameFiles(ctx.files())),
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
+            PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             plan.reasoningSteppedDown() ? REASONING_STEP_DOWN_NOTE : ""),
         unresolvedPrevious,
@@ -530,14 +531,15 @@ public class VerdictBuilder {
 
   /**
    * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, the
-   * unmatched-ignore-glob note, the superseded-run carry-over note, and the reasoning step-down
-   * note. The notes share the review-scope blockquote — each answers "what did this review look at,
-   * or not, and how".
+   * unmatched-ignore-glob note, the refused-coverage-artifact note, the superseded-run carry-over
+   * note, and the reasoning step-down note. The notes share the review-scope blockquote — each
+   * answers "what did this review look at, or not, and why".
    */
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       String pureRenameRollup,
       String unmatchedIgnoreGlobs,
+      String coverageArtifactNotRead,
       String carriedFromSupersededRun,
       String reasoningStepDown) {}
 
@@ -553,7 +555,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", ""),
+        new SummaryInputs(changedFiles, "", "", "", "", ""),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -696,6 +698,7 @@ public class VerdictBuilder {
     var notes = new ArrayList<String>(4);
     addScopeNote(notes, summaryInputs.pureRenameRollup());
     addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
+    addScopeNote(notes, summaryInputs.coverageArtifactNotRead());
     addScopeNote(notes, summaryInputs.carriedFromSupersededRun());
     addScopeNote(notes, summaryInputs.reasoningStepDown());
     return String.join("\n>\n> ", notes);
