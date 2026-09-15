@@ -107,7 +107,9 @@ public class AiReviewService {
    * concise cap rather than the batch review's response allowance. That binding is declared here as
    * the call's {@link ModelLane} and travels to the truncation site, so a cut summary states {@code
    * REVIEW_CONCISE_MAX_OUTPUT_TOKENS} from the outset instead of being raised with the active
-   * model's wording and re-marked afterwards (#581).
+   * model's wording and re-marked afterwards (#581). The same lane selects {@link
+   * ReviewResponseParser#parseSummary}, which reads a response that omits the findings node or the
+   * summary object around its fields (#850).
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
     return runWithRetries(
@@ -414,7 +416,10 @@ public class AiReviewService {
                 response.tokenUsage()));
         return;
       }
-      result.complete(parser.parse(text));
+      // The summary is the one call on the concise lane that streams through here (the verifier
+      // and reply calls block and read their own shapes), and it is read with the summary lane's
+      // tolerances; every batch keeps the #805 refusal of a root with no findings node (#850).
+      result.complete(lane == ModelLane.CONCISE ? parser.parseSummary(text) : parser.parse(text));
     } catch (RuntimeException e) {
       result.completeExceptionally(e);
     }
