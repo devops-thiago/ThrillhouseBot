@@ -188,6 +188,12 @@ class ReviewDispatcherTest {
     verify(ciHoldRevisit, after(300).times(1)).revisit(any());
   }
 
+  /**
+   * The worker's own contract, whatever the collaborator does: a recheck that throws never stops
+   * the queue. {@code CiHoldRevisit.revisit} catches its own failures today, so production does not
+   * reach the dispatcher's catch; the stub stands in for any later path that escapes it (#833
+   * review).
+   */
   @Test
   void shouldContinueAfterCiRecheckFailure() {
     doThrow(new RuntimeException("boom")).when(ciHoldRevisit).revisit(any());
