@@ -982,4 +982,163 @@ class GitHubWriteRetryTest {
       assertTrue(logged.isEmpty(), logged.toString());
     }
   }
+
+  /**
+   * #734. One call waits at most {@code TOTAL_BUDGET}, but a review makes one call per route per
+   * finding, so a review throttled on every finding could wait for hours while holding its pull
+   * request's dispatcher slot. Inside a review the waiting is charged to the review's budget as
+   * well, and once that is spent a throttled write is not repeated at all. Outside a review — the
+   * on-demand commands, the thread replies — nothing changes, which every other test here pins.
+   */
+  @Nested
+  class TheReviewsWriteRetryBudget {
+
+    private final List<LogRecord> logged = new CopyOnWriteArrayList<>();
+    private final Logger julLogger = Logger.getLogger(GitHubWriteRetry.class.getName());
+    private final Handler capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            logged.add(entry);
+          }
+
+          @Override
+          public void flush() {
+            // Nothing is buffered.
+          }
+
+          @Override
+          public void close() {
+            // Nothing to release.
+          }
+        };
+    private Level originalLevel;
+
+    @BeforeEach
+    void captureLogging() {
+      originalLevel = julLogger.getLevel();
+      julLogger.setLevel(Level.ALL);
+      julLogger.addHandler(capture);
+    }
+
+    @AfterEach
+    void restoreLogging() {
+      julLogger.removeHandler(capture);
+      julLogger.setLevel(originalLevel);
+    }
+
+    private List<String> warnings() {
+      return logged.stream()
+          .filter(entry -> entry.getLevel().intValue() >= Level.WARNING.intValue())
+          .map(entry -> entry.getMessage() + " " + Arrays.toString(entry.getParameters()))
+          .toList();
+    }
+
+    private WebApplicationException throttledCall(AtomicInteger calls) {
+      return assertThrows(
+          WebApplicationException.class,
+          () ->
+              retry.call(
+                  "a comment on o/r #7",
+                  () -> {
+                    calls.incrementAndGet();
+                    throw throttled("Retry-After", "4");
+                  }));
+    }
+
+    @Test
+    void aThrottledWriteIsNotRepeatedOnceTheReviewHasSpentItsBudget() {
+      var calls = new AtomicInteger();
+
+      GitHubWriteBudget.within(
+          "o/r #7",
+          Duration.ofSeconds(6),
+          () -> {
+            throttledCall(calls);
+            // The first wait leaves 2s; the second crosses the ceiling and is still served;
+            // the third is refused, so the call ends after three attempts rather than four.
+            assertEquals(3, calls.get());
+            assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+
+            // The next write of the same review is not repeated at all.
+            throttledCall(calls);
+            assertEquals(4, calls.get());
+          });
+
+      assertEquals(List.of(Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+      var stops = warnings().stream().filter(line -> line.contains("write-retry budget")).toList();
+      assertEquals(2, stops.size(), warnings().toString());
+      assertTrue(stops.getFirst().contains("a comment on o/r #7"), stops.toString());
+      assertTrue(stops.getFirst().contains("status=403"), stops.toString());
+    }
+
+    @Test
+    void aStoppedWriteIsNotAlsoReportedAsRetriedOnUnrecognisedBlockWording() {
+      // The #784 block-miss line says the write is retried without the floor. Once the budget is
+      // spent it is not retried at all, and a log that said both would contradict itself, so the
+      // wording report is made only once the wait has actually been admitted.
+      var body =
+          "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily"
+              + " blocked from creating comments.\"}";
+      var calls = new AtomicInteger();
+
+      GitHubWriteBudget.within(
+          "o/r #7",
+          Duration.ofSeconds(1),
+          () -> {
+            throttledCall(calls);
+            assertThrows(
+                WebApplicationException.class,
+                () ->
+                    retry.call(
+                        "a comment on o/r #7",
+                        () -> {
+                          calls.incrementAndGet();
+                          throw failure(403, body, "Retry-After", "4");
+                        }));
+          });
+
+      assertEquals(3, calls.get());
+      var lines = warnings();
+      assertTrue(
+          lines.stream().noneMatch(line -> line.contains("matched no known content-creation")),
+          lines.toString());
+      assertEquals(
+          2,
+          lines.stream().filter(line -> line.contains("write-retry budget")).count(),
+          lines.toString());
+    }
+
+    @Test
+    void theStopIsSilentWhenWarningsAreOff() {
+      // Behind the same level check as the give-up line, because diagnostics() is eager.
+      julLogger.setLevel(Level.OFF);
+      var calls = new AtomicInteger();
+
+      GitHubWriteBudget.within(
+          "o/r #7",
+          Duration.ofSeconds(1),
+          () -> {
+            throttledCall(calls);
+            assertEquals(2, calls.get());
+          });
+
+      assertEquals(List.of(Duration.ofSeconds(4)), slept);
+      assertTrue(logged.isEmpty(), logged.toString());
+    }
+
+    @Test
+    void aReviewThatNeverCrossesItsBudgetKeepsTheFullPerCallBackoff() {
+      var calls = new AtomicInteger();
+
+      GitHubWriteBudget.within("o/r #7", Duration.ofHours(1), () -> throttledCall(calls));
+
+      assertEquals(4, calls.get());
+      assertEquals(
+          List.of(Duration.ofSeconds(4), Duration.ofSeconds(4), Duration.ofSeconds(4)), slept);
+      assertTrue(
+          warnings().stream().noneMatch(line -> line.contains("write-retry budget")),
+          warnings().toString());
+    }
+  }
 }

@@ -34,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -142,6 +143,7 @@ class ReviewOrchestratorTest {
     ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
     diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
     reviewPublisher =
         new ReviewPublisher(
@@ -6322,7 +6324,7 @@ class ReviewOrchestratorTest {
             .thenAnswer(inv -> inv.getArgument(1));
         when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any()))
             .thenAnswer(inv -> inv.getArgument(1));
-        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+        when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
             .thenReturn(
                 List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "reopened")));
         when(followUpAnalyzer.matchFindingThreads(
@@ -7550,7 +7552,7 @@ class ReviewOrchestratorTest {
                       inv.getArgument(2),
                       inv.getArgument(3),
                       inv.getArgument(4)));
-      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any()))
+      when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
           .thenAnswer(inv -> inv.getArgument(1));
       when(followUpAnalyzer.unresolvedFindings(
               ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))
