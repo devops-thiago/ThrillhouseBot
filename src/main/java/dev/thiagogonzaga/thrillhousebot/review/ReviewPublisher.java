@@ -508,11 +508,14 @@ public class ReviewPublisher {
     GitHubWriteBudget.exhausted()
         .ifPresent(
             budget ->
-                sb.append(" — this review spent its ")
+                // The list mixes causes: a finding can be here because GitHub refused its line and
+                // file routes outright, before or regardless of any budget. The sentence says what
+                // the budget did without claiming it for every finding below it (#827 review).
+                sb.append(" — this review also spent its ")
                     .append(budget.toSeconds())
                     .append(
-                        "s write-retry budget waiting on GitHub's rate limit, so later writes were"
-                            + " not retried; re-run `/review` to post them"));
+                        "s write-retry budget waiting on GitHub's rate limit, and a finding refused"
+                            + " after that was not retried, so re-running `/review` may post it"));
     sb.append(":\n\n");
     appendFindingList(sb, findings);
     return sb.toString();
