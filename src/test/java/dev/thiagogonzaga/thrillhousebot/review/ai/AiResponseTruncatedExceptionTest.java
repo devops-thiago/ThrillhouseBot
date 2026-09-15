@@ -39,19 +39,6 @@ class AiResponseTruncatedExceptionTest {
   }
 
   @Test
-  void implicatingConciseModelKeepsMessageAndBodyAndIsIdempotent() {
-    var e = new AiResponseTruncatedException("cap", "{\"findings\":[", false);
-
-    var marked = e.implicatingConciseModel();
-
-    assertTrue(marked.conciseModelImplicated());
-    assertEquals("cap", marked.getMessage());
-    assertEquals("{\"findings\":[", marked.partialBody());
-    // Already marked: no fresh copy, so the identity a caller logged stays stable.
-    assertSame(marked, marked.implicatingConciseModel());
-  }
-
-  @Test
   void findInWalksTheCauseChainAndReturnsTheTruncation() {
     var truncation = new AiResponseTruncatedException("cap", "body", false);
     var wrapped = new CompletionException(new IllegalStateException("wrap", truncation));

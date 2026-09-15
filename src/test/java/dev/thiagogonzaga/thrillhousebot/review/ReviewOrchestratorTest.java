@@ -3852,14 +3852,15 @@ class ReviewOrchestratorTest {
     void aConciseModelTruncationFailureNamesTheConciseKnobToo() {
       var session = failureSession();
 
+      // The concise flag is set at construction, as AiResponses.ModelLane.CONCISE builds it; the
+      // after-the-fact re-marking that used to sit here is gone with #600.
       orchestrator.handleReviewFailure(
           "Bearer tok",
           reviewRequest(),
           session,
           99L,
           new dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException(
-                  "Model stopped at its response-length cap (finish_reason=length)")
-              .implicatingConciseModel());
+              "Model stopped at its response-length cap (finish_reason=length)", null, true));
 
       var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
       verify(commentClient)

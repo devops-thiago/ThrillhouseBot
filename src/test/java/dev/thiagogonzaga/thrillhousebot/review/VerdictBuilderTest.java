@@ -28,11 +28,14 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -1069,6 +1072,88 @@ class VerdictBuilderTest {
 
     assertEquals(2, result.omittedFiles());
     assertTrue(result.truncated());
+  }
+
+  @Test
+  void disabledBudgetingKeepsTheLineCapCountAlongsideAPatchlessFile() {
+    // The legacy lane knows its line-cap omissions only as a count. A patchless file named on the
+    // same review must neither make that count vanish from the disclosure (the #659 shape) nor be
+    // folded into the budget sentence: two causes, two clauses, one held verdict.
+    var ctx = contextWithLineCapOmissions(2);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of("assets/logo.png"),
+            false,
+            null,
+            null,
+            null,
+            null,
+            null);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertEquals(3, result.omittedFiles());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    var summary = result.summaryMarkdown();
+    assertTrue(
+        summary.contains("2 file(s) were omitted because the diff exceeded the size budget"),
+        summary);
+    assertTrue(summary.contains("no diff content for them"), summary);
+    assertTrue(summary.contains("(assets/logo.png)"), summary);
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(checkSummary.contains("2 file(s) omitted"), checkSummary);
+    assertTrue(checkSummary.contains("1 file(s) without diff content from GitHub"), checkSummary);
+  }
+
+  /**
+   * A real planner with budgeting switched off ({@code max-input-tokens=0}), so the plan under test
+   * is the one the disabled-budgeting path actually builds rather than a hand-assembled stand-in.
+   */
+  private static DiffBudgetPlanner unbudgetedPlanner() {
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.maxInputTokens()).thenReturn(0);
+    return new DiffBudgetPlanner(
+        new ReviewDiffFormatter(List.of(), 0),
+        new TokenCounter(),
+        config,
+        new ActiveModelSettings(config, "test-model"));
+  }
+
+  @Test
+  void aPatchlessFileHoldsApprovalAndIsDisclosedWhenBudgetingIsDisabled() {
+    // #785: with budgeting off the planner packed a patchless file as reviewed, and the legacy
+    // verdict lane read no file class from the plan at all, so a binary the model never saw was
+    // neither named nor holding APPROVE — the bot could approve a PR it had not fully read. Planned
+    // through the real planner so the whole chain is covered, not only this lane in isolation.
+    var patchless = new FileDiff("assets/logo.png", "modified", 40, 0, 40, null);
+    var real = new FileDiff("a.java", "modified", 1, 0, 1, "@@ -1,0 +1 @@\n+x");
+    var inputs = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var plan = unbudgetedPlanner().plan(List.of(patchless, real), inputs);
+    var ctx = contextWithLineCapOmissions(0, List.of(patchless, real));
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertFalse(plan.budgeted());
+    assertEquals(List.of("assets/logo.png"), plan.patchlessFiles());
+    assertEquals(List.of(real), plan.batches().get(0).files(), "never packed");
+    assertEquals(1, result.omittedFiles());
+    assertTrue(result.truncated());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertEquals(List.of("assets/logo.png"), result.truncation().patchlessFileNames());
+    var summary = result.summaryMarkdown();
+    assertTrue(
+        summary.contains(
+            "1 file(s) could not be reviewed because GitHub provided no diff content for them"
+                + " — binary files, or text diffs too large to display (assets/logo.png)"),
+        summary);
+    assertFalse(summary.contains("size budget"), summary);
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(checkSummary.contains("1 file(s) without diff content from GitHub"), checkSummary);
   }
 
   private static final CiStatusEvaluator.CiEvaluation CI_OFFENDING =
