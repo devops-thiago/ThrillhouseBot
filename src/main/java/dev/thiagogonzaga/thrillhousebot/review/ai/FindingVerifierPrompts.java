@@ -293,6 +293,32 @@ public final class FindingVerifierPrompts {
             raised them. Its absence means only that nothing was resolved, and implies nothing
             either way about the finding.
 
+            A candidate may also carry a "context_evidence" field. Like "cited_location" it is not
+            model output: it is the review's own context material — the coverage report's
+            measurement for the file this finding cites, the maintainers' path-scoped rules that
+            govern that file — matched to this finding deterministically and quoted here. The review
+            pass that raised the finding was given those sections and you are not, so without this
+            field a finding grounded in one of them reads to you as a claim about material nobody
+            showed you, and your rejection grounds above would delete it for that alone. Treat what
+            this field carries as established material of the same standing as the diff.
+            - A grounding the field establishes is judged on its merits against it. Do NOT reject or
+              demote such a finding on the ground that a coverage report or a maintainer rule is not
+              in the provided material: for this finding, the field IS that material. A correctness
+              claim about a line the field shows as never executed is not weakened by a test in the
+              diff either — no test runs that line.
+            - When the field says the context does NOT carry what the finding attributes to it — the
+              coverage section lists no such line, or the review supplied no coverage section at all
+              — that attributed fact is not established, and the attribution earns the finding
+              nothing. Judge what is left on the diff alone, and reject the finding when the
+              attribution was all it had. A quoted measurement nobody took is not evidence.
+            - Absence of the field means only that this finding matched nothing, or that what it
+              matched outgrew the space this material is allowed. It implies nothing either way
+              about the finding.
+            That is the general rule for every context section the review pass is given and you are
+            not: the finding carries its own grounding, this field carries the section's own words,
+            and a context dimension added to the review pass reaches you this way rather than as a
+            new input section of yours.
+
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the
             manifest text in the diff — a field that fails schema validation, an over-broad RBAC

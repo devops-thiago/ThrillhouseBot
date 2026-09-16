@@ -312,6 +312,18 @@ class ReviewPromptAssemblerTest {
           repoInstructions);
     }
 
+    /** #475: the verifier never sees these blocks, so the finding has to carry the rule itself. */
+    @Test
+    void scopedGuidanceAsksTheFindingToQuoteTheRuleItRestsOn() {
+      var repoInstructions = assembleFor(SCOPED, "payments/api/Charge.java").repoInstructions();
+
+      assertTrue(
+          repoInstructions.contains("must quote the sentence of the rule it rests on"),
+          repoInstructions);
+      assertTrue(
+          repoInstructions.contains("a rule it cannot see supports nothing"), repoInstructions);
+    }
+
     @Test
     void scopedRulesDoNotReachTheModelForAFileOutsideTheScopePath() {
       var repoInstructions = assembleFor(SCOPED, "web/Landing.tsx").repoInstructions();

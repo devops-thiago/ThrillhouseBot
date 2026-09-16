@@ -393,10 +393,16 @@ public class PatchCoverageResolver {
           .append(" more changed file(s) with uncovered added lines)\n");
     }
     var rendered = out.toString().stripTrailing();
-    return rendered.length() > MAX_TOTAL_CHARS
-        ? ConfigKeyContextResolver.truncate(rendered, MAX_TOTAL_CHARS)
-            + "\n… (patch coverage truncated)"
-        : rendered;
+    if (rendered.length() <= MAX_TOTAL_CHARS) {
+      return rendered;
+    }
+    // Whole lines only. Half of "61" is "6", which is a line number too, so an entry the cap cut
+    // mid-range reads to everything downstream — the review pass, and the verifier through the
+    // evidence a finding carries (#475) — as a measurement this report never made, and nothing
+    // there can tell a cut token from a real one.
+    var cut = ConfigKeyContextResolver.truncate(rendered, MAX_TOTAL_CHARS);
+    return cut.substring(0, Math.max(cut.lastIndexOf('\n'), 0)).stripTrailing()
+        + "\n… (patch coverage truncated)";
   }
 
   /** Consecutive line numbers collapsed to {@code start-end}, capped at a readable width. */

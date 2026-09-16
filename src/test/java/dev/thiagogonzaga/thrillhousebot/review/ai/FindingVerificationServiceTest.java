@@ -2647,9 +2647,11 @@ class FindingVerificationServiceTest {
         "diff",
         "stack",
         "",
-        f ->
-            "The code the finding quotes is at line 118 of `src/Main.java`, not at the cited"
-                + " line 109.",
+        new FindingVerificationService.FindingEvidence(
+            f ->
+                "The code the finding quotes is at line 118 of `src/Main.java`, not at the cited"
+                    + " line 109.",
+            FindingVerificationService.ContextEvidence.NONE),
         coverage -> {});
 
     var candidates = ArgumentCaptor.forClass(String.class);
@@ -2659,13 +2661,37 @@ class FindingVerificationServiceTest {
     assertTrue(candidates.getValue().contains("at line 118"), candidates.getValue());
   }
 
+  /**
+   * #475: the context material a finding rests on rides on the candidate too, so a
+   * coverage-grounded or rule-grounded finding is judged against that material instead of against
+   * its absence.
+   */
+  @Test
+  void attachesTheMatchedContextEvidenceToTheCandidateItBelongsTo() throws Exception {
+    var only = finding("high", "high", "Unescaped splice");
+
+    var rendered =
+        service.renderCandidates(
+            List.of(only),
+            new FindingVerificationService.FindingEvidence(
+                FindingVerificationService.CitedLocations.NONE,
+                f ->
+                    "The patch-coverage section this review supplied lists line 42 of `a.java`"
+                        + " among the added lines the report records as never executed."));
+
+    assertTrue(rendered.contains("context_evidence"), rendered);
+    assertTrue(rendered.contains("lists line 42"), rendered);
+    assertFalse(rendered.contains("cited_location"), rendered);
+  }
+
   @Test
   void leavesTheCandidateUntouchedWhenNothingResolved() throws Exception {
     var rendered =
         service.renderCandidates(
             List.of(finding("high", "high", "Unescaped splice")),
-            FindingVerificationService.CitedLocations.NONE);
+            FindingVerificationService.FindingEvidence.NONE);
 
     assertFalse(rendered.contains("cited_location"), rendered);
+    assertFalse(rendered.contains("context_evidence"), rendered);
   }
 }

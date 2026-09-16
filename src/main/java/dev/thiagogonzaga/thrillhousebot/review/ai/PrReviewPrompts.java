@@ -262,6 +262,16 @@ public final class PrReviewPrompts {
             - suggestion_old: the EXACT current code to replace (full lines, no backticks)
             - suggestion_new: the EXACT fixed code (full lines, no backticks)
 
+            SELF-CARRYING EVIDENCE: a finding grounded in one of the context sections supplied to
+            you — the patch-coverage measurement, a path-scoped rule block, a linked issue's text, a
+            config key definition — must quote the material it rests on in its own description and
+            name the section it came from. The audit pass that rules on your findings receives your
+            findings and the diff, not those sections: a grounding you do not carry reads there as a
+            claim about material nobody showed it, and the finding is dropped on exactly that
+            ground. Quote the measured line, the rule sentence, or the stated requirement itself — a
+            paraphrase establishes nothing, and material you were never actually given is a
+            fabrication that is checked against the real section and costs the finding its verdict.
+
             Severity calibration — each level is a claim you must be able to defend:
             - "critical": the code WILL fail at runtime or IS an exploitable security flaw — not
               "might" or "could" — and the failure is demonstrable from the diff and context
@@ -1021,6 +1031,13 @@ public final class PrReviewPrompts {
               earns. Do NOT lower it, and do not drop the finding, on the theory that a test in
               this diff would have caught the problem: none runs that line. Say so in the
               description ("the coverage report shows this line is never executed").
+            - Carry the measurement in any finding you raise from this section: quote the list's own
+              entry for that file, the path and the line range exactly as written below. The audit
+              pass that rules on your findings is not given this section, and a coverage claim that
+              arrives there without its measurement reads as a guess about an artifact nobody showed
+              it. Claiming a measurement this list does not contain is worse than saying nothing:
+              the claim is checked against the list and the finding loses the verdict it would
+              otherwise have earned on the code alone.
             - The list is not evidence in the other direction. A line missing from it may simply
               not be measured — a file the report never mentions, a language the report does not
               cover, a run that instrumented only part of the build. Never claim a line IS covered,
