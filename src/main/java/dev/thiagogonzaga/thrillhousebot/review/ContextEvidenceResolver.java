@@ -106,6 +106,12 @@ public final class ContextEvidenceResolver {
    */
   private static final String ROLL_UP_SUFFIX = " more changed file(s)";
 
+  /** What a file's rendered ranges end with when the render named only some of them. */
+  private static final String RANGE_ROLL_UP = " more range(s)";
+
+  /** What the render leaves behind when the section's total size cap cut it. */
+  private static final String SECTION_CUT = "(patch coverage truncated)";
+
   private ContextEvidenceResolver() {}
 
   /**
@@ -239,15 +245,30 @@ public final class ContextEvidenceResolver {
       if (ranges == null) {
         return contradiction(finding, unlistedFileNote(cited));
       }
-      return contradiction(
-          finding,
+      return contradiction(finding, listedFileNote(path, ranges, finding.line()));
+    }
+
+    /**
+     * What the section says about a line it does not name in a file it does list. The per-file
+     * ranges are capped too, and the render discloses that with its own roll-up, so a line past the
+     * named ones may still have been measured: the note says what the section names rather than
+     * denying the measurement (#475 review).
+     */
+    private static String listedFileNote(String path, String ranges, int citedLine) {
+      var listed =
           "The patch-coverage section this review supplied lists these added lines of `"
               + path
               + "` as never executed: "
               + ranges
-              + ". The cited line "
-              + finding.line()
-              + " is not among them.");
+              + ".";
+      return ranges.contains(RANGE_ROLL_UP)
+          ? listed
+              + " The cited line "
+              + citedLine
+              + " is not among the ones it names, and the section says it names only part of that"
+              + " file's uncovered lines, so whether the report measured this line is not settled"
+              + " here."
+          : listed + " The cited line " + citedLine + " is not among them.";
     }
 
     /**
@@ -279,13 +300,20 @@ public final class ContextEvidenceResolver {
               + cited
               + "`. A file the report does not measure is absent from that section too, so this"
               + " does not establish that the file's lines are covered either.";
-      return coverage.unnamedFiles() == 0
+      if (coverage.unnamedFiles() > 0) {
+        return base
+            + " The section also says "
+            + coverage.unnamedFiles()
+            + " further changed file(s) have uncovered added lines without naming them, so this"
+            + " file may be one of them.";
+      }
+      // The size cap takes whole lines, and the roll-up is the last of them, so a cut section can
+      // name fewer files than the report measured with no count left to say so.
+      return coverage.truncated()
           ? base
-          : base
-              + " The section also says "
-              + coverage.unnamedFiles()
-              + " further changed file(s) have uncovered added lines without naming them, so this"
-              + " file may be one of them.";
+              + " The section was cut at its size cap, so it may not name every file with uncovered"
+              + " added lines and this file may be one it left out."
+          : base;
     }
 
     /** The path the coverage section lists for a cited path, or {@code null} when it lists none. */
@@ -399,11 +427,13 @@ public final class ContextEvidenceResolver {
    *
    * @param byPath the listed files and their ranges, exactly as the section renders them
    * @param unnamedFiles the render's own roll-up count, 0 when it listed everything
+   * @param truncated whether the render's total size cap cut the section, which can take the
+   *     roll-up line with it and leave no count behind
    */
-  record Coverage(Map<String, String> byPath, int unnamedFiles) {
+  record Coverage(Map<String, String> byPath, int unnamedFiles, boolean truncated) {
 
     /** No section was supplied, which is not the same as a section that lists nothing. */
-    static final Coverage NONE = new Coverage(Map.of(), 0);
+    static final Coverage NONE = new Coverage(Map.of(), 0, false);
   }
 
   /**
@@ -432,7 +462,7 @@ public final class ContextEvidenceResolver {
         unnamed += rolledUpFiles(entry);
       }
     }
-    return new Coverage(Map.copyOf(byPath), unnamed);
+    return new Coverage(Map.copyOf(byPath), unnamed, section.contains(SECTION_CUT));
   }
 
   /** The count a roll-up line discloses, or 0 when the line is not one. */

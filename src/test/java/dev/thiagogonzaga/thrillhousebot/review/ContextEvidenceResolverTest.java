@@ -145,6 +145,47 @@ class ContextEvidenceResolverTest {
     assertEquals(1, parsed.byPath().size(), parsed.toString());
   }
 
+  /**
+   * A file's rendered ranges are capped too, and the render says so with its own roll-up. A line
+   * past the named ones may well have been measured, so the note says what the section names rather
+   * than denying the measurement.
+   */
+  @Test
+  void hedgesALineBeyondRangesTheSectionSaysArePartial() {
+    var section =
+        PatchCoverageResolver.SECTION_HEADING
+            + "\n- "
+            + PATH
+            + ": 12-18, 40-41, and 2 more range(s)";
+    var finding = finding(PATH, 55, "Per the coverage analysis, this line is never executed.");
+
+    var note = evidence(round(section, PathScopedInstructions.NONE), finding);
+
+    assertTrue(note.contains("12-18, 40-41, and 2 more range(s)"), note);
+    assertTrue(note.contains("names only part of that file's uncovered lines"), note);
+    assertFalse(note.contains("is not among them."), note);
+  }
+
+  /**
+   * The size cap can take the file roll-up line with it, leaving a section that names fewer files
+   * than the report measured and no count saying so. The cut itself is the disclosure then.
+   */
+  @Test
+  void namesTheCutWhenTheSectionCarriesNoRollUp() {
+    var section =
+        PatchCoverageResolver.SECTION_HEADING
+            + "\n- "
+            + PATH
+            + ": 12-18\n… (patch coverage truncated)";
+    var unlisted = finding("src/main/java/app/Other.java", 3, "The coverage report lists this.");
+
+    var note = evidence(round(section, PathScopedInstructions.NONE), unlisted);
+
+    assertTrue(note.contains("cut at its size cap"), note);
+    assertTrue(ContextEvidenceResolver.parseSection(section).truncated());
+    assertFalse(ContextEvidenceResolver.parseSection(COVERAGE_SECTION).truncated());
+  }
+
   @Test
   void contradictsACoverageClaimAboutAFileTheSectionDoesNotList() {
     var finding =
