@@ -21,9 +21,11 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -308,8 +310,7 @@ class CitedLocationResolverTest {
   @Test
   void resolvesNothingForAnEmptyCandidateList() {
     assertSame(
-        dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService.CitedLocations.NONE,
-        round(changed(PATH)).locate(List.of()));
+        FindingVerificationService.CitedLocations.NONE, round(changed(PATH)).locate(List.of()));
   }
 
   @Test
@@ -367,5 +368,128 @@ class CitedLocationResolverTest {
     var finding = finding(PATH, 9, "nothing here");
 
     assertTrue(resolve(round(changed(PATH)), finding).contains("has 2 lines"), "line count");
+  }
+
+  @Test
+  void toleratesAReviewWithNoFileListAndFindingsWithNoUsableEntry() {
+    var round = resolver.forReview("token", "o", "r", "headsha", null);
+    var usable = finding(PATH, 10, "return x;");
+
+    assertSame(
+        FindingVerificationService.CitedLocations.NONE,
+        round.locate(null),
+        "a round with nothing to resolve resolves nothing");
+    var located = round.locate(Arrays.asList(null, finding(null, 3, "x"), usable));
+
+    assertTrue(
+        located.forFinding(usable).startsWith("No file changed by this pull request has this path"),
+        "a review with no file list matches nothing");
+    verifyNoInteractions(prClient);
+  }
+
+  @Test
+  void ignoresAChangedFileWithNoPath() {
+    givenFile(PATH, RENDERER);
+    var nameless = new FileDiff(null, "modified", 1, 0, 1, "");
+    var blankName = new FileDiff("  ", "modified", 1, 0, 1, "");
+    var blankRename = new FileDiff(PATH, "modified", 1, 0, 1, "", "  ");
+    var finding = finding(PATH, 10, "return \"<p>\" + purpose + \"</p>\";");
+    var withGaps =
+        resolver.forReview(
+            "token", "o", "r", "headsha", Arrays.asList(null, nameless, blankName, blankRename));
+
+    assertNotNull(withGaps.locate(List.of(finding)).forFinding(finding));
+  }
+
+  @Test
+  void refusesToGuessBetweenTwoFilesDifferingOnlyInCase() {
+    var finding = finding("app/FILE.java", 3, "return x;");
+
+    var note = resolve(round(changed("app/File.java"), changed("app/file.java")), finding);
+
+    assertTrue(note.startsWith("No file changed by this pull request has this path"), note);
+    verifyNoInteractions(prClient);
+  }
+
+  @Test
+  void reportsAQuoteMissingFromAFileTheFindingCitesWithoutALine() {
+    givenFile(PATH, RENDERER);
+    var finding = finding(PATH, 0, "return sanitize(purpose);");
+
+    var note = resolve(round(changed(PATH)), finding);
+
+    assertEquals(
+        "The code the finding quotes appears nowhere in `"
+            + PATH
+            + "` at the pull request's head commit.",
+        note);
+  }
+
+  @Test
+  void failsOpenOnAnAbsentOrEmptyResponseBody() {
+    var finding = finding(PATH, 10, "return x;");
+    when(prClient.getFileContent(any(), any(), any(), any(), eq(PATH), any())).thenReturn(null);
+    assertNull(resolve(round(changed(PATH)), finding), "no body");
+
+    var contentless = new GitHubPullRequestClient.FileContent(PATH, PATH, null, "base64", 10);
+    when(prClient.getFileContent(any(), any(), any(), any(), eq(PATH), any()))
+        .thenReturn(contentless);
+    assertNull(resolve(round(changed(PATH)), finding), "no content");
+
+    givenFile(PATH, "");
+    assertNull(resolve(round(changed(PATH)), finding), "empty file");
+  }
+
+  @Test
+  void countsEveryLineOfAFileThatDoesNotEndInANewline() {
+    givenFile(PATH, "one\ntwo");
+    var finding = finding(PATH, 9, "nothing here");
+
+    assertTrue(resolve(round(changed(PATH)), finding).contains("has 2 lines"), "line count");
+  }
+
+  @Test
+  void countsTheOneLineOfASingleLineFile() {
+    givenFile(PATH, "one");
+    var finding = finding(PATH, 9, "nothing here");
+
+    assertTrue(resolve(round(changed(PATH)), finding).contains("has 1 lines"), "line count");
+  }
+
+  @Test
+  void resolvesACitationCarryingAnExtraLeadingDirectory() {
+    givenFile("app/Renderer.java", RENDERER);
+    var finding = finding("src/main/app/Renderer.java", 10, "return \"<p>\" + purpose + \"</p>\";");
+
+    var note = resolve(round(changed("app/Renderer.java")), finding);
+
+    assertTrue(note.contains("`app/Renderer.java` is the only changed file it matches"), note);
+  }
+
+  @Test
+  void keepsTheFirstOccurrenceWhenALaterOneIsFartherFromTheCitedLine() {
+    givenFile(PATH, "int x = compute();\nint y = 0;\nint x = compute();\n");
+    var finding = finding(PATH, 1, "int x = compute();");
+
+    assertTrue(resolve(round(changed(PATH)), finding).contains("at the cited line 1"), "first");
+  }
+
+  @Test
+  void matchesAQuoteAcrossABlankLineAndStopsAtTheEndOfTheFile() {
+    assertEquals(
+        1,
+        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a", "", "b"), 1),
+        "a blank line the model dropped does not break the run");
+    assertEquals(
+        0,
+        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a"), 1),
+        "a quote running past the end of the file is not a match");
+    assertEquals(0, CitedLocationResolver.locateQuote(List.of(), List.of("a"), 1), "no quote");
+  }
+
+  @Test
+  void normalizesAQuoteToItsNonBlankStrippedLines() {
+    assertEquals(List.of(), CitedLocationResolver.normalizedLines("   "));
+    assertEquals(List.of("a", "b"), CitedLocationResolver.normalizedLines("  a  \n\n b \n"));
   }
 }

@@ -415,9 +415,6 @@ public class CitedLocationResolver {
 
     /** Charges the round's character budget, dropping a note that no longer fits. */
     private String attach(ReviewResponse.Finding finding, String note) {
-      if (note == null) {
-        return null;
-      }
       var bounded = note.length() > MAX_NOTE_CHARS ? note.substring(0, MAX_NOTE_CHARS) : note;
       if (charsAttached.addAndGet(bounded.length()) > MAX_TOTAL_CHARS) {
         Log.debugf(
@@ -446,7 +443,7 @@ public class CitedLocationResolver {
    * resolves to the location it was nearly right about rather than to the file's first match.
    */
   static int locateQuote(List<String> quoted, List<String> lines, int citedLine) {
-    if (quoted.isEmpty() || lines.isEmpty()) {
+    if (quoted.isEmpty()) {
       return 0;
     }
     var best = 0;
@@ -495,11 +492,11 @@ public class CitedLocationResolver {
     return List.copyOf(normalized);
   }
 
-  /** Whether one path ends in the other on a path-segment boundary. */
+  /**
+   * Whether one path ends in the other on a path-segment boundary. Equal paths are not considered:
+   * the only caller reaches this after an exact lookup has already missed.
+   */
   static boolean sharesPathSuffix(String a, String b) {
-    if (a.equals(b)) {
-      return true;
-    }
     return a.endsWith("/" + b) || b.endsWith("/" + a);
   }
 
