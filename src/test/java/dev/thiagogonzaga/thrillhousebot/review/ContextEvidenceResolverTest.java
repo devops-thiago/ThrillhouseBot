@@ -107,6 +107,44 @@ class ContextEvidenceResolverTest {
     assertTrue(note.contains("The cited line 12 is not among them"), note);
   }
 
+  /**
+   * The section names only as many files as its cap allows and then says how many more it left out,
+   * so "this file is not listed" is not the same as "this file was measured and covered" — the
+   * finding's own file may be one of the ones the render dropped.
+   */
+  @Test
+  void namesTheFilesTheSectionSaysItLeftOut() {
+    var unlisted = finding("src/main/java/app/Other.java", 3, "The coverage report lists this.");
+
+    var note = evidence(round(COVERAGE_SECTION, PathScopedInstructions.NONE), unlisted);
+
+    assertTrue(note.contains("2 further changed file(s)"), note);
+    assertTrue(note.contains("may be one of them"), note);
+  }
+
+  @Test
+  void readsTheCountOfFilesTheSectionLeftOut() {
+    assertEquals(2, ContextEvidenceResolver.parseSection(COVERAGE_SECTION).unnamedFiles());
+    assertEquals(
+        0, ContextEvidenceResolver.parseSection("### heading\n- src/App.java: 1-4").unnamedFiles());
+  }
+
+  /** Only the render's own roll-up counts; any other line without ranges discloses nothing. */
+  @Test
+  void countsOnlyARollUpLineThatDisclosesANumber() {
+    var parsed =
+        ContextEvidenceResolver.parseSection(
+            """
+            ### heading
+            - a bullet with no ranges
+            - (a parenthesis that is not the roll-up)
+            - (many more changed file(s) with uncovered added lines)
+            - src/App.java: 1-4""");
+
+    assertEquals(0, parsed.unnamedFiles());
+    assertEquals(1, parsed.byPath().size(), parsed.toString());
+  }
+
   @Test
   void contradictsACoverageClaimAboutAFileTheSectionDoesNotList() {
     var finding =
@@ -391,7 +429,7 @@ class ContextEvidenceResolverTest {
   /** A section line the render cut before its ranges carries no measurement to read back. */
   @Test
   void skipsASectionLineThatCarriesNoRanges() {
-    var parsed = ContextEvidenceResolver.parseUncovered("### heading\n- src/App.java: \n");
+    var parsed = ContextEvidenceResolver.parseSection("### heading\n- src/App.java: \n").byPath();
 
     assertFalse(parsed.containsKey("src/App.java"), parsed.toString());
   }
@@ -451,7 +489,7 @@ class ContextEvidenceResolverTest {
                 new PatchCoverageResolver.UncoveredFile(
                     "src/main/java/app/Parser.java", new TreeSet<>(List.of(12)))));
 
-    var parsed = ContextEvidenceResolver.parseUncovered(rendered);
+    var parsed = ContextEvidenceResolver.parseSection(rendered).byPath();
 
     assertEquals("40-41, 61", parsed.get(PATH), rendered);
     assertEquals("12", parsed.get("src/main/java/app/Parser.java"), rendered);
@@ -459,7 +497,7 @@ class ContextEvidenceResolverTest {
 
   @Test
   void readsTheSectionsOwnRangesBackOutOfIt() {
-    var parsed = ContextEvidenceResolver.parseUncovered(COVERAGE_SECTION);
+    var parsed = ContextEvidenceResolver.parseSection(COVERAGE_SECTION).byPath();
 
     assertTrue(parsed.containsKey(PATH), parsed.toString());
     assertTrue(ContextEvidenceResolver.rangesContain(parsed.get(PATH), 47));

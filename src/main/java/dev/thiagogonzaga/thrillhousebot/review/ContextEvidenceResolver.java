@@ -101,6 +101,11 @@ public final class ContextEvidenceResolver {
    */
   private static final String FILE_LINE_PREFIX = "- ";
 
+  /**
+   * What the render's roll-up line says after its count, as {@code PatchCoverageResolver} emits it.
+   */
+  private static final String ROLL_UP_SUFFIX = " more changed file(s)";
+
   private ContextEvidenceResolver() {}
 
   /**
@@ -130,8 +135,8 @@ public final class ContextEvidenceResolver {
   /** One review's parsed context sections and the budget their notes are charged to. */
   public static final class Round {
 
-    /** Uncovered added lines, as the section renders them, by the path it lists them under. */
-    private final Map<String, String> uncoveredByPath;
+    /** The section's listed files with their rendered ranges, and the count it left unnamed. */
+    private final Coverage coverage;
 
     /** Whether a coverage section was supplied at all, which an empty map does not say. */
     private final boolean coverageSupplied;
@@ -152,7 +157,7 @@ public final class ContextEvidenceResolver {
         EvidenceBudget budget,
         boolean silent) {
       this.coverageSupplied = patchCoverage != null && !patchCoverage.isBlank();
-      this.uncoveredByPath = coverageSupplied ? parseUncovered(patchCoverage) : Map.of();
+      this.coverage = coverageSupplied ? parseSection(patchCoverage) : Coverage.NONE;
       this.scopes = pathInstructions == null ? List.of() : pathInstructions.scopes();
       this.governedFiles =
           scopes.stream()
@@ -194,14 +199,23 @@ public final class ContextEvidenceResolver {
     /** The sentences attached to one finding, or {@code null} when nothing could be said. */
     private String noteFor(ReviewResponse.Finding finding) {
       var note = join(coverageNote(finding), pathRuleNote(finding));
-      return note == null ? null : budget.attach(note);
+      if (note == null) {
+        return null;
+      }
+      var attached = budget.attach(note);
+      if (attached == null) {
+        Log.debugf(
+            "Context evidence for %s:%d dropped at the review's character budget",
+            LogSafe.oneLine(finding.file()), finding.line());
+      }
+      return attached;
     }
 
     /** What this review's coverage section says about the line the finding cites. */
     private String coverageNote(ReviewResponse.Finding finding) {
       var cited = finding.file().strip();
       var path = coveragePathFor(cited);
-      var ranges = path == null ? null : uncoveredByPath.get(path);
+      var ranges = path == null ? null : coverage.byPath().get(path);
       if (ranges != null && rangesContain(ranges, finding.line())) {
         return "The patch-coverage section this review supplied lists line "
             + finding.line()
@@ -223,12 +237,7 @@ public final class ContextEvidenceResolver {
                 + " executed.");
       }
       if (ranges == null) {
-        return contradiction(
-            finding,
-            "The patch-coverage section this review supplied lists no uncovered added line in `"
-                + cited
-                + "`. A file the report does not measure is absent from that section too, so this"
-                + " does not establish that the file's lines are covered either.");
+        return contradiction(finding, unlistedFileNote(cited));
       }
       return contradiction(
           finding,
@@ -246,24 +255,46 @@ public final class ContextEvidenceResolver {
      * does not carry. The line says the finding NAMES the report rather than that it claims
      * anything of it: the scan reads prose, and a finding can name the report to disclaim it ("no
      * coverage data was read, but the guard above returns first"), which is a mention and not an
-     * attribution (#475 review). What is attached says only what the section holds, and the
-     * verifier's rule for it is conditioned on an attribution the finding actually made.
+     * attribution (#475 review). It also stops short of saying the verifier was told: the note is
+     * built here and charged to the review's budget afterwards, which can still drop it, and {@link
+     * #noteFor} logs that separately.
      */
     private static String contradiction(ReviewResponse.Finding finding, String note) {
       Log.infof(
           "Finding '%s' (%s:%d) names patch coverage while citing a line this review's section does"
-              + " not carry; the verifier is told what the section actually lists",
+              + " not carry",
           LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
       return note;
     }
 
+    /**
+     * What the section says about a file it does not list. Not being listed is not being measured
+     * and covered: the render names only as many files as its cap allows and then discloses how
+     * many it left out, so a finding's file may be one of those and its measurement may be real
+     * (#475 review). The note says so rather than reading the absence as a refutation.
+     */
+    private String unlistedFileNote(String cited) {
+      var base =
+          "The patch-coverage section this review supplied lists no uncovered added line in `"
+              + cited
+              + "`. A file the report does not measure is absent from that section too, so this"
+              + " does not establish that the file's lines are covered either.";
+      return coverage.unnamedFiles() == 0
+          ? base
+          : base
+              + " The section also says "
+              + coverage.unnamedFiles()
+              + " further changed file(s) have uncovered added lines without naming them, so this"
+              + " file may be one of them.";
+    }
+
     /** The path the coverage section lists for a cited path, or {@code null} when it lists none. */
     private String coveragePathFor(String cited) {
-      if (uncoveredByPath.containsKey(cited)) {
+      if (coverage.byPath().containsKey(cited)) {
         return cited;
       }
       String found = null;
-      for (var path : uncoveredByPath.keySet()) {
+      for (var path : coverage.byPath().keySet()) {
         if (CitedLocationResolver.sharesPathSuffix(path, cited)) {
           if (found != null) {
             // Two listed files match the citation, so which one it means is not settled; saying
@@ -363,17 +394,31 @@ public final class ContextEvidenceResolver {
   }
 
   /**
-   * The rendered coverage section read back into the paths and line ranges it lists. Its per-file
-   * lines are {@code - <path>: <ranges>}; the heading, the prose, the roll-up count and a line
-   * carrying no ranges at all do not parse and are skipped.
+   * What one rendered coverage section carries: the files it lists with their rendered ranges, and
+   * the number of further changed files it says have uncovered added lines without naming them.
+   *
+   * @param byPath the listed files and their ranges, exactly as the section renders them
+   * @param unnamedFiles the render's own roll-up count, 0 when it listed everything
+   */
+  record Coverage(Map<String, String> byPath, int unnamedFiles) {
+
+    /** No section was supplied, which is not the same as a section that lists nothing. */
+    static final Coverage NONE = new Coverage(Map.of(), 0);
+  }
+
+  /**
+   * The rendered coverage section read back into what it says. Its per-file lines are {@code -
+   * <path>: <ranges>} and its roll-up is {@code - (N more changed file(s) …)}; the heading, the
+   * prose and a line carrying no ranges at all do not parse and are skipped.
    *
    * <p>A line the section's size cap cut mid-range would parse, and its last range would be a line
    * number the report never measured. Nothing here could tell that token from a real one, so the
    * cap is applied on a line boundary in {@code PatchCoverageResolver.render} instead: the section
    * this reads never holds a partial entry.
    */
-  static Map<String, String> parseUncovered(String section) {
+  static Coverage parseSection(String section) {
     Map<String, String> byPath = new LinkedHashMap<>();
+    var unnamed = 0;
     for (var raw : section.split("\n")) {
       var line = raw.strip();
       if (!line.startsWith(FILE_LINE_PREFIX)) {
@@ -383,9 +428,20 @@ public final class ContextEvidenceResolver {
       var colon = entry.indexOf(": ");
       if (colon > 0) {
         byPath.put(entry.substring(0, colon), entry.substring(colon + 2).strip());
+      } else {
+        unnamed += rolledUpFiles(entry);
       }
     }
-    return Map.copyOf(byPath);
+    return new Coverage(Map.copyOf(byPath), unnamed);
+  }
+
+  /** The count a roll-up line discloses, or 0 when the line is not one. */
+  private static int rolledUpFiles(String entry) {
+    if (!entry.startsWith("(") || !entry.contains(ROLL_UP_SUFFIX)) {
+      return 0;
+    }
+    var count = parseLine(entry.substring(1, entry.indexOf(ROLL_UP_SUFFIX)));
+    return count == null ? 0 : count;
   }
 
   /**
