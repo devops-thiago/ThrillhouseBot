@@ -838,8 +838,16 @@ public class FollowUpAnalyzer {
         && Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE;
   }
 
-  private static boolean isSameFinding(
-      ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
+  /**
+   * Whether two findings raised in different rounds argue the same defect: the same file, and
+   * either the same anchor with a similar title or enough shared content to be one claim reworded.
+   *
+   * <p>Package-private so {@link VerifierRejectionMemory} recalls a rejection by the rule the
+   * follow-up passes already recognize a re-raise by (#711). A claim that comes back only because
+   * the model worded it differently is the same claim, and a second recognizer would let the two
+   * passes disagree about that.
+   */
+  static boolean isSameFinding(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
     if (finding.file() == null || !FilePaths.same(finding.file(), prior.file())) {
       return false;
     }

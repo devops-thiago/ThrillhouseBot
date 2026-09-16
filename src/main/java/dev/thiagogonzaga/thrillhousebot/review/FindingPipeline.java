@@ -194,6 +194,7 @@ public class FindingPipeline {
   private final FrameworkFalsePositiveFilter frameworkFilter;
   private final FindingDeduplicator deduplicator;
   private final FindingVerificationService findingVerificationService;
+  private final VerifierRejectionMemory rejectionMemory;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final ObjectMapper mapper;
   private final BotIdentity botIdentity;
@@ -209,6 +210,7 @@ public class FindingPipeline {
       FrameworkFalsePositiveFilter frameworkFilter,
       FindingDeduplicator deduplicator,
       FindingVerificationService findingVerificationService,
+      VerifierRejectionMemory rejectionMemory,
       FollowUpAnalyzer followUpAnalyzer,
       ObjectMapper mapper,
       BotIdentity botIdentity,
@@ -221,6 +223,7 @@ public class FindingPipeline {
     this.frameworkFilter = frameworkFilter;
     this.deduplicator = deduplicator;
     this.findingVerificationService = findingVerificationService;
+    this.rejectionMemory = rejectionMemory;
     this.followUpAnalyzer = followUpAnalyzer;
     this.mapper = mapper;
     this.botIdentity = botIdentity;
@@ -767,12 +770,15 @@ public class FindingPipeline {
     var attached = run.evidence().forFindings(batchResponse.findings());
     var validated = quoteValidator.validate(batchResponse, batch.text());
     validated = frameworkFilter.filter(validated, batch.text());
+    // #711: as in the single-call lane — a claim the audit already rejected on this head is not
+    // put to the verifier a second time, and stays dropped on a round that never gets a verdict.
+    var candidates = rejectionMemory.withoutRejectionsOnThisHead(run.session(), validated);
     // #736: the verification call is the one review-path call that does no budget arithmetic of
     // its own, so the section the author alone sizes is bounded here before it is sent.
     var verified =
         findingVerificationService.verify(
             ledgerSessionId(run.session()),
-            validated,
+            candidates,
             PrContextBudget.bound(
                 batchInputs.prContext(), budgetPlanner.perCallInputBudget(), tokenCounter),
             batchInputs.diff(),
@@ -780,6 +786,7 @@ public class FindingPipeline {
             batchInputs.previousFindings(),
             attached,
             run.plan()::recordVerificationCoverage);
+    rejectionMemory.remember(run.session(), candidates.findings(), verified.findings());
     return new BatchOutcome(
         index,
         verified.findings(),
@@ -1435,12 +1442,16 @@ public class FindingPipeline {
     aiResponse = quoteValidator.validate(aiResponse, diff);
     aiResponse = frameworkFilter.filter(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
+    // #711: a claim the audit already rejected on this head is dropped before the call rather
+    // than put to it again. A second verdict on unchanged code is a re-roll of the same question,
+    // and on the fail-open paths there is no second verdict at all.
+    var candidates = rejectionMemory.withoutRejectionsOnThisHead(session, aiResponse);
     // #736: the verification call is the one review-path call that does no budget arithmetic of
     // its own, so the section the author alone sizes is bounded here before it is sent.
     aiResponse =
         findingVerificationService.verify(
             ledgerSessionId(session),
-            aiResponse,
+            candidates,
             PrContextBudget.bound(
                 promptInputs.prContext(), budgetPlanner.perCallInputBudget(), tokenCounter),
             promptInputs.diff(),
@@ -1448,6 +1459,7 @@ public class FindingPipeline {
             promptInputs.previousFindings(),
             attached,
             plan::recordVerificationCoverage);
+    rejectionMemory.remember(session, candidates.findings(), aiResponse.findings());
     // #773: the last word on the two graded fields, so the anchored infrastructure classes cannot
     // be re-spread by the verifier's own lowering, and the grade the publisher routes on is the
     // one persisted below for the next round to compare against.
