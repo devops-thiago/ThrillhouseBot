@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
@@ -346,6 +347,54 @@ class CitedLocationResolverTest {
     assertNull(
         located.forFinding(findings[files.length - 1]),
         "notes past the round's character budget are dropped");
+  }
+
+  /**
+   * A note the budget cannot fit is not charged for, so a later note that does fit is still
+   * attached. Charging a dropped note left the counter carrying it, and the first overflow then
+   * closed the budget for the rest of the round however much capacity was really left (#866
+   * review). Four wide notes and one narrow one take 4,912 of the 6,000; the fifth wide note needs
+   * 1,200 and cannot fit; the narrow note after it needs 112 and can.
+   */
+  @Test
+  void aNoteDroppedAtTheBudgetLeavesRoomForALaterOne() {
+    var wide = "x".repeat(CitedLocationResolver.MAX_LINE_CHARS * 3);
+    var wideContent = (wide + "\n").repeat(20);
+    var narrowContent = "int a = 1;\n".repeat(20);
+    var files = new ArrayList<FileDiff>();
+    var findings = new ArrayList<ReviewResponse.Finding>();
+    for (var i = 0; i < 6; i++) {
+      var path = "src/main/java/app/Wide" + i + ".java";
+      files.add(changed(path));
+      givenFile(path, wideContent);
+      // The fifth wide finding is added after the first narrow one, so it is the note that
+      // overflows; the narrow finding after it is the one the inflated counter used to drop.
+      if (i == 4) {
+        addNarrow(files, findings, "src/main/java/app/NarrowFirst.java", narrowContent);
+      }
+      findings.add(finding(path, 10, null));
+      if (i == 4) {
+        addNarrow(files, findings, "src/main/java/app/NarrowLast.java", narrowContent);
+        break;
+      }
+    }
+
+    var located = round(files.toArray(FileDiff[]::new)).locate(findings);
+
+    assertNull(
+        located.forFinding(findings.get(findings.size() - 2)),
+        "the wide note that does not fit is dropped");
+    assertNotNull(
+        located.forFinding(findings.get(findings.size() - 1)),
+        "a note that still fits is attached after a larger one was dropped");
+  }
+
+  /** Registers a file whose rendered note is small, and a finding citing a line past its end. */
+  private void addNarrow(
+      List<FileDiff> files, List<ReviewResponse.Finding> findings, String path, String content) {
+    files.add(changed(path));
+    givenFile(path, content);
+    findings.add(finding(path, 400, null));
   }
 
   @Test

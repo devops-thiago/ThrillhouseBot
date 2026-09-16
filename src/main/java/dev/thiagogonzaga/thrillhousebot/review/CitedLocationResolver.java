@@ -477,13 +477,33 @@ public class CitedLocationResolver {
     /** Charges the round's character budget, dropping a note that no longer fits. */
     private String attach(ReviewResponse.Finding finding, String note) {
       var bounded = note.length() > MAX_NOTE_CHARS ? note.substring(0, MAX_NOTE_CHARS) : note;
-      if (charsAttached.addAndGet(bounded.length()) > MAX_TOTAL_CHARS) {
+      if (!reserve(bounded.length())) {
         Log.debugf(
             "Cited-location evidence for %s:%d dropped at the round's character budget",
             LogSafe.oneLine(finding.file()), finding.line());
         return null;
       }
       return bounded;
+    }
+
+    /**
+     * Takes {@code chars} of the round's budget, or nothing at all when they do not fit. Charging a
+     * note before deciding left the counter carrying notes that were dropped, so the first overflow
+     * closed the budget for the rest of the round and a note of any size after it was dropped while
+     * the real capacity sat unused. Batches resolve on their own threads, so the read and the write
+     * are one compare-and-set rather than an add followed by a refund, which would let a sibling
+     * batch see the inflated total in between and drop a note that fits.
+     */
+    private boolean reserve(int chars) {
+      while (true) {
+        var attached = charsAttached.get();
+        if (attached + chars > MAX_TOTAL_CHARS) {
+          return false;
+        }
+        if (charsAttached.compareAndSet(attached, attached + chars)) {
+          return true;
+        }
+      }
     }
   }
 
