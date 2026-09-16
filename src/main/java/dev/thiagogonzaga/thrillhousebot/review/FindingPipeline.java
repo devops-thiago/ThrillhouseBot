@@ -99,7 +99,8 @@ public class FindingPipeline {
       ReviewSession session,
       BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
-      Map<Integer, String> previousFilesById) {}
+      Map<Integer, String> previousFilesById,
+      CitedLocationResolver.Round citedLocations) {}
 
   /** The rendered file-section header {@link ReviewDiffFormatter#formatFileSection} emits. */
   private static final String SECTION_HEADER_PREFIX = "### ";
@@ -241,12 +242,13 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
       DiffBudgetPlanner.BudgetPlan plan,
-      DiffLineResolver lineResolver) {
+      DiffLineResolver lineResolver,
+      CitedLocationResolver.Round citedLocations) {
     // Open/clear the spend ledger around everything that can make an AI call, so a review's
     // entry exists exactly while its provider callbacks may land and never outlives the review.
     tokenLedger.open(ledgerSessionId(session));
     try {
-      var response = runWithLedger(session, promptInputs, ctx, plan, lineResolver);
+      var response = runWithLedger(session, promptInputs, ctx, plan, lineResolver, citedLocations);
       // A call that had to run with reasoning disabled (#839) is noted on the ledger entry while
       // the calls are in flight; the verdict reads the plan after that entry is cleared, so the
       // note is copied over here, before the entry goes.
@@ -262,9 +264,10 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
       DiffBudgetPlanner.BudgetPlan plan,
-      DiffLineResolver lineResolver) {
+      DiffLineResolver lineResolver,
+      CitedLocationResolver.Round citedLocations) {
     if (plan.multiCall()) {
-      return runMultiCall(session, promptInputs, ctx, plan, lineResolver);
+      return runMultiCall(session, promptInputs, ctx, plan, lineResolver, citedLocations);
     }
     if (plan.budgeted()
         && plan.batches().isEmpty()
@@ -302,7 +305,8 @@ public class FindingPipeline {
               followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList()));
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
-    return refine(session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan);
+    return refine(
+        session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, citedLocations);
   }
 
   /**
@@ -406,7 +410,8 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
       DiffBudgetPlanner.BudgetPlan plan,
-      DiffLineResolver lineResolver) {
+      DiffLineResolver lineResolver,
+      CitedLocationResolver.Round citedLocations) {
     var batches = plan.batches();
     // The id space of previous_findings_status entries maps 1-based onto the prior response's
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
@@ -418,7 +423,8 @@ public class FindingPipeline {
             session,
             new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan)),
             plan,
-            previousFilesById);
+            previousFilesById,
+            citedLocations);
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -753,6 +759,9 @@ public class FindingPipeline {
       AiReviewService.PromptInputs batchInputs,
       ReviewResponse batchResponse,
       BatchRun run) {
+    // #650: resolved against the findings as the model raised them, before the quote validator
+    // below nulls suggestion_old on exactly the finding whose quote is outside the batch's hunks.
+    var located = run.citedLocations().locate(batchResponse.findings());
     var validated = quoteValidator.validate(batchResponse, batch.text());
     validated = frameworkFilter.filter(validated, batch.text());
     // #736: the verification call is the one review-path call that does no budget arithmetic of
@@ -766,6 +775,7 @@ public class FindingPipeline {
             batchInputs.diff(),
             batchInputs.projectStack(),
             batchInputs.previousFindings(),
+            located,
             run.plan()::recordVerificationCoverage);
     return new BatchOutcome(
         index,
@@ -1412,7 +1422,11 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
-      DiffBudgetPlanner.BudgetPlan plan) {
+      DiffBudgetPlanner.BudgetPlan plan,
+      CitedLocationResolver.Round citedLocations) {
+    // #650: resolved against the findings as the model raised them, before the quote validator
+    // below nulls suggestion_old on exactly the finding whose quote is outside the window.
+    var located = citedLocations.locate(aiResponse.findings());
     aiResponse = quoteValidator.validate(aiResponse, diff);
     aiResponse = frameworkFilter.filter(aiResponse, diff);
     aiResponse = deduplicator.dedupe(aiResponse);
@@ -1427,6 +1441,7 @@ public class FindingPipeline {
             promptInputs.diff(),
             promptInputs.projectStack(),
             promptInputs.previousFindings(),
+            located,
             plan::recordVerificationCoverage);
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(

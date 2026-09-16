@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.service.Result;
@@ -670,6 +671,40 @@ public class FindingVerificationService {
       String projectStack,
       String previousFindings,
       Consumer<VerificationCoverage> coverageSink) {
+    return verify(
+        ledgerSessionId,
+        response,
+        prContext,
+        diff,
+        projectStack,
+        previousFindings,
+        CitedLocations.NONE,
+        coverageSink);
+  }
+
+  /**
+   * The variant that also hands each candidate what its cited {@code path:line} resolves to in the
+   * repository at the head commit (#650).
+   *
+   * <p>The verifier's material is a diff, so a finding whose evidence sits in the same file just
+   * outside the nearest hunk reads to it as a claim about code nobody showed it — the ground its
+   * own prompt tells it to reject on. The resolution is deterministic and adds no model call; it
+   * rides on the candidate rather than in a slot of its own, so a finding is judged against the
+   * code at its own location and not against a location the model got slightly wrong.
+   *
+   * <p>{@link CitedLocations#NONE} is the honest default for a caller with no repository access,
+   * and leaves the candidate's {@code cited_location} field out entirely.
+   */
+  @SuppressWarnings("java:S107") // One verifier input per prompt slot; see the overloads above.
+  public ReviewResponse verify(
+      long ledgerSessionId,
+      ReviewResponse response,
+      String prContext,
+      String diff,
+      String projectStack,
+      String previousFindings,
+      CitedLocations citedLocations,
+      Consumer<VerificationCoverage> coverageSink) {
     return floorInjectionSinkRisk(
         audit(
             ledgerSessionId,
@@ -678,10 +713,12 @@ public class FindingVerificationService {
             diff,
             projectStack,
             previousFindings,
+            citedLocations,
             coverageSink));
   }
 
   /** The audit itself; {@link #verify} applies the deterministic severity floor to its result. */
+  @SuppressWarnings("java:S107") // Mirrors the public overload it implements.
   private ReviewResponse audit(
       long ledgerSessionId,
       ReviewResponse response,
@@ -689,6 +726,7 @@ public class FindingVerificationService {
       String diff,
       String projectStack,
       String previousFindings,
+      CitedLocations citedLocations,
       Consumer<VerificationCoverage> coverageSink) {
     ReviewResponse screened = demoteHedgedBlockingFindings(dropSelfRetractedFindings(response));
     if (!config.review().verifierEnabled() || screened.findings().isEmpty()) {
@@ -711,7 +749,7 @@ public class FindingVerificationService {
     try {
       var result =
           verifier.verify(
-              PromptTemplateEscaper.escape(renderCandidates(screened.findings())),
+              PromptTemplateEscaper.escape(renderCandidates(screened.findings(), citedLocations)),
               prContext == null ? "" : prContext,
               diff,
               projectStack,
@@ -1344,7 +1382,15 @@ public class FindingVerificationService {
     return false;
   }
 
-  /** The shape each candidate is presented in; ids are 1-based positions in the findings list. */
+  /**
+   * The shape each candidate is presented in; ids are 1-based positions in the findings list.
+   *
+   * <p>{@code cited_location} carries what the finding's cited {@code file:line} actually resolves
+   * to in the repository at the head commit (#650), and is absent when nothing resolved. It rides
+   * on the candidate rather than in a section of its own, so the evidence stays bound to the
+   * finding it belongs to and the verifier's input slots stay as they are while this material
+   * grows.
+   */
   @RegisterForReflection
   record Candidate(
       int id,
@@ -1355,9 +1401,11 @@ public class FindingVerificationService {
       String title,
       String description,
       @JsonProperty("suggestion_old") String suggestionOld,
-      @JsonProperty("suggestion_new") String suggestionNew) {
+      @JsonProperty("suggestion_new") String suggestionNew,
+      @JsonInclude(JsonInclude.Include.NON_NULL) @JsonProperty("cited_location")
+          String citedLocation) {
 
-    static Candidate of(int id, ReviewResponse.Finding f) {
+    static Candidate of(int id, ReviewResponse.Finding f, String citedLocation) {
       return new Candidate(
           id,
           f.risk(),
@@ -1367,14 +1415,31 @@ public class FindingVerificationService {
           f.title(),
           f.description(),
           f.suggestionOld(),
-          f.suggestionNew());
+          f.suggestionNew(),
+          citedLocation);
     }
   }
 
-  String renderCandidates(List<ReviewResponse.Finding> findings) throws IOException {
+  /**
+   * Per-finding evidence about where a finding's cited {@code path:line} really points (#650),
+   * resolved deterministically before the call and attached to the candidate it belongs to.
+   */
+  @FunctionalInterface
+  public interface CitedLocations {
+
+    /** Resolves nothing, which leaves the verifier's material exactly as it was before #650. */
+    CitedLocations NONE = finding -> null;
+
+    /** The resolved location for one finding, or {@code null} when nothing was resolved. */
+    String forFinding(ReviewResponse.Finding finding);
+  }
+
+  String renderCandidates(List<ReviewResponse.Finding> findings, CitedLocations citedLocations)
+      throws IOException {
     var candidates = new ArrayList<Candidate>(findings.size());
     for (var i = 0; i < findings.size(); i++) {
-      candidates.add(Candidate.of(i + 1, findings.get(i)));
+      var finding = findings.get(i);
+      candidates.add(Candidate.of(i + 1, finding, citedLocations.forFinding(finding)));
     }
     return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(candidates);
   }

@@ -2627,4 +2627,45 @@ class FindingVerificationServiceTest {
 
     assertSame(original, result);
   }
+
+  /**
+   * #650: the resolved cited location rides on the candidate it belongs to, so the verifier judges
+   * a finding against the code at its own location rather than against the window it was given.
+   */
+  @Test
+  void attachesTheResolvedCitedLocationToTheCandidateItBelongsTo() {
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk("{\"verdicts\":[{\"id\":1,\"verdict\":\"confirmed\",\"reason\":\"real\"}]}"));
+    var only = finding("high", "high", "Unescaped splice");
+    ReviewResponse original = response(only);
+
+    service.verify(
+        SESSION,
+        original,
+        "",
+        "diff",
+        "stack",
+        "",
+        f ->
+            "The code the finding quotes is at line 118 of `src/Main.java`, not at the cited"
+                + " line 109.",
+        coverage -> {});
+
+    var candidates = ArgumentCaptor.forClass(String.class);
+    verify(verifier)
+        .verify(candidates.capture(), anyString(), anyString(), anyString(), anyString());
+    assertTrue(candidates.getValue().contains("cited_location"), candidates.getValue());
+    assertTrue(candidates.getValue().contains("at line 118"), candidates.getValue());
+  }
+
+  @Test
+  void leavesTheCandidateUntouchedWhenNothingResolved() throws Exception {
+    var rendered =
+        service.renderCandidates(
+            List.of(finding("high", "high", "Unescaped splice")),
+            FindingVerificationService.CitedLocations.NONE);
+
+    assertFalse(rendered.contains("cited_location"), rendered);
+  }
 }
