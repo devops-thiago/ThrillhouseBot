@@ -292,6 +292,32 @@ public final class PrReviewPrompts {
               (dimension 4): that is a false statement, not a wording preference.
               Prose style, tone and ordering remain nitpicks.
 
+            Anchored infrastructure classes — grade the consequence, not the pull request:
+            Three defects recur in almost every containerized repository, and for each one the
+            consequence and who it reaches are fixed by the class, not by the change it turns up
+            in. Grade them exactly as follows, in every language and every repository, and let the
+            description carry whatever is specific to this pull request:
+            - A MUTABLE EXTERNAL REFERENCE — a base image, action, or chart named by a tag, or by
+              no tag at all, instead of a digest: risk "medium", confidence "medium". The
+              consequence is a build whose inputs change without a commit; nothing fails at run
+              time. A lockfile elsewhere in the repository pins the dependency set, not the image,
+              so it neither raises nor lowers this.
+            - A PATH THE RUNNING USER CANNOT WRITE — a VOLUME, WORKDIR or data directory that stays
+              root-owned while the image drops to a non-root USER, with no mkdir/chown for it:
+              risk "high", confidence "medium". Docker creates that path root:root, so the
+              consequence is a deterministic failure the first time the container writes there, on
+              every deployment. Which write comes first, and how early it runs, does not change the
+              level — it is the same defect whether it kills the first request or the first flush.
+            - A CONTAINER THAT NEVER DROPS PRIVILEGE — no USER directive, runAsNonRoot unset or
+              false: risk "medium", confidence "medium". By itself it breaks nothing; it decides
+              what a compromise of that container starts with.
+            Confidence is "medium" on all three for the same reason in both directions: the shape
+            is settled by the file in front of you, so it is never "low", and whether this
+            deployment exercises the consequence is not in that file, so it is never "high". A
+            finding that ALSO asserts something the class does not cover — a privileged container,
+            a host mount or namespace, an added capability, a committed credential, a named CVE —
+            is a different claim and takes the severity that claim earns.
+
             Severity is not confidence, and neither one is a reason to stay silent:
             - Emit a finding whose defect you can demonstrate from the provided material even when
               the confidence rules cap it at "medium" or "low". Those rules govern how you WORD the
@@ -314,6 +340,17 @@ public final class PrReviewPrompts {
               differs, the difference is coming from your uncertainty rather than from the defect,
               and it belongs in confidence — pin the risk to the class and lower the confidence
               instead.
+            - Equivalent evidence gets equivalent confidence, and this is the harder half.
+              Confidence answers ONE question — could another reviewer confirm this from the
+              material provided? — and the answer cannot depend on which language the same shape is
+              written in, on how familiar its idiom looks, or on how much of the file you happen to
+              have read. When one change carries the same defect in two places, grade both from the
+              same evidence: if you rate one lower, name in its description the fact you could not
+              check there and could check in the other. If you cannot name one, the two ratings
+              must match. This decides whether a maintainer sees the finding at all: a
+              "low"-confidence finding below "high" risk is collapsed into a summary block and
+              never opens a thread on the diff, so an unjustified confidence gap is the difference
+              between reporting a defect and burying it.
             - EVERY defect gets its OWN finding, on the dimension it belongs to. While writing one
               finding you will often state a SECOND, different defect as supporting evidence — a
               stale comment quoted to show what the code was meant to do, a stub that cannot
