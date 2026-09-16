@@ -352,7 +352,7 @@ public final class ContextEvidenceResolver {
   private static Integer parseLine(String token) {
     try {
       return Integer.valueOf(token.strip());
-    } catch (NumberFormatException e) {
+    } catch (NumberFormatException _) {
       return null;
     }
   }
