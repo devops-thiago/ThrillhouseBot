@@ -152,6 +152,22 @@ class VerifierRejectionMemoryTest {
         titlesOf(memory.withoutRejectionsOnThisHead(session("2659f683"), response(kept))));
   }
 
+  /**
+   * The published side is read by the same anchor. A finding that cites no file is skipped there
+   * too, so it can neither stand in for a rejected candidate nor be mistaken for one.
+   */
+  @Test
+  void readsThePublishedSetByTheSameAnchor() {
+    var rejected = finding("src/A.cs", 3, "Rejected");
+    var anchorless = finding("", 0, "Nowhere in particular");
+    memory.remember(session("2659f683"), List.of(rejected, anchorless), List.of(anchorless));
+
+    assertEquals(
+        List.of(),
+        titlesOf(memory.withoutRejectionsOnThisHead(session("2659f683"), response(rejected))),
+        "the anchored candidate the audit dropped is remembered");
+  }
+
   @Test
   void rememberNothingForAFindingThatCitesNoFile() {
     var anchorless = finding("", 0, "Nowhere in particular");
