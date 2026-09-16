@@ -57,6 +57,20 @@ public class AiReviewService {
 
   private static final int TOO_MANY_REQUESTS = 429;
 
+  /**
+   * How many attempts of one logical call may end at the streaming deadline (#862): the first and
+   * one repeat. Every other transient failure keeps the whole {@code max-ai-retries} budget. A
+   * timed-out attempt is the most expensive failure the loop can have — it spends {@code
+   * ai-timeout-seconds} in full, 15 minutes in production, and the review holds its pull request's
+   * place in the dispatcher throughout — and it is the failure least likely to go away on a repeat,
+   * because a prompt the model did not finish in 15 minutes is the same prompt on the next attempt.
+   * Production saw one 503-file pull request spend 20 such attempts in a day. The repeat is kept
+   * because a first token that never arrived can also be the provider queueing the request, which
+   * the next attempt need not repeat; at the shipped five retries the ceiling was 75 minutes of
+   * waiting per call, and it is 30 now.
+   */
+  private static final int MAX_TIMED_OUT_ATTEMPTS = 2;
+
   /** Wording of Ollama cloud's refusal when no concurrent request slot freed in time (#838). */
   private static final String CONCURRENT_SLOT_REFUSAL = "concurrent request slot";
 
@@ -174,14 +188,20 @@ public class AiReviewService {
    * <p>The repeat's calls are bound as reasoning-disabled on the thread that starts them (see
    * {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads that binding and sends
    * {@code reasoning_effort=none} on those calls alone.
+   *
+   * <p>The timed-out attempts are counted here rather than inside the loop, so the bound of {@link
+   * #MAX_TIMED_OUT_ATTEMPTS} is on the logical call and both passes share it (#862). A call that
+   * already waited out one deadline before its length stop has one attempt left to wait out
+   * another, whether or not reasoning is still on for it.
    */
   private ReviewResponse runWithRetries(
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
       ModelLane lane) {
+    var timeouts = new TimeoutBudget();
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, false);
+      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, false, timeouts);
     } catch (AiResponseTruncatedException e) {
       var effort = reasoningEffortToStepDownFrom(e, lane);
       if (effort.isEmpty()) {
@@ -196,7 +216,7 @@ public class AiReviewService {
       broadcaster.broadcast(
           SessionEventBroadcaster.SessionEvent.retry(
               session, 1, config.review().maxAiRetries(), REASONING_STEP_DOWN_REASON));
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, true);
+      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, true, timeouts);
     }
   }
 
@@ -235,7 +255,8 @@ public class AiReviewService {
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
       ModelLane lane,
-      boolean reasoningDisabled) {
+      boolean reasoningDisabled,
+      TimeoutBudget timeouts) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
 
@@ -284,11 +305,82 @@ public class AiReviewService {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.streamFailed(
                 session, attempt, maxAttempts, sanitize(e)));
+        failIfTimeoutBudgetSpent(session, attempt, maxAttempts, e, timeouts);
       }
     }
 
     throw new AiReviewException(
         "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
+  }
+
+  /**
+   * Ends the call when this failure is the streaming deadline and the call has no timed-out attempt
+   * left (#862), after the attempt has been logged and broadcast like any other transient failure.
+   * Returns for every other failure, and for a timeout the call may still repeat.
+   *
+   * <p>Only the client-side deadline counts. A call that found no free model call slot (#838) was
+   * never sent, and a timeout the provider itself reports arrives as a stream error; both are
+   * ordinary transient failures and keep the ordinary budget.
+   *
+   * @throws AiReviewTimeoutException naming the attempts made and the wall clock they spent, when
+   *     the bound is reached
+   */
+  private static void failIfTimeoutBudgetSpent(
+      ReviewSession session,
+      int attempt,
+      int maxAttempts,
+      RuntimeException failure,
+      TimeoutBudget timeouts) {
+    if (!(failure instanceof AiReviewTimeoutException timeout)
+        || !timeouts.spend(timeout.waited())) {
+      return;
+    }
+    Log.warnf(
+        "AI review attempt %d/%d for session %d timed out after %s; that is the last of the %d"
+            + " timed-out attempts one call may have (%s of waiting in all), so the call fails"
+            + " here instead of spending its remaining attempts on a request that already did not"
+            + " finish inside the deadline",
+        attempt,
+        maxAttempts,
+        session.id,
+        timeout.waited(),
+        MAX_TIMED_OUT_ATTEMPTS,
+        timeouts.waited());
+    throw new AiReviewTimeoutException(
+        "AI review failed after "
+            + attempt
+            + " attempts, "
+            + timeouts.timedOut()
+            + " of which timed out",
+        attempt,
+        timeouts.waited(),
+        timeout);
+  }
+
+  /**
+   * The timed-out attempts of one logical call and the wall clock they spent (#862). Not thread
+   * safe by design: one logical call runs its attempts one after another on a single thread, and
+   * parallel batches each run their own call with a budget of their own.
+   */
+  private static final class TimeoutBudget {
+
+    private int timedOut;
+    private Duration waited = Duration.ZERO;
+
+    /** Records a timed-out attempt and reports whether the call has none left. */
+    boolean spend(Duration wait) {
+      timedOut++;
+      waited = waited.plus(wait);
+      return timedOut >= MAX_TIMED_OUT_ATTEMPTS;
+    }
+
+    int timedOut() {
+      return timedOut;
+    }
+
+    Duration waited() {
+      return waited;
+    }
   }
 
   /**
@@ -368,6 +460,7 @@ public class AiReviewService {
     // reasoning disabled (#839). Both run before the stream returns, on this same thread.
     ReviewSessionContext.bind(session.id, attempt, reasoningDisabled);
     var callId = ReviewSessionContext.currentCallId();
+    var deadline = streamTimeout();
     TokenStream stream = null;
     try {
       stream = streamFactory.get();
@@ -382,12 +475,14 @@ public class AiReviewService {
           .onError(error -> handleStreamError(error, result, flushStream, cancelled))
           .start();
 
-      return result.get(streamTimeout().toMillis(), TimeUnit.MILLISECONDS);
+      return result.get(deadline.toMillis(), TimeUnit.MILLISECONDS);
     } catch (TimeoutException e) {
       cancelled.set(true);
       cancelStream(stream, session.id, attempt);
       flushStream.run();
-      throw new AiReviewException("AI review timed out after " + streamTimeout(), 1, e);
+      // Typed apart from the other transient failures: the retry loop bounds how many attempts of
+      // one call may spend the deadline, and it needs the wait this one spent to say so (#862).
+      throw new AiReviewTimeoutException("AI review timed out after " + deadline, 1, deadline, e);
     } catch (ExecutionException e) {
       throw asAiReviewException(e);
     } catch (InterruptedException e) {
