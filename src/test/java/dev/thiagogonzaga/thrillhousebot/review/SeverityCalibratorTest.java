@@ -216,6 +216,31 @@ class SeverityCalibratorTest {
     assertGrade(latest, "medium", "medium");
   }
 
+  /** The colon is Docker tag syntax, so the occurrence names the reference by itself. */
+  @Test
+  void theLatestTagNamesTheReferenceWithoutTheWordImage() {
+    ReviewResponse.Finding terse =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "FROM alpine:latest — the tag drifts under the build."));
+
+    assertGrade(terse, "medium", "medium");
+  }
+
+  /** An article between the words is the same claim. */
+  @Test
+  void anArticleBeforeRootIsTheSameClaim() {
+    ReviewResponse.Finding article =
+        calibrateOne(
+            finding(
+                "low", "low", "Dockerfile", "The image runs as the root user in the final stage."));
+
+    assertGrade(article, "medium", "medium");
+  }
+
   /** The claim is read on the finding's words, so a contraction is the same claim. */
   @Test
   void aContractionStatesTheSameClaim() {

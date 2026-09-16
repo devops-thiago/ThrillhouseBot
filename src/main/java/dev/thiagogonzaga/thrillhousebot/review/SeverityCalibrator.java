@@ -192,6 +192,11 @@ public final class SeverityCalibrator {
   /**
    * The one claim that has to be read on the raw text: normalization drops the colon that makes
    * {@code :latest} a reference rather than the ordinary English word.
+   *
+   * <p>It also stands on its own, without the subject the other claims need. The colon is Docker
+   * tag syntax, so the occurrence IS the reference being named: "FROM alpine:latest — the tag
+   * drifts under the build" says the whole class in four characters and need not also use the word
+   * "image" for the class to be the one it is.
    */
   private static final String LATEST_TAG = ":latest";
 
@@ -264,6 +269,9 @@ public final class SeverityCalibrator {
           "runs as root",
           "run as root",
           "running as root",
+          "runs as the root",
+          "run as the root",
+          "running as the root",
           "no user directive",
           "no user instruction",
           "missing user directive",
@@ -418,7 +426,8 @@ public final class SeverityCalibrator {
     if (namesNonRootUser(text, raw) && states(text, UNWRITABLE_PATH)) {
       return InfrastructureClass.UNWRITABLE_RUNTIME_PATH;
     }
-    return namesUnpinnedReference(text, raw) && states(text, EXTERNAL_REFERENCE_SUBJECT)
+    return namesLatestTag(raw)
+            || (states(text, UNPINNED_REFERENCE) && states(text, EXTERNAL_REFERENCE_SUBJECT))
         ? InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE
         : null;
   }
@@ -439,8 +448,8 @@ public final class SeverityCalibrator {
     return states(text, NON_ROOT_USER) || USER_DIRECTIVE.matcher(raw).find();
   }
 
-  private static boolean namesUnpinnedReference(String text, String raw) {
-    return states(text, UNPINNED_REFERENCE) || raw.toLowerCase(Locale.ROOT).contains(LATEST_TAG);
+  private static boolean namesLatestTag(String raw) {
+    return raw.toLowerCase(Locale.ROOT).contains(LATEST_TAG);
   }
 
   private static boolean alreadyAnchored(
