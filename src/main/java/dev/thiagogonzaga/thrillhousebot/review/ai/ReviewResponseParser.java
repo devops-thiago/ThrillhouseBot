@@ -520,9 +520,18 @@ public class ReviewResponseParser {
       }
     }
     // Anything else is a scalar where the walkthrough belongs: no (path, summary) pair at all.
+    logUnrecovered(fileSummaries, normalized, seen);
+    summary.set(FILE_SUMMARIES, normalized);
+  }
+
+  /**
+   * What the recovery made of the {@code seen} entries it walked. A recovery that saved some of
+   * them logs the counts and no more: describing the miss would put a shape in the log of every
+   * review one stray entry appears in. A recovery that saved none describes what arrived, because
+   * by then this line is the only record of it (#872).
+   */
+  private static void logUnrecovered(JsonNode fileSummaries, ArrayNode normalized, int seen) {
     if (normalized.isEmpty()) {
-      // The walkthrough is blank and the response is about to be normalized over, so this line is
-      // the only record of what arrived (#872).
       Log.warnf(
           "Review response file_summaries did not match the schema — recovered nothing from %d"
               + " entr%s, so the walkthrough renders with no summaries; it arrived as %s, first"
@@ -531,13 +540,12 @@ public class ReviewResponseParser {
           seen == 1 ? "y" : "ies",
           fileSummaries.getNodeType(),
           describeEntry(firstEntry(fileSummaries)));
-    } else {
-      Log.warnf(
-          "Review response file_summaries did not match the schema — recovered %d entr%s and"
-              + " dropped %d; unrecovered entries render as blank walkthrough rows",
-          normalized.size(), normalized.size() == 1 ? "y" : "ies", seen - normalized.size());
+      return;
     }
-    summary.set(FILE_SUMMARIES, normalized);
+    Log.warnf(
+        "Review response file_summaries did not match the schema — recovered %d entr%s and dropped"
+            + " %d; unrecovered entries render as blank walkthrough rows",
+        normalized.size(), normalized.size() == 1 ? "y" : "ies", seen - normalized.size());
   }
 
   /**
