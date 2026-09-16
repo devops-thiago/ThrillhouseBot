@@ -34,19 +34,28 @@ public final class EvidenceBudget {
   /** Character cap on everything one round attaches, so this evidence never rivals the diff. */
   static final int MAX_TOTAL_CHARS = 6_000;
 
+  /**
+   * Marker of a note this cap cut. A note carries quoted material — a maintainer's scoped rule, a
+   * window of the file — that the verifier prompt presents as the real thing, so a cut sentence
+   * read as a whole one is the fabricated-grounding direction all of this exists to close (#475
+   * review). Room for it is taken out of the cap rather than added to it.
+   */
+  static final String NOTE_TRUNCATED = "\n… (evidence truncated)";
+
   /** Characters attached so far, read and written only under {@link #monitor}. */
   private int charsAttached;
 
   private final Object monitor = new Object();
 
   /**
-   * The note bounded to its own cap and charged to the budget, or {@code null} when what is left no
-   * longer fits it.
+   * The note bounded to its own cap, marked when the cap cut it, and charged to the budget — or
+   * {@code null} when what is left of the budget no longer fits it.
    */
   String attach(String note) {
     var bounded =
         note.length() > MAX_NOTE_CHARS
-            ? ConfigKeyContextResolver.truncate(note, MAX_NOTE_CHARS)
+            ? ConfigKeyContextResolver.truncate(note, MAX_NOTE_CHARS - NOTE_TRUNCATED.length())
+                + NOTE_TRUNCATED
             : note;
     return reserve(bounded.length()) ? bounded : null;
   }

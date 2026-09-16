@@ -177,6 +177,28 @@ class ContextEvidenceResolverTest {
         "one scope's prose must not be quoted in full into every finding it governs");
   }
 
+  /**
+   * Two governed scopes and a measurement outgrow one note, and the cut lands inside prose the
+   * verifier is told is the maintainers' text verbatim. A cut rule is the fabricated-grounding
+   * direction this class exists to close, so the note says it was cut.
+   */
+  @Test
+  void marksACombinedNoteTheCapCuts() {
+    var rules = "Escape everything before it reaches the DOM. ".repeat(20);
+    var two =
+        new PathScopedInstructions(
+            List.of(
+                new PathScopedInstructions.AppliedScope("src/**", rules, List.of(PATH)),
+                new PathScopedInstructions.AppliedScope("**/Renderer.java", rules, List.of(PATH))),
+            ".github");
+    var finding = finding(PATH, 42, "The escaping branch here is never executed.");
+
+    var note = evidence(round(COVERAGE_SECTION, two), finding);
+
+    assertTrue(note.length() <= EvidenceBudget.MAX_NOTE_CHARS, "one note stays within its cap");
+    assertTrue(note.endsWith("… (evidence truncated)"), note);
+  }
+
   @Test
   void carriesBothDimensionsWhenTheFindingRestsOnBoth() {
     var finding = finding(PATH, 42, "The escaping branch here is never executed.");
