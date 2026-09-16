@@ -31,7 +31,11 @@ public final class EvidenceBudget {
   /** Character cap on one finding's note. */
   static final int MAX_NOTE_CHARS = 1_200;
 
-  /** Character cap on everything one round attaches, so this evidence never rivals the diff. */
+  /**
+   * Character cap on everything one review attaches, across every resolver that shares this budget,
+   * so this evidence never rivals the diff. It was a per-round cap before the budget was shared
+   * (#475); reading it as one again would double what a review can attach.
+   */
   static final int MAX_TOTAL_CHARS = 6_000;
 
   /**
