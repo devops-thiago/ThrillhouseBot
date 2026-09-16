@@ -19,8 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.TreeSet;
@@ -228,6 +230,92 @@ class ContextEvidenceResolverTest {
     assertTrue(
         note.contains("lists no uncovered added line in `Renderer.java`"),
         "naming one of two matching files' measurements as this finding's would be a guess");
+  }
+
+  @Test
+  void attachesNothingWhenTheReviewLoadedNoSectionAndNoScopes() {
+    var round = ContextEvidenceResolver.forReview(null, null, new EvidenceBudget());
+
+    assertSame(
+        FindingVerificationService.ContextEvidence.NONE,
+        round.locate(null),
+        "a call with no findings must not build a lookup");
+    assertSame(FindingVerificationService.ContextEvidence.NONE, round.locate(List.of()));
+    assertTrue(
+        evidence(round, finding(PATH, 42, "The coverage report lists this line."))
+            .contains("supplied no patch-coverage section"),
+        "a null section reads as the absent section it is, not as a section listing nothing");
+  }
+
+  /**
+   * Findings are keyed by the location and title the model wrote, so two findings the model raised
+   * at one anchor share an entry and one citing no file at all has none.
+   */
+  @Test
+  void keysEvidenceByTheLocationAndTitleTheModelWrote() {
+    var first = finding(PATH, 42, "The new fallback branch decides what the caller renders.");
+    var second = finding(PATH, 42, "The same anchor, raised twice in one call.");
+    var fileless = finding("", 0, "The coverage report lists this line.");
+
+    var located =
+        round(COVERAGE_SECTION, PathScopedInstructions.NONE)
+            .locate(List.of(first, second, fileless));
+
+    assertNotNull(located.forFinding(first));
+    assertEquals(located.forFinding(first), located.forFinding(second), "one entry per anchor");
+    assertNull(located.forFinding(fileless), "a finding citing no file has nothing to match");
+  }
+
+  @Test
+  void quotesEveryScopeThatGovernsTheFile() {
+    var both =
+        new PathScopedInstructions(
+            List.of(
+                new PathScopedInstructions.AppliedScope("src/**", RULES, List.of(PATH)),
+                new PathScopedInstructions.AppliedScope(
+                    "**/Renderer.java", "Renderers are append-only.", List.of(PATH))),
+            ".github");
+    var finding = finding(PATH, 42, "Renders the title without escaping it.");
+
+    var note = evidence(round("", both), finding);
+
+    assertTrue(note.contains(RULES), note);
+    assertTrue(note.contains("Renderers are append-only."), note);
+    assertTrue(note.contains("files matching `**/Renderer.java`"), note);
+  }
+
+  @Test
+  void governsAFileACitationNamesWithoutItsLeadingDirectory() {
+    var finding = finding("app/Renderer.java", 42, "Renders the title without escaping it.");
+
+    var note = evidence(round("", scoped("src/**", RULES, PATH)), finding);
+
+    assertNotNull(note, "a citation missing a leading directory still names a governed file");
+    assertTrue(note.contains(RULES), note);
+  }
+
+  /** Model output and repository YAML are both allowed to leave text out; neither may throw. */
+  @Test
+  void toleratesAScopeWithNoRulesAndAFindingWithNoProse() {
+    var round = round(COVERAGE_SECTION, scoped("src/**", null, PATH));
+    var measured = new ReviewResponse.Finding("low", "low", PATH, 42, null, null, null, null);
+    var unmeasured = new ReviewResponse.Finding("low", "low", PATH, 12, null, null, null, null);
+
+    var onMeasured = evidence(round, measured);
+    var onUnmeasured = evidence(round, unmeasured);
+
+    assertNotNull(onMeasured, "the measurement is attached however little the finding says");
+    assertTrue(onMeasured.contains("lists line 42"), onMeasured);
+    assertTrue(onMeasured.contains("verbatim:\n"), onMeasured);
+    // A finding with no prose credits the report with nothing, so nothing is contradicted.
+    assertFalse(onUnmeasured.contains("patch-coverage section"), onUnmeasured);
+    assertTrue(onUnmeasured.contains("files matching `src/**`"), onUnmeasured);
+  }
+
+  @Test
+  void ignoresARangeBoundThatIsNotANumber() {
+    assertFalse(ContextEvidenceResolver.rangesContain("12-x", 13));
+    assertFalse(ContextEvidenceResolver.rangesContain("12-18", 11));
   }
 
   /**
