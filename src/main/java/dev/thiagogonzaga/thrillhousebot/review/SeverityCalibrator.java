@@ -109,12 +109,43 @@ public final class SeverityCalibrator {
 
   /**
    * The container-image file, matched as a whole dot-separated segment of the file's name so every
-   * spelling of the artifact is covered ({@code Dockerfile}, {@code Dockerfile.prod}, {@code
-   * prod.dockerfile}, {@code Containerfile}) and a file merely NAMED after it is not ({@code
-   * DockerfileSupport.java}, {@code Dockerfile-guide.md}), which is source and documentation rather
-   * than a declarative deployment artifact.
+   * spelling of the artifact is covered: {@code Dockerfile}, {@code Dockerfile.prod}, {@code
+   * prod.dockerfile}, {@code Containerfile}.
    */
   private static final List<String> CONTAINER_FILE_NAMES = List.of("dockerfile", "containerfile");
+
+  /**
+   * File types that make a name ABOUT the artifact rather than the artifact. A Dockerfile has no
+   * file type — its name is the type — so a terminal extension from this list says the file is
+   * source or documentation however the rest of the name reads: {@code DockerfileSupport.java} and
+   * {@code Dockerfile-guide.md} are already excluded by the whole-segment rule, while {@code
+   * Dockerfile.md} and {@code Containerfile.kt} are not, and only the extension tells them from
+   * {@code Dockerfile.prod}. The list is the types a repository actually writes these in; a name
+   * outside it is one nobody writes, and the miss would cost a finding its calibration rather than
+   * give a document one.
+   */
+  private static final List<String> DOCUMENTARY_EXTENSIONS =
+      List.of(
+          "md",
+          "markdown",
+          "txt",
+          "rst",
+          "adoc",
+          "html",
+          "json",
+          "java",
+          "kt",
+          "kts",
+          "js",
+          "ts",
+          "tsx",
+          "py",
+          "go",
+          "rs",
+          "rb",
+          "cs",
+          "php",
+          "sh");
 
   /**
    * Every trigger below is a list of PHRASES, matched against the finding's own words after {@link
@@ -395,8 +426,13 @@ public final class SeverityCalibrator {
   /** Whether the finding is anchored in one of the declarative artifacts these classes live in. */
   private static boolean isInfrastructureFile(String path) {
     String name = path.substring(path.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
-    return Arrays.stream(SEGMENT.split(name)).anyMatch(CONTAINER_FILE_NAMES::contains)
-        || INFRASTRUCTURE_EXTENSIONS.stream().anyMatch(name::endsWith);
+    return isContainerFile(name) || INFRASTRUCTURE_EXTENSIONS.stream().anyMatch(name::endsWith);
+  }
+
+  private static boolean isContainerFile(String name) {
+    String[] segments = SEGMENT.split(name);
+    return Arrays.stream(segments).anyMatch(CONTAINER_FILE_NAMES::contains)
+        && !DOCUMENTARY_EXTENSIONS.contains(segments[segments.length - 1]);
   }
 
   private static boolean namesNonRootUser(String text, String raw) {

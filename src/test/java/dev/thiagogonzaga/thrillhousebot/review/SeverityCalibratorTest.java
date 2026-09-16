@@ -350,6 +350,15 @@ class SeverityCalibratorTest {
     assertSame(hostNamespace, SeverityCalibrator.calibrate(hostNamespace));
   }
 
+  /** A variant suffix names the same artifact; only a file type says the file is about it. */
+  @Test
+  void aVariantDockerfileIsStillTheArtifact() {
+    assertGrade(
+        calibrateOne(finding("low", "low", "docker/Dockerfile.prod", UNPINNED_RUST)),
+        "medium",
+        "medium");
+  }
+
   /** Podman spells the same artifact differently, and it is the same artifact. */
   @Test
   void aContainerfileIsTheSameArtifactAsADockerfile() {
@@ -412,7 +421,12 @@ class SeverityCalibratorTest {
   /** Being named after the artifact is not being the artifact. */
   @ParameterizedTest
   @ValueSource(
-      strings = {"src/main/java/dev/app/DockerfileSupport.java", "docs/Dockerfile-guide.md"})
+      strings = {
+        "src/main/java/dev/app/DockerfileSupport.java",
+        "docs/Dockerfile-guide.md",
+        "docs/Dockerfile.md",
+        "ui/Containerfile.kt"
+      })
   void aFileMerelyNamedAfterTheDockerfileIsNotOne(String path) {
     ReviewResponse named = response(finding("low", "low", path, UNPINNED_NODE));
 
