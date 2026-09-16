@@ -1637,7 +1637,7 @@ class FindingPipelineTest {
 
     var refined =
         pipeline.run(
-            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
 
     assertEquals("medium", refined.findings().get(0).risk());
     assertEquals("medium", refined.findings().get(0).confidence());
