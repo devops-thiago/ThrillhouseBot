@@ -130,6 +130,9 @@ class FileSummariesDropDiagnosticsTest {
   @Test
   void theFieldNamesAreSanitizedAndBoundedInCountAndLength() {
     var longName = "x".repeat(60);
+    // The U+000A stays raw rather than escaped: extractJson escapes control characters inside
+    // string literals before the document is read, so this is the path a model's own stray
+    // newline takes, and the name reaches the recovery as one<LF><RLO>two either way.
     var forged = "one" + ch(0x0A) + ch(0x202E) + "two";
     var entry = new StringBuilder("{\"" + longName + "\": 1, \"" + forged + "\": 1");
     for (var i = 0; i < 9; i++) {
