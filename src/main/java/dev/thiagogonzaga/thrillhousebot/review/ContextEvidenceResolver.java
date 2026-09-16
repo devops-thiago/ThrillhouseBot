@@ -79,22 +79,21 @@ public final class ContextEvidenceResolver {
   private static final String RULES_TRUNCATED = "\n… (rules truncated)";
 
   /**
-   * The phrases a finding uses when it names the coverage report — the wording the review prompt
-   * itself asks for. Every one of them names the report; none of them merely describes the outcome.
-   * "Never executed" was here and is not: it is also how a finding grounded in the diff alone
-   * describes unreachable code ("the guard returns first, so it is never executed"), and
-   * contradicting that finding's measurement would contradict a claim it never made (#475 review).
-   * The scan is deliberately literal and narrow, and it gates only the contradicting notes: a
-   * phrasing it misses attaches nothing, which is the behaviour the verifier had before this class
-   * existed.
+   * The word a finding uses when it credits coverage material for something. One stem, not a list
+   * of the phrasings the review prompt happens to coach: "per the coverage analysis", "the coverage
+   * results show", "the CI's coverage run confirms" all credit a measurement, and a scan that
+   * missed them would let a paraphrased fabrication reach the verifier uncontradicted, which is the
+   * direction this class exists to close (#475 review).
+   *
+   * <p>It reads as a mention rather than as a claim, deliberately. A finding can name coverage to
+   * disclaim it, or raise a defect about a coverage configuration, and either then travels with a
+   * note stating what the section holds. That note costs such a finding nothing — the verifier's
+   * rule for it is conditioned on an attribution the finding actually made — while the miss it
+   * replaces costs the guard the case it was built for. The stem stops short of the outcome
+   * wording: "never executed" is also how a finding grounded in the diff alone describes
+   * unreachable code, and contradicting that would contradict a claim it never made.
    */
-  private static final List<String> COVERAGE_ATTRIBUTIONS =
-      List.of(
-          "coverage report",
-          "patch coverage",
-          "coverage section",
-          "coverage measurement",
-          "coverage data");
+  private static final String COVERAGE_MENTION = "coverage";
 
   /**
    * The rendered coverage section's per-file line prefix, as {@code PatchCoverageResolver} emits
@@ -213,7 +212,7 @@ public final class ContextEvidenceResolver {
             + ranges
             + ".";
       }
-      if (!attributesToCoverage(finding)) {
+      if (!namesCoverage(finding)) {
         return null;
       }
       if (!coverageSupplied) {
@@ -350,17 +349,17 @@ public final class ContextEvidenceResolver {
   }
 
   /**
-   * Whether the finding credits a coverage report for something. Only the finding's own prose is
-   * scanned — the text a maintainer would read as the claim — and only to decide whether a
-   * contradicting note is worth attaching.
+   * Whether the finding names coverage material at all. Only the finding's own prose is scanned —
+   * the text a maintainer would read as the claim — and only to decide whether a contradicting note
+   * is worth attaching.
    */
-  static boolean attributesToCoverage(ReviewResponse.Finding finding) {
+  static boolean namesCoverage(ReviewResponse.Finding finding) {
     var text =
         ((finding.title() == null ? "" : finding.title())
                 + ' '
                 + (finding.description() == null ? "" : finding.description()))
             .toLowerCase(Locale.ROOT);
-    return COVERAGE_ATTRIBUTIONS.stream().anyMatch(text::contains);
+    return text.contains(COVERAGE_MENTION);
   }
 
   /**

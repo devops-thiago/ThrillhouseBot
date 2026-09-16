@@ -352,6 +352,21 @@ class ContextEvidenceResolverTest {
   }
 
   /** A section line the render cut before its ranges carries no measurement to read back. */
+  /**
+   * The wording the review prompt coaches is not the only wording a finding can credit a report
+   * with, and a paraphrase that escaped the scan would reach the verifier with its measurement
+   * uncontradicted — the direction this guard exists to close.
+   */
+  @Test
+  void contradictsAParaphrasedCoverageClaimToo() {
+    var paraphrase = finding(PATH, 12, "Per the coverage analysis, this line is never executed.");
+
+    var note = evidence(round(COVERAGE_SECTION, PathScopedInstructions.NONE), paraphrase);
+
+    assertNotNull(note, "a credited measurement must be checked however the finding words it");
+    assertTrue(note.contains("The cited line 12 is not among them"), note);
+  }
+
   @Test
   void skipsASectionLineThatCarriesNoRanges() {
     var parsed = ContextEvidenceResolver.parseUncovered("### heading\n- src/App.java: \n");
@@ -383,6 +398,16 @@ class ContextEvidenceResolverTest {
     assertNull(
         evidence(ContextEvidenceResolver.disabled(), finding),
         "a caller that loaded no context knows nothing about what the review measured");
+  }
+
+  @Test
+  void readsACoverageMentionAnywhereInTheFindingsOwnProse() {
+    assertTrue(
+        ContextEvidenceResolver.namesCoverage(
+            finding(PATH, 1, "The CI's coverage run confirms this branch is dead.")));
+    assertFalse(
+        ContextEvidenceResolver.namesCoverage(
+            finding(PATH, 1, "The guard two lines up returns first, so this is never executed.")));
   }
 
   @Test
