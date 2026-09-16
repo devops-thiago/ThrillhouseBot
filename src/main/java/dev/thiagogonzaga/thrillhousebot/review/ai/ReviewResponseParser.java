@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -29,6 +30,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 
 @ApplicationScoped
 public class ReviewResponseParser {
@@ -51,6 +53,12 @@ public class ReviewResponseParser {
   /** Keys a mis-shaped {@code file_summaries} entry may carry the one-line summary under. */
   private static final List<String> SUMMARY_KEYS =
       List.of(SUMMARY, "description", "change", "changes", "note", "text");
+
+  /** How many of a dropped entry's field names one warning line lists before it stops. */
+  private static final int MAX_LOGGED_FIELD_NAMES = 8;
+
+  /** How long one listed field name may be before it is cut. */
+  private static final int MAX_LOGGED_FIELD_NAME_CHARS = 40;
 
   private final ObjectMapper mapper;
 
@@ -473,6 +481,13 @@ public class ReviewResponseParser {
    * salvage in {@link #parseWithoutSummary} then discards the WHOLE summary, taking pr_purpose and
    * the description gaps with it. Normalize to the array-of-{path, summary} form so a recoverable
    * shape still fills the walkthrough, and log what could not be recovered (#536).
+   *
+   * <p>When nothing is recovered the warning also carries the shape that arrived, because by then
+   * nothing else does: the session row stores the response after this rewrite, so its {@code
+   * file_summaries} reads {@code []} and a blank Changed Files table cannot be explained after the
+   * fact (#872). The node itself stays out of the row — it is the whole walkthrough's worth of
+   * model prose on a row already holding the response, for a question the node type and the first
+   * entry's field names answer.
    */
   private void normalizeFileSummaries(JsonNode root) {
     if (!(root instanceof ObjectNode rootObject)
@@ -505,11 +520,89 @@ public class ReviewResponseParser {
       }
     }
     // Anything else is a scalar where the walkthrough belongs: no (path, summary) pair at all.
+    logUnrecovered(fileSummaries, normalized, seen);
+    summary.set(FILE_SUMMARIES, normalized);
+  }
+
+  /**
+   * What the recovery made of the {@code seen} entries it walked. A recovery that saved some of
+   * them logs the counts and no more: describing the miss would put a shape in the log of every
+   * review one stray entry appears in. A recovery that saved none describes what arrived, because
+   * by then this line is the only record of it (#872).
+   */
+  private static void logUnrecovered(JsonNode fileSummaries, ArrayNode normalized, int seen) {
+    if (normalized.isEmpty()) {
+      Log.warnf(
+          "Review response file_summaries did not match the schema — recovered nothing from %d"
+              + " entr%s, so the walkthrough renders with no summaries; it arrived as %s, first"
+              + " entry %s",
+          seen,
+          seen == 1 ? "y" : "ies",
+          fileSummaries.getNodeType(),
+          describeEntry(firstEntry(fileSummaries)));
+      return;
+    }
     Log.warnf(
         "Review response file_summaries did not match the schema — recovered %d entr%s and dropped"
             + " %d; unrecovered entries render as blank walkthrough rows",
         normalized.size(), normalized.size() == 1 ? "y" : "ies", seen - normalized.size());
-    summary.set(FILE_SUMMARIES, normalized);
+  }
+
+  /**
+   * The entry the drop diagnostic describes: element zero of an array, the first property's value
+   * of the map form, and the node itself for a single entry or for a scalar. It is read only when
+   * nothing was recovered, so whichever it returns is one of the dropped entries, and a
+   * non-conforming array always has the element zero it reads (a conforming one — an empty array
+   * among them — returns before this point).
+   */
+  private static JsonNode firstEntry(JsonNode fileSummaries) {
+    if (fileSummaries.isArray()) {
+      return fileSummaries.get(0);
+    }
+    if (looksLikeFileSummary(fileSummaries)) {
+      return fileSummaries;
+    }
+    return fileSummaries.properties().stream()
+        .findFirst()
+        .map(Map.Entry::getValue)
+        .orElse(fileSummaries);
+  }
+
+  /**
+   * One dropped entry's node type and field names, which is what tells an unknown key apart from a
+   * non-textual value or a level of nesting nobody expected — the three ways every entry can fall
+   * outside {@code PATH_KEYS}/{@code SUMMARY_KEYS} at once (#872).
+   *
+   * <p>Names only, never values: a name is all it takes to decide whether the key lists should
+   * grow, while a value carries the model's prose about the diff. The model chooses those names, so
+   * each one is flattened by {@link LogSafe} on its way into the record, and both how many are
+   * listed and how long each may be are bounded — an entry is free to carry a thousand keys or one
+   * key a megabyte long.
+   */
+  private static String describeEntry(JsonNode entry) {
+    var names = new ArrayList<String>();
+    for (var property : entry.properties()) {
+      if (names.size() == MAX_LOGGED_FIELD_NAMES) {
+        break;
+      }
+      names.add(shortened(LogSafe.oneLine(property.getKey())));
+    }
+    if (names.isEmpty()) {
+      return entry.getNodeType() + " with no fields";
+    }
+    var described = entry.getNodeType() + " with field(s) " + names;
+    var unlisted = entry.size() - names.size();
+    if (unlisted > 0) {
+      described += " and " + unlisted + " more";
+    }
+    return described;
+  }
+
+  /** One field name cut to the length a log line carries it at. */
+  private static String shortened(String name) {
+    return name.length() <= MAX_LOGGED_FIELD_NAME_CHARS
+        ? name
+        : name.substring(0, MAX_LOGGED_FIELD_NAME_CHARS) + "…";
   }
 
   /**
