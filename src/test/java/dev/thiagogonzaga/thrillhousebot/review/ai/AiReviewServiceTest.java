@@ -40,6 +40,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -470,6 +474,128 @@ class AiReviewServiceTest {
 
     assertNotNull(ex.getCause());
     assertTrue(ex.getCause().getMessage().contains("timed out"));
+  }
+
+  @Test
+  void repeatedTimeoutsEndTheCallInsteadOfSpendingTheRetryBudget() {
+    // #862: every attempt spends the whole deadline while the review holds its pull request's
+    // dispatcher slot, so one repeat is all a call gets before the deadline is taken as the
+    // answer. The five configured retries used to be spent on it, 75 minutes in production.
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxAiRetries()).thenReturn(5);
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    stubReviewStreams(new HangingTokenStream());
+
+    AiReviewException ex =
+        assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertEquals(2, ex.attempts());
+    assertTrue(ex.getCause().getMessage().contains("timed out"));
+    verifyReviewStreamCalls(2);
+  }
+
+  /**
+   * A pull request that reliably times out has to be visible without reading every line, so the
+   * decision to end the call names the session, the attempt and the wait (#862). The records arrive
+   * already formatted, so the assertions read the rendered line.
+   */
+  @Test
+  void theCallEndedByRepeatedTimeoutsIsLoggedWithSessionAttemptAndWait() {
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxAiRetries()).thenReturn(5);
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    stubReviewStreams(new HangingTokenStream());
+    var logger = Logger.getLogger(AiReviewService.class.getName());
+    var logged = new CopyOnWriteArrayList<LogRecord>();
+    var capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            logged.add(entry);
+          }
+
+          @Override
+          public void flush() {
+            // Nothing is buffered.
+          }
+
+          @Override
+          public void close() {
+            // Nothing to release.
+          }
+        };
+    logger.addHandler(capture);
+
+    try {
+      assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
+    } finally {
+      logger.removeHandler(capture);
+    }
+
+    var decision =
+        logged.stream()
+            .filter(entry -> Level.WARNING.equals(entry.getLevel()))
+            .map(LogRecord::getMessage)
+            .filter(line -> line.contains("fails here"))
+            .findFirst();
+    assertTrue(decision.isPresent(), "expected a WARN naming the decision to end the call");
+    assertTrue(decision.get().contains("attempt 2/5"), decision.get());
+    assertTrue(decision.get().contains("session 42"), decision.get());
+    assertTrue(decision.get().contains("PT2S"), decision.get());
+  }
+
+  @Test
+  void aTimeoutFollowedByASuccessfulAttemptStillSucceeds() {
+    // The repeat is why the bound is two and not one: a first token that never arrived can be the
+    // provider queueing the request, and the next attempt need not repeat it.
+    ReviewSession session = reviewSession();
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    stubReviewStreams(new HangingTokenStream(), new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    assertNotNull(service.review(session, PROMPT_INPUTS));
+
+    verifyReviewStreamCalls(2);
+  }
+
+  @Test
+  void aTimeoutDoesNotShortenTheBudgetOfOtherTransientFailures() {
+    // Only the deadline is bounded (#862). A provider error says nothing about the request, so a
+    // call that timed out once keeps all five attempts for the failures that are worth repeating.
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxAiRetries()).thenReturn(5);
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    stubReviewStreams(
+        new ErrorTokenStream(new RuntimeException("provider down")),
+        new HangingTokenStream(),
+        new ErrorTokenStream(new RuntimeException("provider down")),
+        new ErrorTokenStream(new RuntimeException("provider down")),
+        new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    assertNotNull(service.review(session, PROMPT_INPUTS));
+
+    verifyReviewStreamCalls(5);
+  }
+
+  @Test
+  void repeatedTimeoutsEndTheSummaryCallOnTheSameTerms() {
+    // The summary call shares the retry loop, so it is bounded by the same count; its failure
+    // still degrades to the counts-only summary that keeps the paid findings (#851).
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxAiRetries()).thenReturn(5);
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new HangingTokenStream());
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
+
+    AiReviewException ex =
+        assertThrows(AiReviewException.class, () -> service.summarize(session, inputs));
+
+    assertEquals(2, ex.attempts());
+    verify(prSummarizer, times(2))
+        .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
@@ -1774,6 +1900,18 @@ class AiReviewServiceTest {
             anyString(),
             anyString()))
         .thenReturn(first, then);
+  }
+
+  private void verifyReviewStreamCalls(int expected) {
+    verify(prReviewer, times(expected))
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
   }
 
   /**

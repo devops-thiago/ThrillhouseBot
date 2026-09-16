@@ -44,12 +44,14 @@ import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewTimeoutException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -505,6 +507,39 @@ class FindingPipelineTest {
     verify(aiReviewService, times(1))
         .reviewBatch(eq(session), any(), eq(1), anyInt()); // no second, futile call
 
+    assertEquals(1, result.findings().size());
+    assertEquals("B", result.findings().get(0).title());
+    assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
+    assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
+  @Test
+  void multiCallDisclosesABatchWhoseCallGaveUpOnItsTimedOutAttempts() {
+    // #862: a call the AI service ended on its timed-out attempts is an ordinary spent call here.
+    // The sequential pass still gives the batch the one fresh attempt it gives any transient
+    // failure — the parallel pass sends every batch at once, and a deadline missed under that
+    // contention can be the contention — and the files are disclosed when that attempt fails too.
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(
+            new AiReviewTimeoutException(
+                "AI review failed after 2 attempts, 2 of which timed out",
+                2,
+                Duration.ofMinutes(30),
+                null));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "does things", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var plan = multiBatchPlan();
+    var result = pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()));
+
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
     assertEquals(1, result.findings().size());
     assertEquals("B", result.findings().get(0).title());
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
