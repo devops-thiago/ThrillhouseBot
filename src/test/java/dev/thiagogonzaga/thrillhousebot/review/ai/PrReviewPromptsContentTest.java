@@ -683,6 +683,32 @@ class PrReviewPromptsContentTest {
         req,
         "not evidence in the other direction",
         "absence from the list must never be read as proof a line is covered");
+    assertContains(
+        req,
+        "Carry the measurement in any finding you raise from this section",
+        "a coverage-grounded finding must quote the measurement it rests on (#475)");
+    assertContains(
+        req,
+        "the claim is checked against the list",
+        "a measurement the list does not contain must not be worth inventing (#475)");
+  }
+
+  /** #475: the pattern every context dimension follows, stated once for all of them. */
+  @Test
+  void findingsMustCarryTheContextTheyRestOn() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "SELF-CARRYING EVIDENCE",
+        "a context-grounded finding must quote its grounding (#475)");
+    assertContains(
+        sys,
+        "The audit pass that rules on your findings receives your",
+        "the rule must say why: the audit pass is not given those sections (#475)");
+    assertContains(
+        sys,
+        "paraphrase establishes nothing",
+        "the material must be quoted rather than described (#475)");
   }
 
   @Test

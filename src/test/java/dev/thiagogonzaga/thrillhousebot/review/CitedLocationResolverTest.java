@@ -64,7 +64,7 @@ class CitedLocationResolverTest {
   private final CitedLocationResolver resolver = new CitedLocationResolver(prClient);
 
   private CitedLocationResolver.Round round(FileDiff... files) {
-    return resolver.forReview("token", "o", "r", "headsha", List.of(files));
+    return resolver.forReview("token", "o", "r", "headsha", List.of(files), new EvidenceBudget());
   }
 
   private static FileDiff changed(String path) {
@@ -342,7 +342,7 @@ class CitedLocationResolverTest {
 
     assertNotNull(located.forFinding(findings[0]));
     assertTrue(
-        located.forFinding(findings[0]).length() <= CitedLocationResolver.MAX_NOTE_CHARS,
+        located.forFinding(findings[0]).length() <= EvidenceBudget.MAX_NOTE_CHARS,
         "one note is capped");
     assertNull(
         located.forFinding(findings[files.length - 1]),
@@ -449,7 +449,7 @@ class CitedLocationResolverTest {
 
   @Test
   void toleratesAReviewWithNoFileListAndFindingsWithNoUsableEntry() {
-    var round = resolver.forReview("token", "o", "r", "headsha", null);
+    var round = resolver.forReview("token", "o", "r", "headsha", null, new EvidenceBudget());
     var usable = finding(PATH, 10, "return x;");
 
     assertSame(
@@ -473,7 +473,12 @@ class CitedLocationResolverTest {
     var finding = finding(PATH, 10, "return \"<p>\" + purpose + \"</p>\";");
     var withGaps =
         resolver.forReview(
-            "token", "o", "r", "headsha", Arrays.asList(null, nameless, blankName, blankRename));
+            "token",
+            "o",
+            "r",
+            "headsha",
+            Arrays.asList(null, nameless, blankName, blankRename),
+            new EvidenceBudget());
 
     assertNotNull(withGaps.locate(List.of(finding)).forFinding(finding));
   }

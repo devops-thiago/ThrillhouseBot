@@ -678,22 +678,25 @@ public class FindingVerificationService {
         diff,
         projectStack,
         previousFindings,
-        CitedLocations.NONE,
+        FindingEvidence.NONE,
         coverageSink);
   }
 
   /**
-   * The variant that also hands each candidate what its cited {@code path:line} resolves to in the
-   * repository at the head commit (#650).
+   * The variant that also hands each candidate the material it rests on that the verifier's own
+   * slots do not carry: what its cited {@code path:line} resolves to in the repository at the head
+   * commit (#650), and what the review context sections the verifier is not given say about it
+   * (#475).
    *
    * <p>The verifier's material is a diff, so a finding whose evidence sits in the same file just
-   * outside the nearest hunk reads to it as a claim about code nobody showed it — the ground its
-   * own prompt tells it to reject on. The resolution is deterministic and adds no model call; it
-   * rides on the candidate rather than in a slot of its own, so a finding is judged against the
-   * code at its own location and not against a location the model got slightly wrong.
+   * outside the nearest hunk — or in a coverage report or a maintainer rule it was never handed —
+   * reads to it as a claim about material nobody showed it, the ground its own prompt tells it to
+   * reject on. Both resolutions are deterministic and add no model call; they ride on the candidate
+   * rather than in slots of their own, so a finding is judged against its own grounding, and a
+   * context dimension added to the review pass needs no new verifier input.
    *
-   * <p>{@link CitedLocations#NONE} is the honest default for a caller with no repository access,
-   * and leaves the candidate's {@code cited_location} field out entirely.
+   * <p>{@link FindingEvidence#NONE} is the honest default for a caller that resolved none, and
+   * leaves both candidate fields out entirely.
    */
   @SuppressWarnings("java:S107") // One verifier input per prompt slot; see the overloads above.
   public ReviewResponse verify(
@@ -703,7 +706,7 @@ public class FindingVerificationService {
       String diff,
       String projectStack,
       String previousFindings,
-      CitedLocations citedLocations,
+      FindingEvidence evidence,
       Consumer<VerificationCoverage> coverageSink) {
     return floorInjectionSinkRisk(
         audit(
@@ -713,7 +716,7 @@ public class FindingVerificationService {
             diff,
             projectStack,
             previousFindings,
-            citedLocations,
+            evidence,
             coverageSink));
   }
 
@@ -726,7 +729,7 @@ public class FindingVerificationService {
       String diff,
       String projectStack,
       String previousFindings,
-      CitedLocations citedLocations,
+      FindingEvidence evidence,
       Consumer<VerificationCoverage> coverageSink) {
     ReviewResponse screened = demoteHedgedBlockingFindings(dropSelfRetractedFindings(response));
     if (!config.review().verifierEnabled() || screened.findings().isEmpty()) {
@@ -749,7 +752,7 @@ public class FindingVerificationService {
     try {
       var result =
           verifier.verify(
-              PromptTemplateEscaper.escape(renderCandidates(screened.findings(), citedLocations)),
+              PromptTemplateEscaper.escape(renderCandidates(screened.findings(), evidence)),
               prContext == null ? "" : prContext,
               diff,
               projectStack,
@@ -1386,10 +1389,12 @@ public class FindingVerificationService {
    * The shape each candidate is presented in; ids are 1-based positions in the findings list.
    *
    * <p>{@code cited_location} carries what the finding's cited {@code file:line} actually resolves
-   * to in the repository at the head commit (#650), and is absent when nothing resolved. It rides
-   * on the candidate rather than in a section of its own, so the evidence stays bound to the
-   * finding it belongs to and the verifier's input slots stay as they are while this material
-   * grows.
+   * to in the repository at the head commit (#650), and {@code context_evidence} what the review
+   * context sections the verifier is not given actually say about this finding (#475). Both are
+   * absent when nothing resolved. They ride on the candidate rather than in sections of their own,
+   * so the evidence stays bound to the finding it belongs to and the verifier's input slots stay as
+   * they are while this material grows — which is what lets the next context dimension reach the
+   * verifier without a slot of its own.
    */
   @RegisterForReflection
   record Candidate(
@@ -1403,9 +1408,11 @@ public class FindingVerificationService {
       @JsonProperty("suggestion_old") String suggestionOld,
       @JsonProperty("suggestion_new") String suggestionNew,
       @JsonInclude(JsonInclude.Include.NON_NULL) @JsonProperty("cited_location")
-          String citedLocation) {
+          String citedLocation,
+      @JsonInclude(JsonInclude.Include.NON_NULL) @JsonProperty("context_evidence")
+          String contextEvidence) {
 
-    static Candidate of(int id, ReviewResponse.Finding f, String citedLocation) {
+    static Candidate of(int id, ReviewResponse.Finding f, FindingEvidence evidence) {
       return new Candidate(
           id,
           f.risk(),
@@ -1416,7 +1423,8 @@ public class FindingVerificationService {
           f.description(),
           f.suggestionOld(),
           f.suggestionNew(),
-          citedLocation);
+          evidence.citedLocations().forFinding(f),
+          evidence.contextEvidence().forFinding(f));
     }
   }
 
@@ -1434,12 +1442,38 @@ public class FindingVerificationService {
     String forFinding(ReviewResponse.Finding finding);
   }
 
-  String renderCandidates(List<ReviewResponse.Finding> findings, CitedLocations citedLocations)
+  /**
+   * Per-finding evidence from the review context sections the reviewer is given and the verifier is
+   * not — the patch-coverage measurement, the maintainers' path-scoped rules (#475) — matched
+   * deterministically before the call and attached to the candidate it belongs to.
+   */
+  @FunctionalInterface
+  public interface ContextEvidence {
+
+    /** Matches nothing, which leaves the verifier's material exactly as it was before #475. */
+    ContextEvidence NONE = finding -> null;
+
+    /** The context material for one finding, or {@code null} when none was matched. */
+    String forFinding(ReviewResponse.Finding finding);
+  }
+
+  /**
+   * Everything one call's findings carry into the verifier beyond the finding itself. The two
+   * travel as one value because they are one thing to the verifier — material it was not given and
+   * cannot look up — and because they are charged to one character budget.
+   */
+  public record FindingEvidence(CitedLocations citedLocations, ContextEvidence contextEvidence) {
+
+    /** Attaches nothing, the honest default for a caller that resolved no evidence. */
+    public static final FindingEvidence NONE =
+        new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE);
+  }
+
+  String renderCandidates(List<ReviewResponse.Finding> findings, FindingEvidence evidence)
       throws IOException {
     var candidates = new ArrayList<Candidate>(findings.size());
     for (var i = 0; i < findings.size(); i++) {
-      var finding = findings.get(i);
-      candidates.add(Candidate.of(i + 1, finding, citedLocations.forFinding(finding)));
+      candidates.add(Candidate.of(i + 1, findings.get(i), evidence));
     }
     return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(candidates);
   }

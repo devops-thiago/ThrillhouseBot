@@ -313,13 +313,14 @@ public class ReviewOrchestrator {
       var ciFuture =
           CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, ciReq), reviewExecutor);
 
-      // #650: one resolution round for the whole review, so the batches share its fetch budget
-      // and file cache. Only files this pull request changes are ever read.
-      var citedLocations =
-          citedLocationResolver.forReview(
-              auth, req.owner(), req.repo(), req.commitSha(), ctx.reviewableFiles());
+      // #650/#475: one evidence round for the whole review, so the batches share its fetch budget,
+      // its file cache, and the single character budget every attached note is charged to. Only
+      // files this pull request changes are ever read.
+      var evidence =
+          ReviewEvidence.forReview(
+              citedLocationResolver, auth, req.owner(), req.repo(), req.commitSha(), ctx);
       var aiResponse =
-          findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, citedLocations);
+          findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
       CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
 

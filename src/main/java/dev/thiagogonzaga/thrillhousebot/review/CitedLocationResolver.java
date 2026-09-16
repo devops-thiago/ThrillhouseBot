@@ -98,12 +98,6 @@ public class CitedLocationResolver {
   /** The phrase joining a line number to the path it belongs to, used in every rendered note. */
   private static final String OF_PATH = " of `";
 
-  /** Character cap on one finding's note. */
-  static final int MAX_NOTE_CHARS = 1_200;
-
-  /** Character cap on everything one round attaches, so this evidence never rivals the diff. */
-  static final int MAX_TOTAL_CHARS = 6_000;
-
   private final GitHubPullRequestClient prClient;
 
   @Inject
@@ -118,19 +112,22 @@ public class CitedLocationResolver {
    *
    * @param ref the revision files are read at, normally the PR head SHA
    * @param files the review's reviewable files, already ignore-filtered
+   * @param budget the review's evidence budget, shared with every other resolver that attaches
+   *     something to a candidate (#475)
    */
   public Round forReview(
       String auth,
       String owner,
       String repo,
       String ref,
-      List<GitHubPullRequestClient.FileDiff> files) {
-    return new Round(prClient, auth, owner, repo, ref, files);
+      List<GitHubPullRequestClient.FileDiff> files,
+      EvidenceBudget budget) {
+    return new Round(prClient, auth, owner, repo, ref, files, budget);
   }
 
   /** A round that resolves nothing, for a caller with no repository access. */
   public static Round disabled() {
-    return new Round(null, null, null, null, null, List.of());
+    return new Round(null, null, null, null, null, List.of(), new EvidenceBudget());
   }
 
   /** One review round's budget, cache and path index. */
@@ -153,10 +150,8 @@ public class CitedLocationResolver {
 
     private final AtomicInteger fetches = new AtomicInteger();
 
-    /** Characters attached so far, read and written only under {@link #budget}. */
-    private int charsAttached;
-
-    private final Object budget = new Object();
+    /** The review's evidence budget, shared with the other resolvers that attach notes (#475). */
+    private final EvidenceBudget budget;
 
     private Round(
         GitHubPullRequestClient prClient,
@@ -164,12 +159,14 @@ public class CitedLocationResolver {
         String owner,
         String repo,
         String ref,
-        List<GitHubPullRequestClient.FileDiff> files) {
+        List<GitHubPullRequestClient.FileDiff> files,
+        EvidenceBudget budget) {
       this.prClient = prClient;
       this.auth = auth;
       this.owner = owner;
       this.repo = repo;
       this.ref = ref;
+      this.budget = budget;
       this.byPath = new LinkedHashMap<>();
       this.pathsByLowerCase = new LinkedHashMap<>();
       this.pathByRenameSource = new LinkedHashMap<>();
@@ -206,9 +203,9 @@ public class CitedLocationResolver {
       if (findings == null || findings.isEmpty() || prClient == null) {
         return FindingVerificationService.CitedLocations.NONE;
       }
-      Map<Key, String> notes = new HashMap<>();
+      Map<FindingKey, String> notes = new HashMap<>();
       for (var finding : findings) {
-        var key = keyOf(finding);
+        var key = FindingKey.of(finding);
         if (key != null && !notes.containsKey(key)) {
           var note = noteFor(finding);
           if (note != null) {
@@ -220,23 +217,9 @@ public class CitedLocationResolver {
         return FindingVerificationService.CitedLocations.NONE;
       }
       return finding -> {
-        var key = keyOf(finding);
+        var key = FindingKey.of(finding);
         return key == null ? null : notes.get(key);
       };
-    }
-
-    /**
-     * How a finding is looked up after the pipeline has rebuilt it. Location and title survive
-     * every stage between resolution and verification; {@code suggestion_old} does not.
-     */
-    private record Key(String file, int line, String title) {}
-
-    /** The lookup key for a finding worth resolving, or {@code null} when it cites no file. */
-    private static Key keyOf(ReviewResponse.Finding finding) {
-      if (finding == null || finding.file() == null || finding.file().isBlank()) {
-        return null;
-      }
-      return new Key(finding.file(), finding.line(), finding.title());
     }
 
     /** The sentence(s) attached to one finding, or {@code null} when nothing could be said. */
@@ -478,36 +461,15 @@ public class CitedLocationResolver {
       }
     }
 
-    /** Charges the round's character budget, dropping a note that no longer fits. */
+    /** Charges the review's evidence budget, dropping a note that no longer fits. */
     private String attach(ReviewResponse.Finding finding, String note) {
-      var bounded = note.length() > MAX_NOTE_CHARS ? note.substring(0, MAX_NOTE_CHARS) : note;
-      if (!reserve(bounded.length())) {
+      var attached = budget.attach(note);
+      if (attached == null) {
         Log.debugf(
-            "Cited-location evidence for %s:%d dropped at the round's character budget",
+            "Cited-location evidence for %s:%d dropped at the review's character budget",
             LogSafe.oneLine(finding.file()), finding.line());
-        return null;
       }
-      return bounded;
-    }
-
-    /**
-     * Takes {@code chars} of the round's budget, or nothing at all when they do not fit. Charging a
-     * note before deciding left the counter carrying notes that were dropped, so the first overflow
-     * closed the budget for the rest of the round and a note of any size after it was dropped while
-     * the real capacity sat unused (#866 review). Batches resolve on their own threads, so the read
-     * and the write are one critical section: an add followed by a refund would let a sibling batch
-     * see the inflated total in between and drop a note that fits. The section is two arithmetic
-     * operations over a handful of notes per round, so the monitor costs nothing measurable and
-     * keeps the decision to one branch a test can reach.
-     */
-    private boolean reserve(int chars) {
-      synchronized (budget) {
-        if (charsAttached + chars > MAX_TOTAL_CHARS) {
-          return false;
-        }
-        charsAttached += chars;
-        return true;
-      }
+      return attached;
     }
   }
 

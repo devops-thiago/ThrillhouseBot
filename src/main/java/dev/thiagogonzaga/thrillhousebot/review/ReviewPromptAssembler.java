@@ -50,6 +50,9 @@ public class ReviewPromptAssembler {
       ones this pull request changes under that glob, and that list may be abbreviated; the glob
       is what decides. Where a scope and the project-wide instructions conflict, the scope wins
       for its own files only.
+      A finding you raise under one of these rules must quote the sentence of the rule it rests on,
+      and name the glob that scoped it, in the finding's own description. The audit pass that rules
+      on your findings is not given these blocks, and a rule it cannot see supports nothing.
       """;
 
   private final ThrillhouseConfig config;

@@ -214,4 +214,33 @@ class FindingVerifierPromptsContentTest {
         "The field never rewrites the finding's own \"file\" and \"line\"",
         "the maintainer must still see the citation the model wrote (#650)");
   }
+
+  @Test
+  void verifierTreatsMatchedContextEvidenceAsEstablishedMaterial() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "A candidate may also carry a \"context_evidence\" field",
+        "the verifier must be told what the matched context material is (#475)");
+    assertContains(
+        sys,
+        "for this finding, the field IS that material",
+        "a coverage measurement or a maintainer rule must not read as unshown material (#475)");
+    assertContains(
+        sys,
+        "is not weakened by a test in the",
+        "a claim about a line no test runs must survive the in-diff-test ground (#115/#475)");
+    assertContains(
+        sys,
+        "the attribution earns the finding",
+        "a grounding the context does not carry must buy the finding nothing (#475)");
+    assertContains(
+        sys,
+        "A quoted measurement nobody took is not evidence",
+        "a fabricated measurement must not become a licence to publish (#475)");
+    assertContains(
+        sys,
+        "That is the general rule for every context section",
+        "the next context dimension must follow this pattern rather than add a slot (#475)");
+  }
 }
