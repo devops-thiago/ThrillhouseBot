@@ -137,8 +137,12 @@ public class VerifierRejectionMemory {
    * verification changes a finding's risk or confidence and keeps its location and title, which is
    * what the difference is taken on.
    *
-   * <p>A round whose verification failed open removed nothing and so remembers nothing, leaving the
-   * earlier rounds' answers standing.
+   * <p>The two halves of that difference behave differently when the model call fails open. The
+   * screen sits in front of the call and runs on every round, and the fail-open paths in {@link
+   * FindingVerificationService} all return its output, so a round that lost its call still records
+   * what the screen retracted — a deterministic drop the next round would make again anyway. The
+   * verdict half contributes nothing on such a round, so a candidate the model never ruled on is
+   * left for a later round to rule on, with the earlier rounds' answers standing.
    */
   public void remember(
       ReviewSession session,
