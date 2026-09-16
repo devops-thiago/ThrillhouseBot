@@ -153,6 +153,64 @@ class SeverityCalibratorTest {
     assertGrade(manifest, "medium", "medium");
   }
 
+  /** The same ownership defect, said the way a Kubernetes manifest finding says it. */
+  @Test
+  void aRootOwnedPathUnderANonRootPodIsTheSameClassAsUnderANonRootImage() {
+    ReviewResponse.Finding pod =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "deploy/k8s/api.yaml",
+                "The pod runs as non-root (uid 1000) but /var/lib/data is root-owned, so the first"
+                    + " write is denied and the container restarts."));
+
+    assertGrade(pod, "high", "medium");
+  }
+
+  /** A non-root image with an unpinned base is the reference class, not the ownership one. */
+  @Test
+  void aNonRootImageWhoseBaseIsUnpinnedGradesAsTheReferenceClass() {
+    ReviewResponse.Finding both =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "The image drops to a non-root user, but FROM node:20-alpine is an unpinned base"
+                    + " image, so the build is not reproducible."));
+
+    assertGrade(both, "medium", "medium");
+  }
+
+  /** Unpinned is said of things that are not external references, and those are not the class. */
+  @Test
+  void anUnpinnedToolVersionIsNotAnExternalReference() {
+    ReviewResponse tool =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "low",
+                ".github/workflows/ci.yml",
+                4,
+                "unpinned linter version",
+                "The linter is installed unpinned, so a new release can change which warnings the"
+                    + " job reports.",
+                null,
+                null));
+
+    assertSame(tool, SeverityCalibrator.calibrate(tool));
+  }
+
+  /** Podman spells the same artifact differently, and it is the same artifact. */
+  @Test
+  void aContainerfileIsTheSameArtifactAsADockerfile() {
+    assertGrade(
+        calibrateOne(finding("low", "low", "build/Containerfile", UNPINNED_RUST)),
+        "medium",
+        "medium");
+  }
+
   @Test
   void aFindingThatAlsoAssertsAnEscalationBeyondTheClassKeepsItsOwnGrade() {
     ReviewResponse escalating =
@@ -184,6 +242,51 @@ class SeverityCalibratorTest {
                 null));
 
     assertSame(cacheKey, SeverityCalibrator.calibrate(cacheKey));
+  }
+
+  /**
+   * A manifest field name is written the same way by a finding that says the field is missing and
+   * by one that says it is set, so naming it is not the class.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The securityContext sets runAsUser: 1000, but the service binds port 80, so startup fails.",
+        "runAsNonRoot: true is set, but readOnlyRootFilesystem is missing, so the filesystem can be"
+            + " tampered with."
+      })
+  void aManifestFindingThatSetsThePrivilegeFieldKeepsItsOwnGrade(String description) {
+    ReviewResponse set = response(finding("high", "high", "deploy/k8s/api.yaml", description));
+
+    assertSame(set, SeverityCalibrator.calibrate(set));
+  }
+
+  /** Being named after the artifact is not being the artifact. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"src/main/java/dev/app/DockerfileSupport.java", "docs/Dockerfile-guide.md"})
+  void aFileMerelyNamedAfterTheDockerfileIsNotOne(String path) {
+    ReviewResponse named = response(finding("low", "low", path, UNPINNED_NODE));
+
+    assertSame(named, SeverityCalibrator.calibrate(named));
+  }
+
+  /**
+   * Pinning is said of many things in a workflow, so the claim has to name the immutable thing that
+   * is missing before a generic noun beside it can anchor anything.
+   */
+  @Test
+  void anOutputTagNotPinnedToTheRunIdIsNotAnchored() {
+    ReviewResponse collision =
+        response(
+            finding(
+                "low",
+                "low",
+                ".github/workflows/deploy.yml",
+                "The release job's image output tag is not pinned to the run id, so two concurrent"
+                    + " runs can overwrite each other's push."));
+
+    assertSame(collision, SeverityCalibrator.calibrate(collision));
   }
 
   @Test

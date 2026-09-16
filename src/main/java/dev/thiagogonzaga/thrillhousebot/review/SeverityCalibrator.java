@@ -20,6 +20,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -97,35 +99,65 @@ public final class SeverityCalibrator {
   private static final Confidence ANCHORED_CONFIDENCE = Confidence.MEDIUM;
 
   /**
-   * The declarative deployment artifacts these three classes live in. A Dockerfile is matched by
-   * name in any of its spellings ({@code Dockerfile.prod}, {@code prod.dockerfile}, {@code
-   * Containerfile}); manifests, compose files and workflows by extension, since a Kubernetes or
-   * Helm manifest has no name the repository is obliged to use.
+   * The extensions that carry a manifest, a compose file or a workflow. Read against the file's own
+   * name rather than the whole path, together with the container-image file names below: a
+   * directory component is not the artifact, and one expression over the path both allows that and
+   * backtracks over every segment of a deep one.
    */
-  private static final Pattern INFRASTRUCTURE_FILE =
-      Pattern.compile(
-          "(?:^|/)[^/]*(?:dockerfile|containerfile)[^/]*$|\\.(?:ya?ml|tf|tfvars)$",
-          Pattern.CASE_INSENSITIVE);
+  private static final List<String> INFRASTRUCTURE_EXTENSIONS =
+      List.of(".yml", ".yaml", ".tf", ".tfvars");
 
-  /** The finding says the reference is not pinned to something immutable. */
+  /**
+   * The container-image file, matched as a whole dot-separated segment of the file's name so every
+   * spelling of the artifact is covered ({@code Dockerfile}, {@code Dockerfile.prod}, {@code
+   * prod.dockerfile}, {@code Containerfile}) and a file merely NAMED after it is not ({@code
+   * DockerfileSupport.java}, {@code Dockerfile-guide.md}), which is source and documentation rather
+   * than a declarative deployment artifact.
+   */
+  private static final List<String> CONTAINER_FILE_NAMES = List.of("dockerfile", "containerfile");
+
+  /**
+   * The finding says the reference is not pinned to something immutable. Spelled as one flat
+   * alternation, like every trigger below: a nested group of synonyms reads no better and costs the
+   * matcher a backtracking level per synonym.
+   *
+   * <p>Every alternative names the immutable thing that is missing — a digest, a tag that does not
+   * move — rather than the bare word "pinned". Pinning is said of many things in a workflow ("the
+   * cache key is not pinned to the lockfile hash", "the output tag is not pinned to the run id")
+   * and a generic claim plus a generic noun is one word deep: it would anchor a naming nit at this
+   * class's level, which is the over-firing the class javadoc rules out.
+   */
   private static final Pattern UNPINNED_REFERENCE =
       Pattern.compile(
-          "\\bun-?pinned\\b|\\b(?:not|never|isn't|is\\s+not)\\s+pinned\\b"
-              + "|\\b(?:without|no|lacks?)\\s+(?:a\\s+)?(?:digest|sha256|sha-256)\\b"
-              + "|\\b(?:floating|mutable|moving|rolling)\\s+tag\\b"
-              + "|:latest\\b|\\blatest\\s+tag\\b",
+          "\\bunpinned\\b|\\bun-pinned\\b|\\bnot\\s+pinned\\s+to\\s+a\\s+digest\\b"
+              + "|\\bnot\\s+pinned\\s+by\\s+digest\\b|\\bnot\\s+pinned\\s+to\\s+a\\s+version\\b"
+              + "|\\bwithout\\s+a\\s+digest\\b|\\bwithout\\s+a\\s+sha256\\s+digest\\b"
+              + "|\\bno\\s+digest\\b|\\bno\\s+sha256\\b|\\blacks\\s+a\\s+digest\\b"
+              + "|\\bcarries\\s+no\\s+digest\\b|\\bpin\\s+it\\s+by\\s+digest\\b"
+              + "|\\bfloating\\s+tag\\b|\\bmutable\\s+tag\\b|\\bmoving\\s+tag\\b"
+              + "|\\brolling\\s+tag\\b|:latest\\b|\\blatest\\s+tag\\b",
           Pattern.CASE_INSENSITIVE);
 
-  /** What the unpinned reference refers to, so "unpinned" alone never anchors a finding. */
+  /**
+   * What the unpinned reference refers to, so a pinning claim alone never anchors a finding. The
+   * bare words "tag" and "digest" are deliberately not on this list: they are what the claim above
+   * is already made of, so accepting them here would make the second half of the test a restatement
+   * of the first.
+   */
   private static final Pattern EXTERNAL_REFERENCE_SUBJECT =
       Pattern.compile(
-          "\\b(?:base\\s+image|image|chart|action|digest|tag)\\b", Pattern.CASE_INSENSITIVE);
+          "\\bbase\\s+image\\b|\\bimage\\b|\\bchart\\b|\\baction\\b", Pattern.CASE_INSENSITIVE);
 
-  /** The finding says the container runs as someone other than root. */
+  /**
+   * The finding says the container runs as someone other than root. A manifest FIELD NAME is not on
+   * this list, nor on the privilege-drop one below: {@code runAsNonRoot} and {@code runAsUser} are
+   * written the same way by a finding that says the field is missing and by one that says it is
+   * set, so the name carries no polarity and reading it as the claim would anchor the opposite of
+   * the class. A finding that means either class says so in prose — "runs as root", "non-root" —
+   * and one that says only "runAsUser: 1000 is set, but the port bind fails" keeps its own grade.
+   */
   private static final Pattern NON_ROOT_USER =
-      Pattern.compile(
-          "\\bnon-?\\s?root\\b|\\brunAsNonRoot\\b|\\bunprivileged\\s+user\\b",
-          Pattern.CASE_INSENSITIVE);
+      Pattern.compile("\\bnon-?\\s?root\\b|\\bunprivileged\\s+user\\b", Pattern.CASE_INSENSITIVE);
 
   /**
    * A {@code USER} directive naming an account, read case-sensitively: the Dockerfile instruction
@@ -143,17 +175,20 @@ public final class SeverityCalibrator {
       Pattern.compile(
           "\\broot[-\\s]owned\\b|\\bowned\\s+by\\s+root\\b|\\broot:root\\b|\\bchown\\b"
               + "|\\bownership\\b|\\bpermission\\s+denied\\b|\\bEACCES\\b|\\bnot\\s+writable\\b"
-              + "|\\b(?:cannot|can't|unable\\s+to|fails?\\s+to)\\s+write\\b"
-              + "|\\bwrite\\s+(?:\\w+\\s+){0,3}fails?\\b",
+              + "|\\bcannot\\s+write\\b|\\bcan't\\s+write\\b|\\bunable\\s+to\\s+write\\b"
+              + "|\\bfails\\s+to\\s+write\\b|\\bfail\\s+to\\s+write\\b|\\bwrite\\s+fails?\\b"
+              + "|\\bwrite\\s+will\\s+fail\\b",
           Pattern.CASE_INSENSITIVE);
 
   /** The finding says privilege is never dropped. */
   private static final Pattern NEVER_DROPS_PRIVILEGE =
       Pattern.compile(
           "\\bruns?\\s+as\\s+root\\b|\\brunning\\s+as\\s+root\\b|\\broot\\s+user\\b"
-              + "|\\b(?:no|missing|without\\s+a)\\s+USER\\s+(?:directive|instruction|line)\\b"
-              + "|\\b(?:never|does\\s+not|doesn't)\\s+drops?\\s+privileges?\\b"
-              + "|\\brunAsNonRoot\\b|\\brunAsUser\\b",
+              + "|\\bno\\s+USER\\s+directive\\b|\\bno\\s+USER\\s+instruction\\b"
+              + "|\\bmissing\\s+USER\\s+directive\\b|\\bmissing\\s+USER\\s+instruction\\b"
+              + "|\\bwithout\\s+a\\s+USER\\s+directive\\b|\\bnever\\s+adds\\s+a\\s+USER\\b"
+              + "|\\bnever\\s+drops\\s+privileges?\\b|\\bdoes\\s+not\\s+drop\\s+privileges?\\b"
+              + "|\\bdoesn't\\s+drop\\s+privileges?\\b",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -167,6 +202,9 @@ public final class SeverityCalibrator {
               + "|\\bSYS_ADMIN\\b|\\bcapabilities\\b|\\bdocker\\.sock\\b|\\bdocker\\s+socket\\b"
               + "|\\bCVE-\\d|\\bGHSA-\\w|\\bsecret\\b|\\bcredential\\b|\\bprivate\\s+key\\b",
           Pattern.CASE_INSENSITIVE);
+
+  /** The separator between a file name's stem and its extensions. */
+  private static final Pattern SEGMENT = Pattern.compile("\\.");
 
   private SeverityCalibrator() {}
 
@@ -220,7 +258,7 @@ public final class SeverityCalibrator {
 
   /** The class the finding states, or {@code null} when it states none of them. */
   private static InfrastructureClass classify(ReviewResponse.Finding finding) {
-    if (finding.file() == null || !INFRASTRUCTURE_FILE.matcher(finding.file()).find()) {
+    if (finding.file() == null || !isInfrastructureFile(finding.file())) {
       return null;
     }
     String text =
@@ -242,6 +280,13 @@ public final class SeverityCalibrator {
     return NEVER_DROPS_PRIVILEGE.matcher(text).find()
         ? InfrastructureClass.MISSING_PRIVILEGE_DROP
         : null;
+  }
+
+  /** Whether the finding is anchored in one of the declarative artifacts these classes live in. */
+  private static boolean isInfrastructureFile(String path) {
+    String name = path.substring(path.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+    return Arrays.stream(SEGMENT.split(name)).anyMatch(CONTAINER_FILE_NAMES::contains)
+        || INFRASTRUCTURE_EXTENSIONS.stream().anyMatch(name::endsWith);
   }
 
   private static boolean namesNonRootUser(String text) {
