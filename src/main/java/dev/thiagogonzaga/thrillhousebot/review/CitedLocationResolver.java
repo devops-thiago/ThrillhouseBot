@@ -152,7 +152,11 @@ public class CitedLocationResolver {
     private final Map<String, Optional<List<String>>> contents = new ConcurrentHashMap<>();
 
     private final AtomicInteger fetches = new AtomicInteger();
-    private final AtomicInteger charsAttached = new AtomicInteger();
+
+    /** Characters attached so far, read and written only under {@link #budget}. */
+    private int charsAttached;
+
+    private final Object budget = new Object();
 
     private Round(
         GitHubPullRequestClient prClient,
@@ -490,19 +494,19 @@ public class CitedLocationResolver {
      * Takes {@code chars} of the round's budget, or nothing at all when they do not fit. Charging a
      * note before deciding left the counter carrying notes that were dropped, so the first overflow
      * closed the budget for the rest of the round and a note of any size after it was dropped while
-     * the real capacity sat unused. Batches resolve on their own threads, so the read and the write
-     * are one compare-and-set rather than an add followed by a refund, which would let a sibling
-     * batch see the inflated total in between and drop a note that fits.
+     * the real capacity sat unused (#866 review). Batches resolve on their own threads, so the read
+     * and the write are one critical section: an add followed by a refund would let a sibling batch
+     * see the inflated total in between and drop a note that fits. The section is two arithmetic
+     * operations over a handful of notes per round, so the monitor costs nothing measurable and
+     * keeps the decision to one branch a test can reach.
      */
     private boolean reserve(int chars) {
-      while (true) {
-        var attached = charsAttached.get();
-        if (attached + chars > MAX_TOTAL_CHARS) {
+      synchronized (budget) {
+        if (charsAttached + chars > MAX_TOTAL_CHARS) {
           return false;
         }
-        if (charsAttached.compareAndSet(attached, attached + chars)) {
-          return true;
-        }
+        charsAttached += chars;
+        return true;
       }
     }
   }
