@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A review interrupted by a restart no longer stays `in_progress` for good** (#863): a session row is written `in_progress` when the review starts and updated when it ends, so a review killed between those two writes — a deploy restart, a crash, a `docker kill` — never got the terminal one and stayed `in_progress` for the life of the database. Production had 10 such rows, the oldest from 2026-06-09 and the newest from the 2026-09-09 restart, each counting as a running review and hiding the genuinely in-flight ones among them. Startup now moves every `in_progress` row to `failed` with "Review interrupted before it finished (bot restart or crash)" as the reason, which is what tells it apart on the dashboard from a review that failed on its own. Nothing carries a review across a restart, so a row still in progress at boot belongs to a review that is over: the sweep needs no age threshold and reconciles the rows stranded before it existed, with no manual SQL. Only the status and the reason are written, so the tokens and the cost the review had already paid for stay on the row. Sweeping every row at boot is safe because the bot is a single process; running more than one replica would need the rows to carry an owner first
+
 ## [0.6.8] — 2026-09-15
 
 Moving production to Ollama cloud drove most of this release. The provider limits concurrent requests per account, sometimes ends a stream without reporting token usage, and its model often answered the summary call in a shape the parser refused, so reviews of large pull requests failed after every batch had been paid for. The other large change is CI gating: a review held on pending CI now posts its approval when CI turns green, without a manual `/review`. There are no database migrations. Four configuration points matter when upgrading:

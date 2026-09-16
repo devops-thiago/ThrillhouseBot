@@ -719,6 +719,13 @@ must be a collaborator on at least one repository where the app is installed
 is resolved from the app registration; set `thrillhousebot.dashboard.github.account-owner`
 to pin it explicitly when auto-detection fails.
 
+A review killed before it ends — a deploy restart, a crash — leaves its session
+marked as running, because the row is only updated when the review finishes. No
+review survives a restart, so the next startup records every session still in
+progress as failed, with "Review interrupted before it finished (bot restart or
+crash)" as the reason to tell it apart from a review that failed on its own. The
+tokens and the cost the review had already spent stay on the session.
+
 | | |
 |---|---|
 | ![Cost analytics by model](docs/assets/dashboard-costs.png) | ![Token analytics: input vs. output](docs/assets/dashboard-tokens.png) |
