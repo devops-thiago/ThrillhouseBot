@@ -50,7 +50,10 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * <p>So resolution is quote-first and line-second: the finding's own {@code suggestion_old} is
  * searched for in the whole file, and only when it is nowhere does the cited line number decide
  * what is shown. A citation that is off by a few lines therefore still resolves, which is the case
- * that motivated the ticket.
+ * that motivated the ticket. A quote the file holds in more than one place settles nothing, and is
+ * reported as unsettled rather than resolved to the nearest one: a generic one-liner that also
+ * appears in another method would otherwise point the verifier at code the finding never meant, and
+ * the prompt reads this material as fact.
  *
  * <p>Every outcome is reported as fact, never as a verdict — "the quoted code is at line 118, not
  * the cited line 109", "the pull request changes no file matching this path" — and the finding's
@@ -80,6 +83,14 @@ public class CitedLocationResolver {
 
   /** Lines shown either side of the resolved line. */
   static final int CONTEXT_LINES = 3;
+
+  /**
+   * Blank lines tolerated between two consecutive lines of a quote. The quote arrives with its own
+   * blank lines dropped, so a run has to step over the source's; tolerating any number instead
+   * would let a two-line quote match lines that merely appear in that order anywhere below each
+   * other, which is not the contiguous run this match claims to be.
+   */
+  static final int MAX_BLANK_GAP = 2;
 
   /** Character cap on one rendered source line, so a minified file cannot fill the prompt. */
   static final int MAX_LINE_CHARS = 200;
@@ -247,10 +258,51 @@ public class CitedLocationResolver {
      */
     private String resolveWithin(ReviewResponse.Finding finding, String path, List<String> lines) {
       var quoted = normalizedLines(finding.suggestionOld());
-      var quoteLine = locateQuote(quoted, lines, finding.line());
-      return quoteLine > 0
-          ? quoteNote(finding, path, lines, quoteLine)
-          : unquotedNote(finding, path, lines, quoted.isEmpty());
+      var match = locateQuote(quoted, lines, finding.line());
+      if (!match.found()) {
+        return unquotedNote(finding, path, lines, quoted.isEmpty());
+      }
+      return match.occurrences() > 1
+          ? ambiguousQuoteNote(finding, path, lines, match)
+          : quoteNote(finding, path, lines, match.line());
+    }
+
+    /**
+     * The note for a quote the file holds in more than one place. Which occurrence the finding
+     * means is not settled by the quote, so the nearest one is named rather than asserted: a
+     * generic one-liner ({@code return null;}, a lone brace) that also appears in another method
+     * would otherwise redirect the verifier to code the finding never pointed at, and the prompt
+     * reads this field as settled fact. The window shown is the cited line's whenever that line
+     * exists, since that is where the finding actually points.
+     */
+    private String ambiguousQuoteNote(
+        ReviewResponse.Finding finding, String path, List<String> lines, QuoteMatch match) {
+      var citedLine = finding.line();
+      var inRange = citedLine >= 1 && citedLine <= lines.size();
+      Log.infof(
+          "Finding '%s' cites %s:%d and quotes code that appears in %d places in that file at the"
+              + " head commit; the verifier is told the occurrence is not settled",
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file()),
+          finding.line(),
+          match.occurrences());
+      return "The code the finding quotes appears in "
+          + match.occurrences()
+          + " places in `"
+          + path
+          + "` at the pull request's head commit, so which one it means is not settled here; the"
+          + " nearest to the cited "
+          + citedDescription(citedLine)
+          + " is line "
+          + match.line()
+          + ". "
+          + (inRange ? "" : "The cited line is not a line of this file. ")
+          + snippet(path, lines, inRange ? citedLine : match.line());
+    }
+
+    /** How a citation's line is named in prose, including the file-level finding that has none. */
+    private static String citedDescription(int citedLine) {
+      return citedLine <= 0 ? "location, which names no line," : "line " + citedLine;
     }
 
     /** The note for a finding whose quote the file does not hold, or that quotes nothing. */
@@ -437,38 +489,54 @@ public class CitedLocationResolver {
   }
 
   /**
-   * The line the quoted code is on, or 0 when the file does not hold it. A multi-line quote must
-   * appear as a contiguous run; a single-line quote is that run's degenerate case. When the code
-   * appears more than once the occurrence nearest the cited line wins, so a near-miss citation
-   * resolves to the location it was nearly right about rather than to the file's first match.
+   * Where the quoted code sits in the file: the occurrence nearest the cited line, and how many
+   * places hold it. A near-miss citation therefore resolves to the location it was nearly right
+   * about rather than to the file's first match, while a quote the file holds more than once is
+   * reported as unsettled rather than silently resolved to one of them.
    */
-  static int locateQuote(List<String> quoted, List<String> lines, int citedLine) {
+  record QuoteMatch(int line, int occurrences) {
+
+    static final QuoteMatch NONE = new QuoteMatch(0, 0);
+
+    boolean found() {
+      return line > 0;
+    }
+  }
+
+  /**
+   * The {@link QuoteMatch} for this quote. A multi-line quote must appear as a run in order, with
+   * at most {@link #MAX_BLANK_GAP} blank lines between consecutive quoted lines — the quote itself
+   * carries no blank lines, so some tolerance is needed, but an unbounded one would match lines
+   * scattered anywhere below each other. A single-line quote is that run's degenerate case.
+   */
+  static QuoteMatch locateQuote(List<String> quoted, List<String> lines, int citedLine) {
     if (quoted.isEmpty()) {
-      return 0;
+      return QuoteMatch.NONE;
     }
     var best = 0;
+    var occurrences = 0;
     for (var i = 0; i < lines.size(); i++) {
-      if (!lines.get(i).strip().equals(quoted.get(0))) {
+      if (!lines.get(i).strip().equals(quoted.get(0)) || !runMatches(quoted, lines, i)) {
         continue;
       }
-      if (!runMatches(quoted, lines, i)) {
-        continue;
-      }
+      occurrences++;
       var lineNumber = i + 1;
       if (best == 0 || Math.abs(lineNumber - citedLine) < Math.abs(best - citedLine)) {
         best = lineNumber;
       }
     }
-    return best;
+    return new QuoteMatch(best, occurrences);
   }
 
-  /** Whether the quote's remaining lines follow, skipping blank lines the model dropped. */
+  /** Whether the quote's remaining lines follow, over the blank lines the quote itself dropped. */
   private static boolean runMatches(List<String> quoted, List<String> lines, int start) {
     var at = start;
     for (var q = 1; q < quoted.size(); q++) {
       at++;
-      while (at < lines.size() && lines.get(at).isBlank()) {
+      var skipped = 0;
+      while (at < lines.size() && lines.get(at).isBlank() && skipped < MAX_BLANK_GAP) {
         at++;
+        skipped++;
       }
       if (at >= lines.size() || !lines.get(at).strip().equals(quoted.get(q))) {
         return false;

@@ -349,7 +349,7 @@ class CitedLocationResolverTest {
   }
 
   @Test
-  void picksTheOccurrenceNearestTheCitedLine() {
+  void refusesToSettleAQuoteTheFileHoldsMoreThanOnce() {
     var repeated =
         """
         int x = compute();
@@ -359,7 +359,35 @@ class CitedLocationResolverTest {
     givenFile(PATH, repeated);
     var finding = finding(PATH, 3, "int x = compute();");
 
-    assertTrue(resolve(round(changed(PATH)), finding).contains("at the cited line 3"), "nearest");
+    var note = resolve(round(changed(PATH)), finding);
+
+    assertTrue(note.startsWith("The code the finding quotes appears in 2 places in"), note);
+    assertTrue(note.contains("is not settled here"), note);
+    assertTrue(note.contains("nearest to the cited line 3 is line 3"), note);
+    assertTrue(note.contains("> 3 |"), "the window shown is the cited line's: " + note);
+  }
+
+  @Test
+  void showsTheNearestOccurrenceWhenAnAmbiguousQuoteHasNoUsableCitedLine() {
+    givenFile(PATH, "int x = compute();\nint y = 0;\nint x = compute();\n");
+    var finding = finding(PATH, 40, "int x = compute();");
+
+    var note = resolve(round(changed(PATH)), finding);
+
+    assertTrue(note.contains("The cited line is not a line of this file."), note);
+    assertTrue(note.contains("nearest to the cited line 40 is line 3"), note);
+    assertTrue(note.contains("> 3 |"), note);
+  }
+
+  @Test
+  void namesAFileLevelCitationThatHasNoLine() {
+    givenFile(PATH, "int x = compute();\nint y = 0;\nint x = compute();\n");
+    var finding = finding(PATH, 0, "int x = compute();");
+
+    var note = resolve(round(changed(PATH)), finding);
+
+    assertTrue(
+        note.contains("nearest to the cited location, which names no line, is line 1"), note);
   }
 
   @Test
@@ -471,20 +499,30 @@ class CitedLocationResolverTest {
     givenFile(PATH, "int x = compute();\nint y = 0;\nint x = compute();\n");
     var finding = finding(PATH, 1, "int x = compute();");
 
-    assertTrue(resolve(round(changed(PATH)), finding).contains("at the cited line 1"), "first");
+    assertTrue(
+        resolve(round(changed(PATH)), finding).contains("nearest to the cited line 1 is line 1"),
+        "the nearer of two occurrences is the one named");
   }
 
   @Test
-  void matchesAQuoteAcrossABlankLineAndStopsAtTheEndOfTheFile() {
+  void matchesAQuoteAcrossAShortBlankGapOnly() {
     assertEquals(
         1,
-        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a", "", "b"), 1),
-        "a blank line the model dropped does not break the run");
+        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a", "", "b"), 1).line(),
+        "a blank line the quote dropped does not break the run");
     assertEquals(
         0,
-        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a"), 1),
+        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a", "", "", "", "b"), 1)
+            .line(),
+        "lines merely appearing in that order far apart are not a contiguous run");
+    assertEquals(
+        0,
+        CitedLocationResolver.locateQuote(List.of("a", "b"), List.of("a"), 1).line(),
         "a quote running past the end of the file is not a match");
-    assertEquals(0, CitedLocationResolver.locateQuote(List.of(), List.of("a"), 1), "no quote");
+    assertEquals(
+        CitedLocationResolver.QuoteMatch.NONE,
+        CitedLocationResolver.locateQuote(List.of(), List.of("a"), 1),
+        "no quote");
   }
 
   @Test
