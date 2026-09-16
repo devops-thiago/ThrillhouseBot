@@ -117,26 +117,44 @@ public final class SeverityCalibrator {
   private static final List<String> CONTAINER_FILE_NAMES = List.of("dockerfile", "containerfile");
 
   /**
-   * The finding says the reference is not pinned to something immutable. Spelled as one flat
-   * alternation, like every trigger below: a nested group of synonyms reads no better and costs the
-   * matcher a backtracking level per synonym.
+   * Every trigger below is a list of PHRASES, matched against the finding's own words after {@link
+   * #normalized} reduces them to lower-case words separated by single spaces. A phrase carries its
+   * own word boundaries, so "privileged" does not match inside "unprivileged" and "image" does not
+   * match inside "images", exactly as the expressions these lists replace did — without an
+   * alternation whose cost grows with every synonym and whitespace run in it.
    *
-   * <p>Every alternative names the immutable thing that is missing — a digest, a tag that does not
-   * move — rather than the bare word "pinned". Pinning is said of many things in a workflow ("the
-   * cache key is not pinned to the lockfile hash", "the output tag is not pinned to the run id")
-   * and a generic claim plus a generic noun is one word deep: it would anchor a naming nit at this
-   * class's level, which is the over-firing the class javadoc rules out.
+   * <p>The finding says the reference is not pinned to something immutable. Every phrase names the
+   * immutable thing that is missing — a digest, a tag that does not move — rather than the bare
+   * word "pinned". Pinning is said of many things in a workflow ("the cache key is not pinned to
+   * the lockfile hash", "the output tag is not pinned to the run id"), and a generic claim beside a
+   * generic noun is one word deep: it would anchor a naming nit at this class's level, which is the
+   * over-firing the class javadoc rules out.
    */
-  private static final Pattern UNPINNED_REFERENCE =
-      Pattern.compile(
-          "\\bunpinned\\b|\\bun-pinned\\b|\\bnot\\s+pinned\\s+to\\s+a\\s+digest\\b"
-              + "|\\bnot\\s+pinned\\s+by\\s+digest\\b|\\bnot\\s+pinned\\s+to\\s+a\\s+version\\b"
-              + "|\\bwithout\\s+a\\s+digest\\b|\\bwithout\\s+a\\s+sha256\\s+digest\\b"
-              + "|\\bno\\s+digest\\b|\\bno\\s+sha256\\b|\\blacks\\s+a\\s+digest\\b"
-              + "|\\bcarries\\s+no\\s+digest\\b|\\bpin\\s+it\\s+by\\s+digest\\b"
-              + "|\\bfloating\\s+tag\\b|\\bmutable\\s+tag\\b|\\bmoving\\s+tag\\b"
-              + "|\\brolling\\s+tag\\b|:latest\\b|\\blatest\\s+tag\\b",
-          Pattern.CASE_INSENSITIVE);
+  private static final List<String> UNPINNED_REFERENCE =
+      phrases(
+          "unpinned",
+          "un pinned",
+          "not pinned to a digest",
+          "not pinned by digest",
+          "not pinned to a version",
+          "without a digest",
+          "without a sha256 digest",
+          "no digest",
+          "no sha256",
+          "lacks a digest",
+          "carries no digest",
+          "pin it by digest",
+          "floating tag",
+          "mutable tag",
+          "moving tag",
+          "rolling tag",
+          "latest tag");
+
+  /**
+   * The one claim that has to be read on the raw text: normalization drops the colon that makes
+   * {@code :latest} a reference rather than the ordinary English word.
+   */
+  private static final String LATEST_TAG = ":latest";
 
   /**
    * What the unpinned reference refers to, so a pinning claim alone never anchors a finding. The
@@ -144,9 +162,8 @@ public final class SeverityCalibrator {
    * is already made of, so accepting them here would make the second half of the test a restatement
    * of the first.
    */
-  private static final Pattern EXTERNAL_REFERENCE_SUBJECT =
-      Pattern.compile(
-          "\\bbase\\s+image\\b|\\bimage\\b|\\bchart\\b|\\baction\\b", Pattern.CASE_INSENSITIVE);
+  private static final List<String> EXTERNAL_REFERENCE_SUBJECT =
+      phrases("base image", "image", "images", "chart", "action");
 
   /**
    * The finding says the container runs as someone other than root. A manifest FIELD NAME is not on
@@ -156,55 +173,110 @@ public final class SeverityCalibrator {
    * the class. A finding that means either class says so in prose — "runs as root", "non-root" —
    * and one that says only "runAsUser: 1000 is set, but the port bind fails" keeps its own grade.
    */
-  private static final Pattern NON_ROOT_USER =
-      Pattern.compile("\\bnon-?\\s?root\\b|\\bunprivileged\\s+user\\b", Pattern.CASE_INSENSITIVE);
+  private static final List<String> NON_ROOT_USER =
+      phrases("non root", "nonroot", "unprivileged user");
 
   /**
-   * A {@code USER} directive naming an account, read case-sensitively: the Dockerfile instruction
-   * is written in upper case, and matching it either way would read the ordinary English "user" in
-   * any sentence as a privilege drop. The lookahead keeps the prose that talks ABOUT the
-   * instruction ("no USER directive") from reading as one that is present, which would otherwise
-   * sort a privilege-drop omission into the ownership class beside it.
+   * A {@code USER} directive naming an account, read case-sensitively on the raw text: the
+   * Dockerfile instruction is written in upper case, and matching it either way would read the
+   * ordinary English "user" in any sentence as a privilege drop. The lookahead keeps the prose that
+   * talks ABOUT the instruction ("no USER directive") from reading as one that is present, which
+   * would otherwise sort a privilege-drop omission into the ownership class beside it.
    */
   private static final Pattern USER_DIRECTIVE =
       Pattern.compile(
           "\\bUSER\\s+(?!(?:directive|instruction|line|statement|declaration)\\b)[A-Za-z0-9_$.:-]+");
 
   /** The finding says that user cannot write the path, in ownership or in failure terms. */
-  private static final Pattern UNWRITABLE_PATH =
-      Pattern.compile(
-          "\\broot[-\\s]owned\\b|\\bowned\\s+by\\s+root\\b|\\broot:root\\b|\\bchown\\b"
-              + "|\\bownership\\b|\\bpermission\\s+denied\\b|\\bEACCES\\b|\\bnot\\s+writable\\b"
-              + "|\\bcannot\\s+write\\b|\\bcan't\\s+write\\b|\\bunable\\s+to\\s+write\\b"
-              + "|\\bfails\\s+to\\s+write\\b|\\bfail\\s+to\\s+write\\b|\\bwrite\\s+fails?\\b"
-              + "|\\bwrite\\s+will\\s+fail\\b",
-          Pattern.CASE_INSENSITIVE);
+  private static final List<String> UNWRITABLE_PATH =
+      phrases(
+          "root owned",
+          "owned by root",
+          "root root",
+          "chown",
+          "chowns",
+          "ownership",
+          "permission denied",
+          "eacces",
+          "not writable",
+          "cannot write",
+          "cant write",
+          "unable to write",
+          "fails to write",
+          "fail to write",
+          "write fails",
+          "write fail",
+          "write will fail");
 
   /** The finding says privilege is never dropped. */
-  private static final Pattern NEVER_DROPS_PRIVILEGE =
-      Pattern.compile(
-          "\\bruns?\\s+as\\s+root\\b|\\brunning\\s+as\\s+root\\b|\\broot\\s+user\\b"
-              + "|\\bno\\s+USER\\s+directive\\b|\\bno\\s+USER\\s+instruction\\b"
-              + "|\\bmissing\\s+USER\\s+directive\\b|\\bmissing\\s+USER\\s+instruction\\b"
-              + "|\\bwithout\\s+a\\s+USER\\s+directive\\b|\\bnever\\s+adds\\s+a\\s+USER\\b"
-              + "|\\bnever\\s+drops\\s+privileges?\\b|\\bdoes\\s+not\\s+drop\\s+privileges?\\b"
-              + "|\\bdoesn't\\s+drop\\s+privileges?\\b",
-          Pattern.CASE_INSENSITIVE);
+  private static final List<String> NEVER_DROPS_PRIVILEGE =
+      phrases(
+          "runs as root",
+          "run as root",
+          "running as root",
+          "root user",
+          "no user directive",
+          "no user instruction",
+          "missing user directive",
+          "missing user instruction",
+          "without a user directive",
+          "never adds a user",
+          "never drops privilege",
+          "never drops privileges",
+          "does not drop privilege",
+          "does not drop privileges",
+          "doesnt drop privileges");
 
   /**
    * What the finding must NOT also assert. Each of these puts the level somewhere the class does
    * not decide — a container granted the host, a capability, a credential or a known vulnerability
    * is severe for a reason an anchor cannot weigh — so the review's own grade stands.
    */
-  private static final Pattern ESCALATION_BEYOND_CLASS =
-      Pattern.compile(
-          "\\bprivileged\\b|\\bhostPath\\b|\\bhostNetwork\\b|\\bhostPID\\b|\\bhostIPC\\b"
-              + "|\\bSYS_ADMIN\\b|\\bcapabilities\\b|\\bdocker\\.sock\\b|\\bdocker\\s+socket\\b"
-              + "|\\bCVE-\\d|\\bGHSA-\\w|\\bsecret\\b|\\bcredential\\b|\\bprivate\\s+key\\b",
-          Pattern.CASE_INSENSITIVE);
+  private static final List<String> ESCALATION_BEYOND_CLASS =
+      phrases(
+          "privileged",
+          "hostpath",
+          "hostnetwork",
+          "hostpid",
+          "hostipc",
+          "sys admin",
+          "capabilities",
+          "docker sock",
+          "docker socket",
+          "cve",
+          "ghsa",
+          "secret",
+          "secrets",
+          "credential",
+          "credentials",
+          "private key");
 
   /** The separator between a file name's stem and its extensions. */
   private static final Pattern SEGMENT = Pattern.compile("\\.");
+
+  /** Everything {@link #normalized} turns into the single space that separates two words. */
+  private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
+
+  /** The apostrophes a contraction is written with, dropped so "doesn't" normalizes to one word. */
+  private static final Pattern APOSTROPHE = Pattern.compile("['\u2019]");
+
+  /** Each phrase padded with the spaces that make it match whole words and nothing else. */
+  private static List<String> phrases(String... words) {
+    return Arrays.stream(words).map(word -> " " + word + " ").toList();
+  }
+
+  /**
+   * The finding's words, lower-cased, stripped of punctuation and padded, so a phrase from the
+   * lists above matches whole words wherever the finding put them.
+   */
+  private static String normalized(String text) {
+    String contracted = APOSTROPHE.matcher(text.toLowerCase(Locale.ROOT)).replaceAll("");
+    return " " + NOT_A_WORD.matcher(contracted).replaceAll(" ").strip() + " ";
+  }
+
+  private static boolean states(String normalized, List<String> claim) {
+    return claim.stream().anyMatch(normalized::contains);
+  }
 
   private SeverityCalibrator() {}
 
@@ -261,25 +333,23 @@ public final class SeverityCalibrator {
     if (finding.file() == null || !isInfrastructureFile(finding.file())) {
       return null;
     }
-    String text =
+    String raw =
         (finding.title() == null ? "" : finding.title())
             + "\n"
             + (finding.description() == null ? "" : finding.description());
-    if (ESCALATION_BEYOND_CLASS.matcher(text).find()) {
+    String text = normalized(raw);
+    if (states(text, ESCALATION_BEYOND_CLASS)) {
       return null;
     }
     // Most specific first: a finding that names both the non-root user and the write it cannot
     // make is the ownership defect, not the privilege-drop omission that shares its vocabulary.
-    if (namesNonRootUser(text) && UNWRITABLE_PATH.matcher(text).find()) {
+    if (namesNonRootUser(text, raw) && states(text, UNWRITABLE_PATH)) {
       return InfrastructureClass.UNWRITABLE_RUNTIME_PATH;
     }
-    if (UNPINNED_REFERENCE.matcher(text).find()
-        && EXTERNAL_REFERENCE_SUBJECT.matcher(text).find()) {
+    if (namesUnpinnedReference(text, raw) && states(text, EXTERNAL_REFERENCE_SUBJECT)) {
       return InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE;
     }
-    return NEVER_DROPS_PRIVILEGE.matcher(text).find()
-        ? InfrastructureClass.MISSING_PRIVILEGE_DROP
-        : null;
+    return states(text, NEVER_DROPS_PRIVILEGE) ? InfrastructureClass.MISSING_PRIVILEGE_DROP : null;
   }
 
   /** Whether the finding is anchored in one of the declarative artifacts these classes live in. */
@@ -289,8 +359,12 @@ public final class SeverityCalibrator {
         || INFRASTRUCTURE_EXTENSIONS.stream().anyMatch(name::endsWith);
   }
 
-  private static boolean namesNonRootUser(String text) {
-    return NON_ROOT_USER.matcher(text).find() || USER_DIRECTIVE.matcher(text).find();
+  private static boolean namesNonRootUser(String text, String raw) {
+    return states(text, NON_ROOT_USER) || USER_DIRECTIVE.matcher(raw).find();
+  }
+
+  private static boolean namesUnpinnedReference(String text, String raw) {
+    return states(text, UNPINNED_REFERENCE) || raw.toLowerCase(Locale.ROOT).contains(LATEST_TAG);
   }
 
   private static boolean alreadyAnchored(

@@ -202,6 +202,34 @@ class SeverityCalibratorTest {
     assertSame(tool, SeverityCalibrator.calibrate(tool));
   }
 
+  /** The colon is what makes {@code :latest} a reference rather than the English word. */
+  @Test
+  void theLatestTagIsTheSameClassAsAMissingDigest() {
+    ReviewResponse.Finding latest =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "FROM ubuntu:latest resolves to a different image on every build."));
+
+    assertGrade(latest, "medium", "medium");
+  }
+
+  /** The claim is read on the finding's words, so a contraction is the same claim. */
+  @Test
+  void aContractionStatesTheSameClaim() {
+    ReviewResponse.Finding contracted =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "The container doesn't drop privileges before the entrypoint starts."));
+
+    assertGrade(contracted, "medium", "medium");
+  }
+
   /** Podman spells the same artifact differently, and it is the same artifact. */
   @Test
   void aContainerfileIsTheSameArtifactAsADockerfile() {
