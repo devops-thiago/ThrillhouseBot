@@ -373,7 +373,6 @@ class ContextEvidenceResolverTest {
         "static dead-code reasoning claims no measurement, so there is nothing to contradict");
   }
 
-  /** A section line the render cut before its ranges carries no measurement to read back. */
   /**
    * The wording the review prompt coaches is not the only wording a finding can credit a report
    * with, and a paraphrase that escaped the scan would reach the verifier with its measurement
@@ -389,6 +388,7 @@ class ContextEvidenceResolverTest {
     assertTrue(note.contains("The cited line 12 is not among them"), note);
   }
 
+  /** A section line the render cut before its ranges carries no measurement to read back. */
   @Test
   void skipsASectionLineThatCarriesNoRanges() {
     var parsed = ContextEvidenceResolver.parseUncovered("### heading\n- src/App.java: \n");
