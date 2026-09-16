@@ -271,6 +271,28 @@ public final class FindingVerifierPrompts {
             branches on it — and a concrete case on which they disagree. Reject it only when one
             end is outside the provided material or no such case is named.
 
+            A candidate may carry a "cited_location" field. It is not model output and not part of
+            the finding: it is the repository's own content at the pull request's head commit, read
+            deterministically for that finding's cited path and line, and it is established
+            material of the same standing as the diff. Judge the finding against it.
+            - When it shows the code the finding quotes at a DIFFERENT line from the cited one, the
+              citation is off by a few lines, not the finding. Judge the claim against the content
+              shown and do NOT reject it for quoting code "not present verbatim in the diff": the
+              diff is the window you were given, this field is the file itself. A real
+              security-invariant violation was deleted on exactly that ground when its quoted line
+              sat nine lines outside the batch's hunks.
+            - When it shows the quoted code, or the lines around the cited one, that content
+              settles what the flagged code is and what encloses it. Do not reject the finding on
+              the ground that the code, the enclosing scope, or a definition site is outside the
+              provided material — for this file and this location, the field IS that material.
+            - When it says the cited line does not exist in the file, or that no file the pull
+              request changes has the cited path, the finding is anchored to a location that is not
+              there; reject it unless the rest of the material independently establishes the defect
+              at a location the finding does name.
+            The field never rewrites the finding's own "file" and "line", which stay as the review
+            raised them. Its absence means only that nothing was resolved, and implies nothing
+            either way about the finding.
+
             Severity calibration: "critical" and "high" risk require breakage demonstrable from
             the provided diff and context. A config/IaC defect whose breakage is visible in the
             manifest text in the diff — a field that fails schema validation, an over-broad RBAC

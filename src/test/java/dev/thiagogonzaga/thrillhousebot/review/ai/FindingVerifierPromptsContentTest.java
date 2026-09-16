@@ -185,4 +185,33 @@ class FindingVerifierPromptsContentTest {
         "That cap is about an artifact whose CONTENTS or BEHAVIOR you cannot see, not",
         "the unshown-artifact severity cap must not swallow an artifact-reference finding (#646)");
   }
+
+  @Test
+  void verifierTreatsAResolvedCitedLocationAsEstablishedMaterial() {
+    String sys = FindingVerifierPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "A candidate may carry a \"cited_location\" field",
+        "the verifier must be told what the resolved cited location is (#650)");
+    assertContains(
+        sys,
+        "material of the same standing as the diff",
+        "the resolved content is repository fact, not another claim to be doubted (#650)");
+    assertContains(
+        sys,
+        "citation is off by a few lines, not the finding",
+        "a near-miss line number must not cost a correct finding its verdict (#636/#650)");
+    assertContains(
+        sys,
+        "shown and do NOT reject it for quoting code \"not present verbatim in the diff\"",
+        "the resolved content must disarm the ground that deleted the #636 finding");
+    assertContains(
+        sys,
+        "the cited line does not exist in the file",
+        "a finding anchored to a location that is not there must stay rejectable (#650)");
+    assertContains(
+        sys,
+        "The field never rewrites the finding's own \"file\" and \"line\"",
+        "the maintainer must still see the citation the model wrote (#650)");
+  }
 }

@@ -101,6 +101,7 @@ public class ReviewOrchestrator {
   private final VerdictBuilder verdictBuilder;
 
   private final FindingPipeline findingPipeline;
+  private final CitedLocationResolver citedLocationResolver;
 
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
@@ -224,6 +225,7 @@ public class ReviewOrchestrator {
       ReviewPublisher reviewPublisher,
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
+      CitedLocationResolver citedLocationResolver,
       FindingFeedbackCaptureService findingFeedbackCapture,
       ReviewSkipEmitter skipEmitter,
       SupersededFindingsCarryover carryover,
@@ -241,6 +243,7 @@ public class ReviewOrchestrator {
     this.reviewPublisher = reviewPublisher;
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
+    this.citedLocationResolver = citedLocationResolver;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.skipEmitter = skipEmitter;
     this.carryover = carryover;
@@ -310,7 +313,13 @@ public class ReviewOrchestrator {
       var ciFuture =
           CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, ciReq), reviewExecutor);
 
-      var aiResponse = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver);
+      // #650: one resolution round for the whole review, so the batches share its fetch budget
+      // and file cache. Only files this pull request changes are ever read.
+      var citedLocations =
+          citedLocationResolver.forReview(
+              auth, req.owner(), req.repo(), req.commitSha(), ctx.reviewableFiles());
+      var aiResponse =
+          findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, citedLocations);
 
       CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
 
