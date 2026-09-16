@@ -264,6 +264,40 @@ class SeverityCalibratorTest {
     assertSame(redundant, SeverityCalibrator.calibrate(redundant));
   }
 
+  /**
+   * "non-root user" normalizes to three words, and a phrase list matches inside them: the explicit
+   * non-root claim settles which container class the finding is, so it is read before the words
+   * that merely appear in both.
+   */
+  @Test
+  void anOwnershipFindingThatSaysNonRootUserIsNotThePrivilegeDropClass() {
+    ReviewResponse.Finding ownership =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "The image runs as a non-root user, but /data stays root-owned, so the first write"
+                    + " fails with permission denied and the container exits."));
+
+    assertGrade(ownership, "high", "medium");
+  }
+
+  /** A committed password is a credential, whatever the finding calls it. */
+  @Test
+  void aCommittedPasswordKeepsTheReviewsGrade() {
+    ReviewResponse baked =
+        response(
+            finding(
+                "high",
+                "high",
+                "Dockerfile",
+                "The Dockerfile bakes the deploy password into an ARG and the container runs as"
+                    + " root, so anyone who pulls the image reads it."));
+
+    assertSame(baked, SeverityCalibrator.calibrate(baked));
+  }
+
   /** A digest is asked of things that are not external references, and those are not the class. */
   @Test
   void aMissingDigestForSomethingOtherThanAReferenceIsNotAnchored() {

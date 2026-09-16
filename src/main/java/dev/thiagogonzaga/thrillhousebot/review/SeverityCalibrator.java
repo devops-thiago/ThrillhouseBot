@@ -180,6 +180,10 @@ public final class SeverityCalibrator {
    * set, so the name carries no polarity and reading it as the claim would anchor the opposite of
    * the class. A finding that means either class says so in prose — "runs as root", "non-root" —
    * and one that says only "runAsUser: 1000 is set, but the port bind fails" keeps its own grade.
+   *
+   * <p>An explicit claim from this list also decides which of the two container classes a finding
+   * belongs to, in {@link #classify}: it says the container HAS a non-root user, which is the
+   * premise the privilege-drop class denies.
    */
   private static final List<String> NON_ROOT_USER =
       phrases("non root", "nonroot", "unprivileged user");
@@ -229,7 +233,6 @@ public final class SeverityCalibrator {
           "runs as root",
           "run as root",
           "running as root",
-          "root user",
           "no user directive",
           "no user instruction",
           "missing user directive",
@@ -273,6 +276,8 @@ public final class SeverityCalibrator {
           "secrets",
           "credential",
           "credentials",
+          "password",
+          "passwords",
           "private key");
 
   /** The separator between a file name's stem and its extensions. */
@@ -370,8 +375,13 @@ public final class SeverityCalibrator {
     // to be unwritable by. The two share a vocabulary — "no USER appuser directive, so the app
     // runs as root and the files it writes take root ownership" names an account and an ownership
     // in one sentence — and reading that as the ownership defect would publish it at that class's
-    // level under a class label its own words contradict.
-    if (states(text, NEVER_DROPS_PRIVILEGE)) {
+    // level under a class label its own words contradict. A finding that says in so many words
+    // that the container DOES run as a non-root user settles the same question the other way and
+    // is never this class, however the rest of the sentence reads: "the build stage runs as root,
+    // but the final image drops to a non-root user and /data stays root-owned" is the ownership
+    // defect. Only the explicit non-root claim tells that apart from the omission above — a USER
+    // token in the text does not, since a finding writes "no USER appuser directive" with one.
+    if (!states(text, NON_ROOT_USER) && states(text, NEVER_DROPS_PRIVILEGE)) {
       return InfrastructureClass.MISSING_PRIVILEGE_DROP;
     }
     if (namesNonRootUser(text, raw) && states(text, UNWRITABLE_PATH)) {
