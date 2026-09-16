@@ -1305,6 +1305,68 @@ class PrReviewPromptsContentTest {
         "the artifact cap must not apply to an unshown mitigation for a shown defect (#570)");
   }
 
+  /**
+   * #773. Scoring a whole round for consistency rather than precision found the same unpinned base
+   * image at two severities across seven pull requests and a root-owned volume under a non-root
+   * USER at two more, with nothing in the changes to tell them apart. The prompt states the grade
+   * for each class so the model lands there by itself; {@code SeverityCalibrator} is what makes it
+   * hold when it does not.
+   */
+  @Test
+  void theRecurringInfrastructureClassesCarryAStatedGrade() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "Anchored infrastructure classes — grade the consequence, not the pull request",
+        "the recurring infrastructure classes must carry a stated grade (#773)");
+    assertContains(
+        sys,
+        "A MUTABLE EXTERNAL REFERENCE",
+        "an unpinned base image, action or chart must have one stated level (#773)");
+    assertContains(
+        sys,
+        "A PATH THE RUNNING USER CANNOT WRITE",
+        "a root-owned path under a non-root USER must have one stated level (#773)");
+    assertContains(
+        sys,
+        "A CONTAINER THAT NEVER DROPS PRIVILEGE",
+        "a container that never drops privilege must have one stated level (#773)");
+    assertContains(
+        sys,
+        "Which write comes first, and how early it runs, does not change the",
+        "how early the failure lands must not move the level (#773)");
+    assertContains(
+        sys,
+        "so it is never \"low\", and whether this",
+        "the anchored classes' confidence must be fixed in both directions (#773)");
+  }
+
+  /**
+   * The harder half of #773: the same defect class in the two halves of one paired-language change
+   * drew a confident inline finding in one and a low-confidence collapsed item in the other, on
+   * evidence that was equally provable from the diff in both.
+   */
+  @Test
+  void confidenceMustNotDependOnWhichLanguageTheShapeIsWrittenIn() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertContains(
+        sys,
+        "Equivalent evidence gets equivalent confidence",
+        "confidence must be compared across the halves of a change (#773)");
+    assertContains(
+        sys,
+        "cannot depend on which language the same shape is",
+        "an idiom's familiarity must not move confidence (#773)");
+    assertContains(
+        sys,
+        "name in its description the fact you could not",
+        "an unequal confidence must name what could not be checked (#773)");
+    assertContains(
+        sys,
+        "between reporting a defect and burying it",
+        "the prompt must say what the collapsed surface costs (#773)");
+  }
+
   /** The same guard on both surfaces that emit {@code description_gaps}. */
   @Test
   void bothPromptsKeepWithheldPathsOutOfDescriptionGaps() {

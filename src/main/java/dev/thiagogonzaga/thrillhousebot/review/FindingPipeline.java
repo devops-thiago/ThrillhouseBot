@@ -52,10 +52,11 @@ import java.util.stream.IntStream;
 import org.jboss.logging.Logger;
 
 /**
- * The post-AI finding chain: validate quotes, dedupe, verify against the diff, drop already-replied
- * duplicates, backfill missing content anchors, and persist the response. Extracted from {@code
- * ReviewOrchestrator}; the ordering is preserved verbatim — quote validation runs before dedupe so
- * a merged finding cannot inherit a phantom quote while a verbatim sibling is discarded.
+ * The post-AI finding chain: validate quotes, dedupe, verify against the diff, calibrate the graded
+ * fields, drop already-replied duplicates, backfill missing content anchors, and persist the
+ * response. Extracted from {@code ReviewOrchestrator}; the ordering is preserved verbatim — quote
+ * validation runs before dedupe so a merged finding cannot inherit a phantom quote while a verbatim
+ * sibling is discarded.
  */
 @ApplicationScoped
 public class FindingPipeline {
@@ -1447,6 +1448,10 @@ public class FindingPipeline {
             promptInputs.previousFindings(),
             attached,
             plan::recordVerificationCoverage);
+    // #773: the last word on the two graded fields, so the anchored infrastructure classes cannot
+    // be re-spread by the verifier's own lowering, and the grade the publisher routes on is the
+    // one persisted below for the next round to compare against.
+    aiResponse = SeverityCalibrator.calibrate(aiResponse);
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
             aiResponse, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);
