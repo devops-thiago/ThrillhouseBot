@@ -88,6 +88,7 @@ class FindingPipelineTest {
             frameworkFilter,
             deduplicator,
             findingVerificationService,
+            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2451,6 +2452,7 @@ class FindingPipelineTest {
             frameworkFilter,
             deduplicator,
             realVerificationService,
+            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2507,6 +2509,7 @@ class FindingPipelineTest {
             frameworkFilter,
             deduplicator,
             findingVerificationService,
+            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2649,6 +2652,7 @@ class FindingPipelineTest {
             frameworkFilter,
             deduplicator,
             findingVerificationService,
+            new VerifierRejectionMemory(),
             followUpAnalyzer,
             throwingMapper,
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -3104,5 +3108,95 @@ class FindingPipelineTest {
               f.risk(), "low", f.file(), f.line(), f.title(), f.description(), null, null));
     }
     return new ReviewResponse(stripped, response.previousFindingsStatus(), response.summary());
+  }
+
+  /**
+   * #711 — the verifier reached opposite verdicts on the same claim and the same commit across
+   * rounds: a CRITICAL SQL-injection candidate it rejected in one round was published in the next,
+   * forty minutes later, on an unchanged head. The second round's audit is no more authoritative
+   * than the first's, and on the fail-open paths (an empty response body, a timeout, the spend
+   * ceiling) there is no second audit at all — the candidate posts exactly as the reviewer raised
+   * it. A rejection is therefore remembered for the head it was reached on, and a later round on
+   * that same head drops the claim instead of re-rolling it.
+   */
+  @Test
+  void aRejectedFindingIsNotRePublishedByALaterRoundOnTheSameHead() {
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var raised =
+        new ReviewResponse(
+            List.of(finding("Repositories/ReservationRepository.cs", "Concatenated SQL")),
+            List.of(),
+            null);
+    when(aiReviewService.review(any(), any())).thenReturn(raised);
+    when(findingVerificationService.verify(
+            anyLong(), any(), any(), any(), any(), any(), any(), any()))
+        // Round one rejects the candidate.
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null))
+        // Round two keeps it, the shape both a "confirmed" verdict and every fail-open path take.
+        .thenAnswer(inv -> inv.getArgument(1));
+
+    var first =
+        pipeline.run(
+            ReviewSession.create("owner/repo", 70, "PR", "2659f683"),
+            template,
+            ctx,
+            singleBatchPlan(batch("Repositories/ReservationRepository.cs"), List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+    assertEquals(0, first.findings().size(), "round one's audit rejected the claim");
+
+    var second =
+        pipeline.run(
+            ReviewSession.create("owner/repo", 70, "PR", "2659f683"),
+            template,
+            ctx,
+            singleBatchPlan(batch("Repositories/ReservationRepository.cs"), List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals(
+        List.of(),
+        second.findings().stream().map(ReviewResponse.Finding::title).toList(),
+        "a claim rejected on this head must not be published by a later round on the same head");
+  }
+
+  /**
+   * The bound on the memory above: a rejection describes the code it was reached on, so a push
+   * clears it. Without this the audit's answer on an old head would outlive the code that earned it
+   * and suppress a finding on lines that have since changed.
+   */
+  @Test
+  void aRejectionOnAnOlderHeadDoesNotSuppressTheFindingAfterAPush() {
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var raised =
+        new ReviewResponse(List.of(finding("a.java", "Concatenated SQL")), List.of(), null);
+    when(aiReviewService.review(any(), any())).thenReturn(raised);
+    when(findingVerificationService.verify(
+            anyLong(), any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null))
+        .thenAnswer(inv -> inv.getArgument(1));
+
+    pipeline.run(
+        ReviewSession.create("owner/repo", 70, "PR", "2659f683"),
+        template,
+        ctx,
+        singleBatchPlan(batch("a.java"), List.of()),
+        new DiffLineResolver(Map.of()),
+        ReviewEvidence.NONE);
+    var afterPush =
+        pipeline.run(
+            ReviewSession.create("owner/repo", 70, "PR", "9c1d4e07"),
+            template,
+            ctx,
+            singleBatchPlan(batch("a.java"), List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals(
+        List.of("Concatenated SQL"),
+        afterPush.findings().stream().map(ReviewResponse.Finding::title).toList(),
+        "the new head's finding must be judged on its own");
   }
 }

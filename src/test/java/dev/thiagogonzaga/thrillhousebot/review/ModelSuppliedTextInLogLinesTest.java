@@ -358,6 +358,7 @@ class ModelSuppliedTextInLogLinesTest {
             mock(FrameworkFalsePositiveFilter.class),
             mock(FindingDeduplicator.class),
             mock(FindingVerificationService.class),
+            new VerifierRejectionMemory(),
             mock(FollowUpAnalyzer.class),
             new ObjectMapper(),
             BotIdentity.of("thrillhousebot"),
@@ -500,6 +501,24 @@ class ModelSuppliedTextInLogLinesTest {
         logsOf(
             FindingVerificationService.class,
             () -> service.verify(42L, response, "diff", "stack", ""));
+
+    assertRecordCannotBeForged(captured, "Missing null check");
+  }
+
+  /** {@link VerifierRejectionMemory} dropping a claim the audit rejected on this head (#711). */
+  @Test
+  void aCraftedPathAndTitleCannotForgeARecordFromTheRememberedRejectionDrop() {
+    var memory = new VerifierRejectionMemory();
+    var session =
+        dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession.create(
+            "owner/repo", 70, "PR", "2659f683");
+    var claim = finding(FORGED_PATH, 1, FORGED_TITLE, "old");
+    memory.remember(session, List.of(claim), List.of());
+
+    var captured =
+        logsOf(
+            VerifierRejectionMemory.class,
+            () -> memory.withoutRejectionsOnThisHead(session, response(claim)));
 
     assertRecordCannotBeForged(captured, "Missing null check");
   }
