@@ -240,6 +240,10 @@ class FindingVerifierPromptsContentTest {
         "a fabricated measurement must not become a licence to publish (#475)");
     assertContains(
         sys,
+        "outgrew the space this material is allowed",
+        "absence has two causes and the prompt must not name only one of them (#475 review)");
+    assertContains(
+        sys,
         "That is the general rule for every context section",
         "the next context dimension must follow this pattern rather than add a slot (#475)");
   }

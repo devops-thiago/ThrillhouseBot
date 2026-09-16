@@ -311,8 +311,9 @@ public final class FindingVerifierPrompts {
               — that attributed fact is not established, and the attribution earns the finding
               nothing. Judge what is left on the diff alone, and reject the finding when the
               attribution was all it had. A quoted measurement nobody took is not evidence.
-            - Absence of the field means only that nothing was matched, and implies nothing either
-              way about the finding.
+            - Absence of the field means only that this finding matched nothing, or that what it
+              matched outgrew the space this material is allowed. It implies nothing either way
+              about the finding.
             That is the general rule for every context section the review pass is given and you are
             not: the finding carries its own grounding, this field carries the section's own words,
             and a context dimension added to the review pass reaches you this way rather than as a

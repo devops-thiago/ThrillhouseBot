@@ -79,14 +79,14 @@ public final class ContextEvidenceResolver {
   private static final String RULES_TRUNCATED = "\n… (rules truncated)";
 
   /**
-   * The phrases a finding uses when it names the coverage report as its source — the wording the
-   * review prompt itself asks for. Every one of them names the report; none of them merely
-   * describes the outcome. "Never executed" was here and is not: it is also how a finding grounded
-   * in the diff alone describes unreachable code ("the guard returns first, so it is never
-   * executed"), and contradicting that finding's measurement would contradict a claim it never made
-   * (#475 review). The scan is deliberately literal and narrow, and it gates only the contradicting
-   * notes: a phrasing it misses attaches nothing, which is the behaviour the verifier had before
-   * this class existed.
+   * The phrases a finding uses when it names the coverage report — the wording the review prompt
+   * itself asks for. Every one of them names the report; none of them merely describes the outcome.
+   * "Never executed" was here and is not: it is also how a finding grounded in the diff alone
+   * describes unreachable code ("the guard returns first, so it is never executed"), and
+   * contradicting that finding's measurement would contradict a claim it never made (#475 review).
+   * The scan is deliberately literal and narrow, and it gates only the contradicting notes: a
+   * phrasing it misses attaches nothing, which is the behaviour the verifier had before this class
+   * existed.
    */
   private static final List<String> COVERAGE_ATTRIBUTIONS =
       List.of(
@@ -243,12 +243,17 @@ public final class ContextEvidenceResolver {
     }
 
     /**
-     * Records that a finding attributed to coverage material the review's section does not hold.
+     * Records that a finding named the coverage report while citing a line the review's section
+     * does not carry. The line says the finding NAMES the report rather than that it claims
+     * anything of it: the scan reads prose, and a finding can name the report to disclaim it ("no
+     * coverage data was read, but the guard above returns first"), which is a mention and not an
+     * attribution (#475 review). What is attached says only what the section holds, and the
+     * verifier's rule for it is conditioned on an attribution the finding actually made.
      */
     private static String contradiction(ReviewResponse.Finding finding, String note) {
       Log.infof(
-          "Finding '%s' (%s:%d) attributes a claim to patch coverage that this review's section"
-              + " does not carry; the verifier is told what the section actually lists",
+          "Finding '%s' (%s:%d) names patch coverage while citing a line this review's section does"
+              + " not carry; the verifier is told what the section actually lists",
           LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
       return note;
     }
