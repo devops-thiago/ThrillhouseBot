@@ -221,6 +221,20 @@ public class CitedLocationResolver {
       };
     }
 
+    /**
+     * How a finding is looked up after the pipeline has rebuilt it. Location and title survive
+     * every stage between resolution and verification; {@code suggestion_old} does not.
+     */
+    private record Key(String file, int line, String title) {}
+
+    /** The lookup key for a finding worth resolving, or {@code null} when it cites no file. */
+    private static Key keyOf(ReviewResponse.Finding finding) {
+      if (finding == null || finding.file() == null || finding.file().isBlank()) {
+        return null;
+      }
+      return new Key(finding.file(), finding.line(), finding.title());
+    }
+
     /** The sentence(s) attached to one finding, or {@code null} when nothing could be said. */
     private String noteFor(ReviewResponse.Finding finding) {
       var cited = finding.file().strip();
@@ -471,20 +485,6 @@ public class CitedLocationResolver {
       }
       return bounded;
     }
-  }
-
-  /**
-   * How a finding is looked up after the pipeline has rebuilt it. Location and title survive every
-   * stage between resolution and verification; {@code suggestion_old} does not.
-   */
-  record Key(String file, int line, String title) {}
-
-  /** The lookup key for a finding worth resolving, or {@code null} when it cites no file. */
-  private static Key keyOf(ReviewResponse.Finding finding) {
-    if (finding == null || finding.file() == null || finding.file().isBlank()) {
-      return null;
-    }
-    return new Key(finding.file(), finding.line(), finding.title());
   }
 
   /**
