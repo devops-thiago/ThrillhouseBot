@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Repeated timeouts on one AI call stop spending the whole retry budget** (#862): a streaming attempt waits `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS`, 900 seconds in production, and a timeout was then retried like any other transient failure up to `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES`, so one call could spend 75 minutes of wall clock while its review held the pull request's dispatcher slot. Production saw 20 timed-out attempts in 24 hours, all on one 503-file pull request, and the failed reviews of that day cost more than the completed ones. At most two attempts of one call may now end at the deadline: the second one fails the call instead of spending the attempts that are left, and the decision is logged at WARN with the session id, the attempt and the wait. Every other transient failure keeps the whole budget, a timeout followed by a successful attempt still succeeds, and the reasoning step-down's repeat (#839) shares the bound rather than getting a second pair of waits. The repeat keeps the full deadline, since it is there for the attempt whose first token never arrived because the provider queued the request, and the bound already brings the ceiling down from 75 minutes to 30. The setting still means one attempt's wait. The final summary call shares the loop and behaves the same way, and a review whose batches time out still discloses the files it did not read
+
 ## [0.6.8] — 2026-09-15
 
 Moving production to Ollama cloud drove most of this release. The provider limits concurrent requests per account, sometimes ends a stream without reporting token usage, and its model often answered the summary call in a shape the parser refused, so reviews of large pull requests failed after every batch had been paid for. The other large change is CI gating: a review held on pending CI now posts its approval when CI turns green, without a manual `/review`. There are no database migrations. Four configuration points matter when upgrading:
