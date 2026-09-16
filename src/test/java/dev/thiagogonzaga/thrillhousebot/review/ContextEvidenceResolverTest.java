@@ -126,7 +126,8 @@ class ContextEvidenceResolverTest {
    */
   @Test
   void contradictsACoverageClaimWhenThisReviewSuppliedNoSection() {
-    var finding = finding(PATH, 42, "This line is never executed, so the branch is untested.");
+    var finding =
+        finding(PATH, 42, "The coverage report for this commit shows this line is never executed.");
 
     var note = evidence(round("", PathScopedInstructions.NONE), finding);
 
@@ -285,12 +286,31 @@ class ContextEvidenceResolverTest {
   }
 
   @Test
+  void quotesOnlyTheScopesThatGovernTheFile() {
+    var mixed =
+        new PathScopedInstructions(
+            List.of(
+                new PathScopedInstructions.AppliedScope(
+                    "docs/**", "Docs are prose.", List.of("docs/a.md")),
+                new PathScopedInstructions.AppliedScope("src/**", RULES, List.of(PATH))),
+            ".github");
+    var finding = finding(PATH, 42, "Renders the title without escaping it.");
+
+    var note = evidence(round("", mixed), finding);
+
+    assertTrue(note.contains(RULES), note);
+    assertFalse(note.contains("Docs are prose."), note);
+  }
+
+  @Test
   void governsAFileACitationNamesWithoutItsLeadingDirectory() {
     var finding = finding("app/Renderer.java", 42, "Renders the title without escaping it.");
 
     var note = evidence(round("", scoped("src/**", RULES, PATH)), finding);
 
     assertNotNull(note, "a citation missing a leading directory still names a governed file");
+    assertTrue(note.contains("the only file under a maintainer-scoped glob it matches"), note);
+    assertTrue(note.contains("`" + PATH + "` is one of the files"), note);
     assertTrue(note.contains(RULES), note);
   }
 
@@ -310,6 +330,59 @@ class ContextEvidenceResolverTest {
     // A finding with no prose credits the report with nothing, so nothing is contradicted.
     assertFalse(onUnmeasured.contains("patch-coverage section"), onUnmeasured);
     assertTrue(onUnmeasured.contains("files matching `src/**`"), onUnmeasured);
+  }
+
+  /**
+   * A finding that reasons about dead code from the diff alone credits no report, so nothing it
+   * says is contradicted. The phrase "never executed" is how such a finding naturally reads, which
+   * is why the scan asks for the report to be named rather than for the outcome to be described.
+   */
+  @Test
+  void saysNothingToAFindingThatNamesNoReport() {
+    var deadCode =
+        finding(
+            PATH,
+            12,
+            "The catch block is unreachable: the guard two lines up returns first, so it is never"
+                + " executed.");
+
+    assertNull(
+        evidence(round(COVERAGE_SECTION, PathScopedInstructions.NONE), deadCode),
+        "static dead-code reasoning claims no measurement, so there is nothing to contradict");
+  }
+
+  /** A section line the render cut before its ranges carries no measurement to read back. */
+  @Test
+  void skipsASectionLineThatCarriesNoRanges() {
+    var parsed = ContextEvidenceResolver.parseUncovered("### heading\n- src/App.java: \n");
+
+    assertFalse(parsed.containsKey("src/App.java"), parsed.toString());
+  }
+
+  @Test
+  void refusesToGuessWhichGovernedFileASuffixCitationNames() {
+    var two =
+        new PathScopedInstructions(
+            List.of(
+                new PathScopedInstructions.AppliedScope(
+                    "src/a/**", RULES, List.of("src/a/Renderer.java")),
+                new PathScopedInstructions.AppliedScope(
+                    "src/b/**", "B is append-only.", List.of("src/b/Renderer.java"))),
+            ".github");
+    var finding = finding("Renderer.java", 42, "Renders the title without escaping it.");
+
+    assertNull(
+        evidence(round("", two), finding),
+        "attaching one directory's rules to a finding about another's asserts what is not known");
+  }
+
+  @Test
+  void aDisabledRoundAttachesNothingAtAll() {
+    var finding = finding(PATH, 42, "The coverage report shows this line is never executed.");
+
+    assertNull(
+        evidence(ContextEvidenceResolver.disabled(), finding),
+        "a caller that loaded no context knows nothing about what the review measured");
   }
 
   @Test

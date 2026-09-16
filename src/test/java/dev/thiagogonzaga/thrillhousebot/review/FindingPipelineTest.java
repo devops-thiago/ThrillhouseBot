@@ -76,7 +76,6 @@ class FindingPipelineTest {
   @Mock private DiffBudgetPlanner budgetPlanner;
   @Mock private ReviewTokenLedger tokenLedger;
 
-  /** Hoisted out of the test lambdas below: a call inside an assertThrows lambda is a smell. */
   private FindingPipeline pipeline;
 
   @BeforeEach

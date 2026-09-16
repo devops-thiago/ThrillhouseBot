@@ -34,7 +34,7 @@ import java.util.List;
 public record ReviewEvidence(
     CitedLocationResolver.Round citedLocations, ContextEvidenceResolver.Round contextEvidence) {
 
-  /** Resolves nothing, for a caller with no repository access and no loaded context. */
+  /** Attaches nothing at all, for a caller with no repository access and no loaded context. */
   public static final ReviewEvidence NONE =
       new ReviewEvidence(CitedLocationResolver.disabled(), ContextEvidenceResolver.disabled());
 

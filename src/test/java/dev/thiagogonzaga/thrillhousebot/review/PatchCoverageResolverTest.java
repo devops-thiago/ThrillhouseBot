@@ -535,6 +535,45 @@ class PatchCoverageResolverTest {
           "the section is bounded even when every file has many scattered ranges");
     }
 
+    /**
+     * The cap cuts whole lines only. Half of "61" is "6", which is a line number too, so a cut
+     * entry reads to anything parsing the section — the review pass, and the verifier through the
+     * evidence a finding carries (#475) — as a measurement the report never made, and nothing
+     * downstream can tell a cut token from a real one.
+     */
+    @Test
+    void cutsTheSectionOnALineBoundary() {
+      var files = new ArrayList<PatchCoverageResolver.UncoveredFile>();
+      for (var i = 0; i < PatchCoverageResolver.MAX_FILES_RENDERED; i++) {
+        var lines = new TreeSet<Integer>();
+        for (var line = 1; line <= 40; line += 2) {
+          lines.add(line + i * 1_000);
+        }
+        files.add(
+            new PatchCoverageResolver.UncoveredFile(
+                "src/main/java/dev/thiagogonzaga/thrillhousebot/review/VeryLongName" + i + ".java",
+                lines));
+      }
+      var whole =
+          files.stream()
+              .flatMap(
+                  file ->
+                      PatchCoverageResolver.render(List.of(file))
+                          .lines()
+                          .filter(line -> line.startsWith("- ")))
+              .toList();
+
+      var rendered = PatchCoverageResolver.render(List.copyOf(files));
+
+      var kept = rendered.lines().filter(line -> line.startsWith("- ")).toList();
+      assertFalse(kept.isEmpty(), rendered);
+      assertTrue(kept.size() < files.size(), "the cap has to have dropped something: " + rendered);
+      for (var entry : kept) {
+        assertTrue(
+            whole.contains(entry), "a surviving entry must be a whole rendered line: " + entry);
+      }
+    }
+
     @Test
     void ordersTheWorstCoveredFilesFirstSoTheCapDropsTheLeastInformative() {
       var report =

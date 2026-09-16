@@ -24,6 +24,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Attaches to each candidate finding the review-context material that finding rests on, so the
@@ -77,11 +79,14 @@ public final class ContextEvidenceResolver {
   private static final String RULES_TRUNCATED = "\n… (rules truncated)";
 
   /**
-   * The phrases a finding uses when it attributes a claim to the coverage report — the wording the
-   * review prompt itself asks for. The scan is deliberately literal and narrow, and it gates only
-   * the contradicting notes: a phrasing it misses attaches nothing, which is the behaviour the
-   * verifier had before this class existed, while a broader scan ("untested", "no tests") would
-   * start contradicting findings that never claimed a measurement at all.
+   * The phrases a finding uses when it names the coverage report as its source — the wording the
+   * review prompt itself asks for. Every one of them names the report; none of them merely
+   * describes the outcome. "Never executed" was here and is not: it is also how a finding grounded
+   * in the diff alone describes unreachable code ("the guard returns first, so it is never
+   * executed"), and contradicting that finding's measurement would contradict a claim it never made
+   * (#475 review). The scan is deliberately literal and narrow, and it gates only the contradicting
+   * notes: a phrasing it misses attaches nothing, which is the behaviour the verifier had before
+   * this class existed.
    */
   private static final List<String> COVERAGE_ATTRIBUTIONS =
       List.of(
@@ -89,9 +94,7 @@ public final class ContextEvidenceResolver {
           "patch coverage",
           "coverage section",
           "coverage measurement",
-          "never executed",
-          "no test executes",
-          "not executed by any test");
+          "coverage data");
 
   /**
    * The rendered coverage section's per-file line prefix, as {@code PatchCoverageResolver} emits
@@ -112,12 +115,17 @@ public final class ContextEvidenceResolver {
    */
   public static Round forReview(
       String patchCoverage, PathScopedInstructions pathInstructions, EvidenceBudget budget) {
-    return new Round(patchCoverage, pathInstructions, budget);
+    return new Round(patchCoverage, pathInstructions, budget, false);
   }
 
-  /** A round that attaches nothing, for a caller that loaded no review context. */
+  /**
+   * A round that attaches nothing at all, for a caller that loaded no review context. It is silent
+   * rather than merely empty: a caller that never looked knows nothing about what the review
+   * measured, and "this review supplied no patch-coverage section" would be a statement about the
+   * caller rather than about the review (#475 review).
+   */
   public static Round disabled() {
-    return new Round("", PathScopedInstructions.NONE, new EvidenceBudget());
+    return new Round(null, null, null, true);
   }
 
   /** One review's parsed context sections and the budget their notes are charged to. */
@@ -130,14 +138,29 @@ public final class ContextEvidenceResolver {
     private final boolean coverageSupplied;
 
     private final List<PathScopedInstructions.AppliedScope> scopes;
+
+    /** Every file any of this review's scopes governs, for the citation lookup below. */
+    private final Set<String> governedFiles;
+
     private final EvidenceBudget budget;
 
+    /** Whether this round speaks at all; see {@link ContextEvidenceResolver#disabled()}. */
+    private final boolean silent;
+
     private Round(
-        String patchCoverage, PathScopedInstructions pathInstructions, EvidenceBudget budget) {
+        String patchCoverage,
+        PathScopedInstructions pathInstructions,
+        EvidenceBudget budget,
+        boolean silent) {
       this.coverageSupplied = patchCoverage != null && !patchCoverage.isBlank();
       this.uncoveredByPath = coverageSupplied ? parseUncovered(patchCoverage) : Map.of();
       this.scopes = pathInstructions == null ? List.of() : pathInstructions.scopes();
+      this.governedFiles =
+          scopes.stream()
+              .flatMap(scope -> scope.files().stream())
+              .collect(Collectors.toUnmodifiableSet());
       this.budget = budget;
+      this.silent = silent;
     }
 
     /**
@@ -147,7 +170,7 @@ public final class ContextEvidenceResolver {
      */
     public FindingVerificationService.ContextEvidence locate(
         List<ReviewResponse.Finding> findings) {
-      if (findings == null || findings.isEmpty()) {
+      if (silent || findings == null || findings.isEmpty()) {
         return FindingVerificationService.ContextEvidence.NONE;
       }
       Map<FindingKey, String> notes = new HashMap<>();
@@ -252,26 +275,56 @@ public final class ContextEvidenceResolver {
     /** The maintainers' scoped rules for the file the finding cites, quoted as they wrote them. */
     private String pathRuleNote(ReviewResponse.Finding finding) {
       var cited = finding.file().strip();
+      var governed = governedPathFor(cited);
+      if (governed == null) {
+        return null;
+      }
+      var preamble =
+          governed.equals(cited)
+              ? ""
+              : "The cited path `"
+                  + cited
+                  + "` matches `"
+                  + governed
+                  + "`, the only file under a maintainer-scoped glob it matches. ";
       var sb = new StringBuilder();
       for (var scope : scopes) {
-        if (governs(scope, cited)) {
-          sb.append(sb.isEmpty() ? "" : "\n")
+        if (scope.files().contains(governed)) {
+          sb.append(sb.isEmpty() ? preamble : "\n")
               .append("The maintainers scoped review rules to files matching `")
               .append(scope.glob())
               .append("`, and `")
-              .append(cited)
+              .append(governed)
               .append("` is one of the files in this pull request they govern. Their text for that")
               .append(" glob, verbatim:\n")
               .append(quotedRules(scope.instructions()));
         }
       }
-      return sb.isEmpty() ? null : sb.toString();
+      // A governed path came from the scopes' own file lists, so at least one scope holds it.
+      return sb.toString();
     }
 
-    /** Whether a scope's matched files include the one the finding cites. */
-    private static boolean governs(PathScopedInstructions.AppliedScope scope, String cited) {
-      return scope.files().stream()
-          .anyMatch(f -> f.equals(cited) || CitedLocationResolver.sharesPathSuffix(f, cited));
+    /**
+     * The governed file a citation names, or {@code null} when none does or more than one does.
+     * Exact first, then the single governed file a citation that lost a leading directory matches —
+     * the same discipline {@link #coveragePathFor} applies, and for the same reason: a scope's
+     * rules attached to a finding about another directory's file assert a governance fact that is
+     * not true, which is the direction this class exists to close (#475 review).
+     */
+    private String governedPathFor(String cited) {
+      if (governedFiles.contains(cited)) {
+        return cited;
+      }
+      String found = null;
+      for (var file : governedFiles) {
+        if (CitedLocationResolver.sharesPathSuffix(file, cited)) {
+          if (found != null) {
+            return null;
+          }
+          found = file;
+        }
+      }
+      return found;
     }
   }
 
@@ -307,9 +360,13 @@ public final class ContextEvidenceResolver {
 
   /**
    * The rendered coverage section read back into the paths and line ranges it lists. Its per-file
-   * lines are {@code - <path>: <ranges>}; the heading, the prose, the roll-up count and a line the
-   * section's own size cap cut in half all fail to parse and are skipped, which is the honest
-   * outcome for material the reviewer could not read either.
+   * lines are {@code - <path>: <ranges>}; the heading, the prose, the roll-up count and a line
+   * carrying no ranges at all do not parse and are skipped.
+   *
+   * <p>A line the section's size cap cut mid-range would parse, and its last range would be a line
+   * number the report never measured. Nothing here could tell that token from a real one, so the
+   * cap is applied on a line boundary in {@code PatchCoverageResolver.render} instead: the section
+   * this reads never holds a partial entry.
    */
   static Map<String, String> parseUncovered(String section) {
     Map<String, String> byPath = new LinkedHashMap<>();
