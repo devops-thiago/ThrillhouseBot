@@ -1415,6 +1415,7 @@ public class FindingPipeline {
    * lineResolver} is shared with the caller's verdict backstop, so it is passed in rather than
    * built here.
    */
+  @SuppressWarnings("java:S107") // One post-AI stage's input per parameter; see the chain below.
   private ReviewResponse refine(
       ReviewSession session,
       ReviewResponse aiResponse,

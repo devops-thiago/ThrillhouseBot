@@ -95,6 +95,9 @@ public class CitedLocationResolver {
   /** Character cap on one rendered source line, so a minified file cannot fill the prompt. */
   static final int MAX_LINE_CHARS = 200;
 
+  /** The phrase joining a line number to the path it belongs to, used in every rendered note. */
+  private static final String OF_PATH = " of `";
+
   /** Character cap on one finding's note. */
   static final int MAX_NOTE_CHARS = 1_200;
 
@@ -174,15 +177,14 @@ public class CitedLocationResolver {
         return;
       }
       for (var file : files) {
-        if (file == null || file.filename() == null || file.filename().isBlank()) {
-          continue;
-        }
-        byPath.put(file.filename(), file);
-        pathsByLowerCase
-            .computeIfAbsent(file.filename().toLowerCase(Locale.ROOT), k -> new ArrayList<>())
-            .add(file.filename());
-        if (file.previousFilename() != null && !file.previousFilename().isBlank()) {
-          pathByRenameSource.put(file.previousFilename(), file.filename());
+        if (file != null && file.filename() != null && !file.filename().isBlank()) {
+          byPath.put(file.filename(), file);
+          pathsByLowerCase
+              .computeIfAbsent(file.filename().toLowerCase(Locale.ROOT), k -> new ArrayList<>())
+              .add(file.filename());
+          if (file.previousFilename() != null && !file.previousFilename().isBlank()) {
+            pathByRenameSource.put(file.previousFilename(), file.filename());
+          }
         }
       }
     }
@@ -202,22 +204,21 @@ public class CitedLocationResolver {
       }
       Map<Key, String> notes = new HashMap<>();
       for (var finding : findings) {
-        if (finding == null || finding.file() == null || finding.file().isBlank()) {
-          continue;
-        }
-        var key = Key.of(finding);
-        if (notes.containsKey(key)) {
-          continue;
-        }
-        var note = noteFor(finding);
-        if (note != null) {
-          notes.put(key, note);
+        var key = keyOf(finding);
+        if (key != null && !notes.containsKey(key)) {
+          var note = noteFor(finding);
+          if (note != null) {
+            notes.put(key, note);
+          }
         }
       }
       if (notes.isEmpty()) {
         return FindingVerificationService.CitedLocations.NONE;
       }
-      return finding -> finding == null ? null : notes.get(Key.of(finding));
+      return finding -> {
+        var key = keyOf(finding);
+        return key == null ? null : notes.get(key);
+      };
     }
 
     /** The sentence(s) attached to one finding, or {@code null} when nothing could be said. */
@@ -245,10 +246,10 @@ public class CitedLocationResolver {
                 + "`, so it has no content at the head commit.");
       }
       var lines = linesOf(match.filename());
-      if (lines == null) {
+      if (lines.isEmpty()) {
         return null;
       }
-      var body = resolveWithin(finding, match.filename(), lines);
+      var body = resolveWithin(finding, match.filename(), lines.get());
       return body == null ? null : attach(finding, preamble + body);
     }
 
@@ -347,7 +348,7 @@ public class CitedLocationResolver {
       if (citedLine == quoteLine) {
         return "The code the finding quotes is at the cited line "
             + citedLine
-            + " of `"
+            + OF_PATH
             + path
             + "`. "
             + snippet(path, lines, quoteLine);
@@ -362,7 +363,7 @@ public class CitedLocationResolver {
           quoteLine);
       return "The code the finding quotes is at line "
           + quoteLine
-          + " of `"
+          + OF_PATH
           + path
           + "`, not at the cited line "
           + citedLine
@@ -427,29 +428,23 @@ public class CitedLocationResolver {
       return found;
     }
 
-    /** The file's lines at the round's ref, fetched once per round, or {@code null}. */
-    private List<String> linesOf(String path) {
-      var cached =
-          contents.computeIfAbsent(
-              path,
-              p ->
-                  fetches.incrementAndGet() > MAX_FILES_FETCHED
-                      ? Optional.empty()
-                      : Optional.ofNullable(fetch(p)));
-      return cached.orElse(null);
+    /** The file's lines at the round's ref, fetched once per round; empty when unreadable. */
+    private Optional<List<String>> linesOf(String path) {
+      return contents.computeIfAbsent(
+          path, p -> fetches.incrementAndGet() > MAX_FILES_FETCHED ? Optional.empty() : fetch(p));
     }
 
-    private List<String> fetch(String path) {
+    private Optional<List<String>> fetch(String path) {
       try {
         var file = prClient.getFileContent(auth, ACCEPT, owner, repo, path, ref);
         if (file == null || file.content() == null || file.size() > MAX_FILE_BYTES) {
-          return null;
+          return Optional.empty();
         }
         // GitHub wraps base64 content in newlines — only the MIME decoder tolerates them.
         var text =
             new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
         if (text.isEmpty()) {
-          return null;
+          return Optional.empty();
         }
         // A file ending in a newline has no extra last line; keeping the split's trailing empty
         // element would overstate the line count the "line N does not exist" note reports.
@@ -457,11 +452,11 @@ public class CitedLocationResolver {
         if (lines.size() > 1 && lines.get(lines.size() - 1).isEmpty()) {
           lines.remove(lines.size() - 1);
         }
-        return List.copyOf(lines);
+        return Optional.of(List.copyOf(lines));
       } catch (RuntimeException e) {
         Log.debugf(
             e, "Could not read %s from %s/%s to resolve a cited location", path, owner, repo);
-        return null;
+        return Optional.empty();
       }
     }
 
@@ -482,10 +477,14 @@ public class CitedLocationResolver {
    * How a finding is looked up after the pipeline has rebuilt it. Location and title survive every
    * stage between resolution and verification; {@code suggestion_old} does not.
    */
-  record Key(String file, int line, String title) {
-    static Key of(ReviewResponse.Finding finding) {
-      return new Key(finding.file(), finding.line(), finding.title());
+  record Key(String file, int line, String title) {}
+
+  /** The lookup key for a finding worth resolving, or {@code null} when it cites no file. */
+  private static Key keyOf(ReviewResponse.Finding finding) {
+    if (finding == null || finding.file() == null || finding.file().isBlank()) {
+      return null;
     }
+    return new Key(finding.file(), finding.line(), finding.title());
   }
 
   /**
@@ -516,13 +515,12 @@ public class CitedLocationResolver {
     var best = 0;
     var occurrences = 0;
     for (var i = 0; i < lines.size(); i++) {
-      if (!lines.get(i).strip().equals(quoted.get(0)) || !runMatches(quoted, lines, i)) {
-        continue;
-      }
-      occurrences++;
-      var lineNumber = i + 1;
-      if (best == 0 || Math.abs(lineNumber - citedLine) < Math.abs(best - citedLine)) {
-        best = lineNumber;
+      if (lines.get(i).strip().equals(quoted.get(0)) && runMatches(quoted, lines, i)) {
+        occurrences++;
+        var lineNumber = i + 1;
+        if (best == 0 || Math.abs(lineNumber - citedLine) < Math.abs(best - citedLine)) {
+          best = lineNumber;
+        }
       }
     }
     return new QuoteMatch(best, occurrences);
@@ -577,7 +575,7 @@ public class CitedLocationResolver {
             .append(from)
             .append('-')
             .append(to)
-            .append(" of `")
+            .append(OF_PATH)
             .append(path)
             .append("` at the pull request's head commit:\n");
     for (var n = from; n <= to; n++) {

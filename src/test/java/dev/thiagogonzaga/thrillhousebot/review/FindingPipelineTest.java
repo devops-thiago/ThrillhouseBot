@@ -74,6 +74,10 @@ class FindingPipelineTest {
   @Mock private DiffBudgetPlanner budgetPlanner;
   @Mock private ReviewTokenLedger tokenLedger;
 
+  /** Hoisted out of the test lambdas below: a call inside an assertThrows lambda is a smell. */
+  private static final CitedLocationResolver.Round NO_CITED_LOCATIONS =
+      CitedLocationResolver.disabled();
+
   private FindingPipeline pipeline;
 
   @BeforeEach
@@ -213,7 +217,7 @@ class FindingPipelineTest {
             ctx,
             multiBatchPlan(),
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), eq(2));
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), eq(2));
@@ -260,7 +264,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var sent = ArgumentCaptor.forClass(String.class);
     verify(findingVerificationService, times(2))
@@ -311,7 +315,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var sent = ArgumentCaptor.forClass(String.class);
     verify(findingVerificationService, times(2))
@@ -400,12 +404,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
     assertEquals(
         List.of("Unrelated defect elsewhere"),
         result.findings().stream().map(ReviewResponse.Finding::title).toList(),
@@ -430,13 +429,7 @@ class FindingPipelineTest {
                 new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "does things", List.of())));
     when(tokenLedger.reasoningSteppedDown(42L)).thenReturn(true);
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertTrue(plan.reasoningSteppedDown(), "the ledger's note must reach the plan");
     verify(tokenLedger).clear(42L);
@@ -477,12 +470,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals(
         List.of("Reworded message drops the 30s floor"),
@@ -510,12 +498,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1))
         .reviewBatch(eq(session), any(), eq(1), anyInt()); // no second, futile call
@@ -551,12 +534,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1))
         .reviewBatch(eq(session), any(), eq(1), anyInt()); // no second, futile call
@@ -607,12 +585,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     // #495's no-retry stands: salvage replaces the disclose step, never re-enters the retry lane.
     verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
@@ -667,12 +640,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
     assertEquals(1, result.findings().size());
@@ -702,12 +670,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
     assertEquals(4, result.findings().size());
@@ -733,12 +696,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1)).summarize(eq(session), any());
     assertEquals(2, result.findings().size());
@@ -769,12 +727,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals(2, result.findings().size());
     assertNotNull(result.summary());
@@ -806,7 +759,7 @@ class FindingPipelineTest {
             reviewContext(),
             plan,
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary());
@@ -838,7 +791,7 @@ class FindingPipelineTest {
             reviewContext(),
             plan,
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary(), "counts-only shape: no model summary");
@@ -872,12 +825,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1)).summarize(eq(session), any());
     assertEquals(
@@ -910,7 +858,7 @@ class FindingPipelineTest {
             reviewContext(),
             plan,
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     assertTrue(result.findings().isEmpty());
     assertNull(result.summary());
@@ -942,9 +890,7 @@ class FindingPipelineTest {
       var thrown =
           assertThrows(
               AiReviewException.class,
-              () ->
-                  pipeline.run(
-                      session, template, ctx, plan, resolver, CitedLocationResolver.disabled()));
+              () -> pipeline.run(session, template, ctx, plan, resolver, NO_CITED_LOCATIONS));
       assertSame(interrupted, thrown);
     } finally {
       assertTrue(Thread.interrupted(), "the interrupt flag must survive for the caller to see");
@@ -974,9 +920,7 @@ class FindingPipelineTest {
     var thrown =
         assertThrows(
             AiReviewException.class,
-            () ->
-                pipeline.run(
-                    session, template, ctx, plan, resolver, CitedLocationResolver.disabled()));
+            () -> pipeline.run(session, template, ctx, plan, resolver, NO_CITED_LOCATIONS));
 
     assertSame(failure, thrown);
     assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
@@ -1000,9 +944,7 @@ class FindingPipelineTest {
     var thrown =
         assertThrows(
             ReviewContextLoader.StaleReviewException.class,
-            () ->
-                pipeline.run(
-                    session, template, ctx, plan, resolver, CitedLocationResolver.disabled()));
+            () -> pipeline.run(session, template, ctx, plan, resolver, NO_CITED_LOCATIONS));
 
     assertSame(stale, thrown);
     assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
@@ -1035,7 +977,7 @@ class FindingPipelineTest {
                     ctx,
                     plan,
                     new DiffLineResolver(Map.of()),
-                    CitedLocationResolver.disabled()));
+                    NO_CITED_LOCATIONS));
 
     // Not a truncation, so the generic path applies: tried once, retried once, then disclosed.
     verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
@@ -1092,12 +1034,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     // Batch 1 is tried in the parallel pass and retried once; both fail, then it is soft-failed.
     verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
@@ -1138,7 +1075,7 @@ class FindingPipelineTest {
             ctx,
             multiBatchPlan(),
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), anyInt());
@@ -1167,7 +1104,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     // Leading, so clamping a long overview can never drop the disclosure (#386).
     assertTrue(
@@ -1192,7 +1129,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     return captor.getValue().changedFiles();
   }
@@ -1339,13 +1276,7 @@ class FindingPipelineTest {
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertTrue(captor.getValue().diff().contains("### clipped.java"), captor.getValue().diff());
     assertEquals("base", captor.getValue().baseComparison());
@@ -1365,13 +1296,7 @@ class FindingPipelineTest {
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals("raw legacy diff", captor.getValue().diff());
     verify(quoteValidator).validate(any(), eq("raw legacy diff"));
@@ -1388,13 +1313,7 @@ class FindingPipelineTest {
     when(aiReviewService.review(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     return captor.getValue().diff();
   }
@@ -1504,13 +1423,7 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     var overview = captor.getValue().changedFiles();
     assertTrue(
@@ -1550,7 +1463,7 @@ class FindingPipelineTest {
             reviewContext(),
             plan,
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     verify(aiReviewService, never()).reviewBatch(eq(session), any(), anyInt(), anyInt());
     verify(aiReviewService).summarize(eq(session), any());
@@ -1635,7 +1548,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertEquals(2, captor.getAllValues().size());
     for (var inputs : captor.getAllValues()) {
@@ -1663,9 +1576,7 @@ class FindingPipelineTest {
     var thrown =
         assertThrows(
             TokenSpendCeilingExceededException.class,
-            () ->
-                pipeline.run(
-                    session, template, ctx, plan, resolver, CitedLocationResolver.disabled()));
+            () -> pipeline.run(session, template, ctx, plan, resolver, NO_CITED_LOCATIONS));
 
     assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
     assertNull(session.getAiResponseJson(), "a refused single-call review persists nothing");
@@ -1687,12 +1598,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     // #495's no-retry stands: salvage replaces the disclose step, never re-enters the retry lane.
     verify(aiReviewService, times(1)).review(eq(session), any());
@@ -1741,12 +1647,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals(1, result.findings().size());
     assertNotNull(result.summary());
@@ -1772,12 +1673,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals(3, result.findings().size());
     // The legacy path quote-validates against the raw diff, salvaged findings included.
@@ -1805,8 +1701,7 @@ class FindingPipelineTest {
     var resolver = new DiffLineResolver(Map.of());
     assertThrows(
         AiResponseTruncatedException.class,
-        () ->
-            pipeline.run(session, template, ctx, plan, resolver, CitedLocationResolver.disabled()));
+        () -> pipeline.run(session, template, ctx, plan, resolver, NO_CITED_LOCATIONS));
 
     verify(aiReviewService, times(1)).review(eq(session), any());
     assertTrue(plan.responseCutFiles().isEmpty());
@@ -1850,7 +1745,7 @@ class FindingPipelineTest {
             ctx,
             multiBatchPlan(),
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     assertEquals(3, result.previousFindingsStatus().size());
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
@@ -1887,12 +1782,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
     assertEquals("resolved", result.previousFindingsStatus().get(1).status());
@@ -1931,12 +1821,7 @@ class FindingPipelineTest {
 
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals(1, result.previousFindingsStatus().size());
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
@@ -1985,7 +1870,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var overview = captor.getValue().changedFiles();
     assertFalse(overview.contains("more changed files"), overview);
@@ -2017,7 +1902,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertTrue(
         captor.getValue().changedFiles().contains("overview withheld"),
@@ -2042,7 +1927,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertTrue(captor.getValue().findings().startsWith("[]"), captor.getValue().findings());
     assertTrue(
@@ -2072,13 +1957,7 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("a.java (modified, +3 -0 — partially analyzed"), changedFiles);
@@ -2119,13 +1998,7 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(
@@ -2189,7 +2062,7 @@ class FindingPipelineTest {
             ctx,
             multiBatchPlan(),
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     assertEquals(4, result.findings().size());
     var serialized = captor.getValue().findings();
@@ -2230,12 +2103,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1))
         .reviewBatch(eq(session), any(), eq(2), anyInt()); // no second, knowably-refused call
@@ -2268,12 +2136,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(1))
         .reviewBatch(eq(session), any(), eq(1), anyInt()); // parallel attempt only, no retry
@@ -2304,12 +2167,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
     assertEquals(List.of("a.java"), plan.spendCeilingSkippedFiles());
@@ -2336,12 +2194,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertEquals(2, result.findings().size());
     assertNull(result.summary());
@@ -2372,12 +2225,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     verify(aiReviewService, never()).summarize(any(), any());
     assertEquals(2, result.findings().size());
@@ -2406,12 +2254,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertNull(result.summary());
     var verdict = verdictSeam().build(ctx, result, CI_CLEAR, plan);
@@ -2440,12 +2283,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertNull(result.summary());
     var verdict = verdictSeam().build(ctx, result, CI_CLEAR, plan);
@@ -2491,12 +2329,7 @@ class FindingPipelineTest {
     var plan = multiBatchPlan();
     var result =
         pipeline.run(
-            session,
-            template,
-            ctx,
-            plan,
-            new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     assertTrue(result.findings().isEmpty());
     assertEquals(List.of("a.java", "b.java"), plan.spendCeilingSkippedFiles());
@@ -2558,7 +2391,7 @@ class FindingPipelineTest {
             ctx,
             multiBatchPlan(),
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     // No billed verifier call is made past the ceiling (the summary call stays refused too)...
     verify(findingVerifier, never())
@@ -2611,7 +2444,7 @@ class FindingPipelineTest {
             reviewContext(),
             plan,
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(1), anyInt());
     verify(aiReviewService).reviewBatch(eq(session), any(), eq(2), anyInt());
@@ -2659,7 +2492,7 @@ class FindingPipelineTest {
             reviewContext(),
             plan,
             new DiffLineResolver(Map.of()),
-            CitedLocationResolver.disabled());
+            NO_CITED_LOCATIONS);
 
     verify(aiReviewService, never()).review(any(), any());
     verify(aiReviewService, never()).reviewBatch(any(), any(), anyInt(), anyInt());
@@ -2687,7 +2520,7 @@ class FindingPipelineTest {
         reviewContext(),
         plan,
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertEquals("(no changes detected)", captor.getValue().diff());
   }
@@ -2709,7 +2542,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(List.of("a.java")),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("a.java (omitted"), changedFiles);
@@ -2751,7 +2584,7 @@ class FindingPipelineTest {
         reviewContext(),
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertTrue(captor.getValue().findings().startsWith("[]"), captor.getValue().findings());
     assertTrue(
@@ -2801,7 +2634,7 @@ class FindingPipelineTest {
         ctx,
         singleBatchPlan(batchAdding("src/main/java/app/Trigger.java", REGEX_ADDITION), List.of()),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var guidance = captor.getValue().repoInstructions();
     assertTrue(guidance.contains(PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST), guidance);
@@ -2832,13 +2665,7 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     var withRule =
         captor.getAllValues().stream()
@@ -2877,7 +2704,7 @@ class FindingPipelineTest {
         singleBatchPlan(
             batchAdding("src/test/java/app/TriggerTest.java", REGEX_ADDITION), List.of()),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertEquals("", captor.getValue().repoInstructions());
   }
@@ -2911,7 +2738,7 @@ class FindingPipelineTest {
         ctx,
         singleBatchPlan(bare, List.of()),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertEquals("", captor.getValue().repoInstructions());
   }
@@ -2959,7 +2786,7 @@ class FindingPipelineTest {
           ctx,
           singleBatchPlan(empty, List.of()),
           new DiffLineResolver(Map.of()),
-          CitedLocationResolver.disabled());
+          NO_CITED_LOCATIONS);
     } finally {
       logger.removeHandler(handler);
     }
@@ -2996,7 +2823,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.contains("overview withheld"), changedFiles);
@@ -3025,7 +2852,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     assertEquals(
         "PR scope (whole pull request): 23 files changed, +1612 -240\n",
@@ -3053,13 +2880,7 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
-    pipeline.run(
-        session,
-        template,
-        ctx,
-        plan,
-        new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+    pipeline.run(session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(
@@ -3099,7 +2920,7 @@ class FindingPipelineTest {
         ctx,
         multiBatchPlan(),
         new DiffLineResolver(Map.of()),
-        CitedLocationResolver.disabled());
+        NO_CITED_LOCATIONS);
 
     var changedFiles = captor.getValue().changedFiles();
     assertTrue(changedFiles.startsWith("PR scope (whole pull request): 60 files"), changedFiles);
