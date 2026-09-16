@@ -230,6 +230,92 @@ class SeverityCalibratorTest {
     assertGrade(contracted, "medium", "medium");
   }
 
+  /**
+   * The two container classes share a vocabulary, and the privilege-drop claim denies the other's
+   * premise: a container that runs as root has no non-root user for a root-owned path to be
+   * unwritable by, however much ownership the finding goes on to discuss.
+   */
+  @Test
+  void anOmissionThatNamesTheIntendedAccountIsStillThePrivilegeDropClass() {
+    ReviewResponse.Finding omission =
+        calibrateOne(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "There is no USER appuser directive, so the app runs as root and the files it"
+                    + " writes take root ownership."));
+
+    assertGrade(omission, "medium", "medium");
+  }
+
+  /** A chown that is present, redundant or merely mentioned is not a path nobody can write. */
+  @Test
+  void aNitAboutARedundantChownIsNotTheOwnershipClass() {
+    ReviewResponse redundant =
+        response(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "USER appuser is already set, so the explicit RUN chown -R appuser:appuser is"
+                    + " redundant and adds a duplicate layer; use COPY --chown instead."));
+
+    assertSame(redundant, SeverityCalibrator.calibrate(redundant));
+  }
+
+  /** A digest is asked of things that are not external references, and those are not the class. */
+  @Test
+  void aMissingDigestForSomethingOtherThanAReferenceIsNotAnchored() {
+    ReviewResponse archive =
+        response(
+            new ReviewResponse.Finding(
+                "low",
+                "low",
+                ".github/workflows/ci.yml",
+                9,
+                "downloaded toolchain is not verified",
+                "The step pins the toolchain by version but carries no digest for the archive it"
+                    + " downloads, so a replaced artifact would go unnoticed.",
+                null,
+                null));
+
+    assertSame(archive, SeverityCalibrator.calibrate(archive));
+  }
+
+  /** The claim has to be about the reference, not merely in the same finding as one. */
+  @Test
+  void anUnpinnedPackageInstallBesideAPinnedImageIsNotAnchored() {
+    ReviewResponse aptInstall =
+        response(
+            finding(
+                "low",
+                "low",
+                "Dockerfile",
+                "The base image is correctly pinned by digest, but the apt install is unpinned, so"
+                    + " runtime package versions drift between builds."));
+
+    assertSame(aptInstall, SeverityCalibrator.calibrate(aptInstall));
+  }
+
+  /**
+   * The escalation defeater is read on the words a finding uses, not only on the manifest field
+   * names: missing it would pin a high finding DOWN, which is the direction the design forbids.
+   */
+  @Test
+  void anEscalationWrittenInProseAlsoKeepsTheReviewsGrade() {
+    ReviewResponse hostNamespace =
+        response(
+            finding(
+                "high",
+                "high",
+                "deploy/k8s/api.yaml",
+                "The base image is unpinned, and the pod also shares the host PID namespace with"
+                    + " the node."));
+
+    assertSame(hostNamespace, SeverityCalibrator.calibrate(hostNamespace));
+  }
+
   /** Podman spells the same artifact differently, and it is the same artifact. */
   @Test
   void aContainerfileIsTheSameArtifactAsADockerfile() {

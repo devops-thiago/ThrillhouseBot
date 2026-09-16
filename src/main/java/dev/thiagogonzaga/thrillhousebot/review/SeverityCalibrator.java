@@ -123,17 +123,25 @@ public final class SeverityCalibrator {
    * match inside "images", exactly as the expressions these lists replace did — without an
    * alternation whose cost grows with every synonym and whitespace run in it.
    *
-   * <p>The finding says the reference is not pinned to something immutable. Every phrase names the
-   * immutable thing that is missing — a digest, a tag that does not move — rather than the bare
-   * word "pinned". Pinning is said of many things in a workflow ("the cache key is not pinned to
-   * the lockfile hash", "the output tag is not pinned to the run id"), and a generic claim beside a
-   * generic noun is one word deep: it would anchor a naming nit at this class's level, which is the
-   * over-firing the class javadoc rules out.
+   * <p>The finding says the reference is not pinned to something immutable. Every phrase names
+   * either the immutable thing that is missing — a digest, a tag that does not move — or the
+   * reference it is missing for. A bare "unpinned" is not one of them, and neither is a bare "not
+   * pinned": pinning is said of many things in and around a build ("the cache key is not pinned to
+   * the lockfile hash", "the apt install is unpinned", "the output tag is not pinned to the run
+   * id"), so a bare negation would anchor any of them the moment the word "image" appeared anywhere
+   * else in the finding, which is the over-firing the class javadoc rules out.
    */
   private static final List<String> UNPINNED_REFERENCE =
       phrases(
-          "unpinned",
-          "un pinned",
+          "unpinned base image",
+          "unpinned image",
+          "unpinned chart",
+          "unpinned action",
+          "base image is unpinned",
+          "image is unpinned",
+          "chart is unpinned",
+          "action is unpinned",
+          "image tag is unpinned",
           "not pinned to a digest",
           "not pinned by digest",
           "not pinned to a version",
@@ -187,15 +195,22 @@ public final class SeverityCalibrator {
       Pattern.compile(
           "\\bUSER\\s+(?!(?:directive|instruction|line|statement|declaration)\\b)[A-Za-z0-9_$.:-]+");
 
-  /** The finding says that user cannot write the path, in ownership or in failure terms. */
+  /**
+   * The finding says that user cannot write the path, in ownership or in failure terms. Every
+   * phrase carries the direction: a bare "chown" or "ownership" is said as often of a chown that is
+   * present, redundant or merely mentioned as of one that is missing, so matching the word alone
+   * read a layer-size nit about an existing {@code RUN chown} as this class.
+   */
   private static final List<String> UNWRITABLE_PATH =
       phrases(
           "root owned",
           "owned by root",
           "root root",
-          "chown",
-          "chowns",
-          "ownership",
+          "root ownership",
+          "without a chown",
+          "no chown",
+          "nothing chowns",
+          "never chowned",
           "permission denied",
           "eacces",
           "not writable",
@@ -241,6 +256,15 @@ public final class SeverityCalibrator {
           "hostipc",
           "sys admin",
           "capabilities",
+          "capability",
+          "host mount",
+          "host mounts",
+          "host path",
+          "host namespace",
+          "host namespaces",
+          "host pid",
+          "host ipc",
+          "host network",
           "docker sock",
           "docker socket",
           "cve",
@@ -341,15 +365,21 @@ public final class SeverityCalibrator {
     if (states(text, ESCALATION_BEYOND_CLASS)) {
       return null;
     }
-    // Most specific first: a finding that names both the non-root user and the write it cannot
-    // make is the ownership defect, not the privilege-drop omission that shares its vocabulary.
+    // The privilege-drop claim is read first because it DENIES the other container class's
+    // premise: a container that never drops privilege has no non-root user for a root-owned path
+    // to be unwritable by. The two share a vocabulary — "no USER appuser directive, so the app
+    // runs as root and the files it writes take root ownership" names an account and an ownership
+    // in one sentence — and reading that as the ownership defect would publish it at that class's
+    // level under a class label its own words contradict.
+    if (states(text, NEVER_DROPS_PRIVILEGE)) {
+      return InfrastructureClass.MISSING_PRIVILEGE_DROP;
+    }
     if (namesNonRootUser(text, raw) && states(text, UNWRITABLE_PATH)) {
       return InfrastructureClass.UNWRITABLE_RUNTIME_PATH;
     }
-    if (namesUnpinnedReference(text, raw) && states(text, EXTERNAL_REFERENCE_SUBJECT)) {
-      return InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE;
-    }
-    return states(text, NEVER_DROPS_PRIVILEGE) ? InfrastructureClass.MISSING_PRIVILEGE_DROP : null;
+    return namesUnpinnedReference(text, raw) && states(text, EXTERNAL_REFERENCE_SUBJECT)
+        ? InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE
+        : null;
   }
 
   /** Whether the finding is anchored in one of the declarative artifacts these classes live in. */
