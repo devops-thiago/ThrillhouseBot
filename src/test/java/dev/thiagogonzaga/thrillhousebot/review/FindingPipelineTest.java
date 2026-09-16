@@ -1593,6 +1593,60 @@ class FindingPipelineTest {
     }
   }
 
+  /**
+   * #773: the infrastructure anchor is in the chain, and it runs after the verifier. The verifier
+   * applies its verdict only in the lowering direction, so a downgrade there would otherwise
+   * re-spread exactly the class the anchor pins — which is how the same unpinned base image came
+   * out "medium" on four pull requests of one round and "low" on three.
+   */
+  @Test
+  void theInfrastructureAnchorOutlivesAVerifierDowngrade() {
+    var session = ReviewSession.create("owner/repo", 1, "Add the container image", "sha");
+    var ctx = reviewContext();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("Dockerfile")), List.of(), List.of(), true, null, null, null, null);
+    var raised =
+        new ReviewResponse.Finding(
+            "medium",
+            "medium",
+            "Dockerfile",
+            1,
+            "unpinned base image",
+            "FROM node:20-alpine is an unpinned base image, so two builds of this commit can"
+                + " resolve to different images.",
+            null,
+            null);
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(raised), List.of(), null));
+    when(findingVerificationService.verify(
+            anyLong(), any(), any(), any(), any(), any(), any(), any()))
+        .thenAnswer(
+            inv ->
+                new ReviewResponse(
+                    List.of(
+                        new ReviewResponse.Finding(
+                            "low",
+                            "low",
+                            raised.file(),
+                            raised.line(),
+                            raised.title(),
+                            raised.description(),
+                            null,
+                            null)),
+                    List.of(),
+                    null));
+
+    var refined =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), NO_CITED_LOCATIONS);
+
+    assertEquals("medium", refined.findings().get(0).risk());
+    assertEquals("medium", refined.findings().get(0).confidence());
+  }
+
   @Test
   void singleCallCeilingRefusalPropagatesForTheOrchestratorToFailSoft() {
     // Characterization of the single-call contract: a mid-retry ceiling refusal has no paid batch
