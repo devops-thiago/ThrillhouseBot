@@ -243,6 +243,16 @@ class ContextEvidenceResolverTest {
         "a scope that does not govern the file must not travel with the finding");
   }
 
+  /** Sharing a file name is not sharing a path: the citation has to end in the governed file. */
+  @Test
+  void doesNotGovernAFileThatOnlySharesACitationsName() {
+    var finding = finding("b/Renderer.java", 42, "Renders the title without escaping it.");
+
+    assertNull(
+        evidence(round("", scoped("src/a/**", RULES, "src/a/Renderer.java")), finding),
+        "a citation under a different directory names a different file");
+  }
+
   @Test
   void boundsAVerboseScopesRules() {
     var verbose = "Escape everything. ".repeat(80);

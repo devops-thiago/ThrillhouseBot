@@ -19,13 +19,12 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Attaches to each candidate finding the review-context material that finding rests on, so the
@@ -147,10 +146,16 @@ public final class ContextEvidenceResolver {
     /** Whether a coverage section was supplied at all, which an empty map does not say. */
     private final boolean coverageSupplied;
 
-    private final List<PathScopedInstructions.AppliedScope> scopes;
+    /** The scopes governing each file they matched, in declaration order, built once per review. */
+    private final Map<String, List<PathScopedInstructions.AppliedScope>> scopesByFile;
 
-    /** Every file any of this review's scopes governs, for the citation lookup below. */
-    private final Set<String> governedFiles;
+    /**
+     * Governed files by their last path segment. A suffix match implies an equal last segment —
+     * {@link CitedLocationResolver#sharesPathSuffix} asks one path to end in {@code "/" + } the
+     * other — so a citation that lost a leading directory is looked up here instead of walking
+     * every governed file once per finding.
+     */
+    private final Map<String, List<String>> governedByName;
 
     private final EvidenceBudget budget;
 
@@ -164,13 +169,24 @@ public final class ContextEvidenceResolver {
         boolean silent) {
       this.coverageSupplied = patchCoverage != null && !patchCoverage.isBlank();
       this.coverage = coverageSupplied ? parseSection(patchCoverage) : Coverage.NONE;
-      this.scopes = pathInstructions == null ? List.of() : pathInstructions.scopes();
-      this.governedFiles =
-          scopes.stream()
-              .flatMap(scope -> scope.files().stream())
-              .collect(Collectors.toUnmodifiableSet());
+      this.scopesByFile = new LinkedHashMap<>();
+      this.governedByName = new LinkedHashMap<>();
+      index(pathInstructions);
       this.budget = budget;
       this.silent = silent;
+    }
+
+    /** The scope and name indexes one review's governed files are looked up through. */
+    private void index(PathScopedInstructions pathInstructions) {
+      if (pathInstructions == null) {
+        return;
+      }
+      for (var scope : pathInstructions.scopes()) {
+        for (var file : scope.files()) {
+          scopesByFile.computeIfAbsent(file, f -> new ArrayList<>()).add(scope);
+          governedByName.computeIfAbsent(lastSegment(file), n -> new ArrayList<>()).add(file);
+        }
+      }
     }
 
     /**
@@ -351,19 +367,17 @@ public final class ContextEvidenceResolver {
                   + governed
                   + "`, the only file under a maintainer-scoped glob it matches. ";
       var sb = new StringBuilder();
-      for (var scope : scopes) {
-        if (scope.files().contains(governed)) {
-          sb.append(sb.isEmpty() ? preamble : "\n")
-              .append("The maintainers scoped review rules to files matching `")
-              .append(scope.glob())
-              .append("`, and `")
-              .append(governed)
-              .append("` is one of the files in this pull request they govern. Their text for that")
-              .append(" glob, verbatim:\n")
-              .append(quotedRules(scope.instructions()));
-        }
+      for (var scope : scopesByFile.get(governed)) {
+        sb.append(sb.isEmpty() ? preamble : "\n")
+            .append("The maintainers scoped review rules to files matching `")
+            .append(scope.glob())
+            .append("`, and `")
+            .append(governed)
+            .append("` is one of the files in this pull request they govern. Their text for that")
+            .append(" glob, verbatim:\n")
+            .append(quotedRules(scope.instructions()));
       }
-      // A governed path came from the scopes' own file lists, so at least one scope holds it.
+      // A governed path came from the index, so it has at least one scope.
       return sb.toString();
     }
 
@@ -375,11 +389,11 @@ public final class ContextEvidenceResolver {
      * not true, which is the direction this class exists to close (#475 review).
      */
     private String governedPathFor(String cited) {
-      if (governedFiles.contains(cited)) {
+      if (scopesByFile.containsKey(cited)) {
         return cited;
       }
       String found = null;
-      for (var file : governedFiles) {
+      for (var file : governedByName.getOrDefault(lastSegment(cited), List.of())) {
         if (CitedLocationResolver.sharesPathSuffix(file, cited)) {
           if (found != null) {
             return null;
@@ -389,6 +403,12 @@ public final class ContextEvidenceResolver {
       }
       return found;
     }
+  }
+
+  /** The file name a path ends in, which a suffix match always shares with the path it matches. */
+  static String lastSegment(String path) {
+    var slash = path.lastIndexOf('/');
+    return slash < 0 ? path : path.substring(slash + 1);
   }
 
   /** A scope's rules, bounded so one verbose scope cannot crowd out every other note. */
