@@ -1,8 +1,12 @@
 {
   "current": {
-    "label": "v0.6.8"
+    "label": "v0.6.9"
   },
   "versions": [
+    {
+      "slug": "0.6.8",
+      "label": "v0.6.8"
+    },
     {
       "slug": "0.6.7",
       "label": "v0.6.7"
