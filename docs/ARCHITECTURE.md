@@ -219,8 +219,10 @@ sequenceDiagram
 PR reviews carry inline comments and suggestions; check runs carry pass/fail
 status for branch protection (no inline annotations on the check run itself).
 
-**AI call budget** — every review makes at least two model calls, the review call
-and the summary call; one that reports findings adds a skeptical verification
+**AI call budget** — a review normally makes at least two model calls, the review
+call and the summary call (at `REVIEW_MAX_AI_CALLS=1` the summary call is skipped
+after a review call, and a review whose every file exceeded the budget makes only
+the summary call); one that reports findings adds a skeptical verification
 pass (`FindingVerifier`) that re-sends the diff and each candidate finding,
 dropping or downgrading what it can't confirm. The verifier fails open — a verifier error keeps
 the original findings, so a broken verifier can never block a review. The review

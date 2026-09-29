@@ -326,7 +326,7 @@ will change per provider:
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the fixed-shape/short AI calls — the final summary of a multi-call review, the finding verifier, and maintainer replies — which run on the `concise` named model so they don't share a cap sized for batch review output (see [Per-model AI settings](#per-model-ai-settings)). A summary cut at this cap is salvaged from the cut response or falls back to a counts-only summary, the findings are kept, and the posted review names this variable; set it empty to drop the cap and use the provider default | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (review or batch calls plus the final summary call every review ends with; at `1` the summary call is skipped and the summary is counts-only, with a note saying so), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (review or batch calls plus the final summary call every review ends with; at `1` a review that makes its review call has none left for the summary, so the summary is counts-only with a note saying so — a review whose every file exceeded the budget makes no review call and still gets its summary), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
 | `REVIEW_MAX_TOKENS_PER_REVIEW` | Ceiling on the tokens one review may consume across every AI call it makes — actual input+output as the provider reports them, counting retries and the final summary call, where `REVIEW_MAX_AI_CALLS` only counts planned calls. Once reached no further review call is made: remaining batches are disclosed by name as not reviewed (the verdict holds and the summary names the ceiling as the reason) and the summary degrades to a counts-only rendering that keeps the findings already paid for. `0` disables the ceiling. Review path only — the on-demand commands keep their own call cap | `0` |
 | `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests`, `/add-docs` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
@@ -350,13 +350,15 @@ will change per provider:
 
 ### AI call budget
 
-Every review makes at least **two** model calls: the review call, which returns
+A review normally makes at least **two** model calls: the review call, which returns
 findings and previous-finding statuses only, and a summary call that writes the
 PR-level summary (purpose, description gaps, file walkthrough, labels, diagram)
 from the verified findings and the changed-file list. The summary call never
 carries the diff, so it is small next to the review call. A review that reports
 findings adds a verification call that re-sends the diff and the candidate
-findings, so budget roughly **2× tokens** per flagged review. On large PRs
+findings, so budget roughly **2× tokens** per flagged review. At
+`REVIEW_MAX_AI_CALLS=1` the summary call is skipped after a review call, and a
+review whose every file exceeded the budget makes only the summary call. On large PRs
 under token-aware budgeting this becomes N batch review calls + N per-batch
 verification calls + the same one summary call. Set
 `REVIEW_VERIFIER_ENABLED=false` to skip only the AI verifier — cheaper, at the

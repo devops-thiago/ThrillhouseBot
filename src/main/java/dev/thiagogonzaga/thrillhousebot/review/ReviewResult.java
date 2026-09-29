@@ -516,12 +516,13 @@ public record ReviewResult(
   /**
    * The call-cap sibling of {@link #SUMMARY_SKIPPED_NOTICE} (#664): every review ends with a
    * summary call, and an allowance of one call ({@code REVIEW_MAX_AI_CALLS=1}) is spent by the
-   * review call alone. The partial-review banner would overstate a skip that affects only the
-   * prose, so the knob to raise is named instead. Unlike its siblings it makes no claim that the
-   * findings are complete: the one review call may itself have been cut and salvaged, which the
-   * response-cut disclosure states on its own. When a file-coverage gap exists as well, {@link
-   * #coverageGapClause(int, TruncationDetail)} folds the skip in as one more clause and this banner
-   * is not used.
+   * review call alone whenever one is made (a review whose every file exceeded the budget makes
+   * none, and its summary call fits the allowance). The partial-review banner would overstate a
+   * skip that affects only the prose, so the knob to raise is named instead. Unlike its siblings it
+   * makes no claim that the findings are complete: the one review call may itself have been cut and
+   * salvaged, which the response-cut disclosure states on its own. When a file-coverage gap exists
+   * as well, {@link #coverageGapClause(int, TruncationDetail)} folds the skip in as one more clause
+   * and this banner is not used.
    */
   static final String SUMMARY_CALL_CAP_NOTICE =
       """
