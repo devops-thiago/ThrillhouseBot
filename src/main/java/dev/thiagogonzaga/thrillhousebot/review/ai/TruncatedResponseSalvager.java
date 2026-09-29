@@ -31,10 +31,12 @@ import java.util.List;
  * Salvages the complete leading JSON elements out of a response the model cut mid-JSON — at its
  * length cap ({@link AiResponseTruncatedException#partialBody()}), or with no {@code
  * finish_reason=length} reported at all (#546). The body is well-formed up to the cut, so every
- * {@code findings} / {@code previous_findings_status} array element that closed before it — and a
- * {@code summary} object that did — is recoverable as-is; the trailing cut-off value is dropped by
- * construction. {@link #salvageArray} exposes the same pass for the other review-path responses
- * whose payload is a single named array, such as the finding verifier's {@code verdicts}.
+ * element that closed before it is recoverable as-is; the trailing cut-off value is dropped by
+ * construction. One pass per response contract: {@link #salvage} reads a review call's {@code
+ * findings} / {@code previous_findings_status} arrays (the whole of that contract since #664 moved
+ * the summary object out of it), {@link #salvageSummary} reads the summary call's {@code summary}
+ * object, and {@link #salvageArray} serves the other review-path responses whose payload is a
+ * single named array, such as the finding verifier's {@code verdicts}.
  *
  * <p>Deliberately a separate class from {@link ReviewResponseParser}: the parser's contract is
  * all-or-nothing on a complete body, while salvage is best-effort on a known-cut one, and the two
@@ -74,13 +76,12 @@ public class TruncatedResponseSalvager {
   }
 
   /**
-   * What a salvage pass recovered: the complete findings and previous-finding statuses (possibly
-   * none), and the summary object when it closed before the cut ({@code null} otherwise).
+   * What a review-call salvage pass recovered: the complete findings and previous-finding statuses,
+   * possibly none.
    */
   public record Salvaged(
       List<ReviewResponse.Finding> findings,
-      List<ReviewResponse.PreviousFindingStatus> previousFindingsStatus,
-      ReviewResponse.Summary summary) {
+      List<ReviewResponse.PreviousFindingStatus> previousFindingsStatus) {
     public Salvaged {
       findings = List.copyOf(findings);
       previousFindingsStatus = List.copyOf(previousFindingsStatus);
@@ -93,17 +94,17 @@ public class TruncatedResponseSalvager {
   }
 
   /**
-   * Salvages the complete elements of {@code partialBody}. Everything comes back empty when there
-   * is nothing to work with — no body (every lane carries the text it had before the cut since
-   * #580, so a {@code null} here is a call that produced none), a body that does not open a JSON
-   * object, or a cut that landed before the first element closed.
+   * Salvages the complete findings and previous-finding statuses of a cut review-call body — the
+   * review call's whole response contract ({@link PrReviewPrompts#FINDINGS_RESPONSE_CONTRACT}). Any
+   * other top-level field, including a {@code summary} object the model wrote against that
+   * contract, is skipped. Everything comes back empty when there is nothing to work with — no body
+   * (every lane carries the text it had before the cut since #580, so a {@code null} here is a call
+   * that produced none), a body that does not open a JSON object, or a cut that landed before the
+   * first element closed.
    */
   public Salvaged salvage(String partialBody) {
     var findings = new ArrayList<ReviewResponse.Finding>();
     var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
-    // One-element holder: the summary is the pass's only scalar result, and the field handler
-    // below is a lambda, which cannot assign a local.
-    var summary = new ReviewResponse.Summary[1];
     scan(
         partialBody,
         ReviewResponseParser.REVIEW_ROOT_KEYS,
@@ -114,12 +115,30 @@ public class TruncatedResponseSalvager {
             case "previous_findings_status" ->
                 salvageArrayElements(
                     parser, value, ReviewResponse.PreviousFindingStatus.class, statuses);
-            case "summary" ->
-                summary[0] = objectOrNull(parser, value, ReviewResponse.Summary.class);
             default -> parser.skipChildren();
           }
         });
-    return new Salvaged(findings, statuses, summary[0]);
+    return new Salvaged(findings, statuses);
+  }
+
+  /**
+   * Salvages the {@code summary} object of a cut summary-call body when it closed before the cut
+   * (#500 scope A); {@code null} when it did not, when it does not map onto the summary schema, or
+   * when there is nothing to work with. Same bounded, never-throwing pass as {@link #salvage}.
+   */
+  public ReviewResponse.Summary salvageSummary(String partialBody) {
+    // One-element holder: the field handler below is a lambda, which cannot assign a local.
+    var summary = new ReviewResponse.Summary[1];
+    scan(
+        partialBody,
+        (parser, field, value) -> {
+          if ("summary".equals(field)) {
+            summary[0] = objectOrNull(parser, value, ReviewResponse.Summary.class);
+          } else {
+            parser.skipChildren();
+          }
+        });
+    return summary[0];
   }
 
   /**

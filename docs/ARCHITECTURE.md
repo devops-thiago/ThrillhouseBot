@@ -95,11 +95,13 @@ sequenceDiagram
 
     alt Diff fits one call
         TB->>AI: POST chat (diff + base comparison + review prompt) — live tokens to dashboard
-        AI-->>TB: findings + risk levels + suggestions
+        AI-->>TB: findings + risk levels + suggestions + previous-findings status
         opt Findings found and REVIEW_VERIFIER_ENABLED (default)
             TB->>AI: POST chat (re-check each finding against the diff)
             AI-->>TB: confirmed / downgraded / dropped findings
         end
+        TB->>AI: POST chat (summary rollup of the verified findings)
+        AI-->>TB: PR-level summary
     else Large diff — multi-call
         loop Each batch in parallel (up to REVIEW_MAX_AI_CALLS − 1)
             TB-->>TB: review.batch progress (no per-token stream)
@@ -110,7 +112,7 @@ sequenceDiagram
             end
         end
         TB->>AI: POST chat (summary rollup of aggregated findings)
-        AI-->>TB: PR-level summary + previous-findings status
+        AI-->>TB: PR-level summary
         Note over TB: Any files that still won't fit are disclosed by name
     end
 
@@ -217,17 +219,27 @@ sequenceDiagram
 PR reviews carry inline comments and suggestions; check runs carry pass/fail
 status for branch protection (no inline annotations on the check run itself).
 
-**AI call budget** — a review that reports findings makes **two** model calls
-by default: the review call plus a skeptical verification pass
-(`FindingVerifier`) that re-sends the diff and each candidate finding, dropping
-or downgrading what it can't confirm. It fails open — a verifier error keeps
-the original findings, so a broken verifier can never block a review. Under
-token-aware budgeting on large PRs this becomes N batch review calls + N
-per-batch verification calls + one summary call. `REVIEW_VERIFIER_ENABLED=false`
-skips only the AI pass (a deterministic hedging-language guard still runs) and
-trades cost for more false positives. Expect two model spans per flagged
-single-call review (or N+N+1 under budgeting) in the traces and in the
-dashboard's session totals. Multi-call reviews do not stream tokens to the
+**AI call budget** — a review normally makes at least two model calls, the review
+call and the summary call (at `REVIEW_MAX_AI_CALLS=1` the summary call is skipped
+after a review call, and a review whose every file exceeded the budget makes only
+the summary call); one that reports findings adds a skeptical verification
+pass (`FindingVerifier`) that re-sends the diff and each candidate finding,
+dropping or downgrading what it can't confirm. The verifier fails open — a verifier error keeps
+the original findings, so a broken verifier can never block a review. A finding
+kept that way is not published as if it had been screened: its confidence is
+capped at medium and its text says it was not verified, so under the default
+blocking strictness it cannot request changes on its own, and the summary banner
+states the round's verification coverage. The review
+call's response is findings and previous-finding statuses only; the PR-level
+summary (counts, purpose, description gaps, file walkthrough, labels, diagram) is
+written by the summary call from the verified findings and the changed-file list,
+on both lanes, so it keeps working when a review response is cut at its length
+cap. Under token-aware budgeting on large PRs this becomes N batch review calls +
+N per-batch verification calls + the same one summary call.
+`REVIEW_VERIFIER_ENABLED=false` skips only the AI pass (a deterministic
+hedging-language guard still runs) and trades cost for more false positives.
+Expect three model spans per flagged single-call review (or N+N+1 under
+budgeting) in the traces and in the dashboard's session totals. Multi-call reviews do not stream tokens to the
 dashboard; they emit `review.batch` progress events instead. Batches run
 concurrently on virtual threads; a failed batch is retried once after the
 parallel pass completes. `AI_MAX_CONCURRENT_CALLS` caps the model calls in
@@ -242,8 +254,8 @@ leaves it unbounded. The summary, the verifier and maintainer replies run on a
 separate `concise` model binding with its own response cap
 (`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`) and its own reasoning effort, so they never
 share a cap sized for batch review output. A summary call that fails all its
-retries also leaves a counts-only summary, since every batch was already paid for,
-and the posted review says the summary could not be generated.
+retries also leaves a counts-only summary, since the review calls were already paid
+for, and the posted review says the summary could not be generated.
 
 **Coverage honesty** — a file the review never read does not pass silently. A
 file GitHub reported with changes but no patch text, a file that did not fit any

@@ -23,6 +23,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
@@ -376,6 +377,102 @@ class ReviewPromptAssemblerTest {
                   "Prefer small diffs.", ".github/thrillhousebot.md"),
               PathScopedInstructions.resolve(settings, List.of(filename)),
               List.of(),
+              "",
+              "",
+              "",
+              "",
+              files,
+              () -> new DiffLineResolver(Map.of()),
+              null);
+      var req =
+          new ReviewOrchestrator.ReviewRequest(
+              "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+      return assembler.assemble(ctx, req);
+    }
+  }
+
+  /**
+   * #664: every review ends with a summary call, the sole writer of the summary fields, so the
+   * guidance that gates those fields — the label list and the diagram request — rides that call's
+   * slot and not the review call's. The project-wide instructions reach both; the path-scoped
+   * blocks are review rules and stay with the review call.
+   */
+  @Nested
+  class SummaryCallGuidance {
+
+    @Test
+    void labelAndDiagramRequestsRideTheSummaryCallOnly() {
+      var inputs =
+          assemble(true, List.of(new GitHubLabelClient.Label("bug", "a defect", "ff0000")));
+
+      assertTrue(
+          inputs.summaryInstructions().contains("## Available Repository Labels"),
+          inputs.summaryInstructions());
+      assertTrue(
+          inputs.summaryInstructions().contains("## Control-Flow Diagram Request"),
+          inputs.summaryInstructions());
+      assertFalse(inputs.repoInstructions().contains("Available Repository Labels"));
+      assertFalse(inputs.repoInstructions().contains("Control-Flow Diagram Request"));
+    }
+
+    @Test
+    void projectInstructionsReachBothCallsButPathScopedRulesOnlyTheReviewCall() {
+      var inputs = assemble(false, List.of());
+
+      assertTrue(inputs.summaryInstructions().contains("\nPrefer small diffs.\n"));
+      assertTrue(inputs.repoInstructions().contains("\nPrefer small diffs.\n"));
+      assertTrue(inputs.repoInstructions().contains("flag floating-point arithmetic"));
+      assertFalse(
+          inputs.summaryInstructions().contains("flag floating-point arithmetic"),
+          inputs.summaryInstructions());
+    }
+
+    @Test
+    void reviewOnlyRequestsStayOutOfTheSummaryCall() {
+      var inputs = assemble(false, List.of());
+
+      // The changed file is a test file, so the review call gets the mock-fidelity block.
+      assertTrue(inputs.repoInstructions().contains("## Mock Fidelity Check"));
+      assertFalse(inputs.summaryInstructions().contains("Mock Fidelity Check"));
+    }
+
+    private static AiReviewService.PromptInputs assemble(
+        boolean diagram, List<GitHubLabelClient.Label> labels) {
+      var filename = "payments/ChargeTest.java";
+      var files =
+          List.of(
+              new GitHubPullRequestClient.FileDiff(filename, "modified", 1, 0, 1, "@@ -1 +1 @@"));
+      var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
+      when(config.review().diagram().enabled()).thenReturn(diagram);
+      var labeler = mock(PrLabeler.class);
+      when(labeler.allowNewLabels()).thenReturn(false);
+      var assembler =
+          new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+      var scoped =
+          new RepoSettings(
+              List.of(),
+              List.of(
+                  new RepoSettings.PathInstructions(
+                      "payments/**", "Money is in integer cents; flag floating-point arithmetic.")),
+              ".github/thrillhousebot.yml");
+      var ctx =
+          new ReviewContextLoader.ReviewContext(
+              files,
+              "diff",
+              "",
+              0,
+              List.of(),
+              List.of(),
+              List.of(),
+              true,
+              false,
+              null,
+              List.of(),
+              "",
+              new InstructionsResolver.ResolvedInstructions(
+                  "Prefer small diffs.", ".github/thrillhousebot.md"),
+              PathScopedInstructions.resolve(scoped, List.of(filename)),
+              labels,
               "",
               "",
               "",

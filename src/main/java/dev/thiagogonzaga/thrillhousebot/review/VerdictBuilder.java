@@ -376,6 +376,8 @@ public class VerdictBuilder {
         switch (result.truncation().summaryDegradation()) {
           case RESPONSE_CUT -> " The summary was shortened (response cut at the length cap).";
           case SKIPPED_AT_CEILING -> " The summary was skipped (token spend ceiling reached).";
+          case SKIPPED_AT_CALL_CAP ->
+              " The summary was skipped (REVIEW_MAX_AI_CALLS=1 leaves no call for it).";
           case SUMMARY_FAILED ->
               " The summary was not generated (summary call failed after its retries).";
           case NONE -> "";
@@ -662,6 +664,7 @@ public class VerdictBuilder {
           switch (diffStats.truncation().summaryDegradation()) {
             case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
             case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
+            case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE + summaryMarkdown;
             case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
             case NONE -> summaryMarkdown;
           };

@@ -514,9 +514,28 @@ public record ReviewResult(
       """;
 
   /**
+   * The call-cap sibling of {@link #SUMMARY_SKIPPED_NOTICE} (#664): every review ends with a
+   * summary call, and an allowance of one call ({@code REVIEW_MAX_AI_CALLS=1}) is spent by the
+   * review call alone whenever one is made (a review whose every file exceeded the budget makes
+   * none, and its summary call fits the allowance). The partial-review banner would overstate a
+   * skip that affects only the prose, so the knob to raise is named instead. Unlike its siblings it
+   * makes no claim that the findings are complete: the one review call may itself have been cut and
+   * salvaged, which the response-cut disclosure states on its own. When a file-coverage gap exists
+   * as well, {@link #coverageGapClause(int, TruncationDetail)} folds the skip in as one more clause
+   * and this banner is not used.
+   */
+  static final String SUMMARY_CALL_CAP_NOTICE =
+      """
+      > ⚠️ **Summary skipped.** REVIEW_MAX_AI_CALLS=1 leaves no call for the summary after the\
+       review call, so only the finding counts are shown. Raise REVIEW_MAX_AI_CALLS to 2 or more\
+       for the full summary.
+
+      """;
+
+  /**
    * The failure sibling of {@link #SUMMARY_CUT_NOTICE} (#851): the summary call failed all its
-   * retries (a response the parser refused, a timeout, a dropped connection) after every batch was
-   * reviewed. The findings are complete, so the partial-review banner would overstate the damage;
+   * retries (a response the parser refused, a timeout, a dropped connection) after the review calls
+   * completed. The findings are complete, so the partial-review banner would overstate the damage;
    * no knob is named, because no setting prevents the failure. When a file-coverage gap exists as
    * well, {@link #coverageGapClause(int, TruncationDetail)} folds the failure in as one more clause
    * and this banner is not used.
@@ -713,6 +732,12 @@ public record ReviewResult(
               "the summary was skipped because the review's token spend ceiling"
                   + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
                   + " complete");
+      case SKIPPED_AT_CALL_CAP ->
+          clauses.add(
+              // No completeness claim: this lane's one review call may itself have been cut and
+              // salvaged, and the response-cut clause beside this one says so.
+              "the summary was skipped because REVIEW_MAX_AI_CALLS=1 leaves no call for it after"
+                  + " the review call");
       case SUMMARY_FAILED ->
           clauses.add(
               "the summary was not generated because the summary call failed after its retries —"
@@ -740,18 +765,22 @@ public record ReviewResult(
    * the call was never made, a cut before the first verdict closed and a generic failure — "no
    * verdicts were returned" is the whole truth they share — while PARTIAL covers a cut response and
    * a complete response that simply omitted a verdict, where only the counts hold. The logs carry
-   * the specific reason.
+   * the specific reason. The per-finding half — the cap and the note each unverified finding
+   * carries — is {@code FindingVerificationService.markUnscreened} (#885); this clause states the
+   * same outcome for the set, so the banner and the findings cannot tell the reader different
+   * things.
    */
   private static String verificationClause(VerificationCoverage verification) {
     if (verification.outcome() == VerificationCoverage.Outcome.PARTIAL) {
       return String.format(
           "the second-pass finding verification only covered %d of the %d finding(s) — the"
-              + " remaining %d post unverified, as the reviewer raised them",
+              + " remaining %d post unverified, each marked as such with its confidence capped"
+              + " at medium",
           verification.verified(), verification.candidates(), verification.unverified());
     }
     return String.format(
         "the %d finding(s) were NOT verified by the second-pass audit — no verdicts were"
-            + " returned, so they post as the reviewer raised them",
+            + " returned, so each posts marked as such with its confidence capped at medium",
         verification.candidates());
   }
 
@@ -838,6 +867,7 @@ public record ReviewResult(
     switch (truncation.summaryDegradation()) {
       case RESPONSE_CUT -> parts.add("summary shortened (response cut at the length cap)");
       case SKIPPED_AT_CEILING -> parts.add("summary skipped (token spend ceiling reached)");
+      case SKIPPED_AT_CALL_CAP -> parts.add("summary skipped (no call left under max-ai-calls)");
       case SUMMARY_FAILED ->
           parts.add("summary not generated (summary call failed after its retries)");
       case NONE -> {

@@ -63,7 +63,6 @@ class TruncatedResponseSalvagerTest {
     assertEquals("F1", salvaged.findings().get(0).title());
     assertEquals("F3", salvaged.findings().get(2).title());
     assertTrue(salvaged.previousFindingsStatus().isEmpty());
-    assertNull(salvaged.summary());
     assertTrue(salvaged.hasFindingsOrStatuses());
   }
 
@@ -92,13 +91,39 @@ class TruncatedResponseSalvagerTest {
         "overall_assessment":"solid","pr_purpose":"adds things","description_gaps":[]},\
         "previous_findings_status":[{"id":7,"status":"resol""";
 
+    var summary = salvager.salvageSummary(body);
+
+    assertNotNull(summary);
+    assertEquals(2, summary.totalFindings());
+    assertEquals("solid", summary.overallAssessment());
+  }
+
+  @Test
+  void theReviewCallSalvageSkipsASummaryObjectWrittenAgainstItsContract() {
+    // #664: the review call's contract is findings and statuses only. A summary object the model
+    // wrote anyway is not part of what the review salvage returns, and it does not stop the pass
+    // from reaching the statuses after it.
+    var body =
+        "{\"findings\":["
+            + finding("F1")
+            + "],\"summary\":{\"total_findings\":9,\"overall_assessment\":\"x\"},"
+            + "\"previous_findings_status\":[{\"id\":7,\"status\":\"resolved\",\"note\":\"ok\"},"
+            + "{\"id\":8,\"sta";
+
     var salvaged = salvager.salvage(body);
 
-    assertNotNull(salvaged.summary());
-    assertEquals(2, salvaged.summary().totalFindings());
-    assertEquals("solid", salvaged.summary().overallAssessment());
-    assertTrue(salvaged.previousFindingsStatus().isEmpty());
-    assertFalse(salvaged.hasFindingsOrStatuses());
+    assertEquals(1, salvaged.findings().size());
+    assertEquals(1, salvaged.previousFindingsStatus().size());
+    assertEquals(7, salvaged.previousFindingsStatus().get(0).id());
+  }
+
+  @Test
+  void theSummarySalvageReturnsNullWhenTheSummaryObjectWasCut() {
+    assertNull(
+        salvager.salvageSummary("{\"findings\":[],\"summary\":{\"total_findings\":2,\"overall"));
+    assertNull(salvager.salvageSummary(null));
+    // A summary field that is not an object does not map onto the summary schema.
+    assertNull(salvager.salvageSummary("{\"summary\":\"looks fine\",\"findings\":[]}"));
   }
 
   @Test
@@ -106,7 +131,6 @@ class TruncatedResponseSalvagerTest {
     var salvaged = salvager.salvage("{\"findings\":[{\"risk\":\"high\",\"confidence\":\"hi");
 
     assertFalse(salvaged.hasFindingsOrStatuses());
-    assertNull(salvaged.summary());
   }
 
   @Test

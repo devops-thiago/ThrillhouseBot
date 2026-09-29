@@ -122,10 +122,14 @@ public class FindingDeduplicator {
     return (double) intersection.size() / Math.min(tokensA.size(), tokensB.size());
   }
 
+  /**
+   * Title and description as the overlap reads them. The unverified note a fail-open round appends
+   * to every finding it keeps (#885) is left out: it is shared verbatim, so it would read as common
+   * substance between findings that have none.
+   */
   private static String combinedText(ReviewResponse.Finding f) {
-    return (f.title() == null ? "" : f.title())
-        + " "
-        + (f.description() == null ? "" : f.description());
+    var description = FindingVerificationService.withoutUnverifiedNote(f.description());
+    return (f.title() == null ? "" : f.title()) + " " + (description == null ? "" : description);
   }
 
   /** Token-overlap similarity of normalized titles (Jaccard index), 0.0 when either is blank. */
