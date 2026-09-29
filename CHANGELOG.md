@@ -6,7 +6,7 @@ All notable changes to ThrillhouseBot.
 
 ### Changed
 
-- **The summary omits the Description vs. Implementation section when the check found no mismatch** (#867): the clean state's heading and "No mismatch found" line appeared on most reviews and pushed the findings down. A summary that came back means the check ran, and a review with no summary discloses that in its degradation note, so an absent section now means the description matched. Listed gaps and the collapsed "reported as a finding below" state render as before
+- **The summary omits the Description vs. Implementation section when the check found no mismatch** (#867): the clean state's heading and "No mismatch found" line appeared on most reviews and pushed the findings down. A summary that came back means the check ran, and a counts-only summary (no model prose) is visibly different, so an absent section on a summary with model prose means the description matched. Listed gaps and the collapsed "reported as a finding below" state render as before
 
 ## [0.6.9] — 2026-09-21
 

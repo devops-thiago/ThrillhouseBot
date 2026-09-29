@@ -462,12 +462,13 @@ public class PrSummaryGenerator {
    * <p>#637 made the clean state explicit because an absent section could mean either "checked,
    * matched" or "never checked". That ambiguity no longer needs a line on every clean review: the
    * check is part of the summary call, so a summary that came back at all means it ran. The only
-   * state in which it did not is {@code aiSummary == null}, the counts-only shape, and the review
-   * discloses how it got there — a summary degradation banner (cut at the length cap, skipped at
-   * the token ceiling, failed its retries) or the response-cut coverage note of a salvaged
-   * single-call review. So a reader tells the two apart from the rest of the review rather than
-   * from this section: no degradation disclosure means the check ran, and no section then means it
-   * matched. The README states that rule once instead of every clean review restating it.
+   * state in which it did not is {@code aiSummary == null}, the counts-only shape: no "What this PR
+   * does" paragraph, and every walkthrough row reading "no model summary". That shape is visible on
+   * its own, and the degraded paths into it also say why — a summary degradation banner (cut at the
+   * length cap, skipped at the token ceiling, failed its retries) or the response-cut coverage note
+   * of a salvaged single-call review. So a reader tells the two apart from the rest of the summary
+   * rather than from this section: model prose present means the check ran, and no section then
+   * means it matched. The README states that rule once instead of every clean review restating it.
    *
    * <p>A PR with an empty body also lands in the omitted state, since the model reports no gaps for
    * a description it never received and the renderer cannot tell the two apart from the response
