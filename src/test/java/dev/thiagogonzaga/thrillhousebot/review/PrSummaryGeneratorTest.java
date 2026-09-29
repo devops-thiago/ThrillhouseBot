@@ -381,7 +381,7 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
-  void shouldOmitPurposeSectionWhenAbsentAndStillDiscloseTheGapCheck() {
+  void shouldOmitPurposeAndGapSectionsWhenTheSummaryReportsNeither() {
     var blankSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", " ", List.of());
     var nullPurposeSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, null);
     var blankGapsSummary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", null, List.of(" ", ""));
@@ -389,16 +389,16 @@ class PrSummaryGeneratorTest {
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
 
-    // A summary came back and reported nothing to flag: the section says so rather than vanishing.
+    // A summary came back and reported nothing to flag: the check ran and matched, so the section
+    // is omitted rather than restating a clean result on every review (#867).
     for (var summary :
         List.of(
             generator.generate(1, 0, 0, List.of(), blankSummary, result),
             generator.generate(1, 0, 0, List.of(), nullPurposeSummary, result),
             generator.generate(1, 0, 0, List.of(), blankGapsSummary, result))) {
       assertFalse(summary.contains("What this PR does"), summary);
-      assertTrue(
-          summary.contains("No mismatch found between the PR description and the change."),
-          summary);
+      assertFalse(summary.contains("Description vs. Implementation"), summary);
+      assertFalse(summary.contains("No mismatch found"), summary);
     }
   }
 
@@ -1764,7 +1764,7 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
-  void descriptionGapsSectionStatesTheCheckFoundNothingWhenTheModelReportedNoGap() {
+  void descriptionGapsSectionIsOmittedWhenTheModelReportedNoGap() {
     var aiSummary =
         new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "Adds a cache wrapper.", List.of());
     var result =
@@ -1773,11 +1773,12 @@ class PrSummaryGeneratorTest {
 
     var summary = generator.generate(1, 10, 0, List.of(), aiSummary, result);
 
-    // A clean result is not a warning, so the heading drops the ⚠️ the mismatch states carry.
-    assertTrue(summary.contains("### Description vs. Implementation"), summary);
-    assertFalse(summary.contains("### ⚠️ Description vs. Implementation"), summary);
-    assertTrue(
-        summary.contains("No mismatch found between the PR description and the change."), summary);
+    // The summary came back, so the check ran; with no mismatch there is nothing to say, and the
+    // purpose paragraph moves straight on to the next section (#867).
+    assertTrue(summary.contains("Adds a cache wrapper."), summary);
+    assertFalse(summary.contains("Description vs. Implementation"), summary);
+    assertFalse(summary.contains("No mismatch found"), summary);
+    assertTrue(summary.contains("Adds a cache wrapper.\n\n### Changes Overview"), summary);
   }
 
   @Test
