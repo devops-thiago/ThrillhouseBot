@@ -2071,7 +2071,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void aNotifierFailureAfterThePostDoesNotFailTheReview() {
+    void aRefusedNotificationAfterThePostDoesNotFailTheReview() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -2099,9 +2099,25 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        doThrow(new IllegalStateException("notifier broke"))
-            .when(notifier)
-            .reviewCompleted(any(), anyString(), any());
+        // A real, enabled notifier whose executor refuses the delivery — the failure it meets while
+        // the process shuts down — so the path under test is one production can actually take.
+        var notifications = mock(ThrillhouseConfig.NotificationsConfig.class);
+        var webhook = mock(ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig.class);
+        when(config.notifications()).thenReturn(notifications);
+        when(notifications.webhook()).thenReturn(webhook);
+        when(webhook.url()).thenReturn(java.util.Optional.of("https://hooks.example/secret"));
+        when(webhook.format()).thenReturn("json");
+        when(webhook.secret()).thenReturn(java.util.Optional.empty());
+        when(webhook.events()).thenReturn(List.of("completed", "failed"));
+        when(webhook.timeout()).thenReturn(Duration.ofSeconds(10));
+        when(webhook.maxAttempts()).thenReturn(3);
+        var refusing = mock(ExecutorService.class);
+        doThrow(new java.util.concurrent.RejectedExecutionException("shutting down"))
+            .when(refusing)
+            .execute(any());
+        notifier =
+            new ReviewNotifier(config, java.net.http.HttpClient.newHttpClient(), refusing, "test");
+        orchestrator = newOrchestrator();
 
         var surfaced =
             orchestrator.review(
@@ -2120,7 +2136,8 @@ class ReviewOrchestratorTest {
         assertTrue(surfaced);
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        verify(notifier, never()).reviewFailed(any(), anyString(), any());
+        // The notification was attempted and refused, and the review stayed completed.
+        verify(refusing).execute(any());
       }
     }
 
