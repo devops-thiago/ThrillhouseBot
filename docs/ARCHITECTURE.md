@@ -161,9 +161,9 @@ sequenceDiagram
     alt AI fails
         Note over TB: Same sanitized error path as first review
     else AI succeeds
+        TB->>GH: PATCH comment: PR summary, edited in place (POST a new one if it was deleted or the edit fails)
         TB->>GH: POST PR review (suggestions for unresolved + new issues)
         TB->>GH: PATCH check-run → conclusion based on risk
-        Note over TB: No summary comment on follow-up (only on first run)
     end
 ```
 

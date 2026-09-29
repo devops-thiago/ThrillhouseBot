@@ -573,11 +573,12 @@ public class ReviewOrchestrator {
   }
 
   /**
-   * Posts the PR summary comment, swallowing any failure: it is first-review enrichment, not the
-   * review itself, so a transient failure here must not abort before {@code postReview} and surface
-   * a hard FAILED check for a review that would otherwise post.
+   * Posts or edits the PR summary comment, swallowing any failure: it is enrichment, not the review
+   * itself, so a transient failure here must not abort before {@code postReview} and surface a hard
+   * FAILED check for a review that would otherwise post.
    *
-   * @return {@code true} when the summary comment was actually created — {@code false} on a skip or
+   * @return {@code true} when the summary comment stands in for the round's outcome (see {@link
+   *     ReviewPublisher#publishSummary}) — {@code false} on a skip, an ordinary follow-up edit, or
    *     a swallowed failure, so the summary-only review skip never fires without a summary on the
    *     PR.
    */

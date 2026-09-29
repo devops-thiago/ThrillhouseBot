@@ -47,7 +47,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Every finding can be closed by a maintainer: reply on its review thread, or — for one raised below the inline-posting bar, which has no thread — comment `@thrillhousebot resolved <path>:<line> — <title>` on the PR
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
-- A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
+- One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head (inline findings and the follow-up delta comment stay per round)
 - A Description vs. Implementation section in the summary when the PR description and the change disagree. It is omitted when they match. The check is part of the model summary, so a summary that carries model prose ("What this PR does", per-file walkthrough summaries) and no such section means the check ran and found no mismatch; a counts-only summary means it did not run, and a degraded one says why
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
@@ -98,7 +98,7 @@ not a reaction.
 |---|---|---|
 | `/help` | List the available commands | anyone |
 | `/review` | Run (or re-run) a full review of the PR | write |
-| `/summary` | Post the PR summary if it isn't already on the PR — regenerates it if the comment was deleted, otherwise no-op | write |
+| `/summary` | Post the PR summary if it isn't already on the PR — regenerates it if the comment was deleted, otherwise no-op (the next review round also re-posts a deleted summary) | write |
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
@@ -321,7 +321,7 @@ will change per provider:
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_PATCH_COVERAGE_ENABLED` | Feed patch coverage into the review context: the added lines the repository's own coverage report records as never executed (see [Repository configuration](#repository-configuration)). Only takes effect for a repository that names its coverage artifact in `.github/thrillhousebot.yml` | `false` |
-| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. Only the first review posts the full summary; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
+| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. The full summary is a single comment the bot edits in place each round, so this is the per-round record of what moved; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Changed lines (additions + deletions) at or above which the nudge applies; either dimension triggers it on its own. `0` switches this dimension off — with both at `0` the nudge never fires | `1000` |
