@@ -1157,6 +1157,23 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void shouldDetectASummaryByItsMarkerEvenWhenTheHeadingIsGone() {
+      // #868: the marker is what later rounds find the comment by; it is enough on its own, so a
+      // summary whose heading line was edited away is still recognized and edited, not duplicated.
+      stubComments(comment(PrSummaryGenerator.SUMMARY_MARKER + "\n\nbody", "thrillhousebot[bot]"));
+
+      assertTrue(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
+    void shouldNotMatchTheMarkerMidLine() {
+      stubComments(
+          comment("see " + PrSummaryGenerator.SUMMARY_MARKER + " above", "thrillhousebot[bot]"));
+
+      assertFalse(loader.botSummaryCommentExists("auth", "owner", "repo", 1));
+    }
+
+    @Test
     void shouldTolerateLeadingWhitespaceBeforeTheHeading() {
       stubComments(
           comment("\n  " + PrSummaryGenerator.SUMMARY_HEADING + "\n", "thrillhousebot[bot]"));
