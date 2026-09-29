@@ -156,11 +156,12 @@ public class TruncatedResponseSalvager {
    * to {@code handler}, and end quietly at the cut. Does nothing when there is nothing to work with
    * — no body, an oversized one, or one that does not open a JSON object.
    *
-   * <p>The pass starts at the object that opens on one of {@code rootKeys} ({@link
-   * ReviewResponseParser#extractJson(String, List)}), not at the body's first bracket. A cut body
-   * is the longest and most prose-heavy kind there is, and a {@code [LOW]} tag in its deliberation
-   * once started the pass 252,138 characters ahead of a complete findings array, which then
-   * salvaged nothing (#894).
+   * <p>The pass starts at the answer {@link ReviewResponseParser#extractJson(String, List)} anchors
+   * on — the earliest object from which the rest of the body reads as JSON documents to its end and
+   * whose first document opens on, or holds, one of {@code rootKeys} — not at the body's first
+   * bracket. A cut body is the longest and most prose-heavy kind there is, and a {@code [LOW]} tag
+   * in its deliberation once started the pass 252,138 characters ahead of a complete findings
+   * array, which then salvaged nothing (#894).
    */
   private void scan(String partialBody, List<String> rootKeys, FieldHandler handler) {
     if (partialBody == null

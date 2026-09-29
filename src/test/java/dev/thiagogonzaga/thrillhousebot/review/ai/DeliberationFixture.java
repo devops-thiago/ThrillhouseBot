@@ -29,10 +29,12 @@ public final class DeliberationFixture {
   public static final int PRODUCTION_DELIBERATION_CHARS = 252_380;
 
   private static final String OPENING =
-      "Let me work through this pull request file by file before writing the answer. The change"
-          + " rewires how image pulls report progress, so the integration tests, the registry"
-          + " client and the progress reporter all move together; I will check each finding"
-          + " against the diff.\n\n";
+      """
+      Let me work through this pull request file by file before writing the answer. The change \
+      rewires how image pulls report progress, so the integration tests, the registry client and \
+      the progress reporter all move together; I will check each finding against the diff.
+
+      """;
 
   private static final String ROUND =
       """

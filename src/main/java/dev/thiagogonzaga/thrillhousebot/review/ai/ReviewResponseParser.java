@@ -29,7 +29,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
-import java.nio.CharBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -38,6 +37,7 @@ import java.util.Set;
 import java.util.StringJoiner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 @ApplicationScoped
 public class ReviewResponseParser {
@@ -225,16 +225,30 @@ public class ReviewResponseParser {
    * is; prose with no brace after it is discarded, and the discard is logged with its size.
    */
   private static int nextDocumentStart(String json, int from) {
-    return nextDocumentStart(json, from, true);
+    var next = scanForNextDocument(json, from);
+    if (next.proseFrom() >= 0) {
+      Log.warnf(
+          "Review response continued past its last JSON document with %d characters that hold"
+              + " no further document; discarded them",
+          json.length() - next.proseFrom());
+    }
+    return next.start();
   }
 
-  /** {@link #nextDocumentStart(String, int)}, logging the discard only when {@code log} is set. */
-  private static int nextDocumentStart(String json, int from, boolean log) {
+  /**
+   * Where a scan for a further document stopped: the next document's opening brace, or -1 with
+   * where the brace-free prose that ended the body began (-1 when nothing but whitespace and fence
+   * markers remained).
+   */
+  private record NextDocument(int start, int proseFrom) {}
+
+  /** {@link #nextDocumentStart(String, int)} without the log line, for the answer probe. */
+  private static NextDocument scanForNextDocument(String json, int from) {
     var at = from;
     while (at < json.length()) {
       var c = json.charAt(at);
       if (c == '{') {
-        return at;
+        return new NextDocument(at, -1);
       }
       if (json.startsWith("```", at)) {
         // The marker and its language tag only — a document opened on the same line still counts.
@@ -247,19 +261,12 @@ public class ReviewResponseParser {
       } else {
         var brace = json.indexOf('{', at);
         if (brace < 0) {
-          if (!log) {
-            return -1;
-          }
-          Log.warnf(
-              "Review response continued past its last JSON document with %d characters that hold"
-                  + " no further document; discarded them",
-              json.length() - at);
-          return -1;
+          return new NextDocument(-1, at);
         }
         at = brace;
       }
     }
-    return -1;
+    return new NextDocument(-1, -1);
   }
 
   /**
@@ -717,7 +724,8 @@ public class ReviewResponseParser {
   }
 
   /**
-   * The root keys of a review response: an object that opens on one of them is the answer. Every
+   * The root keys of a review response. The answer's first document opens on one of them or holds
+   * an object that does ({@link #extractJson(String, List)} says how the answer is chosen); every
    * batch and summary response carries at least one, and the shapes it is up against — prose, a
    * severity tag, a quoted Swift or diff excerpt — carry none.
    */
@@ -731,10 +739,6 @@ public class ReviewResponseParser {
 
   /** What a probe finds when the document it reads does not parse. */
   private static final int BROKEN = -2;
-
-  /** The start of a {@code true}, {@code false} or {@code null} literal, or nothing at all. */
-  private static final Pattern LITERAL_PREFIX =
-      Pattern.compile("(?:t(?:r(?:ue?)?)?|f(?:a(?:l(?:se?)?)?)?|n(?:u(?:ll?)?)?)?");
 
   /** Where a JSON object with at least one key may open: a brace, whitespace, then a quote. */
   private static final Pattern OBJECT_START = Pattern.compile("\\{\\s*\"");
@@ -860,16 +864,13 @@ public class ReviewResponseParser {
         // Cut inside this document: the run reached the end of the body.
         return new Probe(firstEnd >= 0 || holdsRootKey(rootKey, start, text.length()), firstEnd);
       }
-      if (end == BROKEN) {
+      if (firstEnd < 0 && end != BROKEN) {
+        firstEnd = end;
+      }
+      if (end == BROKEN || !holdsRootKey(rootKey, start, firstEnd)) {
         break;
       }
-      if (firstEnd < 0) {
-        firstEnd = end;
-        if (!holdsRootKey(rootKey, start, end)) {
-          break;
-        }
-      }
-      at = nextDocumentStart(text, end, false);
+      at = scanForNextDocument(text, end).start();
       if (at < 0) {
         return new Probe(true, firstEnd);
       }
@@ -907,7 +908,8 @@ public class ReviewResponseParser {
       return false;
     }
     var at = start + (int) parseError.getLocation().getCharOffset();
-    return LITERAL_PREFIX.matcher(CharBuffer.wrap(chars, at, chars.length - at)).matches();
+    var rest = new String(chars, at, chars.length - at);
+    return Stream.of("true", "false", "null").anyMatch(literal -> literal.startsWith(rest));
   }
 
   /** Whether an object opening on a root key starts within {@code [from, to)}. */

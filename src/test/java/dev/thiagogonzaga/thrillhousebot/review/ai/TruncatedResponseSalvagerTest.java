@@ -372,9 +372,11 @@ class TruncatedResponseSalvagerTest {
   void salvagesANamedArrayWhoseObjectFollowsBracketedProse() {
     // The verifier's lane anchors on its own field the same way.
     var body =
-        "[HIGH] finding 1 looks wrong; {see} below.\n```json\n{\"verdicts\":["
-            + "{\"id\":1,\"verdict\":\"rejected\",\"risk\":null,\"confidence\":null,\"reason\":\"fp\"},"
-            + "{\"id\":2,\"verd";
+        """
+        [HIGH] finding 1 looks wrong; {see} below.
+        ```json
+        {"verdicts":[{"id":1,"verdict":"rejected","risk":null,"confidence":null,"reason":"fp"},\
+        {"id":2,"verd""";
 
     var verdicts = salvager.salvageArray(body, "verdicts", VerificationResponse.Verdict.class);
 
