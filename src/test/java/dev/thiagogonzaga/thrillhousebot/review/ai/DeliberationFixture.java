@@ -72,6 +72,18 @@ public final class DeliberationFixture {
   private DeliberationFixture() {}
 
   /**
+   * Deliberation that quotes the previous round's answer back as contract-shaped JSON, fenced, the
+   * way a model recaps what it raised before — with the usual deliberation before and after it.
+   */
+  public static String deliberationQuotingAPreviousAnswer(int minChars, String previousAnswer) {
+    return deliberation(minChars / 2)
+        + "Round 1 raised these, which I still hold to:\n\n```json\n"
+        + previousAnswer
+        + "\n```\n\n"
+        + deliberation(minChars / 2);
+  }
+
+  /**
    * Deliberation of at least {@code minChars} characters, opening the way the production one did.
    */
   public static String deliberation(int minChars) {

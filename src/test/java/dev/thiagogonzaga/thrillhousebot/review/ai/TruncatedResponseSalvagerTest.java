@@ -381,4 +381,40 @@ class TruncatedResponseSalvagerTest {
     assertEquals(1, verdicts.size());
     assertEquals("rejected", verdicts.get(0).verdict());
   }
+
+  @Test
+  void salvagesACutRootThatOpensOnAnotherKeyAndHoldsANestedSummary() {
+    // The root opens on a key the contract does not name and holds an object that opens on
+    // "summary". Cut, the root never closes, and it must still be the object the pass reads —
+    // anchoring on the nested summary would leave the findings array unreachable.
+    var body =
+        "[LOW] a {note} first.\n{\"analysis\": {\"summary\": {\"pr_purpose\": \"x\"}},"
+            + " \"findings\": ["
+            + finding("F1")
+            + ","
+            + finding("F2")
+            + ",{\"risk\":\"lo";
+
+    var salvaged = salvager.salvage(body);
+
+    assertEquals(
+        java.util.List.of("F1", "F2"),
+        salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
+  }
+
+  @Test
+  void doesNotSalvageAPreviousRoundsAnswerQuotedInTheDeliberation() {
+    var previous = "{\"findings\":[" + finding("STALE") + "]}";
+    var body =
+        DeliberationFixture.deliberationQuotingAPreviousAnswer(40_000, previous)
+            + "```json\n{\"findings\":["
+            + finding("F1")
+            + ",{\"risk\":\"hi";
+
+    var salvaged = salvager.salvage(body);
+
+    assertEquals(
+        java.util.List.of("F1"),
+        salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
+  }
 }

@@ -29,11 +29,14 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
+import java.nio.CharBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.StringJoiner;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @ApplicationScoped
@@ -222,6 +225,11 @@ public class ReviewResponseParser {
    * is; prose with no brace after it is discarded, and the discard is logged with its size.
    */
   private static int nextDocumentStart(String json, int from) {
+    return nextDocumentStart(json, from, true);
+  }
+
+  /** {@link #nextDocumentStart(String, int)}, logging the discard only when {@code log} is set. */
+  private static int nextDocumentStart(String json, int from, boolean log) {
     var at = from;
     while (at < json.length()) {
       var c = json.charAt(at);
@@ -239,6 +247,9 @@ public class ReviewResponseParser {
       } else {
         var brace = json.indexOf('{', at);
         if (brace < 0) {
+          if (!log) {
+            return -1;
+          }
           Log.warnf(
               "Review response continued past its last JSON document with %d characters that hold"
                   + " no further document; discarded them",
@@ -715,8 +726,21 @@ public class ReviewResponseParser {
   /** A fence marker, its optional language tag, and nothing else but whitespace. */
   private static final Pattern FENCE_OPENER = Pattern.compile("```[\\w+-]*\\s*");
 
+  /** What a probe finds when the input ends inside the document it reads. */
+  private static final int CUT = -1;
+
+  /** What a probe finds when the document it reads does not parse. */
+  private static final int BROKEN = -2;
+
+  /** The start of a {@code true}, {@code false} or {@code null} literal, or nothing at all. */
+  private static final Pattern LITERAL_PREFIX =
+      Pattern.compile("(?:t(?:r(?:ue?)?)?|f(?:a(?:l(?:se?)?)?)?|n(?:u(?:ll?)?)?)?");
+
+  /** Where a JSON object with at least one key may open: a brace, whitespace, then a quote. */
+  private static final Pattern OBJECT_START = Pattern.compile("\\{\\s*\"");
+
   /**
-   * Parser features for the enclosure probe in {@link #extractJson(String, List)}: a raw control
+   * Parser features for the answer probe in {@link #extractJson(String, List)}: a raw control
    * character inside a string is escaped before the real parse, so the probe must not fail on one.
    */
   private static final JsonFactory PROBE_FACTORY =
@@ -731,41 +755,56 @@ public class ReviewResponseParser {
    * Deliberation quotes code, so a body with a brace or bracket ahead of its answer is the ordinary
    * case, not the odd one.
    *
-   * <p>The anchor is the first opening brace whose first key is one of {@code rootKeys} — {@code
-   * {"findings": ...}}, {@code {"summary": ...}} — with only whitespace in between. That identifies
-   * the answer by what it says rather than by where it sits or how it is wrapped, which a fence
-   * cannot: deliberation fences its excerpts too, sometimes as {@code ```json}; a split response
-   * (#805) spreads its documents over several fences, so the last fence would lose all but the
-   * final one; a cut response has no closing fence; and an answer may carry no fence at all. The
-   * first match rather than the last, because a split response's earlier documents are part of the
-   * answer, and {@link #readDocuments} walks on from the first to the rest.
+   * <p>The answer is what the model wrote last, so it is recognized as the tail of the body: the
+   * anchor is the earliest object from which the rest of the body reads as a run of JSON documents
+   * to its end — separated only by whitespace, fence markers and brace-free prose, as {@link
+   * #readDocuments} reads them, with trailing brace-free prose allowed and a cut inside the last
+   * document counting as its end — and whose first document opens on, or holds, one of {@code
+   * rootKeys}. That is decided by where the object sits and what it says, not by how it is wrapped,
+   * which a fence cannot decide: deliberation fences its excerpts too, sometimes as {@code
+   * ```json}; a split response (#805) spreads its answer over several fences, so the last fence
+   * would lose all but the final document; a cut response has no closing fence; and an answer may
+   * carry no fence at all. The earliest such object rather than the last, because a split
+   * response's earlier documents are part of the answer.
    *
-   * <p>A nested object can open on a root key too — a {@code file_summaries} entry written {@code
-   * {"summary": "...", "path": "..."}} under the summary lane's unwrapped root (#850), or {@code
-   * {"analysis": {"summary": {...}}, "findings": [...]}}. The first-bracket rule read the whole
-   * root in both, so when the body's first opening brace lies ahead of the anchor and parses as one
-   * complete object that encloses it, that object is kept. The probe reads at most that one object,
-   * and a failed read — prose, a cut body — just means the anchor stands.
+   * <p>What that rules out, and why each matters:
    *
-   * <p>When no object opens on a root key, this is {@link #extractJson(String)} unchanged, so the
-   * summary lane's unwrapped shape (#850) and every other tolerated form read as they always have.
-   * A response wrapped whole in one fence whose content opens on the anchor keeps having its
-   * closing fence cut as that method cuts it, so prose after the fence is not read as a further
-   * document.
+   * <ul>
+   *   <li>a {@code [LOW]} tag, a {@code {placeholder}} or a Swift closure in the prose: none of
+   *       them opens a JSON object;
+   *   <li>a fenced JSON excerpt of a file under review, or a contract-shaped recap of an earlier
+   *       round quoted in the deliberation: the prose after it holds braces that do not parse, so
+   *       the run breaks before the end — a recap taken for the answer would publish that round's
+   *       findings again;
+   *   <li>an object nested inside the answer's root, such as a {@code file_summaries} entry written
+   *       {@code {"summary": "...", "path": "..."}} under the summary lane's unwrapped root (#850),
+   *       or the {@code summary} under {@code {"analysis": {"summary": {...}}, "findings": [...]}}:
+   *       the root opens earlier and reads to the end itself, whole or cut, so it is chosen first.
+   * </ul>
+   *
+   * <p>When no object satisfies that — the answer is followed by prose holding a brace, say — the
+   * anchor is the first object opening on a root key, so {@link #readDocuments} still reads the
+   * answer and raises its usual error on what follows. When no object opens on a root key at all,
+   * this is {@link #extractJson(String)} unchanged, so every other tolerated form reads as it
+   * always has. A response wrapped whole in one fence whose content opens on the anchor keeps
+   * having its closing fence cut as that method cuts it.
+   *
+   * <p>Each document start is walked at most once across all candidates, and a candidate inside a
+   * complete object already probed is skipped, so the probe stays close to one pass over the body.
    */
   static String extractJson(String raw, List<String> rootKeys) {
     if (raw == null) {
       return "";
     }
     var trimmed = raw.strip();
-    var matcher = rootAnchorPattern(rootKeys).matcher(trimmed);
-    if (!matcher.find()) {
+    var rootKey = rootAnchorPattern(rootKeys).matcher(trimmed);
+    if (!rootKey.find()) {
       return extractJson(raw);
     }
-    var anchor = matcher.start();
-    var firstObject = trimmed.indexOf('{');
-    if (firstObject < anchor && closesPast(trimmed, firstObject, anchor)) {
-      anchor = firstObject;
+    var firstRootObject = rootKey.start();
+    var anchor = answerStart(trimmed, rootKey);
+    if (anchor < 0) {
+      anchor = firstRootObject;
     }
     var end = trimmed.length();
     var close = trimmed.lastIndexOf("```");
@@ -773,6 +812,107 @@ public class ReviewResponseParser {
       end = close;
     }
     return escapeControlCharsInStrings(trimmed.substring(anchor, end).strip());
+  }
+
+  /**
+   * The earliest object start from which {@code text} reads as the answer (see {@link
+   * #extractJson(String, List)}), or -1 when none does.
+   */
+  private static int answerStart(String text, Matcher rootKey) {
+    var dead = new HashSet<Integer>();
+    var chars = text.toCharArray();
+    var candidates = OBJECT_START.matcher(text);
+    var skipUntil = 0;
+    while (candidates.find()) {
+      var start = candidates.start();
+      if (start < skipUntil) {
+        continue;
+      }
+      var probe = probeAnswer(text, chars, start, rootKey, dead);
+      if (probe.answer()) {
+        return start;
+      }
+      skipUntil = Math.max(skipUntil, probe.firstEnd());
+    }
+    return -1;
+  }
+
+  /**
+   * What probing one candidate found: whether the body reads as the answer from it, and where its
+   * first document closed (-1 when it did not parse).
+   */
+  private record Probe(boolean answer, int firstEnd) {}
+
+  /**
+   * Walks the documents from {@code start} to the end of {@code text}. Every document start the
+   * walk passes through on a run that breaks is added to {@code dead}: any later candidate reaching
+   * one follows the same run and breaks the same way.
+   */
+  private static Probe probeAnswer(
+      String text, char[] chars, int start, Matcher rootKey, Set<Integer> dead) {
+    var visited = new ArrayList<Integer>();
+    var firstEnd = -1;
+    var at = start;
+    while (!dead.contains(at)) {
+      visited.add(at);
+      var end = documentEnd(chars, at);
+      if (end == CUT) {
+        // Cut inside this document: the run reached the end of the body.
+        return new Probe(firstEnd >= 0 || holdsRootKey(rootKey, start, text.length()), firstEnd);
+      }
+      if (end == BROKEN) {
+        break;
+      }
+      if (firstEnd < 0) {
+        firstEnd = end;
+        if (!holdsRootKey(rootKey, start, end)) {
+          break;
+        }
+      }
+      at = nextDocumentStart(text, end, false);
+      if (at < 0) {
+        return new Probe(true, firstEnd);
+      }
+    }
+    dead.addAll(visited);
+    return new Probe(false, firstEnd);
+  }
+
+  /**
+   * The index just past the JSON object opening at {@code start}; {@link #CUT} when the input ends
+   * inside it, {@link #BROKEN} when it does not parse.
+   */
+  private static int documentEnd(char[] chars, int start) {
+    try (var parser = PROBE_FACTORY.createParser(chars, start, chars.length - start)) {
+      parser.nextToken();
+      parser.skipChildren();
+      return start + (int) parser.currentLocation().getCharOffset();
+    } catch (IOException e) {
+      return endsAtTheCut(e, chars, start) ? CUT : BROKEN;
+    }
+  }
+
+  /**
+   * Whether a parse of the object at {@code start} failed only because the input ended. Jackson
+   * says so in more than one way: an end inside a string or before a closing brace raises {@link
+   * com.fasterxml.jackson.core.io.JsonEOFException} at the end of input, an end just after a comma
+   * raises a plain parse error there, and an end inside {@code true}, {@code false} or {@code null}
+   * raises one at the start of the partial literal. So the test is what lies past the error's
+   * location: nothing, or the start of a literal. Anything but a parse error with a location is not
+   * a cut; the probe's input is an in-memory array, so no other failure is expected.
+   */
+  static boolean endsAtTheCut(IOException failure, char[] chars, int start) {
+    if (!(failure instanceof JsonProcessingException parseError)
+        || parseError.getLocation() == null) {
+      return false;
+    }
+    var at = start + (int) parseError.getLocation().getCharOffset();
+    return LITERAL_PREFIX.matcher(CharBuffer.wrap(chars, at, chars.length - at)).matches();
+  }
+
+  /** Whether an object opening on a root key starts within {@code [from, to)}. */
+  private static boolean holdsRootKey(Matcher rootKey, int from, int to) {
+    return rootKey.region(from, to).find();
   }
 
   /**
@@ -790,21 +930,6 @@ public class ReviewResponseParser {
     var alternatives = new StringJoiner("|", "(?:", ")");
     rootKeys.forEach(key -> alternatives.add(Pattern.quote(key)));
     return Pattern.compile("\\{\\s*\"" + alternatives + "\"\\s*:");
-  }
-
-  /**
-   * Whether the object opening at {@code start} parses whole and closes past {@code position} —
-   * that is, whether it encloses it.
-   */
-  private static boolean closesPast(String text, int start, int position) {
-    try (var parser = PROBE_FACTORY.createParser(text.substring(start))) {
-      // The caller passes the index of a '{', so the first token opens an object.
-      parser.nextToken();
-      parser.skipChildren();
-      return start + parser.currentLocation().getCharOffset() > position;
-    } catch (IOException _) {
-      return false;
-    }
   }
 
   /**

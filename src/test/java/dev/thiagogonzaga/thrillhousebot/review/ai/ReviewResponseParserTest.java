@@ -1153,4 +1153,72 @@ class ReviewResponseParserTest {
     assertEquals("{\"findings\": []}\n```", ReviewResponseParser.extractJson(closed, KEYS));
     assertTrue(parser.parse(closed).findings().isEmpty());
   }
+
+  @Test
+  void shouldNotTakeAPreviousRoundsAnswerQuotedInTheDeliberationForTheAnswer() {
+    // A recap of an earlier round, written as contract-shaped JSON, opens on "findings" too. The
+    // deliberation after it holds braces that do not parse, so it is not the tail of the body, and
+    // its findings must not be published again beside this round's.
+    var previous =
+        "{\"findings\": [{\"risk\": \"high\", \"confidence\": \"high\", \"file\": \"Old.swift\","
+            + " \"line\": 9, \"title\": \"stale\", \"description\": \"from round 1\"}]}";
+    var raw =
+        DeliberationFixture.deliberationQuotingAPreviousAnswer(40_000, previous) + FENCED_ANSWER;
+
+    var response = parser.parse(raw);
+
+    assertEquals(
+        java.util.List.of("CreateIntegrationTests.swift", "Sources/Registry.swift"),
+        response.findings().stream().map(ReviewResponse.Finding::file).toList());
+  }
+
+  @Test
+  void shouldFallBackToTheFirstRootKeyedObjectWhenNoObjectReadsToTheEnd() {
+    // The answer is followed by a brace that does not parse, so nothing reads to the end: the
+    // anchor is the first root-keyed object and readDocuments raises its usual error. The second
+    // candidate joins the first one's broken run and is not walked again.
+    var raw = "Notes [x]. {\"findings\": []} {\"a\": 1} {bad}";
+    assertEquals(
+        "{\"findings\": []} {\"a\": 1} {bad}", ReviewResponseParser.extractJson(raw, KEYS));
+    assertThrows(IllegalArgumentException.class, () -> parser.parse(raw));
+    // A cut object that holds no root key is not the answer either.
+    var cutExcerpt = "[x] {\"findings\": []} {bad} {\"other\": [1,";
+    assertEquals(
+        "{\"findings\": []} {bad} {\"other\": [1,",
+        ReviewResponseParser.extractJson(cutExcerpt, KEYS));
+  }
+
+  @Test
+  void shouldAnchorOnTheFirstDocumentOfASplitAnswerCutInItsSecond() {
+    var raw = "[LOW] {x}\n{\"summary\": {\"pr_purpose\": \"p\"}}\n```json\n{\"findings\": [1,";
+
+    assertEquals(
+        "{\"summary\": {\"pr_purpose\": \"p\"}}\n```json\n{\"findings\": [1,",
+        ReviewResponseParser.extractJson(raw, KEYS));
+  }
+
+  @Test
+  void shouldTreatACutInsideALiteralOrAfterACommaAsTheEndOfTheAnswer() {
+    // Jackson reports these cuts as plain parse errors, not as an end of input: after a comma at
+    // the error's own location, inside a literal at the literal's start. Both are the answer cut,
+    // not a broken excerpt, so a recap earlier in the body must not be preferred to them.
+    var recap = "[x] {\"findings\": []} then {bad}\n";
+    for (var cut :
+        java.util.List.of(
+            "{\"findings\": [{\"risk\": nul",
+            "{\"findings\": [{\"ok\": tr",
+            "{\"findings\": [{\"ok\": fals",
+            "{\"findings\": [1,")) {
+      assertEquals(cut, ReviewResponseParser.extractJson(recap + cut, KEYS), cut);
+    }
+  }
+
+  @Test
+  void shouldNotTreatAFailureWithoutAParseLocationAsACut() {
+    var chars = "{\"a\"".toCharArray();
+    assertFalse(ReviewResponseParser.endsAtTheCut(new java.io.IOException("io"), chars, 0));
+    assertFalse(
+        ReviewResponseParser.endsAtTheCut(
+            new com.fasterxml.jackson.core.JsonParseException(null, "no location"), chars, 0));
+  }
 }
