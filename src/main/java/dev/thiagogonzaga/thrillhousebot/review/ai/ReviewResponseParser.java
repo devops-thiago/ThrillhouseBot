@@ -29,6 +29,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -793,8 +794,13 @@ public class ReviewResponseParser {
    * always has. A response wrapped whole in one fence whose content opens on the anchor keeps
    * having its closing fence cut as that method cuts it.
    *
-   * <p>Each document start is walked at most once across all candidates, and a candidate inside a
-   * complete object already probed is skipped, so the probe stays close to one pass over the body.
+   * <p>The probe's work is bounded by a small multiple of the body's length, not by the number of
+   * candidates times it. Candidates past the last root-keyed object are never probed, since none of
+   * them can hold one. A candidate inside a complete object already probed is skipped. A run that
+   * breaks marks every document start it walked, so no later candidate walks it again. A document
+   * that breaks marks every object still open where it broke, since each would break at the same
+   * place. What is left is read at most once more by the objects nested in a broken document that
+   * close before the break, and those do not overlap one another.
    */
   static String extractJson(String raw, List<String> rootKeys) {
     if (raw == null) {
@@ -805,10 +811,9 @@ public class ReviewResponseParser {
     if (!rootKey.find()) {
       return extractJson(raw);
     }
-    var firstRootObject = rootKey.start();
-    var anchor = answerStart(trimmed, rootKey);
+    var anchor = findAnswer(trimmed, rootKeys).start();
     if (anchor < 0) {
-      anchor = firstRootObject;
+      anchor = rootKey.start();
     }
     var end = trimmed.length();
     var close = trimmed.lastIndexOf("```");
@@ -820,25 +825,134 @@ public class ReviewResponseParser {
 
   /**
    * The earliest object start from which {@code text} reads as the answer (see {@link
-   * #extractJson(String, List)}), or -1 when none does.
+   * #extractJson(String, List)}), or -1 when none does, with how many characters the probe parsed
+   * to decide it.
    */
-  private static int answerStart(String text, Matcher rootKey) {
-    var dead = new HashSet<Integer>();
-    var chars = text.toCharArray();
-    var candidates = OBJECT_START.matcher(text);
-    var skipUntil = 0;
-    while (candidates.find()) {
-      var start = candidates.start();
-      if (start < skipUntil) {
-        continue;
-      }
-      var probe = probeAnswer(text, chars, start, rootKey, dead);
-      if (probe.answer()) {
-        return start;
-      }
-      skipUntil = Math.max(skipUntil, probe.firstEnd());
+  record AnswerSearch(int start, long charsParsed) {}
+
+  /** Runs the answer probe over {@code text}; see {@link #extractJson(String, List)}. */
+  static AnswerSearch findAnswer(String text, List<String> rootKeys) {
+    return new AnswerProbe(text, rootAnchorPattern(rootKeys).matcher(text)).find();
+  }
+
+  /** One answer search over one body: the candidates, the runs already known to break, the work. */
+  private static final class AnswerProbe {
+    private final String text;
+    private final char[] chars;
+    private final Matcher rootKey;
+    private final Set<Integer> dead = new HashSet<>();
+    private long charsParsed;
+
+    AnswerProbe(String text, Matcher rootKey) {
+      this.text = text;
+      this.chars = text.toCharArray();
+      this.rootKey = rootKey;
     }
-    return -1;
+
+    AnswerSearch find() {
+      // A candidate past the last root-keyed object can hold none, so it is never the answer.
+      var lastRootObject = -1;
+      while (rootKey.find()) {
+        lastRootObject = rootKey.start();
+      }
+      var candidates = OBJECT_START.matcher(text);
+      var skipUntil = 0;
+      while (candidates.find() && candidates.start() <= lastRootObject) {
+        var start = candidates.start();
+        if (start >= skipUntil) {
+          var probe = probe(start);
+          if (probe.answer()) {
+            return new AnswerSearch(start, charsParsed);
+          }
+          skipUntil = Math.max(skipUntil, probe.firstEnd());
+        }
+      }
+      return new AnswerSearch(-1, charsParsed);
+    }
+
+    /**
+     * Walks the documents from {@code start} to the end of the body. Every document start the walk
+     * passes through on a run that breaks is added to {@link #dead}: any later candidate reaching
+     * one follows the same run and breaks the same way.
+     */
+    private Probe probe(int start) {
+      var visited = new ArrayList<Integer>();
+      var firstEnd = -1;
+      var at = start;
+      while (!dead.contains(at)) {
+        visited.add(at);
+        var end = documentEnd(at);
+        if (end == CUT) {
+          // Cut inside this document: the run reached the end of the body, and a root-keyed object
+          // lies at or past every candidate find() probes, so it holds one.
+          return new Probe(true, firstEnd);
+        }
+        if (firstEnd < 0 && end != BROKEN) {
+          firstEnd = end;
+        }
+        if (end == BROKEN || !holdsRootKey(rootKey, start, firstEnd)) {
+          break;
+        }
+        at = scanForNextDocument(text, end).start();
+        if (at < 0) {
+          return new Probe(true, firstEnd);
+        }
+      }
+      dead.addAll(visited);
+      return new Probe(false, firstEnd);
+    }
+
+    /**
+     * The index just past the JSON object opening at {@code start}; {@link #CUT} when the input
+     * ends inside it, {@link #BROKEN} when it does not parse. A break also marks every object still
+     * open where it happened as dead: each of them reads the same characters in the same state up
+     * to that point, so a probe from it would break there too, and without the mark each nested
+     * level of a large unclosed excerpt would be read again.
+     */
+    private int documentEnd(int start) {
+      try (var parser = PROBE_FACTORY.createParser(chars, start, chars.length - start)) {
+        parser.nextToken();
+        parser.skipChildren();
+        var end = start + (int) parser.currentLocation().getCharOffset();
+        charsParsed += end - start;
+        return end;
+      } catch (IOException e) {
+        if (endsAtTheCut(e, chars, start)) {
+          charsParsed += chars.length - start;
+          return CUT;
+        }
+        var failedAt = failureOffset(e, start);
+        charsParsed += failedAt - start;
+        markObjectsOpenAt(start, failedAt);
+        return BROKEN;
+      }
+    }
+
+    /**
+     * Marks the objects open at {@code failedAt} in a parse that began at {@code start}. The text
+     * in between parsed as JSON, so tracking strings and brackets is enough to know which are open.
+     */
+    private void markObjectsOpenAt(int start, int failedAt) {
+      var open = new ArrayDeque<Integer>();
+      var inString = false;
+      var escaped = false;
+      for (var i = start; i < failedAt; i++) {
+        var c = chars[i];
+        if (escaped) {
+          escaped = false;
+        } else if (inString) {
+          escaped = c == '\\';
+          inString = c != '"';
+        } else if (c == '"') {
+          inString = true;
+        } else if (c == '{' || c == '[') {
+          open.push(i);
+        } else if (c == '}' || c == ']') {
+          open.pop();
+        }
+      }
+      open.stream().filter(i -> chars[i] == '{').forEach(dead::add);
+    }
   }
 
   /**
@@ -848,49 +962,14 @@ public class ReviewResponseParser {
   private record Probe(boolean answer, int firstEnd) {}
 
   /**
-   * Walks the documents from {@code start} to the end of {@code text}. Every document start the
-   * walk passes through on a run that breaks is added to {@code dead}: any later candidate reaching
-   * one follows the same run and breaks the same way.
+   * Where a failed parse that began at {@code start} stopped, as an index into the body; {@code
+   * start} itself when the failure carries no location, which only a non-parse failure lacks.
    */
-  private static Probe probeAnswer(
-      String text, char[] chars, int start, Matcher rootKey, Set<Integer> dead) {
-    var visited = new ArrayList<Integer>();
-    var firstEnd = -1;
-    var at = start;
-    while (!dead.contains(at)) {
-      visited.add(at);
-      var end = documentEnd(chars, at);
-      if (end == CUT) {
-        // Cut inside this document: the run reached the end of the body.
-        return new Probe(firstEnd >= 0 || holdsRootKey(rootKey, start, text.length()), firstEnd);
-      }
-      if (firstEnd < 0 && end != BROKEN) {
-        firstEnd = end;
-      }
-      if (end == BROKEN || !holdsRootKey(rootKey, start, firstEnd)) {
-        break;
-      }
-      at = scanForNextDocument(text, end).start();
-      if (at < 0) {
-        return new Probe(true, firstEnd);
-      }
+  static int failureOffset(IOException failure, int start) {
+    if (failure instanceof JsonProcessingException parseError && parseError.getLocation() != null) {
+      return start + (int) parseError.getLocation().getCharOffset();
     }
-    dead.addAll(visited);
-    return new Probe(false, firstEnd);
-  }
-
-  /**
-   * The index just past the JSON object opening at {@code start}; {@link #CUT} when the input ends
-   * inside it, {@link #BROKEN} when it does not parse.
-   */
-  private static int documentEnd(char[] chars, int start) {
-    try (var parser = PROBE_FACTORY.createParser(chars, start, chars.length - start)) {
-      parser.nextToken();
-      parser.skipChildren();
-      return start + (int) parser.currentLocation().getCharOffset();
-    } catch (IOException e) {
-      return endsAtTheCut(e, chars, start) ? CUT : BROKEN;
-    }
+    return start;
   }
 
   /**
@@ -907,7 +986,7 @@ public class ReviewResponseParser {
         || parseError.getLocation() == null) {
       return false;
     }
-    var at = start + (int) parseError.getLocation().getCharOffset();
+    var at = failureOffset(failure, start);
     var rest = new String(chars, at, chars.length - at);
     return Stream.of("true", "false", "null").anyMatch(literal -> literal.startsWith(rest));
   }

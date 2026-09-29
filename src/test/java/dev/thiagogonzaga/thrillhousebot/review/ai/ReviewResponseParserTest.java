@@ -1217,8 +1217,62 @@ class ReviewResponseParserTest {
   void shouldNotTreatAFailureWithoutAParseLocationAsACut() {
     var chars = "{\"a\"".toCharArray();
     assertFalse(ReviewResponseParser.endsAtTheCut(new java.io.IOException("io"), chars, 0));
+    assertEquals(7, ReviewResponseParser.failureOffset(new java.io.IOException("io"), 7));
+    assertEquals(
+        7,
+        ReviewResponseParser.failureOffset(
+            new com.fasterxml.jackson.core.JsonParseException(null, "no location"), 7));
     assertFalse(
         ReviewResponseParser.endsAtTheCut(
             new com.fasterxml.jackson.core.JsonParseException(null, "no location"), chars, 0));
+  }
+
+  /**
+   * An excerpt quoted in the deliberation that opens {@code depth} nested objects — each a
+   * candidate, each carrying a string with escaped quotes and a backslash and a closed array and
+   * object of its own — and then a long array, and never closes any of them.
+   */
+  private static String unclosedExcerpt(int depth, int arrayLength) {
+    return ("{\"name\": \"a \\\"quoted\\\" \\\\ name\", \"tags\": [\"x\"],"
+                + " \"meta\": {\"k\": 1}, \"layer\": ")
+            .repeat(depth)
+        + "{\"blobs\": ["
+        + "1, ".repeat(arrayLength);
+  }
+
+  @Test
+  void shouldFindTheAnswerPastALargeUnclosedExcerptWithBoundedProbeWork() {
+    // Every object of the excerpt is open where it breaks, at the fence that follows it. Each would
+    // break at the same place, and parsing each of the 200 levels to the break, as the probe did,
+    // is 200 times the excerpt's length; the probe must stay within a small multiple of the body.
+    var raw =
+        (DeliberationFixture.deliberation(20_000)
+                + "The manifest as the PR leaves it:\n```json\n"
+                + unclosedExcerpt(200, 5_000)
+                + "\n```\nThe excerpt above is cut off {sic}.\n"
+                + DeliberationFixture.deliberation(20_000)
+                + FENCED_ANSWER)
+            .strip();
+
+    var search = ReviewResponseParser.findAnswer(raw, KEYS);
+
+    assertEquals(raw.indexOf("{\"findings\": ["), search.start());
+    assertTrue(
+        search.charsParsed() <= 3L * raw.length(),
+        "parsed " + search.charsParsed() + " characters of a " + raw.length() + "-character body");
+    assertEquals(2, parser.parse(raw).findings().size());
+  }
+
+  @Test
+  void shouldNotProbeCandidatesPastTheLastRootKeyedObject() {
+    // A cut excerpt after the last root-keyed object runs to the end of the body; none of its
+    // objects can hold a root key, so none is probed rather than each being parsed to the end.
+    var raw = "[x] {\"findings\": []} {bad} " + unclosedExcerpt(200, 5_000);
+
+    var search = ReviewResponseParser.findAnswer(raw, KEYS);
+
+    assertEquals(-1, search.start());
+    assertTrue(search.charsParsed() < 100, "parsed " + search.charsParsed() + " characters");
+    assertTrue(ReviewResponseParser.extractJson(raw, KEYS).startsWith("{\"findings\": []} {bad}"));
   }
 }
