@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -134,6 +135,8 @@ class ReviewOrchestratorTest {
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+  @Mock private ReviewNotifier notifier;
 
   private ReviewOrchestrator orchestrator;
 
@@ -274,7 +277,8 @@ class ReviewOrchestratorTest {
         skipEmitter,
         carryover,
         ciHoldRegistry,
-        reviewExecutor);
+        reviewExecutor,
+        notifier);
   }
 
   private ReviewContextLoader newContextLoader() {
@@ -1722,6 +1726,13 @@ class ReviewOrchestratorTest {
                 argThat(
                     req ->
                         req.body().contains("ThrillhouseBot review could not" + " be completed")));
+        // #73: exactly one failure notification carrying the exception, and no completion.
+        verify(notifier)
+            .reviewFailed(
+                argThat(r -> r.prNumber() == 42),
+                anyString(),
+                argThat(e -> e.getMessage().contains("AI service unavailable")));
+        verifyNoMoreInteractions(notifier);
       }
     }
 
@@ -2010,6 +2021,9 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().contains("review could not be completed")));
+        // #73: the verdict never reached the PR, so the run is announced as failed, not completed.
+        verify(notifier).reviewFailed(any(), anyString(), any());
+        verifyNoMoreInteractions(notifier);
       }
     }
 
@@ -2063,6 +2077,80 @@ class ReviewOrchestratorTest {
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
         verify(broadcaster, times(1)).broadcast(any());
+        // #73: the verdict is on the PR, so a failed session write still announces a completion.
+        verify(notifier).reviewCompleted(any(), anyString(), any());
+        verifyNoMoreInteractions(notifier);
+      }
+    }
+
+    @Test
+    void aRefusedNotificationAfterThePostDoesNotFailTheReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        // A real, enabled notifier whose executor refuses the delivery — the failure it meets while
+        // the process shuts down — so the path under test is one production can actually take.
+        var notifications = mock(ThrillhouseConfig.NotificationsConfig.class);
+        var webhook = mock(ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig.class);
+        when(config.notifications()).thenReturn(notifications);
+        when(notifications.webhook()).thenReturn(webhook);
+        when(webhook.url()).thenReturn(java.util.Optional.of("https://hooks.example/secret"));
+        when(webhook.format()).thenReturn("json");
+        when(webhook.secret()).thenReturn(java.util.Optional.empty());
+        when(webhook.events()).thenReturn(List.of("completed", "failed"));
+        when(webhook.timeout()).thenReturn(Duration.ofSeconds(10));
+        when(webhook.maxAttempts()).thenReturn(3);
+        var refusing = mock(ExecutorService.class);
+        doThrow(new java.util.concurrent.RejectedExecutionException("shutting down"))
+            .when(refusing)
+            .execute(any());
+        notifier =
+            new ReviewNotifier(config, java.net.http.HttpClient.newHttpClient(), refusing, "test");
+        orchestrator = newOrchestrator();
+
+        var surfaced =
+            orchestrator.review(
+                new ReviewOrchestrator.ReviewRequest(
+                    "owner",
+                    "repo",
+                    42,
+                    "abcdefgh",
+                    "Test PR",
+                    "",
+                    "base1234567",
+                    "main",
+                    123L,
+                    false));
+
+        assertTrue(surfaced);
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
+        // The notification was attempted and refused, and the review stayed completed.
+        verify(refusing).execute(any());
       }
     }
 
@@ -2186,6 +2274,16 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(req -> req.body().contains("Everything's coming up Thrillhouse")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+        // #73: exactly one outcome notification, after the verdict is on the PR.
+        var inOrder = inOrder(reviewClient, notifier);
+        inOrder.verify(reviewClient).createReview(any(), any(), any(), any(), anyInt(), any());
+        inOrder
+            .verify(notifier)
+            .reviewCompleted(
+                argThat(r -> "abcdefgh".equals(r.commitSha())),
+                anyString(),
+                argThat(r -> r.reviewState() == ReviewState.APPROVE));
+        verifyNoMoreInteractions(notifier);
       }
     }
 
@@ -3414,6 +3512,9 @@ class ReviewOrchestratorTest {
         assertEquals("skipped", updateCaptor.getValue().conclusion());
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
         verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+        // #73: the result was discarded, so no outcome is announced; the run for the new head
+        // sends its own.
+        verifyNoInteractions(notifier);
       }
     }
 
@@ -6944,6 +7045,14 @@ class ReviewOrchestratorTest {
                 eq("repo"),
                 eq(1L),
                 argThat(update -> "neutral".equals(update.conclusion())));
+        // #73: a held verdict is announced once, now, flagged as held; the approval a later CI
+        // completion posts is not a second notification.
+        verify(notifier)
+            .reviewCompleted(
+                argThat(r -> r.prNumber() == 42),
+                eq(SESSION_URL),
+                argThat(ReviewResult::heldOnCiOnly));
+        verifyNoMoreInteractions(notifier);
       }
     }
 

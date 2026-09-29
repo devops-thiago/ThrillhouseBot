@@ -91,6 +91,14 @@ class StartupConfigValidatorTest {
     private Optional<Integer> conciseMaxOutputTokens = Optional.of(8192);
     private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
         new HashMap<>();
+    private ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig notificationWebhook =
+        disabledWebhook();
+
+    ConfigBuilder notificationWebhook(
+        ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig v) {
+      this.notificationWebhook = v;
+      return this;
+    }
 
     ConfigBuilder appId(String v) {
       this.appId = v;
@@ -221,9 +229,50 @@ class StartupConfigValidatorTest {
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
       lenient().when(ai.maxConcurrentCalls()).thenReturn(maxConcurrentCalls);
+      var notifications = mock(ThrillhouseConfig.NotificationsConfig.class);
+      lenient().when(config.notifications()).thenReturn(notifications);
+      lenient().when(notifications.webhook()).thenReturn(notificationWebhook);
       return new StartupConfigValidator(
           config, aiApiKey, new ActiveModelSettings(config, modelName), conciseMaxOutputTokens);
     }
+  }
+
+  /** The shipped outgoing-webhook configuration: no URL, so notifications are off. */
+  private static ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig disabledWebhook() {
+    var webhook = mock(ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig.class);
+    lenient().when(webhook.url()).thenReturn(Optional.empty());
+    return webhook;
+  }
+
+  /** An enabled outgoing webhook with valid shipped defaults for everything but the URL. */
+  private static ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig webhook(String url) {
+    var webhook = mock(ThrillhouseConfig.NotificationsConfig.OutgoingWebhookConfig.class);
+    lenient().when(webhook.url()).thenReturn(Optional.of(url));
+    lenient().when(webhook.format()).thenReturn("slack");
+    lenient().when(webhook.secret()).thenReturn(Optional.of("s3cret-signing-key"));
+    lenient().when(webhook.events()).thenReturn(List.of("completed", "failed"));
+    lenient().when(webhook.timeout()).thenReturn(java.time.Duration.ofSeconds(10));
+    lenient().when(webhook.maxAttempts()).thenReturn(3);
+    return webhook;
+  }
+
+  @Test
+  void passesWithAValidOutgoingWebhook() {
+    new ConfigBuilder()
+        .notificationWebhook(webhook("https://hooks.slack.com/services/T0/B0/XYZ"))
+        .build()
+        .validate();
+  }
+
+  @Test
+  void refusesAPlainHttpNotificationUrlWithoutQuotingIt() {
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder()
+                .notificationWebhook(webhook("http://hooks.example/secret-token-path"))
+                .build());
+    assertTrue(ex.getMessage().contains("NOTIFICATIONS_WEBHOOK_URL must be an https://"));
+    assertFalse(ex.getMessage().contains("secret-token-path"), ex.getMessage());
   }
 
   /** A per-model settings entry mock; every value defaults to absent unless stubbed by the test. */
