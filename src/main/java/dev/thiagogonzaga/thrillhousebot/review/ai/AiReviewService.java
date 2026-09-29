@@ -132,16 +132,16 @@ public class AiReviewService {
   }
 
   /**
-   * Final summary call of a large multi-call review: rolls the aggregated findings up into the
-   * PR-level summary object + previous_findings_status. Blocking, no token stream; the returned
-   * response carries the summary and previous-findings status (its findings list is empty). Runs on
-   * the {@code concise} named model — the response is one fixed-shape object, so it carries the
-   * concise cap rather than the batch review's response allowance. That binding is declared here as
-   * the call's {@link ModelLane} and travels to the truncation site, so a cut summary states {@code
-   * REVIEW_CONCISE_MAX_OUTPUT_TOKENS} from the outset instead of being raised with the active
-   * model's wording and re-marked afterwards (#581). The same lane selects {@link
-   * ReviewResponseParser#parseSummary}, which reads a response that omits the findings node or the
-   * summary object around its fields (#850).
+   * The summary call every review ends with, on both lanes (#664): rolls the verified findings up
+   * into the PR-level summary object. Blocking, no token stream; only the returned response's
+   * summary is used (its findings list is empty, and previous-finding statuses come from the review
+   * calls, which saw the diff). Runs on the {@code concise} named model — the response is one
+   * fixed-shape object, so it carries the concise cap rather than the batch review's response
+   * allowance. That binding is declared here as the call's {@link ModelLane} and travels to the
+   * truncation site, so a cut summary states {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} from the
+   * outset instead of being raised with the active model's wording and re-marked afterwards (#581).
+   * The same lane selects {@link ReviewResponseParser#parseSummary}, which reads a response that
+   * omits the findings node or the summary object around its fields (#850).
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
     return runWithRetries(
@@ -384,6 +384,11 @@ public class AiReviewService {
   /**
    * The prompt sections sent to the model for one review, pre-escaped for templating. The
    * instructions section arrives pre-rendered with its header and source attribution.
+   *
+   * <p>{@code repoInstructions} is the review call's trailing guidance; {@code summaryInstructions}
+   * is the summary call's (#664) — the label and diagram requests, which gate summary fields the
+   * review call no longer writes, plus the repository's own instructions. The two are assembled
+   * together so each call carries only the guidance its response acts on.
    */
   public record PromptInputs(
       String diff,
@@ -392,7 +397,32 @@ public class AiReviewService {
       String projectStack,
       String relatedTests,
       String previousFindings,
-      String repoInstructions) {}
+      String repoInstructions,
+      String summaryInstructions) {
+
+    /**
+     * Inputs with no summary-call guidance of their own: no label section, no diagram request, no
+     * repository instructions reach the summary call. For callers that only drive the review call.
+     */
+    public PromptInputs(
+        String diff,
+        String prContext,
+        String baseComparison,
+        String projectStack,
+        String relatedTests,
+        String previousFindings,
+        String repoInstructions) {
+      this(
+          diff,
+          prContext,
+          baseComparison,
+          projectStack,
+          relatedTests,
+          previousFindings,
+          repoInstructions,
+          "");
+    }
+  }
 
   /**
    * The prompt sections for the final summary call, pre-escaped for templating: the

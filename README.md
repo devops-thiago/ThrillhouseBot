@@ -52,6 +52,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
+- Optional outgoing notification when a review completes or fails — structured JSON or a Slack/Discord message, HMAC-signed, metadata only unless you opt in
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
 - Lets each repository add its own ignore globs in `.github/thrillhousebot.yml`, unioned with the deployment default, and scope extra review rules to a path glob
@@ -327,7 +328,7 @@ will change per provider:
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the fixed-shape/short AI calls — the final summary of a multi-call review, the finding verifier, and maintainer replies — which run on the `concise` named model so they don't share a cap sized for batch review output (see [Per-model AI settings](#per-model-ai-settings)). A summary cut at this cap is salvaged from the cut response or falls back to a counts-only summary, the findings are kept, and the posted review names this variable; set it empty to drop the cap and use the provider default | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (review or batch calls plus the final summary call every review ends with; at `1` a review that makes its review call has none left for the summary, so the summary is counts-only with a note saying so — a review whose every file exceeded the budget makes no review call and still gets its summary), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
 | `REVIEW_MAX_TOKENS_PER_REVIEW` | Ceiling on the tokens one review may consume across every AI call it makes — actual input+output as the provider reports them, counting retries and the final summary call, where `REVIEW_MAX_AI_CALLS` only counts planned calls. Once reached no further review call is made: remaining batches are disclosed by name as not reviewed (the verdict holds and the summary names the ceiling as the reason) and the summary degrades to a counts-only rendering that keeps the findings already paid for. `0` disables the ceiling. Review path only — the on-demand commands keep their own call cap | `0` |
 | `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests`, `/add-docs` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
@@ -348,14 +349,28 @@ will change per provider:
 | `HTTP_CONNECT_TIMEOUT` | Outbound HTTP connect timeout (GitHub API, OAuth) | `10s` |
 | `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
 | `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive interval in ms; `0` or negative disables it (and stale replay-buffer eviction) | `25000` |
+| `NOTIFICATIONS_WEBHOOK_URL` | Receiver of the outgoing review-outcome notification (see [Outgoing notifications](#outgoing-notifications)). Unset turns notifications off. Treated as a secret and never logged beyond its scheme, host and port; must be `https://` | _(unset — off)_ |
+| `NOTIFICATIONS_WEBHOOK_FORMAT` | Body format: `json` (structured payload), `slack` or `discord` (incoming-webhook chat message) | `json` |
+| `NOTIFICATIONS_WEBHOOK_SECRET` | HMAC-SHA256 key; when set, each request carries `X-Thrillhousebot-Signature-256: sha256=<hex>` over the raw body | _(unset — unsigned)_ |
+| `NOTIFICATIONS_WEBHOOK_EVENTS` | Comma-separated outcomes to send: `completed`, `failed` | `completed,failed` |
+| `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT` | Also send the PR title and each finding's severity, file, line and title. Off by default: only metadata leaves the process | `false` |
+| `NOTIFICATIONS_WEBHOOK_ALLOW_HTTP` | Accept a plain `http://` URL — local testing only | `false` |
+| `NOTIFICATIONS_WEBHOOK_TIMEOUT` | Per-attempt request timeout (at most `60s`) | `10s` |
+| `NOTIFICATIONS_WEBHOOK_MAX_ATTEMPTS` | Attempts per notification (1–5); a timeout, connection failure, `429` or `5xx` is retried with 1s/2s/4s/8s backoff, then the notification is dropped with a WARN | `3` |
 
 ### AI call budget
 
-A review that reports findings makes **two** model calls by default, not one:
-the review call itself plus a verification call that re-sends the diff and the
-candidate findings, so budget roughly **2× tokens** per flagged review. On
-large PRs under token-aware budgeting this becomes N batch review calls + N
-per-batch verification calls + one summary call. Set
+A review normally makes at least **two** model calls: the review call, which returns
+findings and previous-finding statuses only, and a summary call that writes the
+PR-level summary (purpose, description gaps, file walkthrough, labels, diagram)
+from the verified findings and the changed-file list. The summary call never
+carries the diff, so it is small next to the review call. A review that reports
+findings adds a verification call that re-sends the diff and the candidate
+findings, so budget roughly **2× tokens** per flagged review. At
+`REVIEW_MAX_AI_CALLS=1` the summary call is skipped after a review call, and a
+review whose every file exceeded the budget makes only the summary call. On large PRs
+under token-aware budgeting this becomes N batch review calls + N per-batch
+verification calls + the same one summary call. Set
 `REVIEW_VERIFIER_ENABLED=false` to skip only the AI verifier — cheaper, at the
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
@@ -722,6 +737,87 @@ Notes:
   `[0, 2]`, `top-p` in `(0, 1]`, penalties in `[-2, 2]`, token counts positive —
   a typo in any entry (even an inactive model's) fails startup with a message
   naming the key.
+### Outgoing notifications
+
+The bot can tell an external system when a review finishes, so a team can see
+outcomes in chat or feed them into a pipeline without watching the dashboard.
+It is off until `NOTIFICATIONS_WEBHOOK_URL` is set.
+
+**When it fires.** Once per review run, after the outcome is final:
+`review.completed` once the verdict is on the pull request, `review.failed`
+once a failed review has been reported on it (check run and failure comment).
+A run abandoned because the head moved while it reviewed sends nothing — its
+result was discarded, and the run for the new head sends its own. A verdict
+held on pending CI is sent once, when the review posts it, with
+`review.held_on_ci: true`; the approval posted later when CI turns green is not
+a second notification. Commands such as `/describe` or `/improve` send nothing.
+
+**What leaves the process.** With the default `json` format:
+
+```json
+{
+  "schema_version": 1,
+  "event": "review.completed",
+  "timestamp": "2026-09-29T12:00:00Z",
+  "bot": { "name": "thrillhousebot", "version": "0.7.0" },
+  "repository": "octo/repo",
+  "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
+  "session_url": "https://bot.example/session/…",
+  "review": {
+    "verdict": "REQUEST_CHANGES",
+    "check_conclusion": "failure",
+    "highest_risk": "HIGH",
+    "held_on_ci": false,
+    "partial_coverage": false,
+    "first_review": true,
+    "findings": { "total": 3, "critical": 0, "high": 1, "medium": 2, "low": 0 },
+    "previous_findings": { "resolved": 0, "unresolved": 0 }
+  }
+}
+```
+
+A `review.failed` payload carries `failure.category` instead of `review` — one
+of `ai_response_truncated`, `ai_context_window_exceeded`, `ai_timeout`,
+`token_spend_ceiling`, `ai_error`, `github_auth`, `publish_failed`,
+`github_api` or `internal`. The error message itself is never sent, since it
+can quote provider or GitHub responses. No code, diff text, finding
+description, suggested fix, summary or other model output is sent, and neither
+is the PR title. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
+`pull_request.title` and `review.finding_list` (up to 25 findings, most severe
+first, each with `severity`, `file`, `line` and `title`); finding descriptions
+and suggested code are never sent even then. `session_url` is built from
+`DASHBOARD_URL`.
+
+**Chat formats.** `slack` and `discord` send a one-message summary (verdict,
+counts, head commit, links to the PR and the dashboard session) to an
+incoming-webhook URL. With content opted in, the message also lists the PR
+title and up to five findings. PR and model text is escaped so it cannot
+mention anyone or inject links, and Discord messages disable mentions
+outright. One endpoint is supported; to reach several, point it at a relay.
+
+**Verifying requests.** Every request carries `X-Thrillhousebot-Event`
+(`review.completed` / `review.failed`) and `X-Thrillhousebot-Delivery` (the
+same id on every retry of one notification, for de-duplication). With
+`NOTIFICATIONS_WEBHOOK_SECRET` set it also carries
+`X-Thrillhousebot-Signature-256: sha256=<hex>`, the HMAC-SHA256 of the exact
+request body keyed by the secret, the scheme GitHub uses for
+`X-Hub-Signature-256`. Recompute it over the raw bytes and compare in
+constant time; check `timestamp` to refuse replays.
+
+**Delivery.** Sending never delays or fails a review: the body is posted from
+a background virtual thread with the per-attempt timeout above. A timeout,
+connection failure, `429` or `5xx` is retried with backoff up to
+`NOTIFICATIONS_WEBHOOK_MAX_ATTEMPTS`, then the notification is dropped with a
+WARN; any other status is final. Nothing is queued across a restart.
+
+**Security.** The URL is operator-configured and is the only place a
+notification goes. Redirects are not followed, so a receiver cannot bounce the
+payload and its signature elsewhere. `https://` is required unless
+`NOTIFICATIONS_WEBHOOK_ALLOW_HTTP=true`, and a URL with credentials before the
+host is refused at boot. Slack and Discord webhook URLs are credentials in
+their own right, so logs and boot errors name the receiver by scheme, host and
+port only and never print the secret. Point the URL only at a receiver you trust
+with the metadata above; the bot does not restrict which hosts it may reach.
 <!-- docs:configuration:end -->
 
 ## Dashboard
@@ -974,6 +1070,11 @@ sending it private code.
 Set `AI_API_KEY`, `GITHUB_PRIVATE_KEY`, and the webhook secret through your
 environment or a secret manager. Never commit them.
 
+The optional outgoing notification (off by default) sends review metadata to
+the one URL you configure; see [Outgoing notifications](#outgoing-notifications)
+for exactly which fields leave the process. Treat that URL, and
+`NOTIFICATIONS_WEBHOOK_SECRET`, like the other secrets.
+
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
@@ -982,7 +1083,8 @@ This is still an early-stage project; the current constraints are:
 
 - **GitHub only** — no GitLab or Bitbucket integration.
 - **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
-  split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
+  split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls (one call is kept for the
+  summary every review ends with), and files that still
   don't fit are disclosed by name instead of silently dropped. `/improve` batches the same
   way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call), as does
   `/generate-tests` (its per-batch test files are unioned locally) and `/add-docs` (its

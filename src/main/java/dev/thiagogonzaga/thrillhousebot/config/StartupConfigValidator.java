@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import dev.thiagogonzaga.thrillhousebot.notification.NotificationSettings;
 import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -124,6 +125,7 @@ public class StartupConfigValidator {
     validateReasoningEffort(problems, config.ai().reasoning());
     validateConciseResponseCap(problems);
     validateModelCallCeiling(problems, config.ai());
+    problems.addAll(NotificationSettings.problems(config.notifications().webhook()));
 
     if (!problems.isEmpty()) {
       throw new ConfigValidationException(formatMessage(problems));
@@ -132,6 +134,7 @@ public class StartupConfigValidator {
     logDashboardStatus();
     logReasoningStatus();
     logCiGatingStatus();
+    logNotificationStatus();
     logActiveModelStatus();
     logConciseModelStatus();
     warnUnmappedModelEnvVars(System.getenv());
@@ -574,6 +577,25 @@ public class StartupConfigValidator {
               + " (thrillhousebot.review.ci-gating): "
               + review.ciGating());
     }
+  }
+
+  /**
+   * States at boot whether review-outcome notifications leave the process and, when they do, what
+   * goes where (#73) — naming the receiver by scheme, host and port only, since a Slack or Discord
+   * webhook URL is itself a credential, and never the signing secret.
+   */
+  private void logNotificationStatus() {
+    NotificationSettings.resolve(config.notifications().webhook())
+        .ifPresent(
+            settings ->
+                log.info(
+                    "Outgoing review notifications enabled: {} to {}, events={}, signed={},"
+                        + " include-content={}",
+                    settings.format(),
+                    settings.redactedUrl(),
+                    settings.events(),
+                    settings.signed(),
+                    settings.includeContent()));
   }
 
   private void logCiGatingStatus() {
