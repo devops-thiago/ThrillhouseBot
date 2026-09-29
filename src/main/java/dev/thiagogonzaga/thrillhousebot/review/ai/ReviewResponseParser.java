@@ -890,7 +890,7 @@ public class ReviewResponseParser {
         if (firstEnd < 0 && end != BROKEN) {
           firstEnd = end;
         }
-        if (end == BROKEN || !holdsRootKey(rootKey, start, firstEnd)) {
+        if (end == BROKEN || !holdsRootKey(start, firstEnd)) {
           break;
         }
         at = scanForNextDocument(text, end).start();
@@ -926,6 +926,11 @@ public class ReviewResponseParser {
         markObjectsOpenAt(start, failedAt);
         return BROKEN;
       }
+    }
+
+    /** Whether an object opening on a root key starts within {@code [from, to)}. */
+    private boolean holdsRootKey(int from, int to) {
+      return rootKey.region(from, to).find();
     }
 
     /**
@@ -989,11 +994,6 @@ public class ReviewResponseParser {
     var at = failureOffset(failure, start);
     var rest = new String(chars, at, chars.length - at);
     return Stream.of("true", "false", "null").anyMatch(literal -> literal.startsWith(rest));
-  }
-
-  /** Whether an object opening on a root key starts within {@code [from, to)}. */
-  private static boolean holdsRootKey(Matcher rootKey, int from, int to) {
-    return rootKey.region(from, to).find();
   }
 
   /**
