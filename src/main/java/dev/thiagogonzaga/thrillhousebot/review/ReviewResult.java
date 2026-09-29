@@ -740,18 +740,22 @@ public record ReviewResult(
    * the call was never made, a cut before the first verdict closed and a generic failure — "no
    * verdicts were returned" is the whole truth they share — while PARTIAL covers a cut response and
    * a complete response that simply omitted a verdict, where only the counts hold. The logs carry
-   * the specific reason.
+   * the specific reason. The per-finding half — the cap and the note each unverified finding
+   * carries — is {@code FindingVerificationService.markUnscreened} (#885); this clause states the
+   * same outcome for the set, so the banner and the findings cannot tell the reader different
+   * things.
    */
   private static String verificationClause(VerificationCoverage verification) {
     if (verification.outcome() == VerificationCoverage.Outcome.PARTIAL) {
       return String.format(
           "the second-pass finding verification only covered %d of the %d finding(s) — the"
-              + " remaining %d post unverified, as the reviewer raised them",
+              + " remaining %d post unverified, each marked as such with its confidence capped"
+              + " at medium",
           verification.verified(), verification.candidates(), verification.unverified());
     }
     return String.format(
         "the %d finding(s) were NOT verified by the second-pass audit — no verdicts were"
-            + " returned, so they post as the reviewer raised them",
+            + " returned, so each posts marked as such with its confidence capped at medium",
         verification.candidates());
   }
 

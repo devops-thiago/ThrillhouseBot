@@ -34,7 +34,8 @@ public enum BlockingStrictness {
   /**
    * Any {@link RiskLevel#CRITICAL}/{@link RiskLevel#HIGH} finding blocks, regardless of confidence.
    * Prefer for security-heavy repos; note that verifier demotions to medium/low confidence will
-   * still block under this mode.
+   * still block under this mode, and so will a finding the verifier returned no verdict on, whose
+   * confidence is capped at medium (#885).
    */
   STRICT,
 
