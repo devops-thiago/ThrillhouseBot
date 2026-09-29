@@ -25,6 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane;
 import org.junit.jupiter.api.Test;
 
@@ -34,24 +37,116 @@ import org.junit.jupiter.api.Test;
  */
 class AiResponsesTest {
 
+  private static final String ACTIVE_SETTING = "thrillhousebot.ai.models.\"m\".max-output-tokens";
+
+  private static final ResponseCap ACTIVE_CAP =
+      new ResponseCap(ModelLane.ACTIVE, 8192, ACTIVE_SETTING);
+
+  private static final ResponseCap CONCISE_CAP =
+      new ResponseCap(ModelLane.CONCISE, 8192, "REVIEW_CONCISE_MAX_OUTPUT_TOKENS");
+
+  /** A length stop whose provider did report usage, as the blocking lanes' Result carries it. */
+  private static Result<String> truncatedWithUsage(String partial, int prompt, int completion) {
+    return Result.<String>builder()
+        .content(partial)
+        .finishReason(FinishReason.LENGTH)
+        .tokenUsage(new TokenUsage(prompt, completion))
+        .build();
+  }
+
+  @Test
+  void aBlockingStopAtTheLicensedCapStatesTheFiguresAndNamesTheSettingThatSuppliedIt() {
+    // #895: the figures come off the blocking Result too, so a /improve cut at its cap says what
+    // was licensed, what was billed, and which setting to raise.
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    truncatedWithUsage("partial", 1200, 8192), "/improve assistant", ACTIVE_CAP));
+
+    var message = thrown.getMessage();
+    assertTrue(message.contains("licensed max_tokens=8192 (from " + ACTIVE_SETTING + ")"), message);
+    assertTrue(message.contains("billed 8192 completion tokens, 1200 prompt tokens"), message);
+    assertTrue(message.contains("so raise " + ACTIVE_SETTING), message);
+    assertEquals(TruncationReport.Stop.AT_CAP, thrown.report().stop());
+    assertEquals(1200, thrown.inputTokens());
+    assertEquals(8192, thrown.outputTokens());
+  }
+
+  @Test
+  void aBlockingStopShortOfTheLicensedCapDoesNotAdviseRaisingIt() {
+    // The production shape: max_tokens=96000 licensed, the provider stopped at 65536. A higher
+    // setting would change nothing, so the message must not send the operator to it.
+    var cap = new ResponseCap(ModelLane.ACTIVE, 96_000, ACTIVE_SETTING);
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    truncatedWithUsage("partial", 163_342, 65_536), "/improve assistant", cap));
+
+    var message = thrown.getMessage();
+    assertTrue(message.contains("billed 65536 completion tokens, 163342 prompt tokens"), message);
+    assertTrue(message.contains("30464 tokens short of the licensed cap"), message);
+    assertTrue(message.contains("will not move it"), message);
+    assertFalse(message.contains("so raise"), message);
+    assertFalse(message.contains("Raise the active model's"), message);
+  }
+
+  @Test
+  void aConciseStopAtItsCapNamesTheConciseSettingNotTheActiveModels() {
+    // #581 carried into #895: at the cap on the concise lane, the setting to raise is the concise
+    // one, and the aside says why the active model's is not.
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    truncatedWithUsage("{\"verdicts\":[", 900, 8192),
+                    "Finding verification",
+                    CONCISE_CAP));
+
+    var message = thrown.getMessage();
+    assertTrue(message.contains("so raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS"), message);
+    assertTrue(message.contains("does not cap it"), message);
+    assertTrue(thrown.conciseModelImplicated());
+  }
+
+  @Test
+  void aStopWithoutUsageKeepsTheLanesAdviceAndSaysTheUsageWasNotReported() {
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class,
+            () ->
+                AiResponses.textOrThrowOnTruncation(
+                    aiTruncated("partial"), "/improve assistant", ACTIVE_CAP));
+
+    var message = thrown.getMessage();
+    assertTrue(message.contains("usage not reported by the provider"), message);
+    assertTrue(message.contains("licensed max_tokens=8192"), message);
+    assertTrue(message.contains("Raise the active model's max-output-tokens"), message);
+  }
+
   @Test
   void returnsTheTextOfACompletedResponse() {
     assertEquals(
         "{\"docs\":[]}",
-        AiResponses.textOrThrowOnTruncation(aiOk("{\"docs\":[]}"), "X", ModelLane.ACTIVE));
+        AiResponses.textOrThrowOnTruncation(aiOk("{\"docs\":[]}"), "X", ACTIVE_CAP));
   }
 
   @Test
   void passesANullResultThrough() {
     // "no response" is a different condition from "cut short" and the callers already handle it.
-    assertNull(AiResponses.textOrThrowOnTruncation(null, "X", ModelLane.ACTIVE));
+    assertNull(AiResponses.textOrThrowOnTruncation(null, "X", ACTIVE_CAP));
   }
 
   @Test
   void passesAnAbsentContentBodyThrough() {
     // A reasoning model can burn the whole output budget on reasoning tokens and complete with no
     // content and no length stop. That is the same "no response" soft failure, not a truncation.
-    assertNull(AiResponses.textOrThrowOnTruncation(aiNoContent(), "X", ModelLane.CONCISE));
+    assertNull(AiResponses.textOrThrowOnTruncation(aiNoContent(), "X", CONCISE_CAP));
   }
 
   @Test
@@ -63,7 +158,7 @@ class AiResponsesTest {
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () -> AiResponses.textOrThrowOnTruncation(cutShort, "X", ModelLane.ACTIVE));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "X", ACTIVE_CAP));
 
     assertTrue(
         thrown.getMessage().contains("max-output-tokens"),
@@ -77,9 +172,7 @@ class AiResponsesTest {
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    cutShort, "/improve assistant", ModelLane.ACTIVE));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "/improve assistant", ACTIVE_CAP));
 
     assertTrue(
         thrown.getMessage().contains("Raise the active model's max-output-tokens"),
@@ -100,8 +193,7 @@ class AiResponsesTest {
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
-                AiResponses.textOrThrowOnTruncation(
-                    cutShort, "Finding verification", ModelLane.CONCISE));
+                AiResponses.textOrThrowOnTruncation(cutShort, "Finding verification", CONCISE_CAP));
 
     assertTrue(
         thrown.getMessage().contains("raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
@@ -123,8 +215,7 @@ class AiResponsesTest {
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
-                AiResponses.textOrThrowOnTruncation(
-                    cutShort, "Finding verification", ModelLane.CONCISE));
+                AiResponses.textOrThrowOnTruncation(cutShort, "Finding verification", CONCISE_CAP));
 
     assertEquals(cut, thrown.partialBody(), "the paid, cut body must travel with the failure");
   }
@@ -141,8 +232,7 @@ class AiResponsesTest {
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
-                AiResponses.textOrThrowOnTruncation(
-                    cutShort, "Finding verification", ModelLane.CONCISE));
+                AiResponses.textOrThrowOnTruncation(cutShort, "Finding verification", CONCISE_CAP));
 
     var salvaged =
         new TruncatedResponseSalvager(new ObjectMapper())
@@ -159,9 +249,7 @@ class AiResponsesTest {
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    cutShort, "/improve assistant", ModelLane.ACTIVE));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "/improve assistant", ACTIVE_CAP));
 
     assertTrue(thrown.getMessage().startsWith("/improve assistant"), thrown.getMessage());
   }

@@ -63,6 +63,7 @@ public class FindingVerificationService {
   private final ObjectMapper mapper;
   private final ReviewTokenLedger tokenLedger;
   private final TruncatedResponseSalvager salvager;
+  private final ResponseCaps responseCaps;
 
   @Inject
   public FindingVerificationService(
@@ -70,12 +71,14 @@ public class FindingVerificationService {
       ThrillhouseConfig config,
       ObjectMapper mapper,
       ReviewTokenLedger tokenLedger,
-      TruncatedResponseSalvager salvager) {
+      TruncatedResponseSalvager salvager,
+      ResponseCaps responseCaps) {
     this.verifier = verifier;
     this.config = config;
     this.mapper = mapper;
     this.tokenLedger = tokenLedger;
     this.salvager = salvager;
+    this.responseCaps = responseCaps;
   }
 
   private static final Pattern HEDGING =
@@ -761,7 +764,7 @@ public class FindingVerificationService {
       recordVerifierUsage(ledgerSessionId, result);
       var raw =
           AiResponses.textOrThrowOnTruncation(
-              result, "Finding verification", AiResponses.ModelLane.CONCISE);
+              result, "Finding verification", responseCaps.forLane(AiResponses.ModelLane.CONCISE));
       if (raw == null || raw.isBlank()) {
         // The unwrap helper's documented "no response" soft failure, which this caller has to
         // honour like every other one: a reasoning model can spend the whole output budget on

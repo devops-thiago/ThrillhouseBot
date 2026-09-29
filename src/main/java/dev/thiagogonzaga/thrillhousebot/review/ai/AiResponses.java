@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
+import java.util.function.UnaryOperator;
 
 /**
  * Unwraps a blocking AI-service {@link Result}, turning a response the model cut short into a named
@@ -44,9 +45,7 @@ public final class AiResponses {
   public enum ModelLane {
 
     /** The default binding, capped by the active model's {@code max-output-tokens}. */
-    ACTIVE(
-        "Raise the active model's max-output-tokens, or leave it unset to use the provider"
-            + " default."),
+    ACTIVE,
 
     /**
      * The {@code concise} named binding — the summary, verifier and reply calls — capped by {@code
@@ -54,59 +53,70 @@ public final class AiResponses {
      * deliberately never applied to it (see {@link ChatModelCustomizers}), so naming that knob here
      * would send the operator to a setting with no effect on this call.
      */
-    CONCISE(
-        "This call runs on the concise named model, so raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS (the"
-            + " active model's max-output-tokens does not cap it), or leave it unset to use the"
-            + " provider default.");
+    CONCISE;
 
-    private final String remedy;
-
-    ModelLane(String remedy) {
-      this.remedy = remedy;
-    }
-
-    /** The operator instruction naming the response cap that applies to this lane. */
-    String remedy() {
-      return remedy;
+    /**
+     * The lane's standing operator instruction, for a truncation whose figures cannot say whether
+     * the stop reached the cap (the provider reported no usage). {@code code} formats setting names
+     * for the surface: plain for the log, inline code for the posted comment.
+     */
+    String remedy(UnaryOperator<String> code) {
+      return this == CONCISE
+          ? "This call runs on the concise named model, so raise "
+              + code.apply(ResponseCaps.CONCISE_CAP_SETTING)
+              + " (the active model's "
+              + code.apply(MAX_OUTPUT_TOKENS)
+              + " does not cap it), or leave it unset to use the provider default."
+          : "Raise the active model's "
+              + code.apply(MAX_OUTPUT_TOKENS)
+              + ", or leave it unset to use the provider default.";
     }
 
     /**
-     * The truncation to raise for a call on this lane: {@code detail} states what was cut and this
-     * lane appends the remedy and sets the {@linkplain
-     * AiResponseTruncatedException#conciseModelImplicated() concise flag}. Both come from this one
-     * source so they cannot disagree (#581) — a caller that wrote its own remedy text and then
-     * patched the flag afterwards produced an exception telling the operator to raise a knob that
-     * its own flag says does not cap the call. {@code partialBody} is the text the call had
-     * produced before the cut — {@link Result#content()} on the blocking path, the buffered stream
-     * on the streaming one (#580) — and stays {@code null} only for a caller that holds none.
+     * The aside that follows the named setting when the stop reached it: on the concise lane it
+     * says why the active model's setting is not the one (#581); the active lane needs none, since
+     * its setting's key already names the model.
      */
-    AiResponseTruncatedException truncation(String detail, String partialBody) {
-      return truncation(detail, partialBody, null);
+    String capNote(UnaryOperator<String> code) {
+      return this == CONCISE
+          ? " (this call runs on the concise named model; the active model's "
+              + code.apply(MAX_OUTPUT_TOKENS)
+              + " does not cap it)"
+          : "";
     }
+  }
 
-    /**
-     * Same as {@link #truncation(String, String)}, carrying the cut call's provider-reported usage
-     * for the lanes that have it — the streaming path reads it off its {@code ChatResponse}, and
-     * the no-content step-down (#839) logs it.
-     */
-    AiResponseTruncatedException truncation(
-        String detail, String partialBody, TokenUsage tokenUsage) {
-      return new AiResponseTruncatedException(
-          detail + " " + remedy,
-          partialBody,
-          this == CONCISE,
-          tokenUsage == null ? null : tokenUsage.inputTokenCount(),
-          tokenUsage == null ? null : tokenUsage.outputTokenCount());
-    }
+  private static final String MAX_OUTPUT_TOKENS = "max-output-tokens";
+
+  /**
+   * The truncation to raise for a call licensed {@code cap}: {@code detail} states what was cut,
+   * and the cap's lane sets both the advice and the {@linkplain
+   * AiResponseTruncatedException#conciseModelImplicated() concise flag}, from this one source so
+   * they cannot disagree (#581). {@code tokenUsage} is what the provider billed for the cut call,
+   * or {@code null} when it reported none; the message states it against the cap and advises
+   * raising the cap only when the billed completion reached it (#895). {@code partialBody} is the
+   * text the call had produced before the cut — {@link Result#content()} on the blocking path, the
+   * buffered stream on the streaming one (#580).
+   */
+  static AiResponseTruncatedException truncation(
+      String detail, String partialBody, TokenUsage tokenUsage, ResponseCap cap) {
+    var report =
+        new TruncationReport(
+            cap.lane(),
+            cap,
+            tokenUsage == null ? null : tokenUsage.inputTokenCount(),
+            tokenUsage == null ? null : tokenUsage.outputTokenCount());
+    return new AiResponseTruncatedException(
+        detail + " " + report.describe(TruncationReport.PLAIN), partialBody, report);
   }
 
   /**
    * Returns the response text, or throws {@link AiResponseTruncatedException} when the model
    * stopped at its response-length cap. {@code what} names the call for the operator ("/improve",
-   * "Finding verification"), since the exception is what the caller logs; {@code lane} names the
-   * model binding the call ran on, so the message and the exception's {@link
-   * AiResponseTruncatedException#conciseModelImplicated() concise flag} point at the cap that
-   * actually cut it.
+   * "Finding verification"), since the exception is what the caller logs; {@code cap} is the cap
+   * the call's request carried, on the model binding it ran on, so the message and the exception's
+   * {@link AiResponseTruncatedException#conciseModelImplicated() concise flag} point at the setting
+   * that supplied it, and the message states the billed usage against it (#895).
    *
    * <p>A {@code null} result, and a completed response with no content body, both pass through as
    * {@code null}. "No response" is not a truncation, and each caller owns what it costs them: the
@@ -126,16 +136,18 @@ public final class AiResponses {
    * and each lane's existing error contract are unchanged, and a lane that ignores the body behaves
    * exactly as it did.
    */
-  public static String textOrThrowOnTruncation(Result<String> result, String what, ModelLane lane) {
+  public static String textOrThrowOnTruncation(
+      Result<String> result, String what, ResponseCap cap) {
     if (result == null) {
       return null;
     }
     if (result.finishReason() == FinishReason.LENGTH) {
-      throw lane.truncation(
+      throw truncation(
           what
-              + " stopped at the model's response-length cap (finish_reason=length), so the"
-              + " response is incomplete.",
-          result.content());
+              + " stopped on a length limit (finish_reason=length), so the response is incomplete.",
+          result.content(),
+          result.tokenUsage(),
+          cap);
     }
     return result.content();
   }

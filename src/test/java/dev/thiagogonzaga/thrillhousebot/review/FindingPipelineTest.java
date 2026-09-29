@@ -2444,7 +2444,8 @@ class FindingPipelineTest {
             new ObjectMapper(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps.defaults());
     var p =
         new FindingPipeline(
             aiReviewService,

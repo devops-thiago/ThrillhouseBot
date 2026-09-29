@@ -72,7 +72,12 @@ class FindingVerificationServiceTest {
   private FindingVerificationService serviceWith(ReviewTokenLedger ledger) {
     var mapper = new ObjectMapper();
     return new FindingVerificationService(
-        verifier, config, mapper, ledger, new TruncatedResponseSalvager(mapper));
+        verifier,
+        config,
+        mapper,
+        ledger,
+        new TruncatedResponseSalvager(mapper),
+        TestResponseCaps.defaults());
   }
 
   private static Result<String> aiOkWithUsage(String text, int inputTokens, int outputTokens) {

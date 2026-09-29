@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
 import io.quarkus.logging.Log;
 import java.util.List;
 import java.util.function.Supplier;
@@ -320,7 +321,7 @@ public abstract class AbstractPrSuggestionGenerator {
     try {
       String suggestion =
           AiResponses.textOrThrowOnTruncation(
-              assistantCall.get(), command + " assistant", AiResponses.ModelLane.ACTIVE);
+              assistantCall.get(), command + " assistant", ResponseCaps.activeCap(activeModel));
       if (suggestion == null || suggestion.isBlank()) {
         Log.debugf("%s assistant produced an empty suggestion — posting nothing", command);
         return null;

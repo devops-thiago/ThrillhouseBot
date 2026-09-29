@@ -58,6 +58,7 @@ class ConciseModelTruncationTest {
   @Inject AiReviewService aiReviewService;
   @Inject FindingVerifier findingVerifier;
   @Inject ReplyAssistant replyAssistant;
+  @Inject ResponseCaps responseCaps;
 
   @Test
   void aLengthStopOnTheConciseSummaryCallRaisesTheTruncationError() {
@@ -94,7 +95,9 @@ class ConciseModelTruncationTest {
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    result, "Finding verification", AiResponses.ModelLane.CONCISE));
+                    result,
+                    "Finding verification",
+                    responseCaps.forLane(AiResponses.ModelLane.CONCISE)));
 
     assertTrue(
         thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
@@ -114,7 +117,9 @@ class ConciseModelTruncationTest {
             AiResponseTruncatedException.class,
             () ->
                 AiResponses.textOrThrowOnTruncation(
-                    result, "Maintainer reply", AiResponses.ModelLane.CONCISE));
+                    result,
+                    "Maintainer reply",
+                    responseCaps.forLane(AiResponses.ModelLane.CONCISE)));
 
     assertTrue(
         thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
