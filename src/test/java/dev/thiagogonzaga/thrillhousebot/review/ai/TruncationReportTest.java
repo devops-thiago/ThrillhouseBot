@@ -140,7 +140,36 @@ class TruncationReportTest {
     assertEquals(
         "The stop reached the licensed cap, so raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS (this call"
             + " runs on the concise named model; the active model's max-output-tokens does not cap"
-            + " it), or leave it unset to use the provider default.",
+            + " it), or set it empty to drop the cap and use the provider default (unset, it falls"
+            + " back to 8192).",
+        report.remedy(TruncationReport.PLAIN));
+  }
+
+  @Test
+  void aConciseLaneWithNoCapSentSaysTheSettingIsEmptyNotUnset() {
+    // An unset REVIEW_CONCISE_MAX_OUTPUT_TOKENS falls back to 8192; only an empty value sends no
+    // cap, so the figures must describe the state the operator actually put it in.
+    var report =
+        new TruncationReport(
+            ModelLane.CONCISE,
+            new ResponseCap(ModelLane.CONCISE, null, "REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
+            3000,
+            16_384);
+
+    assertEquals(
+        "no max_tokens sent (REVIEW_CONCISE_MAX_OUTPUT_TOKENS is set empty, so the provider"
+            + " default applied); billed 16384 completion tokens, 3000 prompt tokens",
+        report.figures(TruncationReport.PLAIN));
+  }
+
+  @Test
+  void theConciseLanesStandingAdviceDoesNotSayUnsetDropsTheCap() {
+    var report = new TruncationReport(ModelLane.CONCISE, null, null, null);
+
+    assertEquals(
+        "This call runs on the concise named model, so raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS (the"
+            + " active model's max-output-tokens does not cap it), or set it empty to drop the cap"
+            + " and use the provider default (unset, it falls back to 8192).",
         report.remedy(TruncationReport.PLAIN));
   }
 

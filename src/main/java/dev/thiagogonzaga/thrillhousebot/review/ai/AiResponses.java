@@ -66,10 +66,33 @@ public final class AiResponses {
               + code.apply(ResponseCaps.CONCISE_CAP_SETTING)
               + " (the active model's "
               + code.apply(MAX_OUTPUT_TOKENS)
-              + " does not cap it), or leave it unset to use the provider default."
+              + " does not cap it), or "
+              + dropCapClause()
+              + "."
           : "Raise the active model's "
               + code.apply(MAX_OUTPUT_TOKENS)
-              + ", or leave it unset to use the provider default.";
+              + ", or "
+              + dropCapClause()
+              + ".";
+    }
+
+    /**
+     * How the operator drops this lane's cap to reach the provider default. The two differ: the
+     * active model's per-model key has no fallback, so leaving it unset sends no cap, while {@code
+     * REVIEW_CONCISE_MAX_OUTPUT_TOKENS} falls back to the shipped 8192 when unset and only an empty
+     * value drops the cap (application.properties). Advising "leave it unset" on the concise lane
+     * would send an operator cut at 8192 straight back to 8192.
+     */
+    String dropCapClause() {
+      return this == CONCISE
+          ? "set it empty to drop the cap and use the provider default (unset, it falls back to"
+              + " 8192)"
+          : "leave it unset to use the provider default";
+    }
+
+    /** How the lane's setting stands when its requests carry no cap, for the report's figures. */
+    String noCapState() {
+      return this == CONCISE ? "is set empty" : "is unset";
     }
 
     /**

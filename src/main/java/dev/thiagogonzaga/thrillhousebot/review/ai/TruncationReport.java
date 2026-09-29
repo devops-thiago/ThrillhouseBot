@@ -105,7 +105,9 @@ public record TruncationReport(
     if (cap.tokens() == null) {
       return "no max_tokens sent ("
           + code.apply(cap.setting())
-          + " is unset, so the provider default applied)";
+          + " "
+          + lane.noCapState()
+          + ", so the provider default applied)";
     }
     return "licensed max_tokens=" + cap.tokens() + " (from " + code.apply(cap.setting()) + ")";
   }
@@ -137,7 +139,9 @@ public record TruncationReport(
           "The stop reached the licensed cap, so raise "
               + code.apply(cap.setting())
               + lane.capNote(code)
-              + ", or leave it unset to use the provider default.";
+              + ", or "
+              + lane.dropCapClause()
+              + ".";
       case SHORT_OF_CAP ->
           "The provider stopped "
               + (cap.tokens() - completionTokens)
