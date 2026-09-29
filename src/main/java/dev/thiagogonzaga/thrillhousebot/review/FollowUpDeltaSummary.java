@@ -30,10 +30,10 @@ import java.util.Optional;
  * previous round's findings it names them from — so folding it in would mean threading unrelated
  * inputs through, and would put two different comment shapes behind one entry point. Keeping it
  * separate also keeps {@link PrSummaryGenerator#SUMMARY_HEADING} out of the rendered body, which
- * matters: that heading is the marker {@code ReviewContextLoader.isBotSummaryComment} uses to
- * recognize the bot's summary, and a delta comment carrying it would be mistaken for one — edited
- * in place on a superseded round, and counted as an already-posted summary when deciding whether a
- * review is the first.
+ * matters: that heading is one of the two markers {@code ReviewContextLoader.isBotSummaryComment}
+ * uses to recognize the bot's summary, and a delta comment carrying it would be mistaken for one —
+ * overwritten by the next round's summary edit (#868), and counted as an already-posted summary
+ * when deciding whether a review is the first.
  *
  * <p>Three counts are rendered, all sourced from the statuses the follow-up pipeline already
  * produced rather than recomputed here: findings raised this round, previous findings the round

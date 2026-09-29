@@ -35,6 +35,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -161,11 +162,142 @@ class ReviewPublisherTest {
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }
 
+  private static final GitHubReviewClient.ReviewResponse.User BOT =
+      new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+
+  /** The body the publisher posts for {@code summary}: the marker line, then the summary. */
+  private static String posted(String summary) {
+    return PrSummaryGenerator.SUMMARY_MARKER + "\n" + summary;
+  }
+
+  private void existingComments(GitHubCommentClient.IssueComment... comments) {
+    when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        .thenReturn(List.of(comments));
+  }
+
   @Test
-  void plainFollowUpDoesNotPostASummary() {
+  void firstRoundPostsTheSummaryWithTheMarkerOnItsFirstLine() {
+    var firstReview =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            true,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+
+    assertTrue(publisher.publishSummary("auth", "o", "r", 1, firstReview, false));
+
+    // The first round already knows there is no summary to edit (that is what makes it the first),
+    // so it posts without listing the conversation.
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    assertEquals(posted("summary"), body.getValue().body());
+    assertTrue(ReviewContextLoader.isBotSummaryComment(body.getValue().body()));
+    verify(commentClient, never())
+        .listComments(anyString(), anyString(), anyString(), anyString(), anyInt());
+  }
+
+  @Test
+  void secondRoundEditsTheExistingSummaryInPlace() {
+    // #868: a follow-up round used to leave the first round's summary standing, stale. It now
+    // rewrites that comment with the current round's render, marker included, and posts nothing.
+    existingComments(
+        new GitHubCommentClient.IssueComment(
+            5L, posted(ReviewResult.truncationNotice(3) + "round one"), BOT));
+
+    // An ordinary follow-up's edit notifies nobody, so it does not stand in for the round's
+    // outcome: the review and the delta comment still post.
     assertFalse(publisher.publishSummary("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .updateComment(anyString(), anyString(), eq("o"), eq("r"), eq(5L), body.capture());
+    // The whole body is replaced: the earlier round's truncation banner does not survive an edit
+    // whose own round was not truncated.
+    assertEquals(posted("summary"), body.getValue().body());
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  @Test
+  void followUpFindsASummaryPostedBeforeTheMarkerExistedByItsHeading() {
+    existingComments(
+        new GitHubCommentClient.IssueComment(
+            8L, PrSummaryGenerator.SUMMARY_HEADING + "\n\nposted by an older version", BOT));
+
+    publisher.publishSummary("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false);
+
+    verify(commentClient)
+        .updateComment(anyString(), anyString(), anyString(), anyString(), eq(8L), any());
+    verify(commentClient, never())
+        .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  @Test
+  void followUpPostsAFreshSummaryWhenTheMarkedCommentWasDeleted() {
+    // Only the delta comment and a maintainer's reply are left: neither is the summary.
+    existingComments(
+        new GitHubCommentClient.IssueComment(
+            3L, FollowUpDeltaSummary.DELTA_HEADING + "\n\n- counts", BOT),
+        new GitHubCommentClient.IssueComment(
+            4L, posted("quoted"), new GitHubReviewClient.ReviewResponse.User("maintainer")));
+
+    assertFalse(publisher.publishSummary("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    assertEquals(posted("summary"), body.getValue().body());
+    verify(commentClient, never())
+        .updateComment(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+  }
+
+  @Test
+  void refusedEditFallsBackToPostingANewSummary() {
+    existingComments(new GitHubCommentClient.IssueComment(5L, posted("round one"), BOT));
+    when(commentClient.updateComment(
+            anyString(), anyString(), anyString(), anyString(), anyLong(), any()))
+        .thenThrow(new WebApplicationException(404));
+
+    // A failed edit must not cost the pull request its current summary.
+    assertFalse(publisher.publishSummary("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    assertEquals(posted("summary"), body.getValue().body());
+  }
+
+  @Test
+  void followUpThatRendersTheSameSummarySpendsNoWrite() {
+    existingComments(new GitHubCommentClient.IssueComment(5L, posted("summary"), BOT));
+
+    assertFalse(publisher.publishSummary("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false));
+
+    verify(commentClient, never())
+        .updateComment(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+    verify(commentClient, never())
+        .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  @Test
+  void followUpWithNoSummaryToPostTouchesNothing() {
+    var blank =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, " ", List.of(), List.of(), 0);
+
+    assertFalse(publisher.publishSummary("auth", "o", "r", 1, blank, false));
+
+    verify(commentClient, never())
+        .listComments(anyString(), anyString(), anyString(), anyString(), anyInt());
   }
 
   @Test
@@ -268,7 +400,7 @@ class ReviewPublisherTest {
     verify(commentClient, times(1))
         .createComment(
             anyString(), anyString(), anyString(), anyString(), anyInt(), body.capture());
-    assertEquals("summary", body.getValue().body());
+    assertEquals(posted("summary"), body.getValue().body());
   }
 
   @Test

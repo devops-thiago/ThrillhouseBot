@@ -77,21 +77,31 @@ public class ReviewPublisher {
   }
 
   /**
-   * Posts the PR summary comment, but only on the first user-visible review (and only when there is
-   * a summary to post). Follow-up reviews carry their signal in the review itself, not a new
-   * comment — unless {@code forceSummary} is set, which the {@code /summary} command uses to
-   * regenerate a summary that was deleted from the PR even though a review already ran, or a prior
-   * finding was superseded this round ({@link ReviewResult#hasSupersededPrevious}): its targeted
-   * code left the diff, so the earlier summary may describe code that no longer exists. In the
-   * superseded case the bot's existing summary comment is edited in place with the regenerated
-   * markdown — never posted alongside the stale one — falling back to a new comment only when no
-   * prior summary comment exists (e.g. it was deleted).
+   * Keeps one summary comment per pull request, carrying the current round's summary (#868). The
+   * first user-visible review posts it, and so does the {@code /summary} command ({@code
+   * forceSummary}), which runs only after it found no summary on the pull request: both already
+   * know there is nothing to edit, so they post without listing the conversation. Every later round
+   * finds the bot's summary comment by its marker and edits it in place, posting a new one only
+   * when none is left (a maintainer deleted it) — see {@link #upsertSummaryComment}.
    *
-   * @return {@code true} when the summary comment was actually created; {@code false} when this
-   *     review posts no summary (follow-up, or nothing to post). {@code postReview} suppresses a
-   *     redundant no-issues review (summary-only re-run, or a first review held back solely by
-   *     pending/failed CI) only when this returned {@code true} — a failed or skipped summary must
-   *     leave the review as the run's visible outcome.
+   * <p>The edit replaces the whole body, so nothing from an earlier round survives it: the
+   * disclosures (coverage and scope note, degradation and truncation banners, confidence hold,
+   * walkthrough) are the ones this round's render produced, and a banner the current round no
+   * longer earns is gone rather than left stale. The comment keeps no history of its own: the
+   * round-to-round story lives in the per-round surfaces, which stay append-only — each round's
+   * review with its inline findings, and the opt-in delta comment — and GitHub keeps the edit
+   * history of the comment itself. Keeping none also keeps the comment inside the same size budget
+   * the summary was always bounded by.
+   *
+   * @return {@code true} when this round's summary comment stands in for the round's outcome: it
+   *     was created (first review, {@code /summary}), or it was regenerated because a prior finding
+   *     was superseded ({@link ReviewResult#hasSupersededPrevious}) — its targeted code left the
+   *     diff, which is the round the summary used to be re-rendered for. {@code false} when this
+   *     review has no summary to post, and for the in-place edit of an ordinary follow-up round: an
+   *     edit notifies nobody, so the review and the delta comment stay that round's visible
+   *     outcome. {@code postReview} suppresses a redundant no-issues review (summary-only re-run,
+   *     or a first review held back solely by pending/failed CI) only when this returned {@code
+   *     true} — a failed or skipped summary must leave the review as the run's visible outcome.
    */
   boolean publishSummary(
       String auth,
@@ -103,21 +113,15 @@ public class ReviewPublisher {
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
+    var request =
+        new GitHubCommentClient.CreateCommentRequest(
+            PrSummaryGenerator.SUMMARY_MARKER + "\n" + result.summaryMarkdown());
     if (result.isFirstReview() || forceSummary) {
-      commentClient.createComment(
-          auth,
-          ACCEPT,
-          owner,
-          repo,
-          prNumber,
-          new GitHubCommentClient.CreateCommentRequest(result.summaryMarkdown()));
+      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
       return true;
     }
-    if (result.hasSupersededPrevious()) {
-      refreshSummaryComment(auth, owner, repo, prNumber, result.summaryMarkdown());
-      return true;
-    }
-    return false;
+    upsertSummaryComment(auth, owner, repo, prNumber, request);
+    return result.hasSupersededPrevious();
   }
 
   /**
@@ -168,22 +172,54 @@ public class ReviewPublisher {
   }
 
   /**
-   * Replaces the stale summary with the regenerated one after a finding was superseded: edits the
-   * bot's newest existing summary comment in place, so the PR never shows the outdated summary
-   * (describing removed code) next to the fresh one. Creates a new comment only when no summary
-   * comment is found (e.g. a maintainer deleted it).
+   * Edits the bot's summary comment in place with this round's summary, found by scanning the pull
+   * request's comments for the marker rather than by an id held in memory, so a restart loses
+   * nothing. When several carry the marker (a summary re-posted by an older version, or by the
+   * fallback below), the newest is the one edited. An unchanged body is not rewritten, so a round
+   * that renders the same summary spends no write. A new comment is posted when no summary is found
+   * (a maintainer deleted it), or when the edit fails: a failed edit must not cost the pull request
+   * its current summary, so the round posts it fresh and logs why. The edit goes through the same
+   * paced, retried, budgeted write path as every other comment, so a failure reaching here is one
+   * that path already gave up on.
+   *
+   * <p>Two rounds never edit the comment at once: the dispatcher runs a pull request's reviews one
+   * at a time, and a run whose head moved while it ran stands down before its first write (#806),
+   * so it cannot overwrite the summary of the run that replaces it.
    */
-  private void refreshSummaryComment(
-      String auth, String owner, String repo, int prNumber, String summaryMarkdown) {
+  private void upsertSummaryComment(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      GitHubCommentClient.CreateCommentRequest request) {
     var existing =
         commentClient.listComments(auth, ACCEPT, owner, repo, prNumber).stream()
             .filter(c -> c.user() != null && botIdentity.matches(c.user().login()))
             .filter(c -> ReviewContextLoader.isBotSummaryComment(c.body()))
             .reduce((first, second) -> second);
-    var request = new GitHubCommentClient.CreateCommentRequest(summaryMarkdown);
-    if (existing.isPresent()) {
-      commentClient.updateComment(auth, ACCEPT, owner, repo, existing.get().id(), request);
-    } else {
+    if (existing.isEmpty()) {
+      Log.infof("No summary comment found on %s/%s #%d — posting a new one", owner, repo, prNumber);
+      commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
+      return;
+    }
+    var comment = existing.get();
+    if (request.body().equals(comment.body())) {
+      Log.debugf(
+          "Summary comment %d on %s/%s #%d is already current — not editing it",
+          comment.id(), owner, repo, prNumber);
+      return;
+    }
+    try {
+      commentClient.updateComment(auth, ACCEPT, owner, repo, comment.id(), request);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to edit summary comment %d on %s/%s #%d — posting the current summary as a new"
+              + " comment instead",
+          comment.id(),
+          owner,
+          repo,
+          prNumber);
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
     }
   }

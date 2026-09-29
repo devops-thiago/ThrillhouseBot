@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Changed
+
+- **The summary comment is updated in place on every review round** (#868): the summary was posted on the first round only, so after a few pushes it described code the pull request no longer had while the current state was spread across review bodies. Each later round now finds the bot's summary comment by a `<!-- thrillhousebot:summary -->` marker (or, for summaries posted before this release, by its heading) and replaces its body with the current render, disclosures included; a round that renders the same body spends no write. When no summary is left (a maintainer deleted it) the round posts a new one, and a failed edit falls back to posting one, logged at WARN. The comment keeps no history: inline findings, review bodies and the opt-in delta comment stay per round, and GitHub keeps the edit history. An edit notifies nobody, so a follow-up round still posts its review and delta comment as before
+
 ## [0.6.9] — 2026-09-21
 
 What the reviewer knows when it judges a finding drove this release. The second-pass verifier saw only the findings and the diff, so a finding raised from the coverage report or a path-scoped rule read to it as a claim about material it could not see, and it demoted them; a finding's cited location was never checked against the file it named; and a claim the verifier had already rejected could be re-raised and published by a later round on the same commit. The rest is what production showed on 0.6.8: one call could spend a whole review's retry budget at the streaming deadline, a review killed by a restart stayed marked as running for good, and a walkthrough could lose every file summary with nothing recorded about why.
