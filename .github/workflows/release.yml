@@ -87,10 +87,10 @@ jobs:
   scan:
     needs: [verify]
     runs-on: ubuntu-latest
+    # No security-events: the scans below gate the release and upload no SARIF.
     permissions:
       contents: read
       packages: read
-      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -122,6 +122,15 @@ jobs:
           registry: ghcr.io
           username: devops-thiago
           password: ${{ secrets.GITHUB_TOKEN }}
+      # These scans are the release gate (exit-code 1 on CRITICAL/HIGH) and upload no
+      # SARIF to code scanning (#869). Code scanning measures a category's staleness
+      # against the default branch, and this job only ever runs on a tag, so an upload
+      # here never refreshes the category on main: the Security tab reported
+      # trivy-release and trivy-release-distroless as stale from the day they stopped
+      # being uploaded from main. main is already covered by trivy-image and
+      # trivy-image-distroless in ci.yml (every push) and by security-scan.yml (daily).
+      # Do not re-add the upload; the SARIF is kept as a run artifact below instead.
+      # `category` only names the SARIF file when upload is false.
       - name: Scan default image (gate on CRITICAL/HIGH)
         uses: ./.actions-ref/.github/actions/trivy-scan
         with:
@@ -130,6 +139,7 @@ jobs:
           exit-code: "1"
           trivyignores: .trivyignore
           category: trivy-release
+          upload: "false"
       - name: Scan distroless image (gate on CRITICAL/HIGH)
         uses: ./.actions-ref/.github/actions/trivy-scan
         with:
@@ -138,6 +148,19 @@ jobs:
           exit-code: "1"
           trivyignores: .trivyignore
           category: trivy-release-distroless
+          upload: "false"
+      # Keep the reports with the run, including when a scan fails the gate, so the
+      # findings that stopped a release can be read without re-running it.
+      - name: Keep Trivy SARIF reports with the run
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-release-sarif
+          path: |
+            trivy-release.sarif
+            trivy-release-distroless.sarif
+          if-no-files-found: ignore
+          retention-days: 90
 
   promote:
     needs: [verify, scan]
