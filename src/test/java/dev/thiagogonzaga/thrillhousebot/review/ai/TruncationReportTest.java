@@ -184,4 +184,39 @@ class TruncationReportTest {
             + report.remedy(TruncationReport.PLAIN),
         report.describe(TruncationReport.PLAIN));
   }
+
+  /**
+   * #893 — a stop whose step-down repeat was stopped for writing its deliberation into the response
+   * keeps the first call's figures and remedy, and states what the repeat showed between them.
+   */
+  @Test
+  void aStoppedStepDownRepeatIsStatedBetweenTheFiguresAndTheRemedy() {
+    var report = active(65_536, 157_779, 65_536).withInlinedDeliberation(8_000);
+
+    assertEquals(8_000, report.inlinedDeliberationChars());
+    assertEquals(Stop.AT_CAP, report.stop(), "the figures are still the capped call's");
+    assertEquals(
+        "Cap and usage: "
+            + report.figures(TruncationReport.MARKDOWN)
+            + ". No content arrived before that stop, so the call was repeated with reasoning"
+            + " disabled; the model wrote its deliberation into the response instead, and the"
+            + " repeat was stopped after 8000 characters with no answer begun rather than billed"
+            + " the cap a second time. Disabling reasoning does not move this model's"
+            + " deliberation out of the output allowance, so lowering `AI_REASONING_EFFORT` is the"
+            + " other lever. "
+            + report.remedy(TruncationReport.MARKDOWN),
+        report.describe(TruncationReport.MARKDOWN));
+  }
+
+  @Test
+  void theConciseLaneNamesItsOwnEffortSettingAndAPlainStopStatesNoRepeat() {
+    var concise =
+        new TruncationReport(ModelLane.CONCISE, null, 1000, 8192).withInlinedDeliberation(9_000);
+
+    assertTrue(
+        concise
+            .inlinedDeliberation(TruncationReport.PLAIN)
+            .contains("AI_REASONING_EFFORT_CONCISE"));
+    assertEquals("", active(8192, 1000, 8192).inlinedDeliberation(TruncationReport.PLAIN));
+  }
 }
