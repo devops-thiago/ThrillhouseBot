@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -357,6 +358,39 @@ class FindingDeduplicatorTest {
         0.0,
         FindingDeduplicator.contentOverlap(
             raised, new ReviewResponse.Finding("low", "high", "f", 1, null, null, null, null)));
+  }
+
+  @Test
+  void contentOverlapDoesNotReadTheSharedUnverifiedNoteAsCommonSubstance() {
+    // #885: a whole round on the verifier's fail-open path gives every finding the same note. It
+    // says something about the round, not the defect, so two distinct claims must not look alike
+    // because both carry it.
+    var first =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "f",
+            60,
+            "Cluster anchor comparison misses chained duplicates",
+            "deduplication compares each finding only to the first cluster member",
+            null,
+            null);
+    var second =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "f",
+            61,
+            "Token spend is recorded before the response is unwrapped",
+            "a truncated response was billed, so the ledger counts its usage first",
+            null,
+            null);
+
+    assertEquals(
+        FindingDeduplicator.contentOverlap(first, second),
+        FindingDeduplicator.contentOverlap(
+            FindingVerificationService.markUnscreened(first),
+            FindingVerificationService.markUnscreened(second)));
   }
 
   @Test

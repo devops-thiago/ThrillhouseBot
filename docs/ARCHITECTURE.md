@@ -225,7 +225,11 @@ after a review call, and a review whose every file exceeded the budget makes onl
 the summary call); one that reports findings adds a skeptical verification
 pass (`FindingVerifier`) that re-sends the diff and each candidate finding,
 dropping or downgrading what it can't confirm. The verifier fails open — a verifier error keeps
-the original findings, so a broken verifier can never block a review. The review
+the original findings, so a broken verifier can never block a review. A finding
+kept that way is not published as if it had been screened: its confidence is
+capped at medium and its text says it was not verified, so under the default
+blocking strictness it cannot request changes on its own, and the summary banner
+states the round's verification coverage. The review
 call's response is findings and previous-finding statuses only; the PR-level
 summary (counts, purpose, description gaps, file walkthrough, labels, diagram) is
 written by the summary call from the verified findings and the changed-file list,
