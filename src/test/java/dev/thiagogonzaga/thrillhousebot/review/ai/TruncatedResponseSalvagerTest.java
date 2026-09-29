@@ -388,8 +388,27 @@ class TruncatedResponseSalvagerTest {
         java.util.List.of("F1", "F2", "F3"),
         salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
     assertEquals(1, salvaged.previousFindingsStatus().size());
-    assertNull(salvaged.summary(), "the summary object never closed");
+    assertNull(salvager.salvageSummary(body), "the summary object never closed");
     assertTrue(salvaged.hasFindingsOrStatuses());
+  }
+
+  @Test
+  void salvagesTheSummaryOfASummaryCallBodyThatFollowsDeliberation() {
+    // The summary call's salvage anchors on the same root keys as its parse, so prose ahead of
+    // the answer with a "[LOW]" tag and fenced excerpts does not start the pass on a bracket.
+    var deliberation = DeliberationFixture.deliberation(20_000);
+    var body =
+        deliberation
+            + "```json\n{\"summary\":{\"total_findings\":1,\"critical\":0,\"high\":0,"
+            + "\"medium\":1,\"low\":0,\"overall_assessment\":\"one issue\","
+            + "\"pr_purpose\":\"report pull progress\"},\"previous_findings_status\":[{\"id\":2,"
+            + "\"status\":\"unres";
+    assertTrue(body.indexOf('[') < 300, "the first bracket is a severity tag near the start");
+
+    var summary = salvager.salvageSummary(body);
+
+    assertNotNull(summary, "the summary object closed before the cut");
+    assertEquals("report pull progress", summary.prPurpose());
   }
 
   @Test

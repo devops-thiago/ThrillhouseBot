@@ -124,13 +124,16 @@ public class TruncatedResponseSalvager {
   /**
    * Salvages the {@code summary} object of a cut summary-call body when it closed before the cut
    * (#500 scope A); {@code null} when it did not, when it does not map onto the summary schema, or
-   * when there is nothing to work with. Same bounded, never-throwing pass as {@link #salvage}.
+   * when there is nothing to work with. Same bounded, never-throwing pass as {@link #salvage}, and
+   * it anchors on the same root keys {@link ReviewResponseParser#parseSummary} reads the complete
+   * body with, so deliberation ahead of the answer cannot pull the pass onto a bracket in prose.
    */
   public ReviewResponse.Summary salvageSummary(String partialBody) {
     // One-element holder: the field handler below is a lambda, which cannot assign a local.
     var summary = new ReviewResponse.Summary[1];
     scan(
         partialBody,
+        ReviewResponseParser.REVIEW_ROOT_KEYS,
         (parser, field, value) -> {
           if ("summary".equals(field)) {
             summary[0] = objectOrNull(parser, value, ReviewResponse.Summary.class);
