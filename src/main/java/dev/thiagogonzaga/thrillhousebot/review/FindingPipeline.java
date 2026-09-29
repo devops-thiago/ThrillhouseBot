@@ -185,7 +185,8 @@ public class FindingPipeline {
           base.projectStack(),
           base.relatedTests(),
           base.previousFindings(),
-          repoInstructions);
+          repoInstructions,
+          base.summaryInstructions());
     }
   }
 
@@ -234,13 +235,14 @@ public class FindingPipeline {
   }
 
   /**
-   * Calls the model on the assembled prompt, then runs the raw response through the full post-AI
-   * chain ({@link #refine}). The {@code lineResolver} is shared with the verdict backstop, so the
-   * caller builds it once and passes it in. A budgeted plan is authoritative for what the model
-   * sees: even a single batch sends the planned (possibly hunk-clipped) text, never the uncapped
-   * raw diff — otherwise the budget would be bypassed in exactly the oversized-file case that
-   * motivated clipping. The legacy uncapped {@code ctx.diff()} is only sent when budgeting is
-   * explicitly disabled.
+   * Calls the model on the assembled prompt, runs the raw response through the full post-AI chain
+   * ({@link #refine}), then makes the summary call on the refined findings ({@link #withSummary}) —
+   * the same review → refine → summary shape the multi-call lane has (#664). The {@code
+   * lineResolver} is shared with the verdict backstop, so the caller builds it once and passes it
+   * in. A budgeted plan is authoritative for what the model sees: even a single batch sends the
+   * planned (possibly hunk-clipped) text, never the uncapped raw diff — otherwise the budget would
+   * be bypassed in exactly the oversized-file case that motivated clipping. The legacy uncapped
+   * {@code ctx.diff()} is only sent when budgeting is explicitly disabled.
    */
   ReviewResponse run(
       ReviewSession session,
@@ -310,22 +312,40 @@ public class FindingPipeline {
               followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList()));
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
-    return refine(
-        session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence);
+    var refined =
+        refine(session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence);
+    if (budgetPlanner.callCapLeavesNoSummaryCall()) {
+      return summarySkippedAtCallCap(session, refined, plan);
+    }
+    return withSummary(session, refined, promptInputs, ctx, plan);
+  }
+
+  /**
+   * The summary degradation for a single-call review whose {@code max-ai-calls} allowance of one
+   * was spent by the review call (#664): the refined findings are kept and persisted with the
+   * counts-only summary, and the skip is recorded on the plan so the posted review names the knob,
+   * instead of making a call the operator capped away.
+   */
+  private ReviewResponse summarySkippedAtCallCap(
+      ReviewSession session, ReviewResponse refined, DiffBudgetPlanner.BudgetPlan plan) {
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CALL_CAP);
+    Log.warnf(
+        "Review session %d skips its summary call: REVIEW_MAX_AI_CALLS=1 was spent by the review"
+            + " call; keeping the %d findings with a counts-only summary",
+        ledgerSessionId(session), refined.findings().size());
+    return persistWithSummary(session, refined, null);
   }
 
   /**
    * The disclose step for a single-call review the model cut at its length cap (#580): the same
    * salvage the multi-call lane's {@link #salvageTruncatedBatch} runs, applied to the lane that had
    * none. The complete leading findings and statuses are recovered from the buffered partial body
-   * and returned as an ordinary response, so the caller's status scoping and {@link #refine} chain
-   * treat them exactly like parsed ones — a salvaged finding faces every check a parsed finding
-   * does. The summary object rides along when it closed before the cut (it is last in the response
-   * shape, so usually it did not); {@code null} then leaves the renderer's counts-only shape, the
-   * same degradation the multi-call summary seam produces. No {@link SummaryDegradation} is
-   * recorded for it, though: that class's copy states the findings are complete, which is exactly
-   * what a salvaged review's are not — the honest disclosure here is the response-cut file class
-   * below, which says the findings up to the cut were kept.
+   * and returned as an ordinary response, so the caller's status scoping, {@link #refine} chain and
+   * summary call treat them exactly like parsed ones — a salvaged finding faces every check a
+   * parsed finding does. Nothing else is taken from the cut body: the review call's contract is
+   * findings and statuses only (#664), and the summary comes from the summary call that follows,
+   * which is made from the salvaged findings like any others — so a cut review response no longer
+   * costs the review its summary.
    *
    * <p>A salvaged review covers the diff only up to the cut, so the files it was given are recorded
    * as {@linkplain DiffBudgetPlanner.BudgetPlan#recordResponseCutFiles response-cut} — the existing
@@ -335,9 +355,9 @@ public class FindingPipeline {
    *
    * <p>When nothing salvages — the cut landed before the first element closed — the truncation is
    * rethrown, keeping today's behaviour. Unlike a batch, whose siblings still carry the review,
-   * this lane's failed call is the whole review: there would be no finding, no status and no
-   * summary to post, so failing loudly (the orchestrator's notice names the cap and the knob to
-   * raise) beats posting an empty review whose only content is a disclosure.
+   * this lane's failed call is the whole review: there would be no finding and no status to post,
+   * so failing loudly (the orchestrator's notice names the cap and the knob to raise) beats posting
+   * a review whose only content is a disclosure and a summary of nothing.
    */
   private ReviewResponse salvageTruncatedSingleCall(
       ReviewSession session,
@@ -354,8 +374,7 @@ public class FindingPipeline {
       throw truncation;
     }
     discloseSingleCallResponseCut(session, budgetedBatch, plan, salvaged);
-    return new ReviewResponse(
-        salvaged.findings(), salvaged.previousFindingsStatus(), salvaged.summary());
+    return new ReviewResponse(salvaged.findings(), salvaged.previousFindingsStatus(), null);
   }
 
   /**
@@ -486,7 +505,26 @@ public class FindingPipeline {
             ctx.conversationComments(),
             botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
+    return withSummary(session, refined, promptInputs, ctx, plan);
+  }
 
+  /**
+   * The summary call every review ends with, on both lanes (#664), and its degradations: the
+   * refined findings and statuses are kept whatever happens to it, and the summary object comes
+   * from this call alone. Its input is the findings after verification — the counts it reports
+   * describe what is posted, not what the review call first proposed — plus the changed-files
+   * overview and the summary-call guidance ({@code summaryInstructions}: labels, diagram, project
+   * instructions). The overview and the findings are clamped to what the per-call input budget
+   * leaves once the prompt templates, PR context, previous findings and that guidance are counted;
+   * the guidance itself is sent whole, as the review call's trailing guidance is. Persists and
+   * returns the merged response on every path that does not rethrow.
+   */
+  private ReviewResponse withSummary(
+      ReviewSession session,
+      ReviewResponse refined,
+      AiReviewService.PromptInputs promptInputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan) {
     if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
       return countsOnlySummary(session, refined, plan, "skipping the summary call");
     }
@@ -498,36 +536,31 @@ public class FindingPipeline {
                 budgetedFindingsJson(refined.findings(), promptInputs, overview)),
             PromptTemplateEscaper.escape(overview),
             promptInputs.previousFindings(),
-            promptInputs.repoInstructions());
+            promptInputs.summaryInstructions());
     ReviewResponse summaryResponse;
     try {
       summaryResponse = aiReviewService.summarize(session, summaryInputs);
     } catch (TokenSpendCeilingExceededException _) {
-      // The gate above passed but a late usage callback (e.g. a timed-out batch attempt's
+      // The gate above passed but a late usage callback (e.g. a timed-out review attempt's
       // response) crossed the ceiling first, or a summary retry was refused mid-loop.
       return countsOnlySummary(session, refined, plan, "summary call refused");
     } catch (AiResponseTruncatedException e) {
-      // #500 scope A: every batch call succeeded and was billed. Losing the whole review to a
-      // truncated summary would discard exactly the paid work #495 preserved on the batch lane —
+      // #500 scope A: every review call succeeded and was billed. Losing the whole review to a
+      // truncated summary would discard exactly the paid work #495 preserved on the review lane —
       // salvage the summary object if it closed before the cut, else degrade to the same
       // counts-only shape as the ceiling-tripped path above. Never re-enters the retry lane.
       return salvagedOrCountsOnlySummary(session, refined, plan, e);
     } catch (AiReviewException e) {
       // #851: the same reasoning holds for every other way the summary call can fail its retries
-      // (a response the parser refused, a timeout, a connection reset): the batches are paid for,
-      // so the review keeps them under the counts-only summary instead of failing.
+      // (a response the parser refused, a timeout, a connection reset): the review calls are paid
+      // for, so the review keeps their findings under the counts-only summary instead of failing.
       return failedSummary(session, refined, plan, e);
     }
-
-    var merged =
-        new ReviewResponse(
-            refined.findings(), refined.previousFindingsStatus(), summaryResponse.summary());
-    persistAiResponse(session, merged);
-    return merged;
+    return persistWithSummary(session, refined, summaryResponse.summary());
   }
 
   /**
-   * The summary degradation for a review whose token spend ceiling tripped after the batch calls:
+   * The summary degradation for a review whose token spend ceiling tripped after the review calls:
    * the findings are already paid for, so they are kept and persisted with a {@code null} model
    * summary — the renderer's counts-only shape, the same one a summary call that returns no summary
    * object produces — rather than spending past the ceiling or discarding the review. Recorded on
@@ -570,7 +603,7 @@ public class FindingPipeline {
       DiffBudgetPlanner.BudgetPlan plan,
       AiResponseTruncatedException truncation) {
     plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
-    var salvagedSummary = salvager.salvage(truncation.partialBody()).summary();
+    var salvagedSummary = salvager.salvageSummary(truncation.partialBody());
     if (salvagedSummary != null) {
       Log.warnf(
           "Summary response for session %d was cut at the model's response-length cap"
@@ -864,38 +897,11 @@ public class FindingPipeline {
         "No reviewable file could be sent (%d over the per-call token budget, %d with no patch"
             + " text); skipping the review call",
         plan.omittedFiles().size(), plan.patchlessFiles().size());
-    var summaryInputs =
-        new AiReviewService.SummaryInputs(
-            promptInputs.prContext(),
-            "[]",
-            PromptTemplateEscaper.escape(
-                clampOverview(changedFilesOverview(ctx, plan), promptInputs)),
-            promptInputs.previousFindings(),
-            promptInputs.repoInstructions());
-    ReviewResponse summaryResponse;
-    try {
-      summaryResponse = aiReviewService.summarize(session, summaryInputs);
-    } catch (TokenSpendCeilingExceededException _) {
-      // Same degradation as the multi-call summarize seam: a summary retry refused mid-loop at
-      // the spend ceiling must not fail the review — this lane's only AI call is the summary, so
-      // the review must still post with its omission disclosures, and the skip is recorded on the
-      // plan so the posted review names the ceiling.
-      return countsOnlySummary(
-          session, new ReviewResponse(List.of(), List.of(), null), plan, "summary call refused");
-    } catch (AiResponseTruncatedException e) {
-      // Same degradation as the multi-call summary seam (#500 scope A): this path has no findings
-      // by construction, but the review must still post with its omission disclosures rather than
-      // fail on a deterministic truncation.
-      return salvagedOrCountsOnlySummary(
-          session, new ReviewResponse(List.of(), List.of(), null), plan, e);
-    } catch (AiReviewException e) {
-      // Same degradation as the multi-call summary seam (#851): the review still posts with its
-      // omission disclosures rather than failing on the summary call alone.
-      return failedSummary(session, new ReviewResponse(List.of(), List.of(), null), plan, e);
-    }
-    var merged = new ReviewResponse(List.of(), List.of(), summaryResponse.summary());
-    persistAiResponse(session, merged);
-    return merged;
+    // The same summary step every review ends with, so its degradations apply unchanged: this
+    // lane's only AI call is the summary, and whatever becomes of it the review still posts with
+    // its omission disclosures. It is the one call made here, so max-ai-calls=1 still affords it.
+    return withSummary(
+        session, new ReviewResponse(List.of(), List.of(), null), promptInputs, ctx, plan);
   }
 
   /**
@@ -970,7 +976,7 @@ public class FindingPipeline {
             + PrReviewPrompts.SUMMARY_USER
             + promptInputs.prContext()
             + promptInputs.previousFindings()
-            + promptInputs.repoInstructions();
+            + promptInputs.summaryInstructions();
     var overviewBudget = (budget - tokenCounter.estimateTokens(inherited)) / 2;
     var rows = overview.fileRows();
     // Rollup-note tokens are reserved up front so post-truncation append cannot exceed the share.
@@ -1025,7 +1031,7 @@ public class FindingPipeline {
             + promptInputs.prContext()
             + changedFilesOverview
             + promptInputs.previousFindings()
-            + promptInputs.repoInstructions();
+            + promptInputs.summaryInstructions();
     // trueTotalsNote tokens are reserved up front so post-clamp append cannot exceed the budget.
     var noteReserve =
         findings.isEmpty()
@@ -1421,9 +1427,10 @@ public class FindingPipeline {
   }
 
   /**
-   * Runs the raw model response through the full post-AI chain and persists it. The {@code
-   * lineResolver} is shared with the caller's verdict backstop, so it is passed in rather than
-   * built here.
+   * Runs the raw model response through the full post-AI chain. Persisting is left to the summary
+   * step that follows ({@link #withSummary}), which stores the response once, with its summary. The
+   * {@code lineResolver} is shared with the caller's verdict backstop, so it is passed in rather
+   * than built here.
    */
   @SuppressWarnings("java:S107") // One post-AI stage's input per parameter; see the chain below.
   private ReviewResponse refine(
@@ -1476,9 +1483,7 @@ public class FindingPipeline {
             ctx.inlineComments(),
             ctx.conversationComments(),
             botIdentity);
-    aiResponse = populateMissingAnchors(aiResponse, lineResolver);
-    persistAiResponse(session, aiResponse);
-    return aiResponse;
+    return populateMissingAnchors(aiResponse, lineResolver);
   }
 
   void persistAiResponse(ReviewSession session, ReviewResponse aiResponse) {
