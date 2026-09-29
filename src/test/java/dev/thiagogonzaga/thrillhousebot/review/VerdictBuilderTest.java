@@ -533,8 +533,9 @@ class VerdictBuilderTest {
   @Test
   void aSummarySkippedAtTheCallCapIsDisclosedWithoutHoldingApproval() {
     // #664: REVIEW_MAX_AI_CALLS=1 is spent by the review call, so the summary call is not made.
-    // The findings are complete, so approval is not held, but the counts-only summary must say why
-    // it is one and name the knob.
+    // Only the prose is affected, so approval is not held, but the counts-only summary must say why
+    // it is one and name the knob — without claiming the findings complete, since this lane's one
+    // review call may itself have been cut.
     var ctx = contextWithLineCapOmissions(0);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
@@ -574,10 +575,17 @@ class VerdictBuilderTest {
             .summaryMarkdown()
             .contains(
                 "the summary was skipped because REVIEW_MAX_AI_CALLS=1 leaves no call for it after"
-                    + " the review call — the findings themselves are complete"),
+                    + " the review call"),
         result.summaryMarkdown());
     assertFalse(
         result.summaryMarkdown().contains(ReviewResult.SUMMARY_CALL_CAP_NOTICE),
+        result.summaryMarkdown());
+    // The file gap may be the cut of this lane's one review call, so the skip must not vouch for
+    // the findings' completeness beside it.
+    assertFalse(
+        result
+            .summaryMarkdown()
+            .contains("after the review call — the findings themselves are complete"),
         result.summaryMarkdown());
     var checkSummary = VerdictBuilder.checkSummaryForResult(result);
     assertTrue(

@@ -458,8 +458,8 @@ public class DiffBudgetPlanner {
    * much as for a many-batch one. The one allowance too small to hold both, {@code max-ai-calls=1},
    * still plans its one review call, and {@link #callCapLeavesNoSummaryCall()} tells the pipeline
    * to skip the summary rather than exceed the cap. The overhead is the review call's own: {@code
-   * summaryInstructions} rides the summary call, whose input is bounded separately by the pipeline
-   * against {@link #perCallInputBudget()}.
+   * summaryInstructions} rides the summary call, whose overview and findings the pipeline clamps
+   * against {@link #perCallInputBudget()} with that guidance counted.
    */
   public BudgetPlan plan(
       List<GitHubPullRequestClient.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {

@@ -514,8 +514,10 @@ public class FindingPipeline {
    * from this call alone. Its input is the findings after verification — the counts it reports
    * describe what is posted, not what the review call first proposed — plus the changed-files
    * overview and the summary-call guidance ({@code summaryInstructions}: labels, diagram, project
-   * instructions), each bounded to the per-call input budget. Persists and returns the merged
-   * response on every path that does not rethrow.
+   * instructions). The overview and the findings are clamped to what the per-call input budget
+   * leaves once the prompt templates, PR context, previous findings and that guidance are counted;
+   * the guidance itself is sent whole, as the review call's trailing guidance is. Persists and
+   * returns the merged response on every path that does not rethrow.
    */
   private ReviewResponse withSummary(
       ReviewSession session,

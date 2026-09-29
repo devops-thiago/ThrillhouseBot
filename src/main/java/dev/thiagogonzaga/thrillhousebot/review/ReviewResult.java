@@ -516,16 +516,18 @@ public record ReviewResult(
   /**
    * The call-cap sibling of {@link #SUMMARY_SKIPPED_NOTICE} (#664): every review ends with a
    * summary call, and an allowance of one call ({@code REVIEW_MAX_AI_CALLS=1}) is spent by the
-   * review call alone. The findings are complete, so the partial-review banner would overstate the
-   * damage; the knob to raise is named. When a file-coverage gap exists as well, {@link
+   * review call alone. The partial-review banner would overstate a skip that affects only the
+   * prose, so the knob to raise is named instead. Unlike its siblings it makes no claim that the
+   * findings are complete: the one review call may itself have been cut and salvaged, which the
+   * response-cut disclosure states on its own. When a file-coverage gap exists as well, {@link
    * #coverageGapClause(int, TruncationDetail)} folds the skip in as one more clause and this banner
    * is not used.
    */
   static final String SUMMARY_CALL_CAP_NOTICE =
       """
       > ⚠️ **Summary skipped.** REVIEW_MAX_AI_CALLS=1 leaves no call for the summary after the\
-       review call, so only the finding counts are shown — the findings themselves are complete.\
-       Raise REVIEW_MAX_AI_CALLS to 2 or more for the full summary.
+       review call, so only the finding counts are shown. Raise REVIEW_MAX_AI_CALLS to 2 or more\
+       for the full summary.
 
       """;
 
@@ -731,8 +733,10 @@ public record ReviewResult(
                   + " complete");
       case SKIPPED_AT_CALL_CAP ->
           clauses.add(
+              // No completeness claim: this lane's one review call may itself have been cut and
+              // salvaged, and the response-cut clause beside this one says so.
               "the summary was skipped because REVIEW_MAX_AI_CALLS=1 leaves no call for it after"
-                  + " the review call — the findings themselves are complete");
+                  + " the review call");
       case SUMMARY_FAILED ->
           clauses.add(
               "the summary was not generated because the summary call failed after its retries —"

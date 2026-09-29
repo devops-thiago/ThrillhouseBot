@@ -634,9 +634,9 @@ class DiffBudgetPlannerTest {
 
   @Test
   void theSummaryCallGuidanceIsNotChargedToTheReviewCallsDiffBudget() {
-    // #664: the label and diagram requests ride the summary call's own slot, bounded by the
-    // pipeline against the per-call budget. The review call's overhead must not carry them, or a
-    // large label list would shrink the diff every review call can read.
+    // #664: the label and diagram requests ride the summary call's own slot, which the pipeline
+    // counts when it clamps that call's overview and findings. The review call's overhead must not
+    // carry them, or a large label list would shrink the diff every review call can read.
     var f1 = file("dir/f1.java", 5, patch(5));
     var f2 = file("dir/f2.java", 5, patch(5));
     var overhead =
