@@ -8,6 +8,10 @@ All notable changes to ThrillhouseBot.
 
 - **The summary omits the Description vs. Implementation section when the check found no mismatch** (#867): the clean state's heading and "No mismatch found" line appeared on most reviews and pushed the findings down. A summary that came back means the check ran, and a counts-only summary (no model prose) is visibly different, so an absent section on a summary with model prose means the description matched. Listed gaps and the collapsed "reported as a finding below" state render as before
 
+### Fixed
+
+- **The release's Trivy scans no longer leave a stale warning in the Security tab** (#869): code scanning measures a category's freshness against the default branch, and the release scans run on a tag, so `trivy-release` and `trivy-release-distroless` never received an analysis on `main` after June and were reported as months out of date. The release scans still gate on CRITICAL and HIGH in both images and now upload no SARIF; the reports are kept as the run's `trivy-release-sarif` artifact, and the job no longer holds `security-events: write`. `main` stays covered by the image scans in `ci.yml` and `security-scan.yml`.
+
 ## [0.6.9] — 2026-09-21
 
 What the reviewer knows when it judges a finding drove this release. The second-pass verifier saw only the findings and the diff, so a finding raised from the coverage report or a path-scoped rule read to it as a claim about material it could not see, and it demoted them; a finding's cited location was never checked against the file it named; and a claim the verifier had already rejected could be re-raised and published by a later round on the same commit. The rest is what production showed on 0.6.8: one call could spend a whole review's retry budget at the streaming deadline, a review killed by a restart stayed marked as running for good, and a walkthrough could lose every file summary with nothing recorded about why.
