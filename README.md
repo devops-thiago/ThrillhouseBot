@@ -48,6 +48,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
+- A Description vs. Implementation section in the summary when the PR description and the change disagree. It is omitted when they match. The check is part of the model summary, so a summary that carries model prose ("What this PR does", per-file walkthrough summaries) and no such section means the check ran and found no mismatch; a counts-only summary means it did not run, and a degraded one says why
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
@@ -311,7 +312,7 @@ will change per provider:
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
-| `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings | `true` |
+| `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings, each marked unverified with its confidence capped at medium | `true` |
 | `REVIEW_DECLINE_RECHECK_ENABLED` | Re-check a maintainer's decline against the reviewed code before a prior finding is recorded "justified" (see [Re-checking declines](#re-checking-declines)); the finding stays open for one more round only when the reviewed diff plainly contradicts the stated reason. `false` makes a maintainer reply close the finding unconditionally | `true` |
 | `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
@@ -327,7 +328,7 @@ will change per provider:
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the fixed-shape/short AI calls — the final summary of a multi-call review, the finding verifier, and maintainer replies — which run on the `concise` named model so they don't share a cap sized for batch review output (see [Per-model AI settings](#per-model-ai-settings)). A summary cut at this cap is salvaged from the cut response or falls back to a counts-only summary, the findings are kept, and the posted review names this variable; set it empty to drop the cap and use the provider default | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (batch calls plus the final summary call), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
+| `REVIEW_MAX_AI_CALLS` | Cap on AI calls per review (review or batch calls plus the final summary call every review ends with; at `1` a review that makes its review call has none left for the summary, so the summary is counts-only with a note saying so — a review whose every file exceeded the budget makes no review call and still gets its summary), per `/describe` and `/changelog` run (batch calls plus one reduce call, spent only when the PR needed more than one batch), and per `/improve`, `/generate-tests` or `/add-docs` run (batch calls only — their results are merged locally); files that still don't fit are reported by name as omitted | `6` |
 | `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, absorbing token-estimate error | `0.9` |
 | `REVIEW_MAX_TOKENS_PER_REVIEW` | Ceiling on the tokens one review may consume across every AI call it makes — actual input+output as the provider reports them, counting retries and the final summary call, where `REVIEW_MAX_AI_CALLS` only counts planned calls. Once reached no further review call is made: remaining batches are disclosed by name as not reviewed (the verdict holds and the summary names the ceiling as the reason) and the summary degrades to a counts-only rendering that keeps the findings already paid for. `0` disables the ceiling. Review path only — the on-demand commands keep their own call cap | `0` |
 | `REVIEW_MAX_DIFF_LINES` | Line cap on single-call diff renders (replies, base comparison, budgeting-disabled review). Token-budgeted reviews and the batched commands — `/improve`, `/describe`, `/changelog`, `/generate-tests`, `/add-docs` — ignore it (the planner owns coverage by tokens); `0` disables the cap | `5000` |
@@ -359,15 +360,26 @@ will change per provider:
 
 ### AI call budget
 
-A review that reports findings makes **two** model calls by default, not one:
-the review call itself plus a verification call that re-sends the diff and the
-candidate findings, so budget roughly **2× tokens** per flagged review. On
-large PRs under token-aware budgeting this becomes N batch review calls + N
-per-batch verification calls + one summary call. Set
+A review normally makes at least **two** model calls: the review call, which returns
+findings and previous-finding statuses only, and a summary call that writes the
+PR-level summary (purpose, description gaps, file walkthrough, labels, diagram)
+from the verified findings and the changed-file list. The summary call never
+carries the diff, so it is small next to the review call. A review that reports
+findings adds a verification call that re-sends the diff and the candidate
+findings, so budget roughly **2× tokens** per flagged review. At
+`REVIEW_MAX_AI_CALLS=1` the summary call is skipped after a review call, and a
+review whose every file exceeded the budget makes only the summary call. On large PRs
+under token-aware budgeting this becomes N batch review calls + N per-batch
+verification calls + the same one summary call. Set
 `REVIEW_VERIFIER_ENABLED=false` to skip only the AI verifier — cheaper, at the
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
-findings).
+findings). A finding the verifier returned no verdict on (an empty or cut
+response, an error, or a call skipped at `REVIEW_MAX_TOKENS_PER_REVIEW`) still
+posts where it would have, but with its confidence capped at medium and a line
+in its own text saying it was not verified, so under the default `balanced`
+strictness it cannot request changes on its own; the review summary also states
+how many findings went unverified.
 
 The on-request commands are budgeted the same way. `/improve`, `/describe`,
 `/changelog` and `/generate-tests` each split a large PR into batches under
@@ -556,7 +568,8 @@ severity findings still post as comments with a neutral check.
 **Security-team recommendation:** use `strict` so a CRITICAL/HIGH finding cannot
 slip through as a comment just because confidence was demoted. Be aware that
 under `strict`, the finding verifier's confidence demotions (hedged claims →
-medium/low) no longer prevent a merge block — only risk reduction or dropping
+medium/low), and the medium-confidence cap on a finding the verifier returned
+no verdict on, no longer prevent a merge block — only risk reduction or dropping
 the finding does. Stay on `balanced` if you want verifier demotions to keep
 speculative severity findings non-blocking.
 
@@ -693,6 +706,16 @@ Notes:
   model, keep the buffer at least as large as the output cap so a response the
   model is allowed to produce always has reserved room — set both when capping
   output. Boot fails if you don't.
+- **Reading a cut response.** When a call stops with `finish_reason=length`, the
+  log line, the failed check run and the pull-request notice state the
+  `max_tokens` the request licensed and the setting that supplied it (the
+  active model's `max-output-tokens`, or `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` on
+  the concise lane) next to the completion and prompt tokens the provider
+  billed. They advise raising that setting only when the billed completion
+  reached it. A provider can stop a call short of what the request licensed,
+  and that bound does not move with a higher setting, so a stop short of the
+  cap is reported as such. When the provider sends no usage, the notice says so
+  and keeps the lane's standing advice.
 - **`separate-output-budget`** (default `false`) says which contract the model is
   on. Left off, prompt and completion share one window: the budgeter reserves
   `output-buffer-tokens` out of the input budget, and the buffer must cover
@@ -1060,7 +1083,8 @@ This is still an early-stage project; the current constraints are:
 
 - **GitHub only** — no GitLab or Bitbucket integration.
 - **Large diffs** — reviews are token-budgeted (`REVIEW_MAX_INPUT_TOKENS`): big PRs are
-  split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls, and files that still
+  split into up to `REVIEW_MAX_AI_CALLS - 1` batched review calls (one call is kept for the
+  summary every review ends with), and files that still
   don't fit are disclosed by name instead of silently dropped. `/improve` batches the same
   way (up to `REVIEW_MAX_AI_CALLS` calls, since it makes no summary call), as does
   `/generate-tests` (its per-batch test files are unioned locally) and `/add-docs` (its

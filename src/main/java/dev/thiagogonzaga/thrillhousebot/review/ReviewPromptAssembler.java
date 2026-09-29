@@ -24,10 +24,13 @@ import jakarta.inject.Inject;
 /**
  * Turns a loaded {@link ReviewContextLoader.ReviewContext} into the {@link
  * AiReviewService.PromptInputs} the model is called with — fencing the diff and every untrusted
- * prose slot in an unforgeable CSPRNG boundary, and assembling the trailing guidance (labels +
- * diagram request + config-key definitions + patch coverage + repository instructions, global then
- * path-scoped) into the single {@code repoInstructions} slot. Extracted from {@code
- * ReviewOrchestrator} as the pure prompt-shaping transform.
+ * prose slot in an unforgeable CSPRNG boundary, and assembling the trailing guidance of each call.
+ * The review call's ({@code repoInstructions}) carries the review-only requests (mock fidelity, bug
+ * fix efficacy, config-key definitions, heuristic failure modes, patch coverage) and the repository
+ * instructions, global then path-scoped. The summary call's ({@code summaryInstructions}) carries
+ * the label and diagram requests — they gate {@code suggested_labels} and {@code
+ * walkthrough_diagram}, which only the summary call writes (#664) — and the project-wide
+ * instructions. Extracted from {@code ReviewOrchestrator} as the pure prompt-shaping transform.
  */
 @ApplicationScoped
 public class ReviewPromptAssembler {
@@ -75,34 +78,39 @@ public class ReviewPromptAssembler {
     // The diagram request's presence is what gates the model's walkthrough_diagram field.
     String diagramGuidance =
         config.review().diagram().enabled() ? PrReviewPrompts.DIAGRAM_REQUEST : "";
+    String globalInstructions =
+        PromptSections.instructionsSection(ctx.instructions(), INSTRUCTIONS_GUIDANCE);
     // Include pure-renamed test files so mock-fidelity / related-tests guidance still sees moves
     // even though empty rename hunks are excluded from the reviewable diff (#386).
     String relatedTests =
         diffFormatter.buildRelatedTests(
             ReviewDiffFormatter.withPureRenames(ctx.reviewableFiles(), ctx.files()));
-    String trailingGuidance =
+    String reviewGuidance =
         combineSections(
             combineSections(
                 combineSections(
-                    combineSections(
-                        combineSections(
-                            labelGuidance.isBlank()
-                                ? ""
-                                : PromptTemplateEscaper.escape(labelGuidance),
-                            diagramGuidance),
-                        mockFidelitySection(relatedTests)),
-                    combineSections(
-                        bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext()),
-                        configKeyContextSection(ctx.configKeyContext()))),
+                    mockFidelitySection(relatedTests),
+                    bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext())),
                 combineSections(
-                    heuristicFailureModesSection(ctx.diff()),
-                    patchCoverageSection(ctx.patchCoverage()))),
+                    configKeyContextSection(ctx.configKeyContext()),
+                    combineSections(
+                        heuristicFailureModesSection(ctx.diff()),
+                        patchCoverageSection(ctx.patchCoverage())))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
-                PromptSections.instructionsSection(ctx.instructions(), INSTRUCTIONS_GUIDANCE),
+                globalInstructions,
                 PromptSections.pathInstructionsSection(
                     ctx.pathInstructions(), PATH_INSTRUCTIONS_GUIDANCE)));
+    // The summary call gets the project-wide instructions (they may shape how the change is
+    // described) but not the path-scoped blocks: those are per-file review rules whose findings
+    // must quote them, and the summary call reviews no file and raises no finding.
+    String summaryGuidance =
+        combineSections(
+            combineSections(
+                labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
+                diagramGuidance),
+            globalInstructions);
     return new AiReviewService.PromptInputs(
         fencedDiff,
         PromptTemplateEscaper.fence(PromptSections.prContext(req.prTitle(), req.prDescription())),
@@ -110,7 +118,8 @@ public class ReviewPromptAssembler {
         fencedStack,
         PromptTemplateEscaper.fence(relatedTests),
         PromptTemplateEscaper.fence(ctx.previousFindings()),
-        trailingGuidance);
+        reviewGuidance,
+        summaryGuidance);
   }
 
   /**

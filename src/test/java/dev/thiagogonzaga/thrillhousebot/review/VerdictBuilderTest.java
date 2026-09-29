@@ -531,6 +531,68 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void aSummarySkippedAtTheCallCapIsDisclosedWithoutHoldingApproval() {
+    // #664: REVIEW_MAX_AI_CALLS=1 is spent by the review call, so the summary call is not made.
+    // Only the prose is affected, so approval is not held, but the counts-only summary must say why
+    // it is one and name the knob — without claiming the findings complete, since this lane's one
+    // review call may itself have been cut.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CALL_CAP);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertFalse(result.truncated());
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+    assertTrue(
+        result.summaryMarkdown().startsWith(ReviewResult.SUMMARY_CALL_CAP_NOTICE),
+        result.summaryMarkdown());
+    assertTrue(
+        result.summaryMarkdown().contains("Raise REVIEW_MAX_AI_CALLS to 2 or more"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains(
+            "The summary was skipped (REVIEW_MAX_AI_CALLS=1 leaves no call for it)."),
+        checkSummary);
+  }
+
+  @Test
+  void aSummarySkippedAtTheCallCapAlongsideFileGapsFoldsIntoTheCoverageClause() {
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CALL_CAP);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(result.truncated());
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .contains(
+                "the summary was skipped because REVIEW_MAX_AI_CALLS=1 leaves no call for it after"
+                    + " the review call"),
+        result.summaryMarkdown());
+    assertFalse(
+        result.summaryMarkdown().contains(ReviewResult.SUMMARY_CALL_CAP_NOTICE),
+        result.summaryMarkdown());
+    // The file gap may be the cut of this lane's one review call, so the skip must not vouch for
+    // the findings' completeness beside it.
+    assertFalse(
+        result
+            .summaryMarkdown()
+            .contains("after the review call — the findings themselves are complete"),
+        result.summaryMarkdown());
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.contains("summary skipped (no call left under max-ai-calls)"), checkSummary);
+  }
+
+  @Test
   void anUnverifiedFindingSetIsDisclosedWithoutHoldingApproval() {
     // #623: verification failed open (empty body or cut response) and the findings posted anyway
     // — correct — but nothing on any surface said no second stage had screened them. The posted

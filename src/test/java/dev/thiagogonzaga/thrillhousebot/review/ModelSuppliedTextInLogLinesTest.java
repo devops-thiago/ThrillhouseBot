@@ -36,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
 import jakarta.ws.rs.WebApplicationException;
@@ -395,7 +396,8 @@ class ModelSuppliedTextInLogLinesTest {
         config,
         mapper,
         mock(ReviewTokenLedger.class),
-        new TruncatedResponseSalvager(mapper));
+        new TruncatedResponseSalvager(mapper),
+        TestResponseCaps.defaults());
   }
 
   /** {@link FindingVerificationService} demoting a finding whose own wording hedges the defect. */
@@ -494,7 +496,8 @@ class ModelSuppliedTextInLogLinesTest {
             config,
             mapper,
             mock(ReviewTokenLedger.class),
-            new TruncatedResponseSalvager(mapper));
+            new TruncatedResponseSalvager(mapper),
+            TestResponseCaps.defaults());
     var response = response(finding("src/Main.java", 10, FORGED_TITLE, "old"));
 
     var captured =

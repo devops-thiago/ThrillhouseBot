@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -40,6 +42,25 @@ class SuggestionFormatterTest {
     assertTrue(comment.contains("Fix it"));
     assertTrue(comment.contains("```suggestion"));
     assertTrue(comment.contains("new code"));
+  }
+
+  @Test
+  void anUnscreenedFindingsCommentSaysItWasNotVerifiedWhereAScreenedOneDoesNot() {
+    // #885: the inline thread is where the maintainer meets the finding, so it has to carry the
+    // difference the round-level banner states: the capped confidence and the note.
+    var raised =
+        new ReviewResponse.Finding(
+            "high", "high", "Main.java", 10, "Bug", "Fix it", "old code", "new code");
+    var screened = formatter.formatReviewComment(Finding.fromAiResponse(raised));
+    var unscreened =
+        formatter.formatReviewComment(
+            Finding.fromAiResponse(FindingVerificationService.markUnscreened(raised)));
+
+    assertFalse(screened.contains(FindingVerificationService.UNVERIFIED_NOTE));
+    assertFalse(screened.contains("verify before acting"));
+    assertTrue(unscreened.contains("Fix it\n\n" + FindingVerificationService.UNVERIFIED_NOTE));
+    assertTrue(unscreened.contains("_(medium confidence — verify before acting)_"));
+    assertTrue(unscreened.contains("```suggestion"));
   }
 
   @Test

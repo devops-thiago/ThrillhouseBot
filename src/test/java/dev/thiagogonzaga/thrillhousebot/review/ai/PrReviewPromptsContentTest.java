@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -414,17 +415,25 @@ class PrReviewPromptsContentTest {
         "check (c): the end-to-end behavior must be compared against the PR's stated intent");
   }
 
+  /**
+   * #117's inverted-trace gap, moved with the summary object (#664): the review call files the
+   * trace as a finding and names the stated claim it inverts; the summary call, the sole owner of
+   * description_gaps, lists that finding as a gap.
+   */
   @Test
-  void generatorPromptRoutesAnInvertedTraceIntoDescriptionGaps() {
-    String sys = PrReviewPrompts.SYSTEM;
+  void anInvertedTraceIsAFindingThatTheSummaryListsAsADescriptionGap() {
     assertContains(
-        sys,
-        "AND as a summary.description_gaps entry",
-        "an end-to-end trace contradicting the stated intent must also become a description gap");
+        PrReviewPrompts.SYSTEM,
+        "name in the description which stated claim the trace inverts",
+        "an end-to-end trace contradicting the stated intent must name the claim it inverts");
     assertContains(
-        sys,
-        "producer→consumer trace whose end-to-end behavior is the inverse of the stated",
-        "the description_gaps field must name the inverted-trace case as one of its inputs");
+        PrReviewPrompts.SYSTEM,
+        "PR-level summary lists that finding as a description gap",
+        "the review call must know the inverted trace becomes a description gap downstream");
+    assertContains(
+        PrReviewPrompts.SUMMARY_SYSTEM,
+        "inverse of what the description states is a gap as well",
+        "the summary's description_gaps must take the inverted-trace finding as one of its inputs");
   }
 
   @Test
@@ -1037,8 +1046,8 @@ class PrReviewPromptsContentTest {
         "a defect on another dimension must be filed, not cited as evidence (#587)");
     assertContains(
         sys,
-        "summary.file_summaries row, or in a description_gaps entry is NOT",
-        "stating a defect on a non-finding surface must not count as reporting it (#587)");
+        "or in a previous_findings_status note, is NOT reporting it",
+        "stating a defect on a non-finding surface must not count as reporting it (#587, #664)");
     assertContains(
         sys,
         "this one forbids burying a SECOND defect inside the",
@@ -1104,12 +1113,50 @@ class PrReviewPromptsContentTest {
         "a bounded level, or an already-hashed lookup, must invalidate the claim (#537)");
   }
 
+  /**
+   * #664: the review call's contract is findings and previous-finding statuses; every summary field
+   * moved to the summary call. The pins that used to hold for both prompts (#536, #804, #569, #566)
+   * now hold for the summary prompt alone, and this pins that the review prompt no longer asks for
+   * the fields at all — a leftover request would spend output on an object that is discarded.
+   */
   @Test
-  void bothPromptsAskForAsManyFileSummariesAsTheWalkthroughRenders() {
+  void reviewPromptAsksForFindingsAndStatusesOnly() {
+    String sys = PrReviewPrompts.SYSTEM;
+    assertTrue(
+        sys.endsWith(PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT),
+        "the review prompt must close on the findings-only response contract");
     assertContains(
-        PrReviewPrompts.SYSTEM,
-        "cap the array at " + PrReviewPrompts.MAX_FILE_SUMMARIES + " entries",
-        "the review prompt's file_summaries cap must be the walkthrough row bound (#536)");
+        PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT,
+        "{\"findings\": [ ... ], \"previous_findings_status\": [ ... ]}",
+        "the contract must show the two-field response shape");
+    assertContains(
+        PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT,
+        "Do NOT write a \"summary\" object",
+        "the contract must forbid the summary object outright");
+    assertContains(
+        PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT,
+        "is [] when you found no issues — never omit it",
+        "an empty review must still carry the findings node (#805)");
+    for (String field :
+        new String[] {
+          "total_findings",
+          "overall_assessment",
+          "pr_purpose",
+          "description_gaps",
+          "file_summaries",
+          "suggested_labels",
+          "walkthrough_diagram",
+          "summary.",
+          "The \"summary\" object must include"
+        }) {
+      assertFalse(
+          sys.contains(field) || PrReviewPrompts.USER.contains(field),
+          "the review call must no longer ask for summary field " + field + " (#664)");
+    }
+  }
+
+  @Test
+  void summaryPromptAsksForAsManyFileSummariesAsTheWalkthroughRenders() {
     assertContains(
         PrReviewPrompts.SUMMARY_SYSTEM,
         "capped at " + PrReviewPrompts.MAX_FILE_SUMMARIES + " entries",
@@ -1117,12 +1164,8 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
-  void bothPromptsSayAFileSummaryEntryNamesAFileNeverADirectory() {
+  void summaryPromptSaysAFileSummaryEntryNamesAFileNeverADirectory() {
     // The reported PR's response carried "billing/" as an entry, which matches no row (#804).
-    assertContains(
-        PrReviewPrompts.SYSTEM,
-        "never a directory",
-        "the review prompt must rule out directory entries in file_summaries (#804)");
     assertContains(
         PrReviewPrompts.SUMMARY_SYSTEM,
         "never a directory",
@@ -1153,17 +1196,16 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
-  void bothPromptsPinTheFileSummaryShapeThatSurvivesParsing() {
-    for (String prompt : new String[] {PrReviewPrompts.SYSTEM, PrReviewPrompts.SUMMARY_SYSTEM}) {
-      assertContains(
-          prompt,
-          "spelled exactly \"path\"",
-          "a mis-keyed entry is silently dropped, so the keys must be pinned (#536)");
-      assertContains(
-          prompt,
-          "must be an ARRAY, never an object keyed by",
-          "the map form fails schema mapping and costs the whole summary (#536)");
-    }
+  void summaryPromptPinsTheFileSummaryShapeThatSurvivesParsing() {
+    String prompt = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        prompt,
+        "spelled exactly \"path\"",
+        "a mis-keyed entry is silently dropped, so the keys must be pinned (#536)");
+    assertContains(
+        prompt,
+        "must be an ARRAY, never an object keyed by",
+        "the map form fails schema mapping and costs the whole summary (#536)");
   }
 
   @Test
@@ -1367,25 +1409,38 @@ class PrReviewPromptsContentTest {
         "the prompt must say what the collapsed surface costs (#773)");
   }
 
-  /** The same guard on both surfaces that emit {@code description_gaps}. */
+  /**
+   * The guard on the one surface that emits {@code description_gaps} since #664 — the summary call.
+   * The review call's copy of it went with the field; its findings keep the withheld-material
+   * self-check pinned in {@link #withheldMaterialIsNeverReportedAsMissingWork}.
+   */
   @Test
-  void bothPromptsKeepWithheldPathsOutOfDescriptionGaps() {
-    assertContains(
-        PrReviewPrompts.SYSTEM,
-        "a path the material lists as omitted from AI review",
-        "the review call's description_gaps must exclude withheld paths (#569)");
+  void summaryPromptKeepsWithheldPathsOutOfDescriptionGaps() {
     assertContains(
         PrReviewPrompts.SUMMARY_SYSTEM,
         "pure rename, omitted from AI review, or not reviewed IS part of this",
         "the summary call's description_gaps must exclude withheld paths (#569)");
     // #566 — the derived form: the visible docs called unbacked because their code was withheld.
     assertContains(
-        PrReviewPrompts.SYSTEM,
-        "is not a gap either because the code implementing it sits",
-        "the review call's description_gaps must refuse the derived claim too (#566)");
-    assertContains(
         PrReviewPrompts.SUMMARY_SYSTEM,
         "Nor is the documentation or configuration this change does show unbacked",
         "the summary call's description_gaps must refuse the derived claim too (#566)");
+  }
+
+  /**
+   * #664: the summary call, not the review call, answers the diagram request, and it never sees the
+   * diff — so the request must ground the diagram in what that call has instead of inviting it to
+   * reconstruct control flow it was not shown.
+   */
+  @Test
+  void diagramRequestGroundsTheDiagramInTheSummaryCallsOwnMaterial() {
+    assertContains(
+        PrReviewPrompts.DIAGRAM_REQUEST,
+        "You do not see the diff",
+        "the diagram request must say the call answering it has no diff");
+    assertContains(
+        PrReviewPrompts.DIAGRAM_REQUEST,
+        "components and calls that material names",
+        "the diagram must be limited to components its material names");
   }
 }

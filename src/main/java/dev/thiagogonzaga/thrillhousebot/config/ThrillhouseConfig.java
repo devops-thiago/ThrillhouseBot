@@ -220,9 +220,11 @@ public interface ThrillhouseConfig {
     int outputBufferTokens();
 
     /**
-     * Hard cap on model calls per review across all batches plus the final summary call, so a
-     * pathologically large PR can never fan out without bound. Files that do not fit within this
-     * many calls are reported by name, never silently dropped.
+     * Hard cap on model calls per review across all batches plus the final summary call every
+     * review ends with (#664), so a pathologically large PR can never fan out without bound. Files
+     * that do not fit within this many calls are reported by name, never silently dropped. At 1 a
+     * review call spends the whole allowance and the summary call is skipped, disclosed; a review
+     * whose every file exceeded the budget makes no review call, so its summary call still fits.
      */
     @WithDefault("6")
     @WithName("max-ai-calls")

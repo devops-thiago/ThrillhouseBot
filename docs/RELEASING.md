@@ -11,7 +11,14 @@ against an existing tag. The jobs run in order:
 
 1. **verify** — validates the tag is semver, checks it matches `pom.xml`, and
    confirms the CI-built images for that commit already exist in GHCR.
-2. **scan** — Trivy-scans both image variants, gating on CRITICAL/HIGH.
+2. **scan** — Trivy-scans both image variants, gating on CRITICAL/HIGH. The
+   scan uploads nothing to code scanning: it runs on a tag, and code scanning
+   judges a category's freshness against `main`, so a tag-only category shows
+   as stale in the Security tab forever (#869). The SARIF reports are kept as
+   the run's `trivy-release-sarif` artifact instead, and a failed gate names
+   the findings there. The Security tab's image results come from `ci.yml`
+   (`trivy-image`, `trivy-image-distroless`) and `security-scan.yml`, which
+   scan `main`; there is no `trivy-release` category to check after a release.
 3. **promote** — retags the commit images to `:vX.Y.Z` (and `:latest` when the
    tag is the highest `vX.Y.Z` release; a pre-release or floating tag such as
    `v0.6.8-rc1` or `nightly` does not count), signs them with cosign, and attests

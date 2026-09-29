@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TruncationReport;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -44,23 +45,25 @@ public class ReviewOrchestrator {
 
   private static final String CONCLUSION_FAILURE = "failure";
 
-  /** FAILED check-run title when the failure was the model's response-length cap (#500). */
-  static final String TRUNCATION_CHECK_TITLE = "Review failed: the AI response hit its length cap";
+  /**
+   * FAILED check-run title when the failure was a length stop (#500). Not "its cap": the provider
+   * can stop a call short of the cap the request licensed (#895).
+   */
+  static final String TRUNCATION_CHECK_TITLE = "Review failed: the AI response was cut short";
 
   /**
-   * FAILED check-run summary for a truncation: names the cap and the knob(s) to raise, matching the
-   * PR notice, instead of the bare conclusion-only update a generic failure gets.
+   * FAILED check-run summary for a truncation, matching the PR notice instead of the bare
+   * conclusion-only update a generic failure gets: the licensed cap and the setting that supplied
+   * it, the billed usage, and the setting to raise only when the stop reached the cap (#895).
    */
-  static String truncationCheckSummary(boolean conciseModelImplicated) {
-    return "The model's response was cut at its response-length cap (finish_reason=length), so the"
-        + " review output was incomplete. Retrying without changing configuration would be cut at"
-        + " the same point — raise the active model's max-output-tokens (or leave it unset to use"
-        + " the provider default)"
-        + (conciseModelImplicated
-            ? ", and REVIEW_CONCISE_MAX_OUTPUT_TOKENS (the truncated call ran on the concise"
-                + " model)"
-            : "")
-        + ", then run /review again.";
+  static String truncationCheckSummary(TruncationReport report) {
+    return "The model's response was cut on a length limit (finish_reason=length), so the review"
+        + " output was incomplete. "
+        + report.describe(TruncationReport.PLAIN)
+        + (report.advisesASettingChange()
+            ? " Retrying without that change would be cut the same way; make it, then run /review"
+                + " again."
+            : "");
   }
 
   /** FAILED check-run title when the provider rejected the request as over the window (#622). */
@@ -721,7 +724,7 @@ public class ReviewOrchestrator {
     String checkSummary = null;
     if (truncation.isPresent()) {
       checkTitle = TRUNCATION_CHECK_TITLE;
-      checkSummary = truncationCheckSummary(truncation.get().conciseModelImplicated());
+      checkSummary = truncationCheckSummary(truncation.get().report());
     } else if (contextWindow.isPresent()) {
       checkTitle = CONTEXT_WINDOW_CHECK_TITLE;
       checkSummary = contextWindowCheckSummary();
@@ -747,7 +750,7 @@ public class ReviewOrchestrator {
 
     if (truncation.isPresent()) {
       reviewPublisher.postTruncationFailureNotice(
-          auth, req.owner(), req.repo(), req.prNumber(), truncation.get().conciseModelImplicated());
+          auth, req.owner(), req.repo(), req.prNumber(), truncation.get().report());
     } else if (contextWindow.isPresent()) {
       reviewPublisher.postContextWindowFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
     } else {

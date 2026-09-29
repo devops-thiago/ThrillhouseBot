@@ -23,6 +23,7 @@ import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.InternalServerException;
 import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.StreamingHandle;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -77,6 +78,9 @@ class AiReviewServiceTest {
   /** No ceiling, the shipped default; the #838 tests build their own gate with one. */
   @Spy
   private ModelCallGate callGate = new ModelCallGate(0, Duration.ofSeconds(5), System::nanoTime);
+
+  /** The shipped shape: no active-model cap, the concise lane at its 8192 default. */
+  @Spy private ResponseCaps responseCaps = TestResponseCaps.defaults();
 
   private static final AiReviewService.PromptInputs PROMPT_INPUTS =
       new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "");
@@ -1011,7 +1015,14 @@ class AiReviewServiceTest {
     StreamingHandle handle = mock(StreamingHandle.class);
     var cancellableService =
         new AiReviewService(
-            prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, callGate) {
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            tokenLedger,
+            callGate,
+            responseCaps) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -1064,7 +1075,14 @@ class AiReviewServiceTest {
     doThrow(new IllegalStateException("already closed")).when(handle).cancel();
     var cancellableService =
         new AiReviewService(
-            prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, callGate) {
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            tokenLedger,
+            callGate,
+            responseCaps) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -1161,7 +1179,14 @@ class AiReviewServiceTest {
     realLedger.recordUsage(42L, 900_000, 100_000);
     var uncappedService =
         new AiReviewService(
-            prReviewer, prSummarizer, parser, config, broadcaster, realLedger, callGate);
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            realLedger,
+            callGate,
+            responseCaps);
     when(prReviewer.reviewStream(
             anyString(),
             anyString(),
@@ -1200,7 +1225,14 @@ class AiReviewServiceTest {
     realLedger.open(42L);
     var cappedService =
         new AiReviewService(
-            prReviewer, prSummarizer, parser, config, broadcaster, realLedger, callGate);
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            realLedger,
+            callGate,
+            responseCaps);
     when(reviewConfig.maxAiRetries()).thenReturn(5);
     when(prReviewer.reviewStream(
             anyString(),
@@ -1610,6 +1642,54 @@ class AiReviewServiceTest {
   }
 
   @Test
+  void aStreamedStopShortOfTheLicensedCapStatesTheFiguresAndDoesNotAdviseRaisingIt() {
+    // #895, the production shape: the request licensed 96000, the provider billed 65536 and
+    // stopped. The message states both next to the prompt tokens, keeps the character count only
+    // as the size of what reached the salvage step, and does not name the setting as a remedy.
+    var capped =
+        new AiReviewService(
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            tokenLedger,
+            callGate,
+            TestResponseCaps.of(96_000, 8192));
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(
+            invocation ->
+                TruncatedTokenStream.withUsage(
+                    "{\"findings\":[", new TokenUsage(163_342, 65_536), starts));
+
+    var session = reviewSession();
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class, () -> capped.review(session, PROMPT_INPUTS));
+
+    var message = thrown.getMessage();
+    assertTrue(message.contains("13 characters arrived before the cut"), message);
+    assertTrue(
+        message.contains(
+            "licensed max_tokens=96000 (from thrillhousebot.ai.models.\""
+                + TestResponseCaps.MODEL
+                + "\".max-output-tokens); billed 65536 completion tokens, 163342 prompt tokens"),
+        message);
+    assertTrue(message.contains("30464 tokens short of the licensed cap"), message);
+    assertFalse(message.contains("Raise the active model's"), message);
+    assertEquals(TruncationReport.Stop.SHORT_OF_CAP, thrown.report().stop());
+  }
+
+  @Test
   void aTruncatedReviewKeepsTheActiveModelsRemedy() {
     // The other half of the same guarantee: the review lane is bound to the active model, so its
     // truncation must keep naming max-output-tokens — the lane decides the wording, not a default.
@@ -1887,7 +1967,7 @@ class AiReviewServiceTest {
 
   private AiReviewService serviceGatedBy(ModelCallGate gate) {
     return new AiReviewService(
-        prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, gate);
+        prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, gate, responseCaps);
   }
 
   private void stubReviewStreams(TokenStream first, TokenStream... then) {

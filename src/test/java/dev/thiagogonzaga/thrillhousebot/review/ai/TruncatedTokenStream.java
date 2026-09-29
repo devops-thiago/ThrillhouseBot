@@ -56,6 +56,12 @@ final class TruncatedTokenStream implements TokenStream {
     this.starts = starts;
   }
 
+  /** A length stop with content and a usage report: what a provider bills for a cut answer. */
+  static TruncatedTokenStream withUsage(
+      String partialText, TokenUsage usage, AtomicInteger starts) {
+    return new TruncatedTokenStream(partialText, null, usage, starts);
+  }
+
   /** A length stop with an empty content body: the model spent its output allowance reasoning. */
   static TruncatedTokenStream reasoningExhausted(AtomicInteger starts) {
     return new TruncatedTokenStream(

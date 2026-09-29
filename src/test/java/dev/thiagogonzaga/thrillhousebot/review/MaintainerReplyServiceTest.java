@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
 import java.util.List;
@@ -86,7 +87,8 @@ class MaintainerReplyServiceTest {
         formatter,
         replyAssistant,
         repoSettingsResolver,
-        identity);
+        identity,
+        TestResponseCaps.defaults());
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiff(
