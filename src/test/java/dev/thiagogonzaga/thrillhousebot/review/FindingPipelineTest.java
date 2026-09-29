@@ -96,7 +96,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            SecurityScan.disabled());
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -2591,7 +2592,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            SecurityScan.disabled());
     var session = persistedSession();
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -2648,7 +2650,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             realLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            SecurityScan.disabled());
     var session = persistedSession();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -2791,7 +2794,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            SecurityScan.disabled());
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))

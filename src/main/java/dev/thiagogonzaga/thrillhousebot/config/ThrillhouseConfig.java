@@ -430,6 +430,52 @@ public interface ThrillhouseConfig {
 
     @WithName("large-pr-nudge")
     LargePrNudgeConfig largePrNudge();
+
+    @WithName("security-scan")
+    SecurityScanConfig securityScan();
+  }
+
+  /**
+   * Opt-in deterministic security scan of the lines a pull request adds (#60): leaked credentials
+   * in well-known formats and risky infrastructure-as-code settings, raised as findings with a
+   * fixed grade and no model call. A matched credential is never repeated: every surface shows only
+   * its first characters and its length.
+   *
+   * <p>Both halves are off by default. A new source of blocking findings changes the verdict an
+   * existing deployment gets, so turning it on is the operator's call, as it is for every other
+   * feature that adds to a review.
+   */
+  interface SecurityScanConfig {
+    /**
+     * Scan added lines for credentials (provider token formats, private keys, JWTs, assignments).
+     */
+    @WithName("secrets-enabled")
+    @WithDefault("false")
+    boolean secretsEnabled();
+
+    /** Scan added lines for risky Terraform, Kubernetes, CloudFormation and Dockerfile settings. */
+    @WithName("iac-enabled")
+    @WithDefault("false")
+    boolean iacEnabled();
+
+    /**
+     * Minimum Shannon entropy, in bits per character, a quoted literal assigned to a
+     * credential-named key needs before the generic assignment rule reports it. The well-known
+     * formats are not gated by it. Validated at boot to lie in (0, 8].
+     */
+    @WithName("entropy-threshold")
+    @WithDefault("3.5")
+    double entropyThreshold();
+
+    /**
+     * Gitignore-style globs the scan skips on top of the review's ignore set: test fixtures and
+     * snapshots, where token-shaped sample data is expected.
+     */
+    @WithName("skipped-files")
+    @WithDefault(
+        "**/fixtures/**,**/__fixtures__/**,**/testdata/**,**/test-data/**,**/__snapshots__/**,"
+            + "**/*.snap")
+    List<String> skippedFiles();
   }
 
   /**

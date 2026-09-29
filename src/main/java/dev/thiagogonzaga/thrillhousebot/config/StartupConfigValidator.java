@@ -119,6 +119,7 @@ public class StartupConfigValidator {
     validateReviewBudget(problems, config.review());
     validateCiGating(problems, config.review());
     validateBlockingStrictness(problems, config.review());
+    validateSecurityScan(problems, config.review().securityScan());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
     validateActiveModelWindow(problems);
@@ -155,6 +156,23 @@ public class StartupConfigValidator {
           "AI_MAX_CONCURRENT_CALLS must be >= 0, where 0 leaves model calls unbounded"
               + " (thrillhousebot.ai.max-concurrent-calls): "
               + ai.maxConcurrentCalls());
+    }
+  }
+
+  /**
+   * Rejects an entropy threshold the secret scan's generic assignment rule could not use (#60): a
+   * value at or below zero would report every quoted literal assigned to a credential-named key,
+   * and one above eight bits per character — the most a byte alphabet carries — would report none
+   * while the operator believes the rule is on.
+   */
+  private static void validateSecurityScan(
+      List<String> problems, ThrillhouseConfig.SecurityScanConfig scan) {
+    var threshold = scan.entropyThreshold();
+    if (!Double.isFinite(threshold) || threshold <= 0 || threshold > 8.0) {
+      problems.add(
+          "REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD must be in (0, 8] and finite"
+              + " (thrillhousebot.review.security-scan.entropy-threshold): "
+              + threshold);
     }
   }
 

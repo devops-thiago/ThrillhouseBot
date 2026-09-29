@@ -203,6 +203,7 @@ public class FindingPipeline {
   private final TokenCounter tokenCounter;
   private final ReviewTokenLedger tokenLedger;
   private final TruncatedResponseSalvager salvager;
+  private final SecurityScan securityScan;
 
   @Inject
   public FindingPipeline(
@@ -218,7 +219,8 @@ public class FindingPipeline {
       DiffBudgetPlanner budgetPlanner,
       TokenCounter tokenCounter,
       ReviewTokenLedger tokenLedger,
-      TruncatedResponseSalvager salvager) {
+      TruncatedResponseSalvager salvager,
+      SecurityScan securityScan) {
     this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
     this.frameworkFilter = frameworkFilter;
@@ -232,6 +234,7 @@ public class FindingPipeline {
     this.tokenCounter = tokenCounter;
     this.tokenLedger = tokenLedger;
     this.salvager = salvager;
+    this.securityScan = securityScan;
   }
 
   /**
@@ -312,8 +315,12 @@ public class FindingPipeline {
               followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList()));
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
+    // #60: the deterministic scan's findings join after verification, so no model grades them.
     var refined =
-        refine(session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence);
+        securityScan.merge(
+            refine(
+                session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence),
+            ctx);
     if (budgetPlanner.callCapLeavesNoSummaryCall()) {
       return summarySkippedAtCallCap(session, refined, plan);
     }
@@ -505,6 +512,8 @@ public class FindingPipeline {
             ctx.conversationComments(),
             botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
+    // #60: as in the single-call lane, after every model stage and before the summary call.
+    refined = securityScan.merge(refined, ctx);
     return withSummary(session, refined, promptInputs, ctx, plan);
   }
 
@@ -900,8 +909,13 @@ public class FindingPipeline {
     // The same summary step every review ends with, so its degradations apply unchanged: this
     // lane's only AI call is the summary, and whatever becomes of it the review still posts with
     // its omission disclosures. It is the one call made here, so max-ai-calls=1 still affords it.
+    // #60: the deterministic scan reads patches, not the budgeted batches, so it still runs.
     return withSummary(
-        session, new ReviewResponse(List.of(), List.of(), null), promptInputs, ctx, plan);
+        session,
+        securityScan.merge(new ReviewResponse(List.of(), List.of(), null), ctx),
+        promptInputs,
+        ctx,
+        plan);
   }
 
   /**
