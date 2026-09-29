@@ -259,10 +259,11 @@ public class FindingPipeline {
     tokenLedger.open(ledgerSessionId(session));
     try {
       var response = runWithLedger(session, promptInputs, ctx, plan, lineResolver, evidence);
-      // A call that had to run with reasoning disabled (#839) is noted on the ledger entry while
-      // the calls are in flight; the verdict reads the plan after that entry is cleared, so the
-      // note is copied over here, before the entry goes.
-      plan.recordReasoningStepDown(tokenLedger.reasoningSteppedDown(ledgerSessionId(session)));
+      // A call that had to run with reasoning disabled (#839), or whose repeat was stopped because
+      // the model wrote its deliberation into the response (#893), is noted on the ledger entry
+      // while the calls are in flight; the verdict reads the plan after that entry is cleared, so
+      // the note is copied over here, before the entry goes.
+      plan.recordReasoningStepDown(tokenLedger.reasoningStepDown(ledgerSessionId(session)));
       return response;
     } finally {
       tokenLedger.clear(ledgerSessionId(session));

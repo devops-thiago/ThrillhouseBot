@@ -36,14 +36,30 @@ import java.util.function.UnaryOperator;
  * <p>Every rendering takes a {@code code} formatter so the same sentences serve the log (plain) and
  * the posted comment (setting names in backticks) without the wording drifting between them.
  *
+ * <p>A report can also say how the reasoning step-down ended (#893). A length stop with no content
+ * is repeated once with reasoning disabled (#839), and on a model that keeps its reasoning in its
+ * own channel that repeat answers. A model that instead writes its deliberation into the response
+ * when reasoning is off makes the repeat the same call at the same price, so {@link
+ * AiReviewService} stops that repeat once its content has run a bounded length without the answer
+ * opening. The figures are then the first call's — the one billed at the cap — and the report
+ * states what the repeat showed, because it is the evidence that stepping down frees no room on
+ * this model.
+ *
  * @param lane the model binding the cut call ran on
  * @param cap the cap the request licensed, or {@code null} when the raising site did not record one
  * @param promptTokens the provider-reported prompt tokens, or {@code null} when not reported
  * @param completionTokens the provider-reported completion tokens, or {@code null} when not
  *     reported
+ * @param inlinedDeliberationChars how many characters of deliberation the stopped step-down repeat
+ *     wrote into its response without opening the answer, or {@code null} when the stop was not
+ *     followed by such a repeat
  */
 public record TruncationReport(
-    ModelLane lane, ResponseCap cap, Integer promptTokens, Integer completionTokens)
+    ModelLane lane,
+    ResponseCap cap,
+    Integer promptTokens,
+    Integer completionTokens,
+    Integer inlinedDeliberationChars)
     implements Serializable {
 
   /** Formats nothing: the log line's rendering. */
@@ -51,6 +67,23 @@ public record TruncationReport(
 
   /** Wraps setting names as inline code: the posted comment's rendering. */
   public static final UnaryOperator<String> MARKDOWN = s -> "`" + s + "`";
+
+  private static final String EFFORT_SETTING = "AI_REASONING_EFFORT";
+  private static final String CONCISE_EFFORT_SETTING = "AI_REASONING_EFFORT_CONCISE";
+
+  /** A report of one length stop, with no step-down repeat behind it. */
+  public TruncationReport(
+      ModelLane lane, ResponseCap cap, Integer promptTokens, Integer completionTokens) {
+    this(lane, cap, promptTokens, completionTokens, null);
+  }
+
+  /**
+   * This report, stating that the step-down repeat which followed it was stopped after {@code
+   * chars} characters of deliberation written into the response without the answer opening (#893).
+   */
+  public TruncationReport withInlinedDeliberation(int chars) {
+    return new TruncationReport(lane, cap, promptTokens, completionTokens, chars);
+  }
 
   /** How the stop relates to the licensed cap, as far as the figures on hand can tell. */
   public enum Stop {
@@ -151,8 +184,31 @@ public record TruncationReport(
     };
   }
 
-  /** The figures and the remedy together, as the sentences every surface appends. */
+  /**
+   * What the stopped step-down repeat showed, as a full sentence followed by a space, or empty when
+   * no such repeat followed the stop (#893). The lane's own reasoning-effort setting is named as
+   * the other lever: the reasoning at that effort is what outran the cap on the first call.
+   */
+  public String inlinedDeliberation(UnaryOperator<String> code) {
+    if (inlinedDeliberationChars == null) {
+      return "";
+    }
+    return "No content arrived before that stop, so the call was repeated with reasoning disabled;"
+        + " the model wrote its deliberation into the response instead, and the repeat was stopped"
+        + " after "
+        + inlinedDeliberationChars
+        + " characters with no answer begun rather than billed the cap a second time. Disabling"
+        + " reasoning does not move this model's deliberation out of the output allowance, so"
+        + " lowering "
+        + code.apply(lane == ModelLane.CONCISE ? CONCISE_EFFORT_SETTING : EFFORT_SETTING)
+        + " is the other lever. ";
+  }
+
+  /**
+   * The figures, what a stopped step-down repeat showed, and the remedy together, as the sentences
+   * every surface appends.
+   */
   public String describe(UnaryOperator<String> code) {
-    return "Cap and usage: " + figures(code) + ". " + remedy(code);
+    return "Cap and usage: " + figures(code) + ". " + inlinedDeliberation(code) + remedy(code);
   }
 }
