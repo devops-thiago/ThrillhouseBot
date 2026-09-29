@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A bracket in the deliberation ahead of the answer no longer costs the review its findings** (#894): the parser and the truncation salvage both started reading the response at its first `{` or `[`, wherever it was. A 256,302-character production response opened with deliberation whose first `[` was a `[LOW]` severity tag at index 242, 252,138 characters before the answer, so the salvage of that cut response recovered nothing and the review failed with a complete findings array in hand. Both now start at the first object whose first key is `findings`, `previous_findings_status` or `summary` (the verifier's salvage at its `verdicts` object), which finds the answer whether it is fenced, unfenced or cut before its closing fence, and whatever fenced Swift, diff or JSON excerpts come before it. A root that encloses such an object is still read whole, a response split over several documents is still merged with the same warning, and a response with no such object is read exactly as before
+
 ## [0.6.9] — 2026-09-21
 
 What the reviewer knows when it judges a finding drove this release. The second-pass verifier saw only the findings and the diff, so a finding raised from the coverage report or a path-scoped rule read to it as a claim about material it could not see, and it demoted them; a finding's cited location was never checked against the file it named; and a claim the verifier had already rejected could be re-raised and published by a later round on the same commit. The rest is what production showed on 0.6.8: one call could spend a whole review's retry budget at the streaming deadline, a review killed by a restart stayed marked as running for good, and a walkthrough could lose every file summary with nothing recorded about why.

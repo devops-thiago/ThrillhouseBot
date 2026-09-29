@@ -15,7 +15,9 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,6 +33,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
+import java.util.regex.Pattern;
 
 @ApplicationScoped
 public class ReviewResponseParser {
@@ -107,7 +111,7 @@ public class ReviewResponseParser {
     if (raw == null || raw.isBlank()) {
       throw new IllegalArgumentException("Model returned an empty response");
     }
-    var root = readDocuments(extractJson(raw));
+    var root = readDocuments(extractJson(raw, REVIEW_ROOT_KEYS));
     if (summaryLane) {
       foldSummaryFields(root);
     }
@@ -699,6 +703,108 @@ public class ReviewResponseParser {
     }
 
     return escapeControlCharsInStrings(trimmed);
+  }
+
+  /**
+   * The root keys of a review response: an object that opens on one of them is the answer. Every
+   * batch and summary response carries at least one, and the shapes it is up against — prose, a
+   * severity tag, a quoted Swift or diff excerpt — carry none.
+   */
+  static final List<String> REVIEW_ROOT_KEYS = List.of(FINDINGS, PREVIOUS_FINDINGS_STATUS, SUMMARY);
+
+  /** A fence marker, its optional language tag, and nothing else but whitespace. */
+  private static final Pattern FENCE_OPENER = Pattern.compile("```[\\w+-]*\\s*");
+
+  /**
+   * Parser features for the enclosure probe in {@link #extractJson(String, List)}: a raw control
+   * character inside a string is escaped before the real parse, so the probe must not fail on one.
+   */
+  private static final JsonFactory PROBE_FACTORY =
+      JsonFactory.builder().enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS).build();
+
+  /**
+   * Like {@link #extractJson(String)}, but anchored on the answer rather than on the first bracket
+   * in the body (#894). The first-bracket rule is a guess that gets worse the more prose a response
+   * carries: a 256,302-character production response opened with deliberation whose first {@code [}
+   * was a {@code [LOW]} severity tag at index 242, 252,138 characters ahead of the answer, so both
+   * the parse and the truncation salvage started there and a complete findings array was discarded.
+   * Deliberation quotes code, so a body with a brace or bracket ahead of its answer is the ordinary
+   * case, not the odd one.
+   *
+   * <p>The anchor is the first opening brace whose first key is one of {@code rootKeys} — {@code
+   * {"findings": ...}}, {@code {"summary": ...}} — with only whitespace in between. That identifies
+   * the answer by what it says rather than by where it sits or how it is wrapped, which a fence
+   * cannot: deliberation fences its excerpts too, sometimes as {@code ```json}; a split response
+   * (#805) spreads its documents over several fences, so the last fence would lose all but the
+   * final one; a cut response has no closing fence; and an answer may carry no fence at all. The
+   * first match rather than the last, because a split response's earlier documents are part of the
+   * answer, and {@link #readDocuments} walks on from the first to the rest.
+   *
+   * <p>A nested object can open on a root key too — a {@code file_summaries} entry written {@code
+   * {"summary": "...", "path": "..."}} under the summary lane's unwrapped root (#850), or {@code
+   * {"analysis": {"summary": {...}}, "findings": [...]}}. The first-bracket rule read the whole
+   * root in both, so when the body's first opening brace lies ahead of the anchor and parses as one
+   * complete object that encloses it, that object is kept. The probe reads at most that one object,
+   * and a failed read — prose, a cut body — just means the anchor stands.
+   *
+   * <p>When no object opens on a root key, this is {@link #extractJson(String)} unchanged, so the
+   * summary lane's unwrapped shape (#850) and every other tolerated form read as they always have.
+   * A response wrapped whole in one fence whose content opens on the anchor keeps having its
+   * closing fence cut as that method cuts it, so prose after the fence is not read as a further
+   * document.
+   */
+  static String extractJson(String raw, List<String> rootKeys) {
+    if (raw == null) {
+      return "";
+    }
+    var trimmed = raw.strip();
+    var matcher = rootAnchorPattern(rootKeys).matcher(trimmed);
+    if (!matcher.find()) {
+      return extractJson(raw);
+    }
+    var anchor = matcher.start();
+    var firstObject = trimmed.indexOf('{');
+    if (firstObject < anchor && closesPast(trimmed, firstObject, anchor)) {
+      anchor = firstObject;
+    }
+    var end = trimmed.length();
+    var close = trimmed.lastIndexOf("```");
+    if (close > anchor && opensTheWholeFence(trimmed, anchor)) {
+      end = close;
+    }
+    return escapeControlCharsInStrings(trimmed.substring(anchor, end).strip());
+  }
+
+  /**
+   * Whether {@code text} is wrapped in a fence whose content opens at {@code anchor}, so its last
+   * fence marker is the answer's closing one. A body that opens on a fenced excerpt (a {@code
+   * ```swift} block quoted in deliberation) is not: its last marker may be the answer's opening
+   * fence of a cut response, and cutting there would drop the answer.
+   */
+  private static boolean opensTheWholeFence(String text, int anchor) {
+    return FENCE_OPENER.matcher(text.substring(0, anchor)).matches();
+  }
+
+  /** An object whose first key is one of {@code rootKeys}. */
+  private static Pattern rootAnchorPattern(List<String> rootKeys) {
+    var alternatives = new StringJoiner("|", "(?:", ")");
+    rootKeys.forEach(key -> alternatives.add(Pattern.quote(key)));
+    return Pattern.compile("\\{\\s*\"" + alternatives + "\"\\s*:");
+  }
+
+  /**
+   * Whether the object opening at {@code start} parses whole and closes past {@code position} —
+   * that is, whether it encloses it.
+   */
+  private static boolean closesPast(String text, int start, int position) {
+    try (var parser = PROBE_FACTORY.createParser(text.substring(start))) {
+      // The caller passes the index of a '{', so the first token opens an object.
+      parser.nextToken();
+      parser.skipChildren();
+      return start + parser.currentLocation().getCharOffset() > position;
+    } catch (IOException _) {
+      return false;
+    }
   }
 
   /**

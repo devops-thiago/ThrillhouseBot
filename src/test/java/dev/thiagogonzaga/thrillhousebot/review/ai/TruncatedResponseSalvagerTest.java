@@ -334,4 +334,51 @@ class TruncatedResponseSalvagerTest {
     assertDoesNotThrow(() -> TruncatedResponseSalvager.closeQuietly(parser));
     verify(parser).close();
   }
+
+  @Test
+  void salvagesTheCompleteFindingsOfAProductionShapedBodyCutInItsFileSummaries() {
+    // #894, the production shape: 252,380 characters of deliberation whose first '[' is a "[LOW]"
+    // tag at the start and whose fenced swift, diff and json excerpts carry braces and brackets,
+    // then the fenced answer, cut inside file_summaries after the findings array had closed. The
+    // pass started at the "[LOW]" and salvaged nothing, and the whole round was discarded.
+    var deliberation =
+        DeliberationFixture.deliberation(DeliberationFixture.PRODUCTION_DELIBERATION_CHARS);
+    var body =
+        deliberation
+            + "```json\n{\"findings\":["
+            + finding("F1")
+            + ","
+            + finding("F2")
+            + ","
+            + finding("F3")
+            + "],\"previous_findings_status\":[{\"id\":2,\"status\":\"unresolved\",\"note\":\"n\"}],"
+            + "\"summary\":{\"total_findings\":3,\"critical\":0,\"high\":0,\"medium\":3,\"low\":0,"
+            + "\"overall_assessment\":\"three issues\",\"pr_purpose\":\"report pull progress\","
+            + "\"file_summaries\":[{\"path\":\"Sources/Registry.swift\",\"summary\":\"rekeys\"},"
+            + "{\"path\":\"CreateIntegrationTests.swift\",\"summ";
+    assertTrue(body.indexOf('[') < 300, "the first bracket is a severity tag near the start");
+
+    var salvaged = salvager.salvage(body);
+
+    assertEquals(
+        java.util.List.of("F1", "F2", "F3"),
+        salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
+    assertEquals(1, salvaged.previousFindingsStatus().size());
+    assertNull(salvaged.summary(), "the summary object never closed");
+    assertTrue(salvaged.hasFindingsOrStatuses());
+  }
+
+  @Test
+  void salvagesANamedArrayWhoseObjectFollowsBracketedProse() {
+    // The verifier's lane anchors on its own field the same way.
+    var body =
+        "[HIGH] finding 1 looks wrong; {see} below.\n```json\n{\"verdicts\":["
+            + "{\"id\":1,\"verdict\":\"rejected\",\"risk\":null,\"confidence\":null,\"reason\":\"fp\"},"
+            + "{\"id\":2,\"verd";
+
+    var verdicts = salvager.salvageArray(body, "verdicts", VerificationResponse.Verdict.class);
+
+    assertEquals(1, verdicts.size());
+    assertEquals("rejected", verdicts.get(0).verdict());
+  }
 }
