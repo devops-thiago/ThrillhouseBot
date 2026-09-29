@@ -45,7 +45,9 @@ import java.util.regex.Pattern;
  * against the diff and project stack, dropping rejected findings and lowering inflated ones.
  *
  * <p>Fails open by design — any verifier error keeps the original findings, so a broken or slow
- * verification call can degrade quality but never lose a review.
+ * verification call can degrade quality but never lose a review. A finding kept that way is not
+ * published as if it had been screened, though: {@link #markUnscreened} caps its confidence and
+ * says so in its own text (#885).
  *
  * <p>The verifier is a billed review-path call, so it participates in the {@code
  * REVIEW_MAX_TOKENS_PER_REVIEW} spend ceiling like every other call the review makes: its {@link
@@ -600,6 +602,18 @@ public class FindingVerificationService {
 
   private static final String MEDIUM_LABEL = "medium";
 
+  /**
+   * The paragraph {@link #markUnscreened} appends to a finding the second-pass audit did not rule
+   * on (#885). Worded so it names only what is true on every path that reaches it — no verdict, and
+   * a confidence ceiling — and deliberately free of hedge words and of the escalation terms {@code
+   * SeverityCalibrator} reads, so it cannot move a later deterministic pass. The similarity passes
+   * read descriptions through {@link #withoutUnverifiedNote}, so two findings carrying the same
+   * note do not look alike because of it.
+   */
+  public static final String UNVERIFIED_NOTE =
+      "_Unverified: the second-pass audit returned no verdict on this finding, so its confidence is"
+          + " capped at medium._";
+
   /** The verifier response's only field, and the array salvage keys on when the body is cut. */
   private static final String VERDICTS = "verdicts";
 
@@ -608,9 +622,10 @@ public class FindingVerificationService {
    * as a screened candidate. Read through {@link #decisionOf} by both that count and {@link
    * #apply}'s switch, so what the review DOES with a verdict and what it CLAIMS it verified cannot
    * drift (#710): every other label — absent, blank, or a word this service does not recognize —
-   * lands in {@code apply}'s fail-open default, where the finding posts exactly as the reviewer
-   * raised it. The strictness matches {@link #strictRisk}/{@link #strictConfidence}: an
-   * uninterpretable label from model output is treated as absent rather than guessed at.
+   * lands in {@code apply}'s fail-open default, where the finding posts {@linkplain #markUnscreened
+   * marked unscreened} (#885). The strictness matches {@link #strictRisk}/{@link
+   * #strictConfidence}: an uninterpretable label from model output is treated as absent rather than
+   * guessed at.
    */
   private static final Set<String> ACTED_ON_DECISIONS =
       Set.of("confirmed", "downgraded", "rejected");
@@ -621,7 +636,9 @@ public class FindingVerificationService {
    * Previous findings let the verifier reject re-raises of answered findings. {@code
    * ledgerSessionId} is the review's {@link ReviewTokenLedger} key ({@link
    * ReviewTokenLedger#keyFor}): the call's usage is recorded against it, and once the review's
-   * spend ceiling is reached the call is skipped fail-open, keeping the unverified findings.
+   * spend ceiling is reached the call is skipped fail-open, keeping the unverified findings — each
+   * one {@linkplain #markUnscreened marked unscreened} rather than published as if it had been
+   * screened (#885).
    */
   public ReviewResponse verify(
       long ledgerSessionId,
@@ -750,7 +767,7 @@ public class FindingVerificationService {
           tokenLedger.ceiling(),
           screened.findings().size());
       coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
-      return screened;
+      return markUnscreened(screened);
     }
     try {
       var result =
@@ -775,7 +792,7 @@ public class FindingVerificationService {
             "Finding verification returned no response body — keeping the %d unverified finding(s)",
             screened.findings().size());
         coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
-        return screened;
+        return markUnscreened(screened);
       }
       var verification = parseOrSalvage(raw, screened.findings().size());
       var applied = apply(screened, verification);
@@ -794,7 +811,7 @@ public class FindingVerificationService {
           "Finding verification failed — keeping the %d unverified finding(s)",
           screened.findings().size());
       coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
-      return screened;
+      return markUnscreened(screened);
     }
   }
 
@@ -808,9 +825,10 @@ public class FindingVerificationService {
    * lane already uses, not a second parser.
    *
    * <p>Salvage is strictly additive to the fail-open contract: a candidate whose verdict fell on
-   * the far side of the cut simply has no verdict, and {@link #apply} keeps such a finding exactly
-   * as it stands — a missing verdict never rejects or downgrades anything. When nothing at all is
-   * recoverable the parse failure is rethrown, so the caller logs and fails open as before.
+   * the far side of the cut simply has no verdict, and {@link #apply} keeps such a finding,
+   * {@linkplain #markUnscreened marked unscreened} — a missing verdict never rejects or downgrades
+   * anything. When nothing at all is recoverable the parse failure is rethrown, so the caller logs
+   * and fails open as before.
    */
   private VerificationResponse parseOrSalvage(String raw, int candidates) throws IOException {
     try {
@@ -854,7 +872,7 @@ public class FindingVerificationService {
       // The verifier fails open by design; say why so a cap is not mistaken for a provider fault.
       Log.warnf("Finding verification — keeping unverified findings. %s", e.getMessage());
       coverageSink.accept(new VerificationCoverage(candidates, 0));
-      return screened;
+      return markUnscreened(screened);
     }
     var verified = candidatesCovered(salvaged, candidates);
     Log.warnf(
@@ -878,7 +896,7 @@ public class FindingVerificationService {
    *
    * <p>An id alone is not coverage. A verdict whose decision label is absent, blank or not one of
    * {@link #ACTED_ON_DECISIONS} falls into {@link #apply}'s fail-open default, where the candidate
-   * posts exactly as the reviewer raised it — the same state a candidate with no verdict at all
+   * posts unscreened ({@link #markUnscreened}) — the same state a candidate with no verdict at all
    * ends in — so counting it screened published an unverified finding inside a set the review
    * called fully verified (#710). That is the harm #623 exists to prevent, and it is the dangerous
    * direction: the empty-body path keeps every finding unverified and says so, while a set that
@@ -917,10 +935,10 @@ public class FindingVerificationService {
    * collapsed duplicates first and read the label from the survivor, while the count filtered by
    * label first and de-duplicated the ids that were left. An id carrying an undecidable element
    * followed by a decidable one therefore landed in {@code apply}'s fail-open default — the finding
-   * posts exactly as the reviewer raised it — while the count called that candidate screened, which
-   * is the published-set-reads-as-fully-screened harm #623 exists to prevent, reached by a narrower
-   * route. The drift is one-directional (the reverse order already agreed), so it only ever
-   * over-counted, i.e. exclusively toward the dangerous side.
+   * posts unscreened — while the count called that candidate screened, which is the
+   * published-set-reads-as-fully-screened harm #623 exists to prevent, reached by a narrower route.
+   * The drift is one-directional (the reverse order already agreed), so it only ever over-counted,
+   * i.e. exclusively toward the dangerous side.
    *
    * <p>Duplicates are model output, not a hypothetical: the collapse predates this fix, first-wins
    * is the behaviour the audit already applies, and the count now inherits it rather than inventing
@@ -1486,6 +1504,7 @@ public class FindingVerificationService {
     var kept = new ArrayList<ReviewResponse.Finding>();
     var rejected = 0;
     var downgraded = 0;
+    var unscreened = 0;
     for (var i = 0; i < response.findings().size(); i++) {
       var finding = response.findings().get(i);
       var verdict = byId.get(i + 1);
@@ -1503,19 +1522,112 @@ public class FindingVerificationService {
           downgraded++;
           kept.add(downgrade(finding, verdict));
         }
-        // confirmed, unknown decision, or no verdict at all — fail open and keep the finding
-        default -> kept.add(finding);
+        case "confirmed" -> kept.add(finding);
+        // Unknown decision, or no verdict at all — fail open and keep the finding, but not as a
+        // screened one (#885). The same labels candidatesCovered leaves out of the coverage count,
+        // so the findings marked here are exactly the ones the round-level disclosure counts.
+        default -> {
+          unscreened++;
+          kept.add(markUnscreened(finding));
+        }
       }
     }
 
-    if (rejected == 0 && downgraded == 0) {
+    if (rejected == 0 && downgraded == 0 && unscreened == 0) {
       return response;
     }
     Log.infof(
-        "Finding verification: %d kept, %d downgraded, %d rejected",
-        kept.size() - downgraded, downgraded, rejected);
+        "Finding verification: %d kept, %d downgraded, %d rejected, %d kept unscreened",
+        kept.size() - downgraded - unscreened, downgraded, rejected, unscreened);
     return new ReviewResponse(
         kept, response.previousFindingsStatus(), recount(response.summary(), kept));
+  }
+
+  /**
+   * {@link #markUnscreened(ReviewResponse.Finding)} over a whole finding set: the fail-open exits
+   * where the verifier ruled on nothing — the spend-ceiling skip, an empty body, a cut with nothing
+   * salvageable, any failure the catch absorbs. Nothing is dropped and the risk counts do not move,
+   * so the summary stands as it is.
+   */
+  public static ReviewResponse markUnscreened(ReviewResponse response) {
+    return new ReviewResponse(
+        response.findings().stream().map(FindingVerificationService::markUnscreened).toList(),
+        response.previousFindingsStatus(),
+        response.summary());
+  }
+
+  /**
+   * What a finding the second-pass audit did not rule on is published as (#885): kept — the
+   * reviewer's own pass raised it, and dropping it because the verifier could not answer is the
+   * loss this service's fail-open contract exists to prevent (#623) — but with its confidence
+   * capped at medium and {@link #UNVERIFIED_NOTE} appended to its description, so the finding
+   * itself says what the round-level {@link VerificationCoverage} disclosure says about the set.
+   *
+   * <p>Why medium and not low. The cap's job is to stop an unscreened finding from deciding the
+   * verdict alone: under the default {@code BlockingStrictness.BALANCED} and under {@code LENIENT},
+   * blocking needs high confidence, so a capped finding informs the verdict without requesting
+   * changes by itself. Low would also move a medium- or low-risk finding off the diff into the
+   * collapsed "Things to double-check" block ({@code Finding.postsInline}) and make it eligible for
+   * the litigated-anchor withhold ({@code FollowUpAnalyzer.withoutPreviouslyLitigated}), which
+   * drops lower-confidence findings — so a verifier that returned nothing could cost a finding its
+   * place, or the finding itself, which is exactly what the fail-open contract rules out. The
+   * verifier's silence says nothing about the finding's merit; it only removes the second opinion
+   * that would have justified letting it block. Medium says precisely that, and the published
+   * comment already carries "medium confidence — verify before acting" beside it.
+   *
+   * <p>{@code STRICT} is left as the operator configured it: that mode blocks on critical/high risk
+   * regardless of confidence, verifier demotions included, and an unscreened finding follows the
+   * same rule. A finding already at medium or low confidence keeps its level — the cap only lowers.
+   *
+   * <p>A whole round on this path — the case #871 hit on an empty body — publishes every finding
+   * this way: all of them post where they would have posted, none can request changes on its own
+   * under the default mode, each says it was not verified, and the banner states the counts.
+   * Holding the findings for a later round instead was declined: it delays every finding on the
+   * round where it matters, and needs state the rejection memory (#711) does not carry, for a path
+   * that is rare in production — the one recorded occurrence is #871's, and a week of logs since
+   * shows none. Nothing is marked when the verifier is disabled: that is the operator's
+   * configuration, not a failure to screen.
+   *
+   * <p>Idempotent: a finding already carrying the note gets it once.
+   */
+  public static ReviewResponse.Finding markUnscreened(ReviewResponse.Finding finding) {
+    var confidence =
+        Confidence.fromString(finding.confidence()) == Confidence.HIGH
+            ? MEDIUM_LABEL
+            : finding.confidence();
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        confidence,
+        finding.file(),
+        finding.line(),
+        finding.title(),
+        withUnverifiedNote(finding.description()),
+        finding.suggestionOld(),
+        finding.suggestionNew());
+  }
+
+  private static String withUnverifiedNote(String description) {
+    if (description == null || description.isBlank()) {
+      return UNVERIFIED_NOTE;
+    }
+    if (description.contains(UNVERIFIED_NOTE)) {
+      return description;
+    }
+    return description.stripTrailing() + "\n\n" + UNVERIFIED_NOTE;
+  }
+
+  /**
+   * The description without {@link #UNVERIFIED_NOTE}, for the passes that compare findings by their
+   * wording (#885). Two unscreened findings share the note verbatim, and a whole round on the
+   * fail-open path gives every finding it; read into a token overlap or a phrase match, that shared
+   * paragraph could merge two distinct findings or cross-reference one to the other. The note says
+   * something about the round, not about the defect, so similarity must not see it.
+   */
+  public static String withoutUnverifiedNote(String description) {
+    if (description == null || !description.contains(UNVERIFIED_NOTE)) {
+      return description;
+    }
+    return description.replace(UNVERIFIED_NOTE, "").strip();
   }
 
   /** Applies the verdict's risk/confidence, but only ever in the lowering direction. */
