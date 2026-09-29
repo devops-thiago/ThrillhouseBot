@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -259,7 +260,7 @@ public class VerdictBuilder {
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
-            plan.reasoningSteppedDown() ? REASONING_STEP_DOWN_NOTE : ""),
+            reasoningStepDownNote(plan.reasoningStepDown())),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -535,6 +536,35 @@ public class VerdictBuilder {
   static final String REASONING_STEP_DOWN_NOTE =
       "this review ran with reasoning disabled after the model spent its whole output allowance"
           + " reasoning and produced no answer at the configured effort";
+
+  /**
+   * The review-scope note for a step-down repeat that was stopped (#893): the model wrote its
+   * deliberation into the response once reasoning was disabled, so the repeat was ended with no
+   * answer begun rather than billed the cap a second time, and the call it repeated delivered
+   * nothing. What that call would have covered is disclosed by the batch or summary disclosure the
+   * failed call already produces; this note says why the step-down did not recover it.
+   */
+  static final String REASONING_REPEAT_STOPPED_NOTE =
+      "a model call spent its whole output allowance reasoning and produced no answer, and its"
+          + " repeat with reasoning disabled was stopped because the model wrote its deliberation"
+          + " into the response instead; that call delivered nothing, and it was not billed the"
+          + " output cap a second time";
+
+  /**
+   * The step-down's review-scope note: the repeat that ran, the repeat that was stopped, or both as
+   * separate paragraphs when the review's calls went both ways (a batch and the summary run on
+   * different models). Empty when no call stepped down.
+   */
+  static String reasoningStepDownNote(ReasoningStepDown stepDown) {
+    var notes = new ArrayList<String>(2);
+    if (stepDown.ranWithReasoningDisabled()) {
+      notes.add(REASONING_STEP_DOWN_NOTE);
+    }
+    if (stepDown.repeatStopped()) {
+      notes.add(REASONING_REPEAT_STOPPED_NOTE);
+    }
+    return String.join("\n>\n> ", notes);
+  }
 
   /**
    * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, the
