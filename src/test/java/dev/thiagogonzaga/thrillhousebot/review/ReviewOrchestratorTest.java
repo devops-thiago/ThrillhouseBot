@@ -1609,7 +1609,6 @@ class ReviewOrchestratorTest {
       return capturePromptInputs(files).repoInstructions();
     }
 
-    /** Runs review() far enough to capture the prompt inputs the review call was given. */
     /** #59: a failing check at the head, as the gate's own CI read returns it. */
     private void stubFailingCheckAtHead() {
       when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
@@ -1656,6 +1655,7 @@ class ReviewOrchestratorTest {
       assertFalse(guidance.contains("unit-tests"), guidance);
     }
 
+    /** Runs review() far enough to capture the prompt inputs the review call was given. */
     private AiReviewService.PromptInputs capturePromptInputs(
         GitHubPullRequestClient.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {

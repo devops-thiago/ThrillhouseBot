@@ -249,12 +249,12 @@ class CiFailureContextResolverTest {
     void stripsAnsiCarriageReturnsBidiOverridesAndOtherControlCharacters() {
       var check =
           new CiStatusEvaluator.FailedCheck(
-              "evil\nname‮",
+              "evil\nname\u202E",
               "failure",
               0L,
               null,
               "\u001B[31mred\u001B[0m title\u0007",
-              "line one\r\nhidden\rshown\tafter tab​\u0000",
+              "line one\r\nhidden\rshown\tafter tab\u200B\u0000",
               0);
 
       var section = resolver(true, false, 4000).resolve("a", "o", "r", evaluation(0, check));
@@ -344,8 +344,11 @@ class CiFailureContextResolverTest {
           .thenReturn(redirect());
       when(fetcher.fetchTail(LOG_URI, CiFailureContextResolver.LOG_TAIL_BYTES))
           .thenReturn(
-              ("2026-09-29T10:00:00.1234567Z Running tests\n\n"
-                      + "2026-09-29T10:00:01.0000000Z \u001B[31mFAILED\u001B[0m FooTest\n")
+              """
+                  2026-09-29T10:00:00.1234567Z Running tests
+
+                  2026-09-29T10:00:01.0000000Z \u001B[31mFAILED\u001B[0m FooTest
+                  """
                   .getBytes(StandardCharsets.UTF_8));
 
       var section =

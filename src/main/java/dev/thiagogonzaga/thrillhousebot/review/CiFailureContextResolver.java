@@ -310,16 +310,16 @@ public class CiFailureContextResolver {
     var start = bytes.length >= LOG_TAIL_BYTES ? 1 : 0;
     var kept = new ArrayDeque<String>();
     var chars = 0;
-    for (var i = lines.length - 1; i >= start && kept.size() < LOG_TAIL_LINES; i--) {
+    var full = false;
+    for (var i = lines.length - 1; i >= start && kept.size() < LOG_TAIL_LINES && !full; i--) {
       var line = clip(LOG_TIMESTAMP.matcher(lines[i]).replaceFirst("").strip(), MAX_LINE_CHARS);
-      if (line.isEmpty()) {
-        continue;
+      if (!line.isEmpty()) {
+        full = chars + line.length() + 1 > MAX_LOG_CHARS;
+        if (!full) {
+          kept.addFirst(line);
+          chars += line.length() + 1;
+        }
       }
-      if (chars + line.length() + 1 > MAX_LOG_CHARS) {
-        break;
-      }
-      kept.addFirst(line);
-      chars += line.length() + 1;
     }
     return String.join("\n", kept);
   }

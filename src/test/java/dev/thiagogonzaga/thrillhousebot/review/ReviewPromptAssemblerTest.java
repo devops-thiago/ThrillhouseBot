@@ -588,8 +588,11 @@ class ReviewPromptAssemblerTest {
   class CiFailuresInThePrompt {
 
     private static final String FAILURES =
-        "Checks on this commit that had completed without passing when this review started: 1\n"
-            + "### unit-tests (conclusion: failure)\nTitle: 1 test failed\n";
+        """
+        Checks on this commit that had completed without passing when this review started: 1
+        ### unit-tests (conclusion: failure)
+        Title: 1 test failed
+        """;
 
     @Test
     void guidanceAndDataReachTheModelTogether() {
