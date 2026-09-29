@@ -34,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
@@ -1717,7 +1718,7 @@ class VerdictBuilderTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), true, null, null, null, null);
-    plan.recordReasoningStepDown(true);
+    plan.recordReasoningStepDown(new ReasoningStepDown(true, false));
     var realSummaryBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false),
@@ -1741,6 +1742,48 @@ class VerdictBuilderTest {
     assertEquals(ReviewState.APPROVE, result.reviewState(), "a step-down never holds approval");
   }
 
+  /**
+   * #893 — a step-down repeat stopped because the model wrote its deliberation into the response is
+   * disclosed as such, never as a review that ran with reasoning disabled; when the review's calls
+   * went both ways, both are stated as separate paragraphs of the one blockquote.
+   */
+  @Test
+  void aStoppedStepDownRepeatIsDisclosedInTheReviewScopeNote() {
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+    var stoppedOnly =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    stoppedOnly.recordReasoningStepDown(new ReasoningStepDown(false, true));
+
+    var result =
+        realSummaryBuilder.build(
+            contextWithUnmatchedGlobs(List.of()), CLEAN_RESPONSE, CI_CLEAR, stoppedOnly);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** a model call spent its whole output allowance"
+                    + " reasoning and produced no answer, and its repeat with reasoning disabled"
+                    + " was stopped because the model wrote its deliberation into the response"
+                    + " instead; that call delivered nothing, and it was not billed the output cap"
+                    + " a second time\n\n"),
+        result.summaryMarkdown());
+
+    assertEquals(
+        VerdictBuilder.REASONING_STEP_DOWN_NOTE
+            + "\n>\n> "
+            + VerdictBuilder.REASONING_REPEAT_STOPPED_NOTE,
+        VerdictBuilder.reasoningStepDownNote(new ReasoningStepDown(true, true)));
+    assertEquals("", VerdictBuilder.reasoningStepDownNote(ReasoningStepDown.NONE));
+  }
+
   /** The config-shaped notes are separate paragraphs of one blockquote, in a fixed order. */
   @Test
   void everyScopeNoteSharesOneBlockquoteInAFixedOrder() {
@@ -1753,7 +1796,7 @@ class VerdictBuilderTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), true, null, null, null, null);
-    plan.recordReasoningStepDown(true);
+    plan.recordReasoningStepDown(new ReasoningStepDown(true, false));
     var realSummaryBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false),

@@ -30,6 +30,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -466,29 +467,38 @@ class DiffBudgetPlannerTest {
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), true, null, null, null, null);
-    assertFalse(plan.reasoningSteppedDown(), "no call has stepped down on a fresh plan");
+    assertEquals(
+        ReasoningStepDown.NONE,
+        plan.reasoningStepDown(),
+        "no call has stepped down on a fresh plan");
 
-    plan.recordReasoningStepDown(true);
+    var stepDown = new ReasoningStepDown(true, false);
+    plan.recordReasoningStepDown(stepDown);
 
-    assertTrue(plan.reasoningSteppedDown());
+    assertEquals(stepDown, plan.reasoningStepDown());
     assertFalse(plan.truncated(), "a step-down is not a coverage gap and must not hold approval");
     var snapshot = plan.reasoningStepDownRef();
-    snapshot.set(false);
-    assertTrue(plan.reasoningSteppedDown(), "mutating the snapshot must not touch the live slot");
+    snapshot.set(ReasoningStepDown.NONE);
+    assertEquals(
+        stepDown, plan.reasoningStepDown(), "mutating the snapshot must not touch the live slot");
   }
 
   @Test
   void aPlanBuiltWithItsOwnStepDownSlotKeepsThatInstanceLive() {
-    var live = new java.util.concurrent.atomic.AtomicBoolean(true);
+    var stepDown = new ReasoningStepDown(false, true);
+    var live = new java.util.concurrent.atomic.AtomicReference<>(stepDown);
     var plan =
         new DiffBudgetPlanner.BudgetPlan(
             List.of(), List.of(), List.of(), List.of(), true, null, null, null, null, null, live);
 
-    assertTrue(plan.reasoningSteppedDown());
+    assertEquals(stepDown, plan.reasoningStepDown());
     assertNotSame(live, plan.reasoningStepDownRef(), "the accessor returns a defensive snapshot");
 
-    live.set(false);
-    assertFalse(plan.reasoningSteppedDown(), "the plan reads the slot it was built with");
+    live.set(ReasoningStepDown.NONE);
+    assertEquals(
+        ReasoningStepDown.NONE,
+        plan.reasoningStepDown(),
+        "the plan reads the slot it was built with");
   }
 
   @Test

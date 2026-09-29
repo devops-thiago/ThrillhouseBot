@@ -20,7 +20,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -52,7 +52,9 @@ import java.util.concurrent.atomic.LongAdder;
  * off, and the posted summary must say so. The note lives here rather than on the response because
  * it is per review, not per call — any batch or the summary can take the step-down — and this is
  * the one per-review record that exists exactly while the calls are made. The review path copies it
- * onto its plan before clearing the entry.
+ * onto its plan before clearing the entry. A repeat that was stopped because the model wrote its
+ * deliberation into the response (#893) is noted too, and counted apart, so the summary can tell a
+ * review produced with reasoning off from one whose repeat delivered nothing.
  */
 @ApplicationScoped
 public class ReviewTokenLedger {
@@ -60,10 +62,11 @@ public class ReviewTokenLedger {
   private final ConcurrentHashMap<Long, Entry> entries = new ConcurrentHashMap<>();
   private final long maxTokensPerReview;
 
-  /** One review's row: tokens spent so far, and whether a call ran with reasoning disabled. */
+  /** One review's row: tokens spent so far, and how many calls stepped down and how they ended. */
   private static final class Entry {
     private final LongAdder spent = new LongAdder();
-    private final AtomicBoolean reasoningSteppedDown = new AtomicBoolean();
+    private final AtomicInteger reasoningStepDowns = new AtomicInteger();
+    private final AtomicInteger stoppedRepeats = new AtomicInteger();
   }
 
   @Inject
@@ -97,16 +100,34 @@ public class ReviewTokenLedger {
   public void recordReasoningStepDown(long sessionId) {
     var entry = entries.get(sessionId);
     if (entry != null) {
-      entry.reasoningSteppedDown.set(true);
+      entry.reasoningStepDowns.incrementAndGet();
     }
   }
 
   /**
-   * Whether any of the review's calls so far ran with reasoning disabled after a no-content cap.
+   * Notes that a repeat recorded through {@link #recordReasoningStepDown} was stopped because the
+   * model wrote its deliberation into the response with no answer begun (#893). Dropped for a
+   * session with no open entry, on the same terms.
    */
-  public boolean reasoningSteppedDown(long sessionId) {
+  public void recordReasoningRepeatStopped(long sessionId) {
     var entry = entries.get(sessionId);
-    return entry != null && entry.reasoningSteppedDown.get();
+    if (entry != null) {
+      entry.stoppedRepeats.incrementAndGet();
+    }
+  }
+
+  /**
+   * How the review's step-downs have gone so far: whether any repeat ran to its end with reasoning
+   * disabled, and whether any was stopped. {@link ReasoningStepDown#NONE} for a session with no
+   * open entry.
+   */
+  public ReasoningStepDown reasoningStepDown(long sessionId) {
+    var entry = entries.get(sessionId);
+    if (entry == null) {
+      return ReasoningStepDown.NONE;
+    }
+    var stopped = entry.stoppedRepeats.get();
+    return new ReasoningStepDown(entry.reasoningStepDowns.get() > stopped, stopped > 0);
   }
 
   /** Total tokens (input + output) recorded for this review so far; 0 when nothing is open. */
