@@ -514,9 +514,25 @@ public record ReviewResult(
       """;
 
   /**
+   * The call-cap sibling of {@link #SUMMARY_SKIPPED_NOTICE} (#664): every review ends with a
+   * summary call, and an allowance of one call ({@code REVIEW_MAX_AI_CALLS=1}) is spent by the
+   * review call alone. The findings are complete, so the partial-review banner would overstate the
+   * damage; the knob to raise is named. When a file-coverage gap exists as well, {@link
+   * #coverageGapClause(int, TruncationDetail)} folds the skip in as one more clause and this banner
+   * is not used.
+   */
+  static final String SUMMARY_CALL_CAP_NOTICE =
+      """
+      > ⚠️ **Summary skipped.** REVIEW_MAX_AI_CALLS=1 leaves no call for the summary after the\
+       review call, so only the finding counts are shown — the findings themselves are complete.\
+       Raise REVIEW_MAX_AI_CALLS to 2 or more for the full summary.
+
+      """;
+
+  /**
    * The failure sibling of {@link #SUMMARY_CUT_NOTICE} (#851): the summary call failed all its
-   * retries (a response the parser refused, a timeout, a dropped connection) after every batch was
-   * reviewed. The findings are complete, so the partial-review banner would overstate the damage;
+   * retries (a response the parser refused, a timeout, a dropped connection) after the review calls
+   * completed. The findings are complete, so the partial-review banner would overstate the damage;
    * no knob is named, because no setting prevents the failure. When a file-coverage gap exists as
    * well, {@link #coverageGapClause(int, TruncationDetail)} folds the failure in as one more clause
    * and this banner is not used.
@@ -713,6 +729,10 @@ public record ReviewResult(
               "the summary was skipped because the review's token spend ceiling"
                   + " (REVIEW_MAX_TOKENS_PER_REVIEW) was reached — the findings themselves are"
                   + " complete");
+      case SKIPPED_AT_CALL_CAP ->
+          clauses.add(
+              "the summary was skipped because REVIEW_MAX_AI_CALLS=1 leaves no call for it after"
+                  + " the review call — the findings themselves are complete");
       case SUMMARY_FAILED ->
           clauses.add(
               "the summary was not generated because the summary call failed after its retries —"
@@ -838,6 +858,7 @@ public record ReviewResult(
     switch (truncation.summaryDegradation()) {
       case RESPONSE_CUT -> parts.add("summary shortened (response cut at the length cap)");
       case SKIPPED_AT_CEILING -> parts.add("summary skipped (token spend ceiling reached)");
+      case SKIPPED_AT_CALL_CAP -> parts.add("summary skipped (no call left under max-ai-calls)");
       case SUMMARY_FAILED ->
           parts.add("summary not generated (summary call failed after its retries)");
       case NONE -> {

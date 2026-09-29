@@ -114,6 +114,11 @@ class FindingPipelineTest {
                         any()))
         .thenReturn(Map.of());
     lenient().when(budgetPlanner.perCallInputBudget()).thenReturn(Integer.MAX_VALUE);
+    // Every review ends with the summary call (#664). A test about the review call gets an empty
+    // summary response unless it stubs its own.
+    lenient()
+        .when(aiReviewService.summarize(any(), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
   }
 
   private static ReviewResponse.Finding finding(String file, String title) {
@@ -1716,10 +1721,11 @@ class FindingPipelineTest {
   }
 
   @Test
-  void singleCallSalvageKeepsASummaryObjectThatClosedBeforeTheCut() {
-    // The single call's summary rides in the same body as its findings, so a cut that lands after
-    // the summary object closed leaves usable prose — it must be kept, not thrown away with the
-    // rest of the paid response.
+  void aCutSingleCallReviewStillGetsItsSummaryFromTheSummaryCall() {
+    // #664: the summary no longer rides in the review body, so a cut review response keeps its
+    // summary — the summary call is made from the salvaged findings like any others. A summary
+    // object the model wrote into the review body anyway, against the findings-only contract, is
+    // not what the review posts.
     var session = persistedSession();
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -1728,19 +1734,143 @@ class FindingPipelineTest {
         "{\"findings\":["
             + bodyFinding("S1")
             + "],\"summary\":{\"total_findings\":1,\"critical\":0,\"high\":0,\"medium\":1,"
-            + "\"low\":0,\"overall_assessment\":\"ok\",\"pr_purpose\":\"does things\"},"
+            + "\"low\":0,\"overall_assessment\":\"ok\",\"pr_purpose\":\"from the review call\"},"
             + "\"previous_findings_status\":[{\"id\":1,\"status\":\"unres";
     when(aiReviewService.review(eq(session), any()))
         .thenThrow(new AiResponseTruncatedException("finish_reason=length", body, false));
+    var summary =
+        new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "from the summary call", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
 
     var result =
         pipeline.run(
             session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
 
     assertEquals(1, result.findings().size());
-    assertNotNull(result.summary());
-    assertEquals("does things", result.summary().prPurpose());
+    assertEquals("from the summary call", result.summary().prPurpose());
     assertEquals(List.of("a.java"), plan.responseCutFiles());
+    // The summary call is told which file the cut review covered only in part.
+    assertTrue(
+        captor.getValue().changedFiles().contains("partially reviewed"),
+        captor.getValue().changedFiles());
+    assertTrue(captor.getValue().findings().contains("S1"), captor.getValue().findings());
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
+  }
+
+  @Test
+  void singleCallReviewEndsWithTheSummaryCallOnTheVerifiedFindings() {
+    // #664: the single-call lane runs review -> refine -> summary like the multi-call lane. The
+    // summary call sees the findings after verification, not the ones the review call proposed,
+    // and carries the summary-call guidance rather than the review call's trailing guidance.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template =
+        new AiReviewService.PromptInputs(
+            "d", "ctx", "base", "stack", "tests", "prev", "REVIEW GUIDANCE", "SUMMARY GUIDANCE");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    var kept = finding("a.java", "kept by the verifier");
+    var dropped = finding("a.java", "dropped by the verifier");
+    var reviewSummary =
+        new ReviewResponse.Summary(2, 0, 0, 2, 0, "unverified", "review call", List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(kept, dropped), List.of(), reviewSummary));
+    when(findingVerificationService.verify(
+            anyLong(), any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(new ReviewResponse(List.of(kept), List.of(), reviewSummary));
+    var summary = new ReviewResponse.Summary(1, 0, 0, 1, 0, "fine", "summary call", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var result =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+
+    verify(aiReviewService, times(1)).review(eq(session), any());
+    verify(aiReviewService, times(1)).summarize(eq(session), any());
+    var inputs = captor.getValue();
+    assertTrue(inputs.findings().contains("kept by the verifier"), inputs.findings());
+    assertFalse(inputs.findings().contains("dropped by the verifier"), inputs.findings());
+    assertEquals("SUMMARY GUIDANCE", inputs.repoInstructions());
+    assertEquals("prev", inputs.previousFindings());
+    assertSame(summary, result.summary(), "the summary comes from the summary call alone");
+    assertEquals(List.of(kept), result.findings());
+    assertTrue(session.getAiResponseJson().contains("summary call"));
+    assertFalse(session.getAiResponseJson().contains("unverified"));
+  }
+
+  @Test
+  void singleCallKeepsItsFindingsWhenTheSummaryCallFails() {
+    // #664: the single-call lane shares the multi-call lane's summary degradations. A summary call
+    // that fails its retries no longer costs the review: the findings post under the counts-only
+    // summary, and the posted review says why.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiReviewException("AI review failed after 5 attempts", 5, null));
+
+    var result =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+
+    assertEquals(1, result.findings().size());
+    assertNull(result.summary());
+    assertEquals(SummaryDegradation.SUMMARY_FAILED, plan.summaryDegradation());
+    assertNotNull(session.getAiResponseJson());
+  }
+
+  @Test
+  void aCallCapOfOneSkipsTheSummaryCallAndSaysSo() {
+    // #664: max-ai-calls=1 is spent by the review call, so the summary call — which would be the
+    // second — is not made; the findings post under the counts-only summary and the skip is
+    // recorded so the posted review names REVIEW_MAX_AI_CALLS.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(budgetPlanner.callCapLeavesNoSummaryCall()).thenReturn(true);
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+
+    var result =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+
+    verify(aiReviewService, never()).summarize(any(), any());
+    assertEquals(1, result.findings().size());
+    assertNull(result.summary());
+    assertEquals(SummaryDegradation.SKIPPED_AT_CALL_CAP, plan.summaryDegradation());
+    assertNotNull(session.getAiResponseJson(), "the review is persisted without a summary call");
+  }
+
+  @Test
+  void aCallCapOfOneStillAffordsTheSummaryWhenNoReviewCallWasMade() {
+    // The budget-exhausted lane makes no review call, so its summary call is the only one and fits
+    // an allowance of one.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("a.java"), List.of(), true, null, null, null, null);
+    lenient().when(budgetPlanner.callCapLeavesNoSummaryCall()).thenReturn(true);
+    var summary = new ReviewResponse.Summary(0, 0, 0, 0, 0, "n/a", "big change", List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var result =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+
+    verify(aiReviewService, never()).review(any(), any());
+    assertSame(summary, result.summary());
+    assertEquals(SummaryDegradation.NONE, plan.summaryDegradation());
   }
 
   @Test

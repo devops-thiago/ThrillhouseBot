@@ -633,6 +633,64 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void theSummaryCallGuidanceIsNotChargedToTheReviewCallsDiffBudget() {
+    // #664: the label and diagram requests ride the summary call's own slot, bounded by the
+    // pipeline against the per-call budget. The review call's overhead must not carry them, or a
+    // large label list would shrink the diff every review call can read.
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    budget(overhead + sectionTokens(f1) + sectionTokens(f2) + 30);
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "d", "ctx", "base", "s", "t", "", "", "labels ".repeat(5_000));
+
+    var plan = planner.plan(List.of(f1, f2), inputs);
+
+    assertEquals(1, plan.batches().size(), "both files fit one review call");
+    assertTrue(plan.omittedFiles().isEmpty());
+  }
+
+  @Test
+  void aCallAllowanceOfOneLeavesNoCallForTheSummary() {
+    // #664: every review ends with the summary call, so both lanes reserve it; only the allowance
+    // of one — the smallest the validator accepts — cannot hold the review call and the summary.
+    when(reviewConfig.maxAiCalls()).thenReturn(1);
+    assertTrue(planner.callCapLeavesNoSummaryCall());
+    when(reviewConfig.maxAiCalls()).thenReturn(2);
+    assertFalse(planner.callCapLeavesNoSummaryCall());
+  }
+
+  @Test
+  void boundingThePreviousFindingsKeepsTheSummaryCallGuidance() {
+    budget(20_000);
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "d",
+            "ctx",
+            "base",
+            "s",
+            "t",
+            PromptTemplateEscaper.fence(previousFindingsBlock(40, 6)),
+            "review guidance",
+            "summary guidance");
+
+    var bounded = planner.boundPreviousFindings(inputs);
+
+    assertFalse(bounded == inputs, "the block was over its share, so new inputs are returned");
+    assertEquals("review guidance", bounded.repoInstructions());
+    assertEquals("summary guidance", bounded.summaryInstructions());
+  }
+
+  @Test
   void planningTheSameInputRepeatedlyGivesTheSameBatches() {
     // #604: fence() mints a CSPRNG token per call, and a 32-hex token has no fixed BPE width: the
     // two fence lines ran 51 to 87 tokens over 200,000 draws. The overhead used to be sized from a

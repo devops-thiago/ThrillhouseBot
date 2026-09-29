@@ -452,6 +452,14 @@ public class DiffBudgetPlanner {
    * would let "in-budget" batches overshoot the real input limit. The base comparison is counted
    * too: the budgeted single-batch call keeps it (multi-batch calls drop it, so they under-fill
    * slightly, which errs safe). An explicit {@code max-input-tokens <= 0} disables budgeting.
+   *
+   * <p>Both lanes account for calls the same way (#664): every review ends with the summary call,
+   * whether it made one review call or several, so the reservation holds for a one-batch plan as
+   * much as for a many-batch one. The one allowance too small to hold both, {@code max-ai-calls=1},
+   * still plans its one review call, and {@link #callCapLeavesNoSummaryCall()} tells the pipeline
+   * to skip the summary rather than exceed the cap. The overhead is the review call's own: {@code
+   * summaryInstructions} rides the summary call, whose input is bounded separately by the pipeline
+   * against {@link #perCallInputBudget()}.
    */
   public BudgetPlan plan(
       List<GitHubPullRequestClient.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {
@@ -480,6 +488,17 @@ public class DiffBudgetPlanner {
             + bounded.repoInstructions();
     return plan(
         reviewable, sharedOverhead, perCallInputBudget(), Math.max(1, review.maxAiCalls() - 1));
+  }
+
+  /**
+   * Whether {@code max-ai-calls} is spent by the review call alone, leaving none for the summary
+   * call — the allowance of 1, the smallest the startup validator accepts. The plan keeps its one
+   * review call there (a review with no review call reviews nothing), so the summary is the call
+   * that gives way, disclosed as {@link SummaryDegradation#SKIPPED_AT_CALL_CAP}. Every larger
+   * allowance holds the review calls and the summary call, as {@link #plan} reserves.
+   */
+  public boolean callCapLeavesNoSummaryCall() {
+    return config.review().maxAiCalls() < 2;
   }
 
   /**
@@ -547,7 +566,8 @@ public class DiffBudgetPlanner {
         inputs.projectStack(),
         inputs.relatedTests(),
         bounded.text(),
-        inputs.repoInstructions());
+        inputs.repoInstructions(),
+        inputs.summaryInstructions());
   }
 
   /** A bounded previous-findings block: its text and what the bounding cost. */

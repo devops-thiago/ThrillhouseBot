@@ -175,6 +175,12 @@ class ReviewOrchestratorTest {
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper));
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
+    // The shipped call allowance, so every review ends with its summary call (#664); a test about
+    // the review call gets an empty summary response unless it stubs its own.
+    lenient().when(reviewConfig.maxAiCalls()).thenReturn(6);
+    lenient()
+        .when(aiReviewService.summarize(any(ReviewSession.class), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
     when(reviewConfig.maxReviewComments()).thenReturn(10);
     lenient()
         .when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
@@ -1545,15 +1551,20 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldInjectDiagramRequestIntoPromptWhenDiagramEnabled() {
+    void shouldInjectDiagramRequestIntoTheSummaryCallWhenDiagramEnabled() {
       when(diagramConfig.enabled()).thenReturn(true);
 
-      assertTrue(captureRepoInstructions().contains("Control-Flow Diagram Request"));
+      var inputs = capturePromptInputs();
+      // #664: walkthrough_diagram is a summary field, so its request rides the summary call only.
+      assertTrue(inputs.summaryInstructions().contains("Control-Flow Diagram Request"));
+      assertFalse(inputs.repoInstructions().contains("Control-Flow Diagram Request"));
     }
 
     @Test
     void shouldNotInjectDiagramRequestWhenDiagramDisabled() {
-      assertFalse(captureRepoInstructions().contains("Control-Flow Diagram Request"));
+      var inputs = capturePromptInputs();
+      assertFalse(inputs.summaryInstructions().contains("Control-Flow Diagram Request"));
+      assertFalse(inputs.repoInstructions().contains("Control-Flow Diagram Request"));
     }
 
     @Test
@@ -1584,11 +1595,13 @@ class ReviewOrchestratorTest {
     }
 
     /** Runs review() far enough to capture the prompt and returns its repoInstructions slot. */
-    private String captureRepoInstructions() {
-      return captureRepoInstructions(new GitHubPullRequestClient.FileDiff[0]);
+    private String captureRepoInstructions(GitHubPullRequestClient.FileDiff... files) {
+      return capturePromptInputs(files).repoInstructions();
     }
 
-    private String captureRepoInstructions(GitHubPullRequestClient.FileDiff... files) {
+    /** Runs review() far enough to capture the prompt inputs the review call was given. */
+    private AiReviewService.PromptInputs capturePromptInputs(
+        GitHubPullRequestClient.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -1633,7 +1646,7 @@ class ReviewOrchestratorTest {
 
         var inputsCaptor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
         verify(aiReviewService).review(eq(session), inputsCaptor.capture());
-        return inputsCaptor.getValue().repoInstructions();
+        return inputsCaptor.getValue();
       }
     }
 
@@ -2212,7 +2225,10 @@ class ReviewOrchestratorTest {
         var summary =
             new ReviewResponse.Summary(
                 0, 0, 0, 0, 0, "looks good", "adds a thing", List.of(), List.of("bug", "docs"));
+        // #664: labels are a summary field, written by the summary call the review ends with.
         when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        when(aiReviewService.summarize(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
 
         orchestrator.review(
