@@ -311,7 +311,7 @@ will change per provider:
 | `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip auto-review of PRs carrying any (wins over required) | _(empty)_ |
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
-| `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings | `true` |
+| `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings, each marked unverified with its confidence capped at medium | `true` |
 | `REVIEW_DECLINE_RECHECK_ENABLED` | Re-check a maintainer's decline against the reviewed code before a prior finding is recorded "justified" (see [Re-checking declines](#re-checking-declines)); the finding stays open for one more round only when the reviewed diff plainly contradicts the stated reason. `false` makes a maintainer reply close the finding unconditionally | `true` |
 | `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
@@ -359,7 +359,12 @@ per-batch verification calls + one summary call. Set
 `REVIEW_VERIFIER_ENABLED=false` to skip only the AI verifier — cheaper, at the
 cost of more false positives; a deterministic hedging guard still runs, and a
 verifier failure never blocks the review (it fails open, keeping the original
-findings).
+findings). A finding the verifier returned no verdict on (an empty or cut
+response, an error, or a call skipped at `REVIEW_MAX_TOKENS_PER_REVIEW`) still
+posts where it would have, but with its confidence capped at medium and a line
+in its own text saying it was not verified, so under the default `balanced`
+strictness it cannot request changes on its own; the review summary also states
+how many findings went unverified.
 
 The on-request commands are budgeted the same way. `/improve`, `/describe`,
 `/changelog` and `/generate-tests` each split a large PR into batches under
@@ -548,7 +553,8 @@ severity findings still post as comments with a neutral check.
 **Security-team recommendation:** use `strict` so a CRITICAL/HIGH finding cannot
 slip through as a comment just because confidence was demoted. Be aware that
 under `strict`, the finding verifier's confidence demotions (hedged claims →
-medium/low) no longer prevent a merge block — only risk reduction or dropping
+medium/low), and the medium-confidence cap on a finding the verifier returned
+no verdict on, no longer prevent a merge block — only risk reduction or dropping
 the finding does. Stay on `balanced` if you want verifier demotions to keep
 speculative severity findings non-blocking.
 

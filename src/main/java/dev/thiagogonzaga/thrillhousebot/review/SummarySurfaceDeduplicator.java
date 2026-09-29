@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -152,7 +153,10 @@ final class SummarySurfaceDeduplicator {
    * false collapse deletes a claim outright where a surviving duplicate only repeats one.
    */
   private static List<Claim> claimsOf(Finding finding) {
-    var description = claim(finding.description());
+    // #885: the unverified note is shared verbatim by every finding a fail-open round kept, so it
+    // is a phrase-arm match between any two of them; it says nothing about either defect.
+    var description =
+        claim(FindingVerificationService.withoutUnverifiedNote(finding.description()));
     return List.of(
         claim(finding.title()),
         new Claim(
