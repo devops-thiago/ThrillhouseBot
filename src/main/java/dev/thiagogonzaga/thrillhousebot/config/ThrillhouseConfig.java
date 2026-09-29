@@ -593,8 +593,9 @@ public interface ThrillhouseConfig {
 
       /**
        * Receiver URL. Unset turns notifications off. Treated as a secret: Slack and Discord
-       * incoming-webhook URLs carry their credential in the path, so the URL is never logged — only
-       * its host.
+       * incoming-webhook URLs carry their credential in the path, so the URL is never logged in
+       * full — only its scheme, host and explicit port (see {@code
+       * NotificationSettings#redactedUrl()}).
        */
       Optional<String> url();
 
