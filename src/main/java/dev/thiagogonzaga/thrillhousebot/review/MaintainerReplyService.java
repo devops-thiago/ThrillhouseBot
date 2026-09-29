@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
 import io.quarkus.logging.Log;
@@ -58,6 +59,7 @@ public class MaintainerReplyService {
   private final ReplyAssistant replyAssistant;
   private final RepoSettingsResolver repoSettingsResolver;
   private final BotIdentity botIdentity;
+  private final ResponseCaps responseCaps;
 
   @Inject
   public MaintainerReplyService(
@@ -70,7 +72,8 @@ public class MaintainerReplyService {
       ReviewDiffFormatter diffFormatter,
       ReplyAssistant replyAssistant,
       RepoSettingsResolver repoSettingsResolver,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      ResponseCaps responseCaps) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -81,6 +84,7 @@ public class MaintainerReplyService {
     this.replyAssistant = replyAssistant;
     this.repoSettingsResolver = repoSettingsResolver;
     this.botIdentity = botIdentity;
+    this.responseCaps = responseCaps;
   }
 
   /**
@@ -379,7 +383,7 @@ public class MaintainerReplyService {
               "Maintainer reply",
               // ReplyAssistant is bound to the concise named model, so the cap that can cut this
               // call is REVIEW_CONCISE_MAX_OUTPUT_TOKENS, not the active model's.
-              AiResponses.ModelLane.CONCISE);
+              responseCaps.forLane(AiResponses.ModelLane.CONCISE));
       if (reply == null || reply.isBlank()) {
         Log.debug("Reply assistant produced an empty reply — posting nothing");
         return null;

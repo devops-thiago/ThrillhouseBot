@@ -691,6 +691,16 @@ Notes:
   model, keep the buffer at least as large as the output cap so a response the
   model is allowed to produce always has reserved room — set both when capping
   output. Boot fails if you don't.
+- **Reading a cut response.** When a call stops with `finish_reason=length`, the
+  log line, the failed check run and the pull-request notice state the
+  `max_tokens` the request licensed and the setting that supplied it (the
+  active model's `max-output-tokens`, or `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` on
+  the concise lane) next to the completion and prompt tokens the provider
+  billed. They advise raising that setting only when the billed completion
+  reached it. A provider can stop a call short of what the request licensed,
+  and that bound does not move with a higher setting, so a stop short of the
+  cap is reported as such. When the provider sends no usage, the notice says so
+  and keeps the lane's standing advice.
 - **`separate-output-budget`** (default `false`) says which contract the model is
   on. Left off, prompt and completion share one window: the budgeter reserves
   `output-buffer-tokens` out of the input budget, and the buffer must cover
