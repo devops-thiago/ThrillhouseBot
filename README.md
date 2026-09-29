@@ -47,11 +47,12 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Every finding can be closed by a maintainer: reply on its review thread, or — for one raised below the inline-posting bar, which has no thread — comment `@thrillhousebot resolved <path>:<line> — <title>` on the PR
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
-- A summary comment on the first run, with a risk breakdown and a changed-files walkthrough
+- One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head (inline findings and the follow-up delta comment stay per round)
 - A Description vs. Implementation section in the summary when the PR description and the change disagree. It is omitted when they match. The check is part of the model summary, so a summary that carries model prose ("What this PR does", per-file walkthrough summaries) and no such section means the check ran and found no mismatch; a counts-only summary means it did not run, and a degraded one says why
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
+- Optional outgoing notification when a review completes or fails — structured JSON or a Slack/Discord message, HMAC-signed, metadata only unless you opt in
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
 - Lets each repository add its own ignore globs in `.github/thrillhousebot.yml`, unioned with the deployment default, and scope extra review rules to a path glob
@@ -97,7 +98,7 @@ not a reaction.
 |---|---|---|
 | `/help` | List the available commands | anyone |
 | `/review` | Run (or re-run) a full review of the PR | write |
-| `/summary` | Post the PR summary if it isn't already on the PR — regenerates it if the comment was deleted, otherwise no-op | write |
+| `/summary` | Post the PR summary if it isn't already on the PR — regenerates it if the comment was deleted, otherwise no-op (the next review round also re-posts a deleted summary) | write |
 | `/describe` | Suggest an improved PR title and description generated from the diff, as a comment to copy in (never overwrites the PR) | write |
 | `/changelog` | Draft a CHANGELOG entry for the PR from the diff (Added/Changed/Fixed/Security…), as a comment to copy into `CHANGELOG.md` (never commits) | write |
 | `/add-docs` | Generate docstrings/inline docs for the symbols changed in the PR, posted as committable suggestions (or a note with the drafted docs when a multi-line declaration can't be pinned to a single diff hunk) | write |
@@ -320,7 +321,7 @@ will change per provider:
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_PATCH_COVERAGE_ENABLED` | Feed patch coverage into the review context: the added lines the repository's own coverage report records as never executed (see [Repository configuration](#repository-configuration)). Only takes effect for a repository that names its coverage artifact in `.github/thrillhousebot.yml` | `false` |
-| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. Only the first review posts the full summary; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
+| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. The full summary is a single comment the bot edits in place each round, so this is the per-round record of what moved; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Changed lines (additions + deletions) at or above which the nudge applies; either dimension triggers it on its own. `0` switches this dimension off — with both at `0` the nudge never fires | `1000` |
@@ -348,6 +349,14 @@ will change per provider:
 | `HTTP_CONNECT_TIMEOUT` | Outbound HTTP connect timeout (GitHub API, OAuth) | `10s` |
 | `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
 | `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive interval in ms; `0` or negative disables it (and stale replay-buffer eviction) | `25000` |
+| `NOTIFICATIONS_WEBHOOK_URL` | Receiver of the outgoing review-outcome notification (see [Outgoing notifications](#outgoing-notifications)). Unset turns notifications off. Treated as a secret and never logged beyond its scheme, host and port; must be `https://` | _(unset — off)_ |
+| `NOTIFICATIONS_WEBHOOK_FORMAT` | Body format: `json` (structured payload), `slack` or `discord` (incoming-webhook chat message) | `json` |
+| `NOTIFICATIONS_WEBHOOK_SECRET` | HMAC-SHA256 key; when set, each request carries `X-Thrillhousebot-Signature-256: sha256=<hex>` over the raw body | _(unset — unsigned)_ |
+| `NOTIFICATIONS_WEBHOOK_EVENTS` | Comma-separated outcomes to send: `completed`, `failed` | `completed,failed` |
+| `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT` | Also send the PR title and each finding's severity, file, line and title. Off by default: only metadata leaves the process | `false` |
+| `NOTIFICATIONS_WEBHOOK_ALLOW_HTTP` | Accept a plain `http://` URL — local testing only | `false` |
+| `NOTIFICATIONS_WEBHOOK_TIMEOUT` | Per-attempt request timeout (at most `60s`) | `10s` |
+| `NOTIFICATIONS_WEBHOOK_MAX_ATTEMPTS` | Attempts per notification (1–5); a timeout, connection failure, `429` or `5xx` is retried with 1s/2s/4s/8s backoff, then the notification is dropped with a WARN | `3` |
 
 ### AI call budget
 
@@ -728,6 +737,87 @@ Notes:
   `[0, 2]`, `top-p` in `(0, 1]`, penalties in `[-2, 2]`, token counts positive —
   a typo in any entry (even an inactive model's) fails startup with a message
   naming the key.
+### Outgoing notifications
+
+The bot can tell an external system when a review finishes, so a team can see
+outcomes in chat or feed them into a pipeline without watching the dashboard.
+It is off until `NOTIFICATIONS_WEBHOOK_URL` is set.
+
+**When it fires.** Once per review run, after the outcome is final:
+`review.completed` once the verdict is on the pull request, `review.failed`
+once a failed review has been reported on it (check run and failure comment).
+A run abandoned because the head moved while it reviewed sends nothing — its
+result was discarded, and the run for the new head sends its own. A verdict
+held on pending CI is sent once, when the review posts it, with
+`review.held_on_ci: true`; the approval posted later when CI turns green is not
+a second notification. Commands such as `/describe` or `/improve` send nothing.
+
+**What leaves the process.** With the default `json` format:
+
+```json
+{
+  "schema_version": 1,
+  "event": "review.completed",
+  "timestamp": "2026-09-29T12:00:00Z",
+  "bot": { "name": "thrillhousebot", "version": "0.7.0" },
+  "repository": "octo/repo",
+  "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
+  "session_url": "https://bot.example/session/…",
+  "review": {
+    "verdict": "REQUEST_CHANGES",
+    "check_conclusion": "failure",
+    "highest_risk": "HIGH",
+    "held_on_ci": false,
+    "partial_coverage": false,
+    "first_review": true,
+    "findings": { "total": 3, "critical": 0, "high": 1, "medium": 2, "low": 0 },
+    "previous_findings": { "resolved": 0, "unresolved": 0 }
+  }
+}
+```
+
+A `review.failed` payload carries `failure.category` instead of `review` — one
+of `ai_response_truncated`, `ai_context_window_exceeded`, `ai_timeout`,
+`token_spend_ceiling`, `ai_error`, `github_auth`, `publish_failed`,
+`github_api` or `internal`. The error message itself is never sent, since it
+can quote provider or GitHub responses. No code, diff text, finding
+description, suggested fix, summary or other model output is sent, and neither
+is the PR title. `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT=true` adds
+`pull_request.title` and `review.finding_list` (up to 25 findings, most severe
+first, each with `severity`, `file`, `line` and `title`); finding descriptions
+and suggested code are never sent even then. `session_url` is built from
+`DASHBOARD_URL`.
+
+**Chat formats.** `slack` and `discord` send a one-message summary (verdict,
+counts, head commit, links to the PR and the dashboard session) to an
+incoming-webhook URL. With content opted in, the message also lists the PR
+title and up to five findings. PR and model text is escaped so it cannot
+mention anyone or inject links, and Discord messages disable mentions
+outright. One endpoint is supported; to reach several, point it at a relay.
+
+**Verifying requests.** Every request carries `X-Thrillhousebot-Event`
+(`review.completed` / `review.failed`) and `X-Thrillhousebot-Delivery` (the
+same id on every retry of one notification, for de-duplication). With
+`NOTIFICATIONS_WEBHOOK_SECRET` set it also carries
+`X-Thrillhousebot-Signature-256: sha256=<hex>`, the HMAC-SHA256 of the exact
+request body keyed by the secret, the scheme GitHub uses for
+`X-Hub-Signature-256`. Recompute it over the raw bytes and compare in
+constant time; check `timestamp` to refuse replays.
+
+**Delivery.** Sending never delays or fails a review: the body is posted from
+a background virtual thread with the per-attempt timeout above. A timeout,
+connection failure, `429` or `5xx` is retried with backoff up to
+`NOTIFICATIONS_WEBHOOK_MAX_ATTEMPTS`, then the notification is dropped with a
+WARN; any other status is final. Nothing is queued across a restart.
+
+**Security.** The URL is operator-configured and is the only place a
+notification goes. Redirects are not followed, so a receiver cannot bounce the
+payload and its signature elsewhere. `https://` is required unless
+`NOTIFICATIONS_WEBHOOK_ALLOW_HTTP=true`, and a URL with credentials before the
+host is refused at boot. Slack and Discord webhook URLs are credentials in
+their own right, so logs and boot errors name the receiver by scheme, host and
+port only and never print the secret. Point the URL only at a receiver you trust
+with the metadata above; the bot does not restrict which hosts it may reach.
 <!-- docs:configuration:end -->
 
 ## Dashboard
@@ -979,6 +1069,11 @@ sending it private code.
 
 Set `AI_API_KEY`, `GITHUB_PRIVATE_KEY`, and the webhook secret through your
 environment or a secret manager. Never commit them.
+
+The optional outgoing notification (off by default) sends review metadata to
+the one URL you configure; see [Outgoing notifications](#outgoing-notifications)
+for exactly which fields leave the process. Treat that URL, and
+`NOTIFICATIONS_WEBHOOK_SECRET`, like the other secrets.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

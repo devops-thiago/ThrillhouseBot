@@ -829,14 +829,22 @@ public class ReviewContextLoader {
   }
 
   /**
-   * Whether an issue-comment body is the bot's PR summary. The heading may be preceded by the
+   * Whether an issue-comment body is the bot's PR summary: a line that is exactly the summary
+   * marker ({@link PrSummaryGenerator#SUMMARY_MARKER}, #868) or exactly the summary heading, which
+   * is all a summary posted before the marker existed carries. The heading may be preceded by the
    * truncation blockquote banner ({@link ReviewResult#truncationNotice(int)}), so a
    * starts-with-heading check alone would miss an already-posted summary on a large PR and re-post
-   * it on every re-review.
+   * it on every re-review. A whole-line match keeps a comment that only mentions the heading in a
+   * sentence from being taken for the summary.
    */
   static boolean isBotSummaryComment(String body) {
     return body != null
-        && body.lines().anyMatch(line -> line.strip().equals(PrSummaryGenerator.SUMMARY_HEADING));
+        && body.lines()
+            .map(String::strip)
+            .anyMatch(
+                line ->
+                    line.equals(PrSummaryGenerator.SUMMARY_MARKER)
+                        || line.equals(PrSummaryGenerator.SUMMARY_HEADING));
   }
 
   List<GitHubCommentClient.IssueComment> fetchIssueComments(

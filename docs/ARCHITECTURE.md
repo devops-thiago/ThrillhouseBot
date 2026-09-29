@@ -161,9 +161,9 @@ sequenceDiagram
     alt AI fails
         Note over TB: Same sanitized error path as first review
     else AI succeeds
+        TB->>GH: PATCH comment: PR summary, edited in place (POST a new one if it was deleted or the edit fails)
         TB->>GH: POST PR review (suggestions for unresolved + new issues)
         TB->>GH: PATCH check-run → conclusion based on risk
-        Note over TB: No summary comment on follow-up (only on first run)
     end
 ```
 
@@ -211,6 +211,7 @@ sequenceDiagram
 | `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
 | `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
+| `notification/` | The opt-in outgoing review-outcome notification: resolves and validates its configuration, renders the JSON / Slack / Discord body (metadata only unless content is opted in), and posts it off the review thread with an HMAC signature and a bounded retry | `ReviewNotifier`, `NotificationSettings`, `NotificationPayloads`, `WebhookDelivery` |
 | `config/` | Wiring: the outbound HTTP client, the review thread pool, typed config, active-model settings (caps, generation params), fail-fast startup validation, and the shared bot-identity used to recognize the bot's own activity | `HttpClientProducer`, `ReviewExecutorProducer`, `ThrillhouseConfig`, `ActiveModelSettings`, `StartupConfigValidator`, `BotIdentity` |
 | `frontend/` | The Next.js dashboard, built to a static export and served by Quarkus | — |
 

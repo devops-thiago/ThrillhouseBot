@@ -164,9 +164,9 @@ public interface GitHubCommentClient {
       CreateCommentRequest request);
 
   /**
-   * Edits a comment, with the same throttle backoff {@link #createComment} gets. Editing the bot's
-   * existing summary in place carries the regenerated markdown of a superseded round, so losing it
-   * to a throttle leaves the PR showing a summary that describes code the diff no longer has.
+   * Edits a comment, with the same throttle backoff {@link #createComment} gets. Every follow-up
+   * round edits the bot's summary comment in place with its own render (#868), so losing the edit
+   * to a throttle would leave the PR showing an earlier round's summary.
    */
   default CommentResponse updateComment(
       String auth,

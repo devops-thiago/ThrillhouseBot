@@ -64,6 +64,15 @@ public class PrSummaryGenerator {
   public static final String SUMMARY_HEADING = "## 🤖 ThrillhouseBot PR Summary";
 
   /**
+   * Invisible first line of the summary comment as posted, in the same {@code <!--
+   * thrillhousebot:... -->} shape as the finding marker, so a later round can find the comment and
+   * edit it in place (#868). It is written at the top because GitHub's size cap cuts the tail of an
+   * over-long body, and the marker must survive that cut. The heading stays a recognizer too: a
+   * summary posted before this marker existed carries only the heading.
+   */
+  public static final String SUMMARY_MARKER = "<!-- thrillhousebot:summary -->";
+
+  /**
    * Upper bound on rows in the changed-files walkthrough. Keeps the comment within GitHub's size
    * budget on large PRs; any files beyond this are rolled up into a trailing "… and N more" note.
    *
