@@ -46,6 +46,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewTimeoutException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.DeliberationFixture;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
@@ -1900,6 +1901,33 @@ class FindingPipelineTest {
     verify(quoteValidator).validate(any(), eq("raw legacy diff"));
     assertTrue(plan.responseCutFiles().isEmpty(), "no batch to name means no per-file disclosure");
     assertFalse(plan.truncated());
+  }
+
+  @Test
+  void singleCallSalvagesTheFindingsOfAProseHeavyResponseCutInItsWalkthrough() {
+    // #894: session 5175's shape. A 256k-character response, nearly all deliberation whose first
+    // bracket is a "[LOW]" tag in prose, cut inside file_summaries after the findings array had
+    // closed. The salvage anchored on that tag, recovered nothing, and the review failed with a
+    // complete round of findings in hand.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    var body =
+        DeliberationFixture.deliberation(DeliberationFixture.PRODUCTION_DELIBERATION_CHARS)
+            + "```json\n"
+            + partialBatchBody().replace(",{\"id\":2,\"status\":\"resol", "")
+            + "],\"summary\":{\"total_findings\":3,\"overall_assessment\":\"ok\","
+            + "\"file_summaries\":[{\"path\":\"a.java\",\"summ";
+    when(aiReviewService.review(eq(session), any()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length", body, false));
+
+    var result =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+
+    assertEquals(3, result.findings().size());
+    assertEquals(List.of("a.java"), plan.responseCutFiles());
   }
 
   @Test
