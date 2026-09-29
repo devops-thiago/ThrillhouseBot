@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -112,6 +113,8 @@ public class ReviewOrchestrator {
   private final CiHoldRegistry ciHoldRegistry;
 
   private final ExecutorService reviewExecutor;
+
+  private final ReviewNotifier notifier;
 
   /**
    * Parameter object for the {@link #review(ReviewRequest)} method.
@@ -230,7 +233,8 @@ public class ReviewOrchestrator {
       ReviewSkipEmitter skipEmitter,
       SupersededFindingsCarryover carryover,
       CiHoldRegistry ciHoldRegistry,
-      @ReviewExecutor ExecutorService reviewExecutor) {
+      @ReviewExecutor ExecutorService reviewExecutor,
+      ReviewNotifier notifier) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
@@ -249,6 +253,7 @@ public class ReviewOrchestrator {
     this.carryover = carryover;
     this.ciHoldRegistry = ciHoldRegistry;
     this.reviewExecutor = reviewExecutor;
+    this.notifier = notifier;
   }
 
   /**
@@ -411,6 +416,13 @@ public class ReviewOrchestrator {
             applyReviewResult(session, result);
             broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(session));
           });
+      // #73: the verdict is final for this run once it is on the pull request. A superseded run
+      // returned above without reaching here, and a verdict held on CI is announced now, not again
+      // when CiHoldRevisit posts the approval.
+      runPostResultStep(
+          doneReq,
+          "send the outcome notification",
+          () -> notifier.reviewCompleted(doneReq, sessionUrl(session), result));
 
       Log.infof(
           "Review complete for %s/%s #%d: %d findings, state=%s",
@@ -752,6 +764,7 @@ public class ReviewOrchestrator {
       Log.warnf(persistenceError, "Failed to persist failed review session %d", session.id);
     }
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+    notifier.reviewFailed(req, sessionUrl(session), e);
   }
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */

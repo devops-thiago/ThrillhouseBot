@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in outgoing notification when a review completes or fails** (#73): set `NOTIFICATIONS_WEBHOOK_URL` and each final review outcome is posted to it once, as a structured JSON payload or as a Slack or Discord incoming-webhook message (`NOTIFICATIONS_WEBHOOK_FORMAT`). By default only metadata leaves the process: repository, PR number, head commit, verdict, finding counts by severity, failure category, dashboard link, timestamp and bot version; `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT` adds the PR title and finding titles, never finding prose or code. Requests can be signed with HMAC-SHA256 (`NOTIFICATIONS_WEBHOOK_SECRET`, sent as `X-Thrillhousebot-Signature-256`), run off the review thread with a bounded timeout and retry, never follow redirects, and never log the URL beyond its host. A run superseded by a newer push sends nothing, and a verdict held on CI is sent once, not again when CI turns green. The configuration is validated at boot
+
 ## [0.6.9] — 2026-09-21
 
 What the reviewer knows when it judges a finding drove this release. The second-pass verifier saw only the findings and the diff, so a finding raised from the coverage report or a path-scoped rule read to it as a claim about material it could not see, and it demoted them; a finding's cited location was never checked against the file it named; and a claim the verifier had already rejected could be re-raised and published by a later round on the same commit. The rest is what production showed on 0.6.8: one call could spend a whole review's retry budget at the streaming deadline, a review killed by a restart stayed marked as running for good, and a walkthrough could lose every file summary with nothing recorded about why.

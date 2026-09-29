@@ -53,6 +53,8 @@ public interface ThrillhouseConfig {
 
   AiPricingConfig ai();
 
+  NotificationsConfig notifications();
+
   interface GitHubConfig {
     @WithName("app-id")
     String appId();
@@ -559,6 +561,88 @@ public interface ThrillhouseConfig {
     /** Optional override; when unset the owner is resolved from the GitHub App via GET /app. */
     @WithName("github.account-owner")
     Optional<String> accountOwner();
+  }
+
+  /**
+   * Outgoing review-outcome notifications (#73). Everything here is off until an operator sets
+   * {@link OutgoingWebhookConfig#url()}.
+   */
+  interface NotificationsConfig {
+    OutgoingWebhookConfig webhook();
+
+    /**
+     * One outgoing webhook fired when a review reaches a final outcome. The payload carries
+     * metadata only — repository, pull request number, head commit, verdict, finding counts,
+     * failure category, dashboard link — unless {@link #includeContent()} opts in to the PR title
+     * and finding titles. Validated at boot by {@link StartupConfigValidator}.
+     */
+    interface OutgoingWebhookConfig {
+      /** Formats accepted by {@link #format()}. */
+      List<String> ALLOWED_FORMATS = List.of("json", "slack", "discord");
+
+      /** Events accepted by {@link #events()}. */
+      List<String> ALLOWED_EVENTS = List.of("completed", "failed");
+
+      /**
+       * Upper bound on {@link #maxAttempts()}, so a dead receiver cannot hold a thread for long.
+       */
+      int MAX_ATTEMPTS_CEILING = 5;
+
+      /** Upper bound on {@link #timeout()} for the same reason. */
+      Duration MAX_TIMEOUT = Duration.ofSeconds(60);
+
+      /**
+       * Receiver URL. Unset turns notifications off. Treated as a secret: Slack and Discord
+       * incoming-webhook URLs carry their credential in the path, so the URL is never logged — only
+       * its host.
+       */
+      Optional<String> url();
+
+      /**
+       * Body format: {@code json} (the structured payload), {@code slack} or {@code discord} (an
+       * incoming-webhook message for that chat service).
+       */
+      @WithDefault("json")
+      String format();
+
+      /**
+       * HMAC-SHA256 key. When set, every request carries {@code X-Thrillhousebot-Signature-256:
+       * sha256=<hex>} computed over the exact request body, the way GitHub signs its own webhooks.
+       */
+      Optional<String> secret();
+
+      /** Which outcomes are sent: any of {@code completed}, {@code failed}. */
+      @WithDefault("completed,failed")
+      List<String> events();
+
+      /**
+       * Opt-in to the PR title and the findings' severity, location and title. Off by default so
+       * nothing the model wrote, and nothing from the PR itself, leaves the process.
+       */
+      @WithName("include-content")
+      @WithDefault("false")
+      boolean includeContent();
+
+      /**
+       * Accept a plain {@code http://} URL. For local testing only; off by default so the payload
+       * and its signature never travel unencrypted by accident.
+       */
+      @WithName("allow-http")
+      @WithDefault("false")
+      boolean allowHttp();
+
+      /** Per-attempt request timeout. */
+      @WithDefault("10s")
+      Duration timeout();
+
+      /**
+       * Attempts per notification, the first included. A timeout, a connection failure, a 429 or a
+       * 5xx is repeated with exponential backoff; anything else is final.
+       */
+      @WithName("max-attempts")
+      @WithDefault("3")
+      int maxAttempts();
+    }
   }
 
   interface AiPricingConfig {

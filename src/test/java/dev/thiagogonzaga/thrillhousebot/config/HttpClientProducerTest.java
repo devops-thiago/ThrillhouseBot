@@ -45,4 +45,16 @@ class HttpClientProducerTest {
 
     assertEquals(Duration.ofSeconds(30), client.connectTimeout().get());
   }
+
+  @Test
+  void neverFollowsRedirects() {
+    // The outgoing review notification (#73) relies on this: a receiver must not be able to bounce
+    // the payload and its signature to a host the operator did not configure.
+    ThrillhouseConfig config = mock(ThrillhouseConfig.class);
+    when(config.httpConnectTimeout()).thenReturn(Duration.ofSeconds(10));
+
+    var client = new HttpClientProducer(config).httpClient();
+
+    assertEquals(java.net.http.HttpClient.Redirect.NEVER, client.followRedirects());
+  }
 }
