@@ -290,14 +290,15 @@ public final class NotificationPayloads {
   }
 
   /**
-   * Discord markdown control characters, backslash-escaped so PR or model text renders literally.
+   * Discord markdown control characters, backslash-escaped so PR or model text renders literally —
+   * {@code <} included, so {@code <t:…>} timestamps and {@code <:emoji:…>} custom emoji stay text.
    * Mentions are disabled separately through {@code allowed_mentions}. Visible for tests.
    */
   static String discordEscape(String value) {
     var out = new StringBuilder(value.length());
     for (var i = 0; i < value.length(); i++) {
       var c = value.charAt(i);
-      if ("\\*_~`|>[]()#-".indexOf(c) >= 0) {
+      if ("\\*_~`|<>[]()#-".indexOf(c) >= 0) {
         out.append('\\');
       }
       out.append(c);

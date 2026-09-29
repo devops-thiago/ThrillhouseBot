@@ -116,6 +116,16 @@ class NotificationPayloadsTest {
         .isEqualTo("https://github.com/octo/repo/pull/42");
     assertThat(json.at("/pull_request/title").isMissingNode()).isTrue();
     assertThat(json.get("session_url").asText()).isEqualTo(SESSION);
+    assertThat(json.has("failure")).isFalse();
+  }
+
+  @Test
+  void jsonCompletedCarriesTheVerdictAndCounts() throws Exception {
+    var json =
+        parse(
+            NotificationPayloads.render(
+                completed(withFindings()), NotificationFormat.JSON, false, NOW, "0.7.0"));
+
     assertThat(json.at("/review/verdict").asText()).isEqualTo("REQUEST_CHANGES");
     assertThat(json.at("/review/check_conclusion").asText()).isEqualTo("failure");
     assertThat(json.at("/review/highest_risk").asText()).isEqualTo("HIGH");
@@ -130,7 +140,13 @@ class NotificationPayloadsTest {
     assertThat(json.at("/review/previous_findings/resolved").asInt()).isEqualTo(1);
     assertThat(json.at("/review/previous_findings/unresolved").asInt()).isEqualTo(2);
     assertThat(json.at("/review/finding_list").isMissingNode()).isTrue();
-    assertThat(json.has("failure")).isFalse();
+  }
+
+  @Test
+  void jsonCompletedLeavesAllContentOutByDefault() {
+    var body =
+        NotificationPayloads.render(
+            completed(withFindings()), NotificationFormat.JSON, false, NOW, "0.7.0");
 
     var text = new String(body, java.nio.charset.StandardCharsets.UTF_8);
     assertThat(text)
@@ -274,8 +290,8 @@ class NotificationPayloadsTest {
     var content = NotificationPayloads.discord(completed(withFindings()), true).get("content");
 
     assertThat(content.asText())
-        .contains("\nPR title <here\\>")
-        .contains("\\[CRITICAL\\] a.java:3 — Critical <!channel\\> \\*bold\\*");
+        .contains("\nPR title \\<here\\>")
+        .contains("\\[CRITICAL\\] a.java:3 — Critical \\<!channel\\> \\*bold\\*");
   }
 
   @Test
@@ -362,7 +378,7 @@ class NotificationPayloadsTest {
   @Test
   void escapersHandleEveryControlCharacter() {
     assertThat(NotificationPayloads.slackEscape("a & <b> c")).isEqualTo("a &amp; &lt;b&gt; c");
-    assertThat(NotificationPayloads.discordEscape("\\*_~`|>[]()#-x"))
-        .isEqualTo("\\\\\\*\\_\\~\\`\\|\\>\\[\\]\\(\\)\\#\\-x");
+    assertThat(NotificationPayloads.discordEscape("\\*_~`|<>[]()#-x <t:1696100000:R>"))
+        .isEqualTo("\\\\\\*\\_\\~\\`\\|\\<\\>\\[\\]\\(\\)\\#\\-x \\<t:1696100000:R\\>");
   }
 }

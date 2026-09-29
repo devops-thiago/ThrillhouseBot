@@ -227,16 +227,14 @@ class WebhookDeliveryTest {
     var client = mock(HttpClient.class);
     when(client.send(any(), any())).thenThrow(new InterruptedException());
 
-    try {
-      var result =
-          new WebhookDelivery(client, sleeps::add).deliver(settings(Optional.empty(), 3), REQUEST);
+    var result =
+        new WebhookDelivery(client, sleeps::add).deliver(settings(Optional.empty(), 3), REQUEST);
+    // Reads and clears the flag, so the interrupt never leaks into the next test.
+    var flagged = Thread.interrupted();
 
-      assertThat(result).isEqualTo(WebhookDelivery.Result.INTERRUPTED);
-      assertThat(Thread.currentThread().isInterrupted()).isTrue();
-      verify(client, times(1)).send(any(), any());
-    } finally {
-      Thread.interrupted();
-    }
+    assertThat(result).isEqualTo(WebhookDelivery.Result.INTERRUPTED);
+    assertThat(flagged).isTrue();
+    verify(client, times(1)).send(any(), any());
   }
 
   @Test
@@ -247,17 +245,14 @@ class WebhookDeliveryTest {
           throw new InterruptedException();
         };
 
-    try {
-      var result =
-          new WebhookDelivery(HttpClient.newHttpClient(), interrupted)
-              .deliver(settings(Optional.empty(), 3), REQUEST);
+    var result =
+        new WebhookDelivery(HttpClient.newHttpClient(), interrupted)
+            .deliver(settings(Optional.empty(), 3), REQUEST);
+    var flagged = Thread.interrupted();
 
-      assertThat(result).isEqualTo(WebhookDelivery.Result.INTERRUPTED);
-      assertThat(Thread.currentThread().isInterrupted()).isTrue();
-      assertThat(hits).hasValue(1);
-    } finally {
-      Thread.interrupted();
-    }
+    assertThat(result).isEqualTo(WebhookDelivery.Result.INTERRUPTED);
+    assertThat(flagged).isTrue();
+    assertThat(hits).hasValue(1);
   }
 
   @Test

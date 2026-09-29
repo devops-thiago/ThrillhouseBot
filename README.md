@@ -348,7 +348,7 @@ will change per provider:
 | `HTTP_CONNECT_TIMEOUT` | Outbound HTTP connect timeout (GitHub API, OAuth) | `10s` |
 | `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
 | `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive interval in ms; `0` or negative disables it (and stale replay-buffer eviction) | `25000` |
-| `NOTIFICATIONS_WEBHOOK_URL` | Receiver of the outgoing review-outcome notification (see [Outgoing notifications](#outgoing-notifications)). Unset turns notifications off. Treated as a secret and never logged beyond its host; must be `https://` | _(unset — off)_ |
+| `NOTIFICATIONS_WEBHOOK_URL` | Receiver of the outgoing review-outcome notification (see [Outgoing notifications](#outgoing-notifications)). Unset turns notifications off. Treated as a secret and never logged beyond its scheme, host and port; must be `https://` | _(unset — off)_ |
 | `NOTIFICATIONS_WEBHOOK_FORMAT` | Body format: `json` (structured payload), `slack` or `discord` (incoming-webhook chat message) | `json` |
 | `NOTIFICATIONS_WEBHOOK_SECRET` | HMAC-SHA256 key; when set, each request carries `X-Thrillhousebot-Signature-256: sha256=<hex>` over the raw body | _(unset — unsigned)_ |
 | `NOTIFICATIONS_WEBHOOK_EVENTS` | Comma-separated outcomes to send: `completed`, `failed` | `completed,failed` |
@@ -792,8 +792,8 @@ notification goes. Redirects are not followed, so a receiver cannot bounce the
 payload and its signature elsewhere. `https://` is required unless
 `NOTIFICATIONS_WEBHOOK_ALLOW_HTTP=true`, and a URL with credentials before the
 host is refused at boot. Slack and Discord webhook URLs are credentials in
-their own right, so logs and boot errors name the receiver by scheme and host
-only and never print the secret. Point the URL only at a receiver you trust
+their own right, so logs and boot errors name the receiver by scheme, host and
+port only and never print the secret. Point the URL only at a receiver you trust
 with the metadata above; the bot does not restrict which hosts it may reach.
 <!-- docs:configuration:end -->
 

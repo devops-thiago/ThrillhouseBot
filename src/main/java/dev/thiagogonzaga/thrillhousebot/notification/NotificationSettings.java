@@ -172,14 +172,17 @@ public record NotificationSettings(
   }
 
   /**
-   * The receiver as it may be logged: scheme and host only. Everything after the host — where Slack
-   * and Discord keep the webhook's credential — is withheld.
+   * The receiver as it may be logged: scheme, host and (when explicit) port only. Everything after
+   * them — the path and query, where Slack and Discord keep the webhook's credential — is withheld.
    */
   public String redactedUrl() {
     return redact(url);
   }
 
-  /** Scheme and host of {@code uri}, with the rest withheld. Visible for tests. */
+  /**
+   * Scheme, host and explicit port of {@code uri}, with the path and query withheld. Visible for
+   * tests.
+   */
   static String redact(URI uri) {
     var port = uri.getPort() > 0 ? ":" + uri.getPort() : "";
     return uri.getScheme() + "://" + uri.getHost() + port + "/…";

@@ -581,8 +581,8 @@ public class StartupConfigValidator {
 
   /**
    * States at boot whether review-outcome notifications leave the process and, when they do, what
-   * goes where (#73) — naming the receiver by host only, since a Slack or Discord webhook URL is
-   * itself a credential, and never the signing secret.
+   * goes where (#73) — naming the receiver by scheme, host and port only, since a Slack or Discord
+   * webhook URL is itself a credential, and never the signing secret.
    */
   private void logNotificationStatus() {
     NotificationSettings.resolve(config.notifications().webhook())

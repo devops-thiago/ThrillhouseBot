@@ -80,8 +80,52 @@ final class WebhookDelivery {
     INTERRUPTED
   }
 
-  /** What to send: the rendered body and the headers that identify it. */
-  record Request(String event, String deliveryId, byte[] body, String userAgent) {}
+  /**
+   * What to send: the rendered body and the headers that identify it. A class rather than a record
+   * because it carries an array, which a record would compare and print by identity.
+   */
+  static final class Request {
+    private final String event;
+    private final String deliveryId;
+    private final byte[] body;
+    private final String userAgent;
+
+    Request(String event, String deliveryId, byte[] body, String userAgent) {
+      this.event = event;
+      this.deliveryId = deliveryId;
+      this.body = body.clone();
+      this.userAgent = userAgent;
+    }
+
+    String event() {
+      return event;
+    }
+
+    String deliveryId() {
+      return deliveryId;
+    }
+
+    byte[] body() {
+      return body.clone();
+    }
+
+    String userAgent() {
+      return userAgent;
+    }
+
+    /** {@code <event> notification <id> to <redacted receiver>}, for log lines. */
+    String describe(NotificationSettings settings) {
+      return event + " notification " + deliveryId + " to " + settings.redactedUrl();
+    }
+  }
+
+  /**
+   * One attempt's outcome: the HTTP status code, or {@link #NO_STATUS} with the failure's type when
+   * no response arrived.
+   */
+  private record Attempt(int httpCode, String failure) {
+    static final int NO_STATUS = -1;
+  }
 
   private final HttpClient client;
   private final Sleeper sleeper;
@@ -93,60 +137,59 @@ final class WebhookDelivery {
 
   Result deliver(NotificationSettings settings, Request request) {
     var httpRequest = buildRequest(settings, request);
-    String lastFailure = "none";
+    var what = request.describe(settings);
+    var lastFailure = "none";
     for (var attempt = 1; attempt <= settings.maxAttempts(); attempt++) {
+      Attempt outcome;
       try {
-        var status = client.send(httpRequest, HttpResponse.BodyHandlers.discarding()).statusCode();
-        if (status / 100 == 2) {
-          log.debug(
-              "Delivered {} notification {} to {} on attempt {}",
-              request.event(),
-              request.deliveryId(),
-              settings.redactedUrl(),
-              attempt);
-          return Result.DELIVERED;
-        }
-        if (!retryable(status)) {
-          log.warn(
-              "Notification receiver {} refused {} notification {} with HTTP {}{} — not retried",
-              settings.redactedUrl(),
-              request.event(),
-              request.deliveryId(),
-              status,
-              status / 100 == 3 ? " (redirects are not followed)" : "");
-          return Result.REJECTED;
-        }
-        lastFailure = "HTTP " + status;
-      } catch (IOException e) {
-        lastFailure = e.getClass().getSimpleName();
+        outcome = send(httpRequest);
       } catch (InterruptedException _) {
-        return interrupted(settings, request);
+        return interrupted(what);
       }
-      if (attempt < settings.maxAttempts()) {
-        try {
-          sleeper.sleep(backoff(attempt));
-        } catch (InterruptedException _) {
-          return interrupted(settings, request);
-        }
+      var httpCode = outcome.httpCode();
+      if (httpCode / 100 == 2) {
+        log.debug("Delivered {} on attempt {}", what, attempt);
+        return Result.DELIVERED;
+      }
+      if (httpCode != Attempt.NO_STATUS && !retryable(httpCode)) {
+        var note = httpCode / 100 == 3 ? " (redirects are not followed)" : "";
+        log.warn("Receiver refused {} with HTTP {}{} — not retried", what, httpCode, note);
+        return Result.REJECTED;
+      }
+      lastFailure = outcome.failure();
+      if (attempt < settings.maxAttempts() && !pause(attempt)) {
+        return interrupted(what);
       }
     }
-    log.warn(
-        "Dropped {} notification {} to {} after {} attempt(s); last failure: {}",
-        request.event(),
-        request.deliveryId(),
-        settings.redactedUrl(),
-        settings.maxAttempts(),
-        lastFailure);
+    var attempts = settings.maxAttempts();
+    log.warn("Dropped {} after {} attempt(s); last failure: {}", what, attempts, lastFailure);
     return Result.DROPPED;
   }
 
-  private static Result interrupted(NotificationSettings settings, Request request) {
+  /** One POST; an I/O failure is an outcome, not an exception. */
+  private Attempt send(HttpRequest httpRequest) throws InterruptedException {
+    try {
+      var status = client.send(httpRequest, HttpResponse.BodyHandlers.discarding()).statusCode();
+      return new Attempt(status, "HTTP " + status);
+    } catch (IOException e) {
+      return new Attempt(Attempt.NO_STATUS, e.getClass().getSimpleName());
+    }
+  }
+
+  /** Waits out the backoff after {@code attempt}; false when interrupted. */
+  private boolean pause(int attempt) {
+    try {
+      sleeper.sleep(backoff(attempt));
+      return true;
+    } catch (InterruptedException _) {
+      Thread.currentThread().interrupt();
+      return false;
+    }
+  }
+
+  private static Result interrupted(String what) {
     Thread.currentThread().interrupt();
-    log.warn(
-        "Interrupted while delivering {} notification {} to {} — dropped",
-        request.event(),
-        request.deliveryId(),
-        settings.redactedUrl());
+    log.warn("Interrupted while delivering {} — dropped", what);
     return Result.INTERRUPTED;
   }
 
