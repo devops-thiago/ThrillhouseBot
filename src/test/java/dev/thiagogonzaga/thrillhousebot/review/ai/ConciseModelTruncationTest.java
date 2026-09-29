@@ -90,14 +90,12 @@ class ConciseModelTruncationTest {
 
     var result = findingVerifier.verify("[]", "", "diff", "", "");
 
+    var cap = responseCaps.forLane(AiResponses.ModelLane.CONCISE);
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    result,
-                    "Finding verification",
-                    responseCaps.forLane(AiResponses.ModelLane.CONCISE)));
+            () -> AiResponses.textOrThrowOnTruncation(result, "Finding verification", cap));
 
     assertTrue(
         thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
@@ -111,15 +109,12 @@ class ConciseModelTruncationTest {
         .thenReturn(lengthStoppedResponse("A reply cut mid-sen"));
 
     var result = replyAssistant.reply("question", "", "", "", "");
+    var cap = responseCaps.forLane(AiResponses.ModelLane.CONCISE);
 
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    result,
-                    "Maintainer reply",
-                    responseCaps.forLane(AiResponses.ModelLane.CONCISE)));
+            () -> AiResponses.textOrThrowOnTruncation(result, "Maintainer reply", cap));
 
     assertTrue(
         thrown.getMessage().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),

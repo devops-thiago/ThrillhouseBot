@@ -58,12 +58,12 @@ class AiResponsesTest {
   void aBlockingStopAtTheLicensedCapStatesTheFiguresAndNamesTheSettingThatSuppliedIt() {
     // #895: the figures come off the blocking Result too, so a /improve cut at its cap says what
     // was licensed, what was billed, and which setting to raise.
+    var cutShort = truncatedWithUsage("partial", 1200, 8192);
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    truncatedWithUsage("partial", 1200, 8192), "/improve assistant", ACTIVE_CAP));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "/improve assistant", ACTIVE_CAP));
 
     var message = thrown.getMessage();
     assertTrue(message.contains("licensed max_tokens=8192 (from " + ACTIVE_SETTING + ")"), message);
@@ -80,12 +80,12 @@ class AiResponsesTest {
     // setting would change nothing, so the message must not send the operator to it.
     var cap = new ResponseCap(ModelLane.ACTIVE, 96_000, ACTIVE_SETTING);
 
+    var cutShort = truncatedWithUsage("partial", 163_342, 65_536);
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    truncatedWithUsage("partial", 163_342, 65_536), "/improve assistant", cap));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "/improve assistant", cap));
 
     var message = thrown.getMessage();
     assertTrue(message.contains("billed 65536 completion tokens, 163342 prompt tokens"), message);
@@ -99,14 +99,13 @@ class AiResponsesTest {
   void aConciseStopAtItsCapNamesTheConciseSettingNotTheActiveModels() {
     // #581 carried into #895: at the cap on the concise lane, the setting to raise is the concise
     // one, and the aside says why the active model's is not.
+    var cutShort = truncatedWithUsage("{\"verdicts\":[", 900, 8192);
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
             () ->
-                AiResponses.textOrThrowOnTruncation(
-                    truncatedWithUsage("{\"verdicts\":[", 900, 8192),
-                    "Finding verification",
-                    CONCISE_CAP));
+                AiResponses.textOrThrowOnTruncation(cutShort, "Finding verification", CONCISE_CAP));
 
     var message = thrown.getMessage();
     assertTrue(message.contains("so raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS"), message);
@@ -116,12 +115,12 @@ class AiResponsesTest {
 
   @Test
   void aStopWithoutUsageKeepsTheLanesAdviceAndSaysTheUsageWasNotReported() {
+    var cutShort = aiTruncated("partial");
+
     var thrown =
         assertThrows(
             AiResponseTruncatedException.class,
-            () ->
-                AiResponses.textOrThrowOnTruncation(
-                    aiTruncated("partial"), "/improve assistant", ACTIVE_CAP));
+            () -> AiResponses.textOrThrowOnTruncation(cutShort, "/improve assistant", ACTIVE_CAP));
 
     var message = thrown.getMessage();
     assertTrue(message.contains("usage not reported by the provider"), message);

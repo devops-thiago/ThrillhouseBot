@@ -1670,10 +1670,11 @@ class AiReviewServiceTest {
                 TruncatedTokenStream.withUsage(
                     "{\"findings\":[", new TokenUsage(163_342, 65_536), starts));
 
+    var session = reviewSession();
+
     var thrown =
         assertThrows(
-            AiResponseTruncatedException.class,
-            () -> capped.review(reviewSession(), PROMPT_INPUTS));
+            AiResponseTruncatedException.class, () -> capped.review(session, PROMPT_INPUTS));
 
     var message = thrown.getMessage();
     assertTrue(message.contains("13 characters arrived before the cut"), message);
