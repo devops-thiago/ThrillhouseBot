@@ -26,11 +26,12 @@ import jakarta.inject.Inject;
  * AiReviewService.PromptInputs} the model is called with — fencing the diff and every untrusted
  * prose slot in an unforgeable CSPRNG boundary, and assembling the trailing guidance of each call.
  * The review call's ({@code repoInstructions}) carries the review-only requests (mock fidelity, bug
- * fix efficacy, config-key definitions, heuristic failure modes, patch coverage) and the repository
- * instructions, global then path-scoped. The summary call's ({@code summaryInstructions}) carries
- * the label and diagram requests — they gate {@code suggested_labels} and {@code
- * walkthrough_diagram}, which only the summary call writes (#664) — and the project-wide
- * instructions. Extracted from {@code ReviewOrchestrator} as the pure prompt-shaping transform.
+ * fix efficacy, config-key definitions, heuristic failure modes, patch coverage, the opt-in
+ * CI-failure list) and the repository instructions, global then path-scoped. The summary call's
+ * ({@code summaryInstructions}) carries the label and diagram requests — they gate {@code
+ * suggested_labels} and {@code walkthrough_diagram}, which only the summary call writes (#664) —
+ * and the project-wide instructions. Extracted from {@code ReviewOrchestrator} as the pure
+ * prompt-shaping transform.
  */
 @ApplicationScoped
 public class ReviewPromptAssembler {
@@ -72,6 +73,19 @@ public class ReviewPromptAssembler {
 
   AiReviewService.PromptInputs assemble(
       ReviewContextLoader.ReviewContext ctx, ReviewOrchestrator.ReviewRequest req) {
+    return assemble(ctx, req, "");
+  }
+
+  /**
+   * Assembles the prompt inputs with the opt-in CI-failure section (#59): {@code ciFailures} is the
+   * unfenced list {@link CiFailureContextResolver} built, or blank when there is none. It rides the
+   * review call's trailing guidance, so every batch carries it and the planner counts it in the
+   * shared overhead with the rest of that slot.
+   */
+  AiReviewService.PromptInputs assemble(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewOrchestrator.ReviewRequest req,
+      String ciFailures) {
     String fencedDiff = PromptTemplateEscaper.fence(ctx.diff());
     String fencedStack = PromptTemplateEscaper.fence(ctx.projectStack());
     String labelGuidance = PrLabeler.buildLabelGuidance(ctx.repoLabels(), labeler.allowNewLabels());
@@ -95,7 +109,9 @@ public class ReviewPromptAssembler {
                     configKeyContextSection(ctx.configKeyContext()),
                     combineSections(
                         heuristicFailureModesSection(ctx.diff()),
-                        patchCoverageSection(ctx.patchCoverage())))),
+                        combineSections(
+                            patchCoverageSection(ctx.patchCoverage()),
+                            ciFailuresSection(ciFailures))))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
@@ -190,6 +206,19 @@ public class ReviewPromptAssembler {
     return PrReviewPrompts.PATCH_COVERAGE_REQUEST
         + "\n\n"
         + PromptTemplateEscaper.fence(patchCoverage);
+  }
+
+  /**
+   * The CI-failure guidance plus the list itself (#59) — empty when no check had failed when the
+   * review started, the feature is off, or the list could not be built. The list is output a pull
+   * request's own code wrote, so it is fenced and framed as data like the other untrusted slots,
+   * and the guidance travels with it or not at all.
+   */
+  static String ciFailuresSection(String ciFailures) {
+    if (ciFailures == null || ciFailures.isBlank()) {
+      return "";
+    }
+    return PrReviewPrompts.CI_FAILURES_REQUEST + "\n\n" + PromptTemplateEscaper.fence(ciFailures);
   }
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */
