@@ -289,18 +289,6 @@ class FindingVerificationServiceTest {
     assertEquals(4, unverifiedNotes(result));
   }
 
-  @Test
-  void aDisabledVerifierMarksNothing() {
-    // Not verifying is the operator's configuration, not a failure to screen.
-    when(reviewConfig.verifierEnabled()).thenReturn(false);
-    ReviewResponse original = response(finding("critical", "high", "Bug"));
-
-    var result = service.verify(SESSION, original, "diff", "stack", "");
-
-    assertSame(original, result);
-    verifyNoInteractions(verifier);
-  }
-
   private static long unverifiedNotes(ReviewResponse response) {
     return response.findings().stream()
         .filter(f -> f.description().contains(FindingVerificationService.UNVERIFIED_NOTE))
@@ -486,6 +474,8 @@ class FindingVerificationServiceTest {
 
   @Test
   void shouldSkipVerificationWhenDisabled() {
+    // Also pins #885's carve-out: a disabled verifier is the operator's configuration, not a
+    // failure to screen, so nothing is capped or marked unverified.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original = response(finding("critical", "high", "Bug"));
 
