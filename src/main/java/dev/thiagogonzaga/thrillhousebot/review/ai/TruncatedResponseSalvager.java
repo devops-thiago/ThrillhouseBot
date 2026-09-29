@@ -41,8 +41,9 @@ import java.util.List;
  * <p>Deliberately a separate class from {@link ReviewResponseParser}: the parser's contract is
  * all-or-nothing on a complete body, while salvage is best-effort on a known-cut one, and the two
  * must not blur (#508 is being fixed in the parser in parallel). The fence/noise stripping and
- * control-character escaping are shared through {@link ReviewResponseParser#extractJson}, and the
- * tokenization is Jackson's own streaming parser — no hand-rolled string slicing over model output.
+ * control-character escaping are shared through {@link ReviewResponseParser#extractJson(String,
+ * List)}, and the tokenization is Jackson's own streaming parser — no hand-rolled string slicing
+ * over model output.
  *
  * <p>Paranoid by construction, since the input is model output: the scan is a single bounded
  * forward pass ({@link #MAX_SALVAGED_BODY_CHARS}), each array keeps at most {@link
@@ -106,6 +107,7 @@ public class TruncatedResponseSalvager {
     var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
     scan(
         partialBody,
+        ReviewResponseParser.REVIEW_ROOT_KEYS,
         (parser, field, value) -> {
           switch (field) {
             case "findings" ->
@@ -122,13 +124,16 @@ public class TruncatedResponseSalvager {
   /**
    * Salvages the {@code summary} object of a cut summary-call body when it closed before the cut
    * (#500 scope A); {@code null} when it did not, when it does not map onto the summary schema, or
-   * when there is nothing to work with. Same bounded, never-throwing pass as {@link #salvage}.
+   * when there is nothing to work with. Same bounded, never-throwing pass as {@link #salvage}, and
+   * it anchors on the same root keys {@link ReviewResponseParser#parseSummary} reads the complete
+   * body with, so deliberation ahead of the answer cannot pull the pass onto a bracket in prose.
    */
   public ReviewResponse.Summary salvageSummary(String partialBody) {
     // One-element holder: the field handler below is a lambda, which cannot assign a local.
     var summary = new ReviewResponse.Summary[1];
     scan(
         partialBody,
+        ReviewResponseParser.REVIEW_ROOT_KEYS,
         (parser, field, value) -> {
           if ("summary".equals(field)) {
             summary[0] = objectOrNull(parser, value, ReviewResponse.Summary.class);
@@ -151,6 +156,7 @@ public class TruncatedResponseSalvager {
     var elements = new ArrayList<T>();
     scan(
         partialBody,
+        List.of(field),
         (parser, name, value) -> {
           if (field.equals(name)) {
             salvageArrayElements(parser, value, type, elements);
@@ -171,14 +177,21 @@ public class TruncatedResponseSalvager {
    * The single bounded forward pass every salvage shares: hand each top-level field of the cut body
    * to {@code handler}, and end quietly at the cut. Does nothing when there is nothing to work with
    * — no body, an oversized one, or one that does not open a JSON object.
+   *
+   * <p>The pass starts at the answer {@link ReviewResponseParser#extractJson(String, List)} anchors
+   * on — the earliest object from which the rest of the body reads as JSON documents to its end and
+   * whose first document opens on, or holds, one of {@code rootKeys} — not at the body's first
+   * bracket. A cut body is the longest and most prose-heavy kind there is, and a {@code [LOW]} tag
+   * in its deliberation once started the pass 252,138 characters ahead of a complete findings
+   * array, which then salvaged nothing (#894).
    */
-  private void scan(String partialBody, FieldHandler handler) {
+  private void scan(String partialBody, List<String> rootKeys, FieldHandler handler) {
     if (partialBody == null
         || partialBody.isBlank()
         || partialBody.length() > MAX_SALVAGED_BODY_CHARS) {
       return;
     }
-    var json = ReviewResponseParser.extractJson(partialBody);
+    var json = ReviewResponseParser.extractJson(partialBody, rootKeys);
     JsonParser parser = null;
     try {
       parser = mapper.createParser(json);
