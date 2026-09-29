@@ -41,24 +41,27 @@ import java.util.Optional;
  * no-retry contract intact: the detection site still throws, nothing re-enters the retry lane, and
  * only the consumer gains an input it previously threw away.
  *
- * <p>The streaming lane also attaches the cut call's provider-reported token counts ({@link
- * #inputTokens()}, {@link #outputTokens()}): a length stop with an empty body is the reasoning tail
- * spending the whole output allowance (#839), and the step-down that repeats such a call with
- * reasoning off logs the counts that show it. Plain counts rather than the provider's usage object,
- * so the exception stays serializable and free of client types.
+ * <p>Each lane also attaches a {@linkplain #report() truncation report}: the cap the request
+ * licensed and the setting that supplied it, and the provider-reported token counts ({@link
+ * #inputTokens()}, {@link #outputTokens()}). The counts serve two readers. A length stop with an
+ * empty body is the reasoning tail spending the whole output allowance (#839), and the step-down
+ * that repeats such a call with reasoning off logs them. And every surface that tells the operator
+ * about the cut — this message, the orchestrator's check run, the posted notice — states the billed
+ * completion against the licensed cap and advises raising the cap only when the stop reached it
+ * (#895): a provider can stop short of what the request licensed, and a higher setting does not
+ * move that. Plain values rather than the provider's usage object, so the exception stays
+ * serializable and free of client types.
  *
  * <p>The message's remedy and the {@linkplain #conciseModelImplicated() concise flag} are set
- * together at construction by {@link AiResponses.ModelLane#truncation}, the one source for both, so
- * they cannot disagree (#581). There is deliberately no way to re-mark the flag afterwards: the
- * method that did so kept the message as it was, which is how a summary-lane truncation once told
- * the operator to raise a knob its own flag said did not apply (#600).
+ * together at construction by {@link AiResponses#truncation}, from the one report, so they cannot
+ * disagree (#581). There is deliberately no way to re-mark the flag afterwards: the method that did
+ * so kept the message as it was, which is how a summary-lane truncation once told the operator to
+ * raise a knob its own flag said did not apply (#600).
  */
 public class AiResponseTruncatedException extends AiReviewException {
 
   private final String partialBody;
-  private final boolean conciseModelImplicated;
-  private final Integer inputTokens;
-  private final Integer outputTokens;
+  private final TruncationReport report;
 
   public AiResponseTruncatedException(String message) {
     this(message, null, false);
@@ -77,8 +80,11 @@ public class AiResponseTruncatedException extends AiReviewException {
   }
 
   /**
+   * A truncation with provider-reported counts but no recorded cap, so its report cannot compare
+   * the two and falls back to the lane's standing advice.
+   *
    * @param inputTokens the cut call's provider-reported input token count, or {@code null} when the
-   *     lane does not carry it (the blocking assistants) or the provider reported none
+   *     provider reported none
    * @param outputTokens the cut call's provider-reported output token count, same terms
    */
   public AiResponseTruncatedException(
@@ -87,11 +93,23 @@ public class AiResponseTruncatedException extends AiReviewException {
       boolean conciseModelImplicated,
       Integer inputTokens,
       Integer outputTokens) {
+    this(
+        message,
+        partialBody,
+        new TruncationReport(
+            conciseModelImplicated ? AiResponses.ModelLane.CONCISE : AiResponses.ModelLane.ACTIVE,
+            null,
+            inputTokens,
+            outputTokens));
+  }
+
+  /**
+   * @param report the cut call's lane, licensed cap and billed usage — what every surface renders
+   */
+  public AiResponseTruncatedException(String message, String partialBody, TruncationReport report) {
     super(message, 1, null);
     this.partialBody = partialBody;
-    this.conciseModelImplicated = conciseModelImplicated;
-    this.inputTokens = inputTokens;
-    this.outputTokens = outputTokens;
+    this.report = report;
   }
 
   /** The text received before the cut, on any lane; {@code null} when the call produced none. */
@@ -101,17 +119,22 @@ public class AiResponseTruncatedException extends AiReviewException {
 
   /** The cut call's provider-reported input tokens; {@code null} when not carried or reported. */
   public Integer inputTokens() {
-    return inputTokens;
+    return report.promptTokens();
   }
 
   /** The cut call's provider-reported output tokens; {@code null} when not carried or reported. */
   public Integer outputTokens() {
-    return outputTokens;
+    return report.completionTokens();
+  }
+
+  /** The cut call's lane, licensed cap and billed usage, as every surface renders them (#895). */
+  public TruncationReport report() {
+    return report;
   }
 
   /** Whether the truncated call ran on the {@code concise} named model. */
   public boolean conciseModelImplicated() {
-    return conciseModelImplicated;
+    return report.lane() == AiResponses.ModelLane.CONCISE;
   }
 
   /**

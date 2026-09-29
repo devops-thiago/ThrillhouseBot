@@ -90,6 +90,8 @@ public class AiReviewService {
 
   private final ModelCallGate callGate;
 
+  private final ResponseCaps responseCaps;
+
   @Inject
   public AiReviewService(
       PrReviewer prReviewer,
@@ -98,7 +100,8 @@ public class AiReviewService {
       ThrillhouseConfig config,
       SessionEventBroadcaster broadcaster,
       ReviewTokenLedger tokenLedger,
-      ModelCallGate callGate) {
+      ModelCallGate callGate,
+      ResponseCaps responseCaps) {
     this.prReviewer = prReviewer;
     this.prSummarizer = prSummarizer;
     this.parser = parser;
@@ -106,6 +109,7 @@ public class AiReviewService {
     this.broadcaster = broadcaster;
     this.tokenLedger = tokenLedger;
     this.callGate = callGate;
+    this.responseCaps = responseCaps;
   }
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
@@ -237,17 +241,11 @@ public class AiReviewService {
   }
 
   /**
-   * The counts the step-down log states — never the model's text, only what the provider billed.
+   * The figures the step-down log states — the licensed cap and what the provider billed, never the
+   * model's text. The same figures the truncation's own message carries (#895).
    */
   private static String describeUsage(AiResponseTruncatedException e) {
-    return tokenCount(e.inputTokens())
-        + " input / "
-        + tokenCount(e.outputTokens())
-        + " output tokens";
-  }
-
-  private static String tokenCount(Integer count) {
-    return count == null ? "unknown" : count.toString();
+    return e.report().figures(TruncationReport.PLAIN);
   }
 
   private ReviewResponse attemptWithRetries(
@@ -546,13 +544,18 @@ public class AiReviewService {
         // concise-model truncation naming a cap that does not bound it.
         // The provider's usage rides along too: a stop after 0 characters is the reasoning tail
         // spending the whole allowance, and the step-down that repeats it logs the counts (#839).
+        // It is stated against the cap the request licensed, so the message advises raising the
+        // cap only when the billed completion reached it (#895). The character count stays only
+        // as the size of what the salvage step has to work with — never the sole figure.
         result.completeExceptionally(
-            lane.truncation(
-                "Model stopped at its response-length cap (finish_reason=length) after "
+            AiResponses.truncation(
+                "Model stopped on a length limit (finish_reason=length), so the response is"
+                    + " incomplete; "
                     + text.length()
-                    + " characters, so the response is incomplete.",
+                    + " characters arrived before the cut.",
                 text,
-                response.tokenUsage()));
+                response.tokenUsage(),
+                responseCaps.forLane(lane)));
         return;
       }
       // The summary is the one call on the concise lane that streams through here (the verifier
