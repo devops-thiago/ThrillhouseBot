@@ -657,7 +657,7 @@ class ReviewResultTest {
     assertTrue(
         clause.contains(
             "the 7 finding(s) were NOT verified by the second-pass audit — no verdicts were"
-                + " returned, so they post as the reviewer raised them"),
+                + " returned, so each posts marked as such with its confidence capped at medium"),
         clause);
   }
 
@@ -681,6 +681,8 @@ class ReviewResultTest {
         clause.contains("the second-pass finding verification only covered 6 of the 10 finding(s)"),
         clause);
     assertTrue(clause.contains("the remaining 4 post unverified"), clause);
+    // #885: the banner states the same per-finding outcome each unverified finding carries.
+    assertTrue(clause.contains("each marked as such with its confidence capped at medium"), clause);
   }
 
   @Test

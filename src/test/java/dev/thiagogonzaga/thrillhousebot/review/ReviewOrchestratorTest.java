@@ -3883,8 +3883,10 @@ class ReviewOrchestratorTest {
               eq(42),
               commentCaptor.capture());
       var body = commentCaptor.getValue().body();
-      assertTrue(body.contains("response-length cap"), body);
+      assertTrue(body.contains("finish_reason=length"), body);
       assertTrue(body.contains("max-output-tokens"), body);
+      // #895: a truncation that carries no usage still says so rather than implying a comparison.
+      assertTrue(body.contains("usage not reported by the provider"), body);
       assertFalse(body.contains("reply with `/review`"), body);
 
       // The FAILED check run must say the same instead of the null title/summary it sends today.
@@ -3899,7 +3901,7 @@ class ReviewOrchestratorTest {
               checkCaptor.capture());
       var output = checkCaptor.getValue().output();
       assertNotNull(output, "the FAILED check run must carry a truncation title/summary");
-      assertTrue(output.title().contains("length cap"), output.title());
+      assertTrue(output.title().contains("cut short"), output.title());
       assertTrue(output.summary().contains("max-output-tokens"), output.summary());
     }
 
@@ -3907,7 +3909,7 @@ class ReviewOrchestratorTest {
     void aConciseModelTruncationFailureNamesTheConciseKnobToo() {
       var session = failureSession();
 
-      // The concise flag is set at construction, as AiResponses.ModelLane.CONCISE builds it; the
+      // The concise flag is set at construction, as AiResponses.truncation builds it; the
       // after-the-fact re-marking that used to sit here is gone with #600.
       orchestrator.handleReviewFailure(
           "Bearer tok",
@@ -3943,6 +3945,110 @@ class ReviewOrchestratorTest {
       assertTrue(
           checkCaptor.getValue().output().summary().contains("REVIEW_CONCISE_MAX_OUTPUT_TOKENS"),
           checkCaptor.getValue().output().summary());
+    }
+
+    /** A truncation carrying the figures the streaming lane attaches (#895). */
+    private dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException
+        truncationWithUsage(
+            dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane lane,
+            int licensed,
+            String setting,
+            int prompt,
+            int completion) {
+      return new dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException(
+          "Model stopped on a length limit (finish_reason=length)",
+          null,
+          new dev.thiagogonzaga.thrillhousebot.review.ai.TruncationReport(
+              lane,
+              new dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCap(lane, licensed, setting),
+              prompt,
+              completion));
+    }
+
+    private String postedNoticeBody() {
+      var commentCaptor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+      verify(commentClient)
+          .createComment(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(42),
+              commentCaptor.capture());
+      return commentCaptor.getValue().body();
+    }
+
+    private String failedCheckSummary() {
+      var checkCaptor = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+      verify(checkRunClient)
+          .updateCheckRun(
+              eq("Bearer tok"),
+              anyString(),
+              eq("owner"),
+              eq("repo"),
+              eq(99L),
+              checkCaptor.capture());
+      return checkCaptor.getValue().output().summary();
+    }
+
+    @Test
+    void aStopShortOfTheLicensedCapIsReportedAsAProviderBoundOnBothSurfaces() {
+      // #895, the production shape: every request carried max_tokens=96000 and the provider
+      // stopped at exactly 65536. Advising a higher max-output-tokens would change nothing, so
+      // neither the notice nor the check run may give that advice — both state the figures and
+      // say the bound is the provider's.
+      var setting = "thrillhousebot.ai.models.\"glm-5.3-flash\".max-output-tokens";
+
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          failureSession(),
+          99L,
+          truncationWithUsage(
+              dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane.ACTIVE,
+              96_000,
+              setting,
+              163_342,
+              65_536));
+
+      var body = postedNoticeBody();
+      assertTrue(body.contains("licensed max_tokens=96000 (from `" + setting + "`)"), body);
+      assertTrue(body.contains("billed 65536 completion tokens, 163342 prompt tokens"), body);
+      assertTrue(body.contains("30464 tokens short of the licensed cap"), body);
+      assertTrue(body.contains("provider-side bound"), body);
+      assertFalse(body.contains("so raise"), body);
+      assertFalse(body.contains("Raise the active model's"), body);
+      assertFalse(body.contains("run `/review` again"), body);
+
+      var summary = failedCheckSummary();
+      assertTrue(summary.contains("licensed max_tokens=96000 (from " + setting + ")"), summary);
+      assertTrue(summary.contains("provider-side bound"), summary);
+      assertFalse(summary.contains("so raise"), summary);
+      assertFalse(summary.contains("run /review again"), summary);
+    }
+
+    @Test
+    void aConciseStopAtTheLicensedCapNamesTheConciseSettingOnBothSurfaces() {
+      // #581 carried into #895: a stop that reached the cap is the one case that advises raising
+      // it, and on the concise lane that is REVIEW_CONCISE_MAX_OUTPUT_TOKENS alone.
+      orchestrator.handleReviewFailure(
+          "Bearer tok",
+          reviewRequest(),
+          failureSession(),
+          99L,
+          truncationWithUsage(
+              dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane.CONCISE,
+              8192,
+              "REVIEW_CONCISE_MAX_OUTPUT_TOKENS",
+              40_000,
+              8192));
+
+      var body = postedNoticeBody();
+      assertTrue(body.contains("so raise `REVIEW_CONCISE_MAX_OUTPUT_TOKENS`"), body);
+      assertTrue(body.contains("run `/review` again"), body);
+      var summary = failedCheckSummary();
+      assertTrue(summary.contains("so raise REVIEW_CONCISE_MAX_OUTPUT_TOKENS"), summary);
+      assertTrue(summary.contains("run /review again"), summary);
     }
 
     @Test

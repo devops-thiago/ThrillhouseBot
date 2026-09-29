@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubWriteBudget;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TruncationReport;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -263,20 +264,17 @@ public class ReviewPublisher {
   }
 
   /**
-   * The failure notice for a review that failed because the model's response was cut at its length
-   * cap (#500 scope B). A truncation is deterministic — the generic notice's bare {@code /review}
-   * advice is exactly the knowably-futile retry #495 exists to prevent — so this variant names the
-   * cap and the knob to raise instead: the active model's {@code max-output-tokens}, plus {@code
-   * REVIEW_CONCISE_MAX_OUTPUT_TOKENS} when the truncated call ran on the concise named model (its
-   * cap is configured separately).
+   * The failure notice for a review that failed because the model's response was cut on a length
+   * limit (#500 scope B). The generic notice's bare {@code /review} advice is exactly the
+   * knowably-futile retry #495 exists to prevent, so this variant states what happened instead: the
+   * cap the request licensed and the setting that supplied it — the active model's {@code
+   * max-output-tokens}, or {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} on the concise lane — against
+   * the completion and prompt tokens the provider billed. It advises raising the setting only when
+   * the billed completion reached it; a stop short of the cap is a provider-side bound a higher
+   * setting will not move, and the notice says so rather than sending the operator to it (#895).
    */
   void postTruncationFailureNotice(
-      String auth, String owner, String repo, int prNumber, boolean conciseModelImplicated) {
-    var conciseClause =
-        conciseModelImplicated
-            ? " The truncated call ran on the concise model, so raise"
-                + " `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` as well."
-            : "";
+      String auth, String owner, String repo, int prNumber, TruncationReport report) {
     postFailureNoticeComment(
         auth,
         owner,
@@ -285,12 +283,14 @@ public class ReviewPublisher {
         """
             ⚠️ **ThrillhouseBot review could not be completed.**
 
-            The model's response was cut at its response-length cap (`finish_reason=length`), \
-            so the review output was incomplete. This failure is deterministic: retrying \
-            without changing configuration would be cut at the same point. Raise the active \
-            model's `max-output-tokens` (or leave it unset to use the provider default), then \
-            run `/review` again."""
-            + conciseClause);
+            The model's response was cut on a length limit (`finish_reason=length`), so the \
+            review output was incomplete."""
+            + " "
+            + report.describe(TruncationReport.MARKDOWN)
+            + (report.advisesASettingChange()
+                ? " Retrying without that change would be cut the same way; make it, then run"
+                    + " `/review` again."
+                : ""));
   }
 
   /**

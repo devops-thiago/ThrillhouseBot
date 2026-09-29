@@ -27,6 +27,7 @@ import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
 import dev.thiagogonzaga.thrillhousebot.review.Finding;
 import dev.thiagogonzaga.thrillhousebot.review.VerificationCoverage;
 import java.util.ArrayList;
@@ -72,7 +73,12 @@ class FindingVerificationServiceTest {
   private FindingVerificationService serviceWith(ReviewTokenLedger ledger) {
     var mapper = new ObjectMapper();
     return new FindingVerificationService(
-        verifier, config, mapper, ledger, new TruncatedResponseSalvager(mapper));
+        verifier,
+        config,
+        mapper,
+        ledger,
+        new TruncatedResponseSalvager(mapper),
+        TestResponseCaps.defaults());
   }
 
   private static Result<String> aiOkWithUsage(String text, int inputTokens, int outputTokens) {
@@ -103,6 +109,195 @@ class FindingVerificationServiceTest {
         List.of(),
         new ReviewResponse.Summary(
             findings.length, 0, 0, 0, 0, "assessment", "purpose", List.of("gap")));
+  }
+
+  /**
+   * #885: the fail-open contract, spelled out rather than delegated to the code under test — every
+   * finding the reviewer raised is still there, at its risk, anchor and suggestion, but a high
+   * confidence is capped at medium and the description ends with the unverified note.
+   */
+  private static void assertKeptUnscreened(ReviewResponse original, ReviewResponse result) {
+    assertEquals(original.findings().size(), result.findings().size());
+    for (var i = 0; i < original.findings().size(); i++) {
+      var raised = original.findings().get(i);
+      var kept = result.findings().get(i);
+      assertEquals(raised.risk(), kept.risk());
+      assertEquals(
+          "high".equals(raised.confidence()) || raised.confidence() == null
+              ? "medium"
+              : raised.confidence(),
+          kept.confidence());
+      assertEquals(raised.file(), kept.file());
+      assertEquals(raised.line(), kept.line());
+      assertEquals(raised.title(), kept.title());
+      assertEquals(
+          raised.description() + "\n\n" + FindingVerificationService.UNVERIFIED_NOTE,
+          kept.description());
+      assertEquals(raised.suggestionOld(), kept.suggestionOld());
+      assertEquals(raised.suggestionNew(), kept.suggestionNew());
+    }
+    assertEquals(original.previousFindingsStatus(), result.previousFindingsStatus());
+    // Nothing dropped, so the finding total stands; apply() recounts the per-risk counts from the
+    // kept set, which the cap never moves.
+    assertEquals(original.summary().totalFindings(), result.summary().totalFindings());
+  }
+
+  @Test
+  void anUnscreenedFindingIsCappedAtMediumAndSaysSoInItsOwnText() {
+    // #885: a finding no verdict screened keeps its risk, anchor and placement, but can no longer
+    // request changes on its own under the default mode, and its own text says why.
+    var raised = finding("critical", "high", "Unscreened");
+
+    var kept = FindingVerificationService.markUnscreened(raised);
+
+    assertEquals("critical", kept.risk());
+    assertEquals("medium", kept.confidence());
+    assertEquals("desc\n\n" + FindingVerificationService.UNVERIFIED_NOTE, kept.description());
+    var published = Finding.fromAiResponse(kept);
+    assertTrue(published.postsInline());
+    assertFalse(BlockingStrictness.BALANCED.isBlocking(published));
+    assertFalse(BlockingStrictness.LENIENT.isBlocking(published));
+    // STRICT blocks on severity regardless of confidence, and the cap does not override that.
+    assertTrue(BlockingStrictness.STRICT.isBlocking(published));
+    assertTrue(BlockingStrictness.BALANCED.isBlocking(Finding.fromAiResponse(raised)));
+  }
+
+  @Test
+  void theCapOnlyLowersAndNeverMovesAFindingOffTheDiff() {
+    // Medium, not low: a capped medium-risk finding must stay inline. Low would route it to the
+    // collapsed double-check block and expose it to the litigated-anchor withhold, a drop the
+    // verifier's silence would have caused.
+    for (var raised :
+        List.of(
+            finding("medium", "high", "Was high"),
+            finding("medium", "medium", "Was medium"),
+            finding("medium", "low", "Was low"),
+            finding("low", null, "Pre-confidence"))) {
+      var kept = FindingVerificationService.markUnscreened(raised);
+
+      assertEquals(raised.risk(), kept.risk());
+      assertEquals(
+          Finding.fromAiResponse(raised).postsInline(),
+          Finding.fromAiResponse(kept).postsInline(),
+          raised.title());
+    }
+    assertEquals(
+        "medium",
+        FindingVerificationService.markUnscreened(finding("medium", "high", "t")).confidence());
+    assertEquals(
+        "low",
+        FindingVerificationService.markUnscreened(finding("medium", "low", "t")).confidence());
+    assertEquals(
+        "medium",
+        FindingVerificationService.markUnscreened(finding("low", null, "t")).confidence());
+  }
+
+  @Test
+  void markingIsIdempotentAndCoversAFindingWithNoDescription() {
+    var once = FindingVerificationService.markUnscreened(finding("high", "high", "t"));
+
+    assertEquals(once, FindingVerificationService.markUnscreened(once));
+    var bare =
+        FindingVerificationService.markUnscreened(
+            new ReviewResponse.Finding("high", "high", "a.java", 1, "t", null, null, null));
+    assertEquals(FindingVerificationService.UNVERIFIED_NOTE, bare.description());
+    var blank =
+        FindingVerificationService.markUnscreened(
+            new ReviewResponse.Finding("high", "high", "a.java", 1, "t", "  ", null, null));
+    assertEquals(FindingVerificationService.UNVERIFIED_NOTE, blank.description());
+  }
+
+  @Test
+  void withoutUnverifiedNoteRestoresTheReviewersOwnWording() {
+    var marked = FindingVerificationService.markUnscreened(finding("high", "high", "t"));
+
+    assertEquals("desc", FindingVerificationService.withoutUnverifiedNote(marked.description()));
+    assertEquals("plain", FindingVerificationService.withoutUnverifiedNote("plain"));
+    assertNull(FindingVerificationService.withoutUnverifiedNote(null));
+    assertEquals(
+        "",
+        FindingVerificationService.withoutUnverifiedNote(
+            FindingVerificationService.UNVERIFIED_NOTE));
+  }
+
+  @Test
+  void aScreenedFindingPublishesUntouchedBesideAnUnscreenedOneFromTheSameRound() {
+    // #885, both paths in one round: the confirmed candidate is exactly what the reviewer raised,
+    // the one the verifier skipped is capped and noted, and the per-finding marks agree with the
+    // round-level coverage the banner renders.
+    var confirmed = finding("critical", "high", "Confirmed");
+    var skipped = finding("high", "high", "Skipped");
+    ReviewResponse original = response(confirmed, skipped);
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"verdict\": \"confirmed\", \"reason\": \"real\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertSame(confirmed, result.findings().get(0));
+    assertTrue(BlockingStrictness.BALANCED.isBlocking(Finding.fromAiResponse(confirmed)));
+    assertKeptUnscreened(response(skipped), response(result.findings().get(1)));
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+    assertEquals(reported.get(0).unverified(), unverifiedNotes(result));
+  }
+
+  @Test
+  void aFullyScreenedRoundCarriesNoUnverifiedNote() {
+    ReviewResponse original =
+        response(finding("critical", "high", "One"), finding("high", "high", "Two"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+                {"verdicts": [{"id": 1, "verdict": "confirmed", "reason": "real"},
+                              {"id": 2, "verdict": "confirmed", "reason": "real"}]}
+                """));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertSame(original, result);
+    assertEquals(0, unverifiedNotes(result));
+    assertFalse(reported.get(0).disclosed());
+  }
+
+  @Test
+  void aWholeRoundOnTheFailOpenPathKeepsEveryFindingInPlaceAndNoneBlocks() {
+    // The #871 shape: the verifier returns no body, so nothing in the round was screened. Every
+    // finding still posts where it would have (none lost, none moved off the diff), none requests
+    // changes on its own under the default mode, each says it was not verified, and the coverage
+    // the banner renders counts all of them.
+    ReviewResponse original =
+        response(
+            finding("critical", "high", "Critical"),
+            finding("high", "high", "High"),
+            finding("medium", "high", "Medium"),
+            finding("low", "low", "Low"));
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiNoContent());
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertKeptUnscreened(original, result);
+    for (var i = 0; i < original.findings().size(); i++) {
+      var published = Finding.fromAiResponse(result.findings().get(i));
+      assertEquals(
+          Finding.fromAiResponse(original.findings().get(i)).postsInline(),
+          published.postsInline());
+      assertFalse(BlockingStrictness.BALANCED.isBlocking(published));
+    }
+    assertEquals(List.of(new VerificationCoverage(4, 0)), reported);
+    assertEquals(VerificationCoverage.Outcome.NONE, reported.get(0).outcome());
+    assertEquals(4, unverifiedNotes(result));
+  }
+
+  private static long unverifiedNotes(ReviewResponse response) {
+    return response.findings().stream()
+        .filter(f -> f.description().contains(FindingVerificationService.UNVERIFIED_NOTE))
+        .count();
   }
 
   @Test
@@ -284,6 +479,8 @@ class FindingVerificationServiceTest {
 
   @Test
   void shouldSkipVerificationWhenDisabled() {
+    // Also pins #885's carve-out: a disabled verifier is the operator's configuration, not a
+    // failure to screen, so nothing is capped or marked unverified.
     when(reviewConfig.verifierEnabled()).thenReturn(false);
     ReviewResponse original = response(finding("critical", "high", "Bug"));
 
@@ -312,7 +509,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
     verifyNoInteractions(verifier);
   }
 
@@ -356,7 +553,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result); // fails open, findings kept
+    assertKeptUnscreened(original, result); // fails open, findings kept
     assertEquals(1000L, ledger.tokensSpent(SESSION));
   }
 
@@ -379,7 +576,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
     verify(tokenLedger, never()).recordUsage(anyLong(), any(), any());
   }
 
@@ -465,10 +662,10 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    // Fails open: the unverified finding survives at its original risk/confidence.
+    // Fails open: the unverified finding survives at its risk, confidence capped (#885).
     assertEquals(1, result.findings().size());
     assertEquals("critical", result.findings().get(0).risk());
-    assertEquals("high", result.findings().get(0).confidence());
+    assertEquals("medium", result.findings().get(0).confidence());
   }
 
   @Test
@@ -497,11 +694,11 @@ class FindingVerificationServiceTest {
     assertEquals("Speculative", result.findings().get(0).title());
     assertEquals("low", result.findings().get(0).risk());
     assertEquals("low", result.findings().get(0).confidence());
-    // The candidate whose verdict was on the far side of the cut stays untouched, never rejected.
+    // The candidate whose verdict fell past the cut is kept unscreened, never rejected (#885).
     var unverified = result.findings().get(1);
     assertEquals("Verdict cut off", unverified.title());
     assertEquals("high", unverified.risk());
-    assertEquals("high", unverified.confidence());
+    assertEquals("medium", unverified.confidence());
     assertEquals(2, result.summary().totalFindings());
   }
 
@@ -515,8 +712,8 @@ class FindingVerificationServiceTest {
         .thenReturn(
             aiTruncated("{\"verdicts\": [{\"id\": 1, \"verdict\": \"reje"), aiTruncated(null));
 
-    assertSame(original, service.verify(SESSION, original, "diff", "stack", ""));
-    assertSame(original, service.verify(SESSION, original, "diff", "stack", ""));
+    assertKeptUnscreened(original, service.verify(SESSION, original, "diff", "stack", ""));
+    assertKeptUnscreened(original, service.verify(SESSION, original, "diff", "stack", ""));
   }
 
   @Test
@@ -535,7 +732,7 @@ class FindingVerificationServiceTest {
 
       assertEquals(1, result.findings().size());
       assertEquals("critical", result.findings().get(0).risk());
-      assertEquals("high", result.findings().get(0).confidence());
+      assertEquals("medium", result.findings().get(0).confidence());
       parser.verify(() -> ReviewResponseParser.extractJson(any()), never());
     }
   }
@@ -588,11 +785,11 @@ class FindingVerificationServiceTest {
     assertEquals("low", result.findings().get(0).risk());
     assertEquals("low", result.findings().get(0).confidence());
     assertEquals("Real injection", result.findings().get(1).title());
-    // The unverified candidate survives untouched — a missing verdict never rejects or downgrades.
+    // The unverified candidate is kept unscreened — a missing verdict never rejects it (#885).
     var unverified = result.findings().get(2);
     assertEquals("Verdict cut off", unverified.title());
     assertEquals("high", unverified.risk());
-    assertEquals("high", unverified.confidence());
+    assertEquals("medium", unverified.confidence());
     assertEquals(3, result.summary().totalFindings());
   }
 
@@ -607,7 +804,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
   }
 
   @Test
@@ -1092,7 +1289,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
   }
 
   @Test
@@ -1132,7 +1329,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
   }
 
   @Test
@@ -1178,7 +1375,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
   }
 
   @Test
@@ -1189,7 +1386,7 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "");
 
-    assertSame(original, result);
+    assertKeptUnscreened(original, result);
   }
 
   @Test

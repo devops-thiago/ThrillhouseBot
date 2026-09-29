@@ -221,7 +221,11 @@ status for branch protection (no inline annotations on the check run itself).
 by default: the review call plus a skeptical verification pass
 (`FindingVerifier`) that re-sends the diff and each candidate finding, dropping
 or downgrading what it can't confirm. It fails open — a verifier error keeps
-the original findings, so a broken verifier can never block a review. Under
+the original findings, so a broken verifier can never block a review. A finding
+kept that way is not published as if it had been screened: its confidence is
+capped at medium and its text says it was not verified, so under the default
+blocking strictness it cannot request changes on its own, and the summary banner
+states the round's verification coverage. Under
 token-aware budgeting on large PRs this becomes N batch review calls + N
 per-batch verification calls + one summary call. `REVIEW_VERIFIER_ENABLED=false`
 skips only the AI pass (a deterministic hedging-language guard still runs) and

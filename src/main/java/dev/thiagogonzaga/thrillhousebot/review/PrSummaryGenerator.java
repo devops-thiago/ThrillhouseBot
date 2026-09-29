@@ -103,12 +103,6 @@ public class PrSummaryGenerator {
   static final String GAPS_HEADING = "### ⚠️ Description vs. Implementation";
 
   /**
-   * Heading of the same section when the check found nothing. Carries no warning emoji: a clean
-   * result is not a warning, and reusing the ⚠️ heading would make every review look flagged.
-   */
-  static final String NO_GAPS_HEADING = "### Description vs. Implementation";
-
-  /**
    * Body for the state where the model reported gaps but #588 collapsed every one of them onto a
    * finding that states the same thing. The claim still reaches the reader at its most specific
    * surface, so it is not repeated here — but the check plainly ran, and saying so is what keeps a
@@ -123,10 +117,6 @@ public class PrSummaryGenerator {
   static final String GAPS_ALL_REPORTED_AS_FINDINGS =
       "Every mismatch found between the description and the change is reported as a finding below,"
           + " so it is not repeated here.";
-
-  /** Body for the state where the check ran over the description and found no mismatch. */
-  static final String NO_GAPS_FOUND =
-      "No mismatch found between the PR description and the change.";
 
   /**
    * One changed file in the walkthrough: its path, the diff's authoritative change type, and
@@ -191,7 +181,7 @@ public class PrSummaryGenerator {
             reportedGaps, summariesByPath(aiSummary), result.findings());
 
     appendPrPurpose(sb, aiSummary);
-    appendDescriptionGaps(sb, aiSummary, reportedGaps.size(), surfaces.descriptionGaps());
+    appendDescriptionGaps(sb, reportedGaps.size(), surfaces.descriptionGaps());
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
@@ -468,27 +458,32 @@ public class PrSummaryGenerator {
   }
 
   /**
-   * Renders the Description vs. Implementation section in whichever of its three states the check
-   * actually reached, so a reader can tell a matching description from a check that never ran
-   * (#637). Silence is reserved for the one case that earns it — {@code aiSummary} is {@code null},
-   * meaning no summary came back at all, which the summary-degradation banners already disclose.
+   * Renders the Description vs. Implementation section in the two states that carry information,
+   * and omits it when the check ran and found no mismatch (#867).
    *
-   * <p>The states are: gaps survived, so they are listed; the model reported gaps but every one of
-   * them restated an inline finding and #588 collapsed them all away, which used to delete the
-   * whole section along with them (the sharpest measured case — the review found the contradicted
-   * bug and still said nothing about the description); and the model reported none, which is now
-   * stated rather than implied by an absent heading.
+   * <p>The rendered states are: gaps survived, so they are listed; and the model reported gaps but
+   * every one of them restated an inline finding and #588 collapsed them all away, which used to
+   * delete the whole section along with them (the sharpest measured case — the review found the
+   * contradicted bug and still said nothing about the description). The collapsed state keeps its
+   * heading and says the mismatches are reported as findings below, because there the check found
+   * something and an absent section would hide that.
    *
-   * <p>A PR with an empty body reaches the last state too, since the model reports no gaps for a
-   * description it never received and the renderer cannot tell the two apart from the response
-   * alone. The line is vacuous there rather than wrong, and that is the safe direction: the failure
-   * this fixes is a reader who cannot tell "checked, matched" from "never checked".
+   * <p>#637 made the clean state explicit because an absent section could mean either "checked,
+   * matched" or "never checked". That ambiguity no longer needs a line on every clean review: the
+   * check is part of the summary call, so a summary that came back at all means it ran. The only
+   * state in which it did not is {@code aiSummary == null}, the counts-only shape: no "What this PR
+   * does" paragraph, and every walkthrough row reading "no model summary". That shape is visible on
+   * its own, and the degraded paths into it also say why — a summary degradation banner (cut at the
+   * length cap, skipped at the token ceiling, failed its retries) or the response-cut coverage note
+   * of a salvaged single-call review. So a reader tells the two apart from the rest of the summary
+   * rather than from this section: model prose present means the check ran, and no section then
+   * means it matched. The README states that rule once instead of every clean review restating it.
+   *
+   * <p>A PR with an empty body also lands in the omitted state, since the model reports no gaps for
+   * a description it never received and the renderer cannot tell the two apart from the response
+   * alone. The old clean line was vacuous there; omitting it is the better outcome.
    */
-  private static void appendDescriptionGaps(
-      StringBuilder sb, ReviewResponse.Summary aiSummary, int reported, List<String> gaps) {
-    if (aiSummary == null) {
-      return;
-    }
+  private static void appendDescriptionGaps(StringBuilder sb, int reported, List<String> gaps) {
     if (!gaps.isEmpty()) {
       sb.append(GAPS_HEADING).append("\n");
       sb.append("The PR description does not fully match the change:\n");
@@ -500,9 +495,7 @@ public class PrSummaryGenerator {
     }
     if (reported > 0) {
       sb.append(GAPS_HEADING).append("\n").append(GAPS_ALL_REPORTED_AS_FINDINGS).append("\n\n");
-      return;
     }
-    sb.append(NO_GAPS_HEADING).append("\n").append(NO_GAPS_FOUND).append("\n\n");
   }
 
   /**

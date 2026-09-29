@@ -20,10 +20,15 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 /**
  * How much of the review's finding set the second-pass verification audit actually covered: {@code
  * candidates} findings were handed to the verifier, and {@code verified} of them received a
- * verdict. The verifier fails open by design — a finding it never ruled on posts exactly as the
- * reviewer raised it — so this record exists purely so the posted review can disclose that state
- * instead of leaving it log-only (#623): production measured roughly one review in three publishing
- * findings no second stage had screened, with nothing on any surface saying so.
+ * verdict. The verifier fails open by design — a finding it never ruled on still posts — so this
+ * record exists so the posted review can disclose that state instead of leaving it log-only (#623):
+ * production measured roughly one review in three publishing findings no second stage had screened,
+ * with nothing on any surface saying so.
+ *
+ * <p>This is the round-level half. The finding-level half is {@code
+ * FindingVerificationService.markUnscreened} (#885): each finding counted in {@link #unverified()}
+ * posts with its confidence capped at medium and a note in its own text, so it cannot request
+ * changes on its own under the default blocking mode and does not read like a screened one.
  *
  * <p>The gap between the two counts arises on the verifier's known soft-failure paths: an empty
  * response body, a response cut mid-JSON whose salvage recovered only the verdicts that closed
@@ -70,7 +75,7 @@ public record VerificationCoverage(int candidates, int verified) {
     return outcome() != Outcome.FULL;
   }
 
-  /** How many candidates never received a verdict and posted as the reviewer raised them. */
+  /** How many candidates never received a verdict and posted marked unverified (#885). */
   public int unverified() {
     return candidates - verified;
   }
