@@ -400,7 +400,24 @@ class ReviewLearningsTest {
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
                     "t", 1L, "o", "r", 1, List.of(), null, List.of(), List.of(), () -> "")));
+    assertEquals(
+        0,
+        enabled()
+            .captureSurvivingDeclines(
+                new ReviewLearnings.DeclineCapture(
+                    "t", 1L, "o", "r", 1, null, null, null, null, () -> "")));
     verifyNoInteractions(store, installationClient);
+  }
+
+  @Test
+  void aCaptureCopiesItsListsAndTreatsMissingOnesAsEmpty() {
+    var capture =
+        new ReviewLearnings.DeclineCapture("t", 1L, "o", "r", 1, null, null, null, null, null);
+
+    assertTrue(capture.previous().isEmpty());
+    assertTrue(capture.statuses().isEmpty());
+    assertTrue(capture.inlineComments().isEmpty());
+    assertTrue(capture.conversationComments().isEmpty());
   }
 
   // --- governance ---

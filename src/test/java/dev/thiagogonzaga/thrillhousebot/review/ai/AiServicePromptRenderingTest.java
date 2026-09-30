@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -269,7 +270,8 @@ class AiServicePromptRenderingTest {
                     PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
                     PromptTemplateEscaper.escape("DIFF_SENTINEL"),
                     PromptTemplateEscaper.escape("STACK_SENTINEL"),
-                    PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL")));
+                    PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL"),
+                    FindingVerifierPrompts.SYSTEM));
 
     assertTrue(user.contains("FINDINGS_SENTINEL"), "findings missing");
     assertTrue(user.contains("DIFF_SENTINEL"), "diff missing from verifier prompt");
@@ -294,7 +296,8 @@ class AiServicePromptRenderingTest {
                     PromptTemplateEscaper.escape("STACK_SENTINEL"),
                     PromptTemplateEscaper.escape("TESTS_SENTINEL"),
                     PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL"),
-                    PromptTemplateEscaper.escape("INSTRUCTIONS_SENTINEL")));
+                    PromptTemplateEscaper.escape("INSTRUCTIONS_SENTINEL"),
+                    PrReviewPrompts.SYSTEM));
 
     assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
     assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
@@ -303,6 +306,36 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("TESTS_SENTINEL"), "relatedTests missing");
     assertTrue(user.contains("PREVFINDINGS_SENTINEL"), "previousFindings missing");
     assertTrue(user.contains("INSTRUCTIONS_SENTINEL"), "repoInstructions missing");
+  }
+
+  @Test
+  void reviewSystemMessageIsTheRoutedPromptVerbatim() throws InterruptedException {
+    // #665: the system prompt is a @V value now, assembled per call. The model must receive exactly
+    // that string — the monolith byte for byte with routing off (it carries JSON braces a template
+    // pass could touch), and a routed prompt with its skipped blocks really absent.
+    var routed =
+        PrReviewPrompts.reviewSystemPrompt(
+            java.util.Set.of(ReviewDimension.CONFIG_KEY_DOCUMENTATION));
+    for (var expected : java.util.List.of(PrReviewPrompts.SYSTEM, routed)) {
+      var request =
+          captureStreamingRequest(
+              streamingChatModel,
+              () -> prReviewer.reviewStream("d", "", "", "", "", "", "", expected));
+      assertEquals(expected, systemText(request));
+    }
+  }
+
+  @Test
+  void verifierSystemMessageIsTheRoutedPromptVerbatim() {
+    var routed =
+        FindingVerifierPrompts.verifierSystemPrompt(
+            java.util.Set.of(ReviewDimension.MOCK_FIDELITY));
+    for (var expected : java.util.List.of(FindingVerifierPrompts.SYSTEM, routed)) {
+      var request =
+          captureBlockingRequest(
+              conciseChatModel, () -> findingVerifier.verify("[]", "", "d", "", "", expected));
+      assertEquals(expected, systemText(request));
+    }
   }
 
   @Test
@@ -355,6 +388,11 @@ class AiServicePromptRenderingTest {
 
   private String captureStreaming(StreamingChatModel model, Supplier<TokenStream> call)
       throws InterruptedException {
+    return userText(captureStreamingRequest(model, call));
+  }
+
+  private ChatRequest captureStreamingRequest(StreamingChatModel model, Supplier<TokenStream> call)
+      throws InterruptedException {
     var captured = new AtomicReference<ChatRequest>();
     doAnswer(
             inv -> {
@@ -374,7 +412,15 @@ class AiServicePromptRenderingTest {
         .onError(error -> done.countDown())
         .start();
     assertTrue(done.await(10, TimeUnit.SECONDS), "review stream did not complete");
-    return userText(captured.get());
+    return captured.get();
+  }
+
+  private static String systemText(ChatRequest request) {
+    return request.messages().stream()
+        .filter(SystemMessage.class::isInstance)
+        .map(m -> ((SystemMessage) m).text())
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("no system message in chat request"));
   }
 
   private static String userText(ChatRequest request) {

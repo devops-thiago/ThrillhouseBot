@@ -1,0 +1,52 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/PrLabeler.java (modified, +40 -1)
+```diff
+@@ -288,8 +288,47 @@ public class PrLabeler {
+     return reconciled;
+   }
+ 
++  /**
++   * Lower-cased names of the labels currently on the PR, used to keep additive re-reviews from
++   * exceeding max-labels. Best-effort: if the lookup fails we return an empty set, which simply
++   * falls back to applying the reconciled suggestions for this review.
++   */
++  private Set<String> currentLabelKeys(LabelRequest request) {
++    try {
++      var labels =
++          labelClient.listIssueLabels(
++              request.auth(),
++              ACCEPT,
++              request.owner(),
++              request.repo(),
++              request.prNumber(),
++              LABELS_PER_PAGE,
++              1);
++      if (labels == null) {
++        return Set.of();
++      }
++      var keys = new HashSet<String>();
++      for (var label : labels) {
++        var name = label.name();
++        if (name != null && !name.isBlank()) {
++          keys.add(name.strip().toLowerCase(Locale.ROOT));
++        }
++      }
++      return keys;
++    } catch (RuntimeException e) {
++      LOG.debugf(e, "Could not read current labels; applying reconciled suggestions as-is");
++      return Set.of();
++    }
++  }
++
+   private void applyLabels(LabelRequest request, List<String> reconciled) {
+-    var toApply = reconciled.stream().limit(maxLabels).toList();
++    var current = currentLabelKeys(request);
++    var budget = Math.max(0, maxLabels - current.size());
++    var toApply =
++        reconciled.stream()
++            .filter(name -> !current.contains(name.toLowerCase(Locale.ROOT)))
++            .limit(budget)
++            .toList();
+     if (toApply.isEmpty()) {
+       return;
+     }
+```

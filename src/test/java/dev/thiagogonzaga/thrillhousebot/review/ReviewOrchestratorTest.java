@@ -176,7 +176,8 @@ class ReviewOrchestratorTest {
                 diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
             new TokenCounter(),
             mock(ReviewTokenLedger.class),
-            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper));
+            new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
+            ReviewDimensionRouter.disabled());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     // The shipped call allowance, so every review ends with its summary call (#664); a test about
@@ -267,7 +268,7 @@ class ReviewOrchestratorTest {
         new CiStatusEvaluator(checkRunClient, BOT_ID),
         new CheckRunManager(checkRunClient),
         newContextLoader(),
-        new ReviewPromptAssembler(config, labeler, diffFormatter),
+        new ReviewPromptAssembler(config, labeler, diffFormatter, ReviewDimensionRouter.disabled()),
         new DiffBudgetPlanner(
             diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
         reviewPublisher,
@@ -5844,7 +5845,8 @@ class ReviewOrchestratorTest {
                   diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
               new TokenCounter(),
               mock(ReviewTokenLedger.class),
-              new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper));
+              new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
+              ReviewDimensionRouter.disabled());
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

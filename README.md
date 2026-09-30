@@ -316,6 +316,7 @@ will change per provider:
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; only auto-review PRs whose base branch matches one (e.g. `main,release/*`). Globs are gitignore-style: `*` does **not** cross `/`, so use `**` to span slashes (`**` alone matches every branch) | _(empty — all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (wins over allowlist; same `*`/`**` rule — match nested branches with `**`, e.g. `dependabot/**`) | _(empty)_ |
 | `REVIEW_VERIFIER_ENABLED` | Second, skeptical AI pass that re-checks each finding against the diff before posting, dropping or downgrading what it can't confirm (see [AI call budget](#ai-call-budget)); fails open — a verifier error keeps the original findings, each marked unverified with its confidence capped at medium | `true` |
+| `REVIEW_DIMENSION_ROUTING_ENABLED` | Give each review call only the review dimension blocks its files can use instead of all ten (see [AI call budget](#ai-call-budget)). The blocks are picked from each file's kind (documentation, configuration or infrastructure, script, source, test) and from probes of its patch for API or list code and for mocks. Correctness, security and regressions are always included, an unrecognized file type brings every block in, and the verifier's carve-outs follow the files its candidates are anchored in. Each call's choice is logged at INFO. Off by default until the eval corpus has been run with it on | `false` |
 | `REVIEW_DECLINE_RECHECK_ENABLED` | Re-check a maintainer's decline against the reviewed code before a prior finding is recorded "justified" (see [Re-checking declines](#re-checking-declines)); the finding stays open for one more round only when the reviewed diff plainly contradicts the stated reason. `false` makes a maintainer reply close the finding unconditionally | `true` |
 | `REVIEW_BLOCKING_STRICTNESS` | When findings escalate to `REQUEST_CHANGES`: `balanced` (CRITICAL/HIGH + HIGH confidence), `strict` (any CRITICAL/HIGH), or `lenient` (CRITICAL + HIGH confidence only). See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads (including finding replies) with an AI reply | `true` |
@@ -390,6 +391,17 @@ posts where it would have, but with its confidence capped at medium and a line
 in its own text saying it was not verified, so under the default `balanced`
 strictness it cannot request changes on its own; the review summary also states
 how many findings went unverified.
+
+Every review call carries the same system prompt: a core plus ten review
+dimension blocks, about 11,000 tokens. With
+`REVIEW_DIMENSION_ROUTING_ENABLED=true` each call carries only the blocks its
+files can use. In measurements, a documentation-only call drops about 27% of
+that prompt, a source-only call 19–22%, a configuration-only call 17%, and a
+call mixing source, tests, configuration and documentation carries every block.
+The budget planner sizes each batch from the pull request's own routed prompt,
+so a pull request with no configuration, test or API code also fits more diff
+into each call. A routed prompt opens with the same ~7,000-token core in every
+call, so a provider's prompt cache still matches it across batches and reviews.
 
 The on-request commands are budgeted the same way. `/improve`, `/describe`,
 `/changelog` and `/generate-tests` each split a large PR into batches under

@@ -32,7 +32,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void verifierCarvesOutADemonstratedInjectionSink() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_INJECTION_SINK;
     assertContains(
         sys,
         "An injection-sink finding",
@@ -57,7 +57,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void injectionSinkCarveOutStillRejectsASinkTheMaterialNeutralizes() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_INJECTION_SINK;
     assertContains(
         sys,
         "Reject it only when the provided material shows the neutralizing",
@@ -70,7 +70,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void verifierDoesNotTreatStandardLibrarySemanticsAsUnestablished() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_HEAD;
     assertContains(
         sys,
         "This ground also does NOT cover documented semantics of the language or its own",
@@ -91,7 +91,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void standardLibraryCarveOutKeepsTheGroundForRepoStateAndUnshownCallers() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_HEAD;
     assertContains(
         sys,
         "state not shown (files, solution or project files, manifests), for unshown callers,",
@@ -104,7 +104,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void severityCalibrationExemptsBothDemonstrableClassesFromTheMediumCap() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_TAIL;
     assertContains(
         sys,
         "semantics is not one of those, so that cap does not apply to it either",
@@ -117,7 +117,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void verifierDoesNotTreatBuildToolConventionsAsUnestablished() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_HEAD;
     assertContains(
         sys,
         "This ground likewise does NOT cover",
@@ -146,7 +146,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void verifierJudgesAnArtifactReferenceFindingOnTheProducingSideItIsShown() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CARVE_OUT_ARTIFACT_REFERENCE;
     assertContains(
         sys,
         "An artifact-reference finding",
@@ -171,7 +171,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void artifactReferenceCarveOutKeepsItsRejectionPathsAndTheUnshownArtifactCap() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CARVE_OUT_ARTIFACT_REFERENCE;
     assertContains(
         sys,
         "producing step or the committed file that satisfies the reference,",
@@ -181,14 +181,14 @@ class FindingVerifierPromptsContentTest {
         "rests on nothing",
         "a finding naming neither a build file nor a committed filename must stay rejectable");
     assertContains(
-        sys,
+        FindingVerifierPrompts.CORE_TAIL,
         "That cap is about an artifact whose CONTENTS or BEHAVIOR you cannot see, not",
         "the unshown-artifact severity cap must not swallow an artifact-reference finding (#646)");
   }
 
   @Test
   void verifierTreatsAResolvedCitedLocationAsEstablishedMaterial() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_TAIL;
     assertContains(
         sys,
         "A candidate may carry a \"cited_location\" field",
@@ -217,7 +217,7 @@ class FindingVerifierPromptsContentTest {
 
   @Test
   void verifierTreatsMatchedContextEvidenceAsEstablishedMaterial() {
-    String sys = FindingVerifierPrompts.SYSTEM;
+    String sys = FindingVerifierPrompts.CORE_TAIL;
     assertContains(
         sys,
         "A candidate may also carry a \"context_evidence\" field",

@@ -219,6 +219,7 @@ class FollowUpAnalyzerLearningsTest {
     comments.add(comment(501L, 500L, NESTED_FILE, FLAT_THREADS, "fork-author", "CONTRIBUTOR"));
     comments.add(comment(502L, 500L, NESTED_FILE, FLAT_THREADS, BOT, "NONE"));
     comments.add(comment(503L, 500L, NESTED_FILE, "  ", "maintainer", "MEMBER"));
+    comments.add(comment(505L, 500L, NESTED_FILE, null, "maintainer", "MEMBER"));
     comments.add(
         new GitHubReviewClient.PullRequestComment(504L, 500L, NESTED_FILE, FLAT_THREADS, null));
 
@@ -259,6 +260,23 @@ class FollowUpAnalyzerLearningsTest {
     assertEquals(902L, surviving.get(0).sourceCommentId());
     assertFalse(surviving.get(0).onThread());
     assertEquals(FLAT_THREADS, surviving.get(0).reason());
+  }
+
+  @Test
+  void aConversationDirectiveNamingAnotherFindingIsNotItsReason() {
+    var other = "@thrillhousebot declined `" + PAUSE_FILE + ":60` — " + RACE_TITLE + "\n\nNo.";
+    var titleless = new ReviewResponse.Finding("low", NESTED_FILE, 3, null, null, null, null);
+
+    assertTrue(
+        analyzer
+            .survivingDeclines(
+                List.of(NESTED, titleless),
+                List.of(1, 2),
+                List.of(),
+                List.of(conversation(903L, other)),
+                BOT_ID,
+                () -> PLAIN_DIFF)
+            .isEmpty());
   }
 
   @Test

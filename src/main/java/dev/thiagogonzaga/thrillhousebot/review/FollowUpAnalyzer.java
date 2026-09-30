@@ -2071,9 +2071,8 @@ public class FollowUpAnalyzer {
   }
 
   private static boolean isRememberable(ReviewResponse.Finding finding, String reason) {
-    return reason != null
-        && !reason.isBlank()
-        && !RebuttalContradiction.assertsRefutablePremise(finding, reason);
+    // Never null: a thread reply is kept only with a body, and a directive's reason is joined text.
+    return !reason.isBlank() && !RebuttalContradiction.assertsRefutablePremise(finding, reason);
   }
 
   /**

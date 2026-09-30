@@ -20,6 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -95,6 +97,59 @@ class EvalCorpusTest {
       assertNotNull(c.spec().targetFile(), c.name() + ": targetFile");
       assertNotNull(c.spec().keywords(), c.name() + ": keywords");
       assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords must not be empty");
+    }
+  }
+
+  @Test
+  void everyRoutedDimensionHasAMustFindCase() {
+    // #665: a routed dimension with no must-find case can be gated out of the prompt with nothing
+    // turning red. Each needs one before routing is trusted.
+    for (var dimension : ReviewDimension.values()) {
+      if (dimension.alwaysOn()) {
+        continue;
+      }
+      assertTrue(
+          corpus.stream()
+              .anyMatch(
+                  c ->
+                      c.isGeneratorCase()
+                          && EvalCase.MUST_FIND.equals(c.spec().expectation())
+                          && c.dimensions().contains(dimension)),
+          "no must-find generator case declares routed dimension " + dimension);
+    }
+  }
+
+  @Test
+  void everyCaseDiffParsesIntoTheFilesTheRouterReads() {
+    for (EvalCase c : corpus) {
+      var files = c.files();
+      assertFalse(files.isEmpty(), c.name() + ": diff.txt has no parsable ### path section");
+      for (var file : files) {
+        assertFalse(file.patch().isBlank(), c.name() + ": empty patch for " + file.filename());
+      }
+      if (c.isGeneratorCase()) {
+        assertTrue(
+            files.stream().anyMatch(f -> f.filename().equals(c.spec().targetFile())),
+            c.name() + ": targetFile must be one of the diff's sections");
+      }
+    }
+  }
+
+  @Test
+  void routingKeepsEveryDimensionACaseDependsOn() {
+    // The deterministic half of the recall gate (#665): the live eval shows the model finds the
+    // defect when the block is there; this shows the router puts the block there for the case's
+    // files, in every build, without an API key.
+    for (EvalCase c : corpus) {
+      var routed =
+          c.isVerifierCase()
+              ? ReviewDimensionRouter.dimensionsForPaths(List.of(c.spec().finding().file()))
+              : ReviewDimensionRouter.routeFiles(c.files()).dimensions();
+      for (var dimension : c.dimensions()) {
+        assertTrue(
+            routed.contains(dimension),
+            c.name() + ": routing left out " + dimension + " (routed " + routed + ")");
+      }
     }
   }
 }

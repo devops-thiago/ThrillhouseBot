@@ -278,7 +278,6 @@ public class ReviewLearnings {
           conversationComments == null ? List.of() : List.copyOf(conversationComments);
     }
   }
-  }
 
   /**
    * Stores this round's surviving declines as learnings; returns how many new ones were stored. The
