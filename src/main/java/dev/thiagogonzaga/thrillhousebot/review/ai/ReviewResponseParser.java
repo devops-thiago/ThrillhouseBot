@@ -47,6 +47,7 @@ public class ReviewResponseParser {
   private static final String PREVIOUS_FINDINGS_STATUS = "previous_findings_status";
   private static final String SUMMARY = "summary";
   private static final String DESCRIPTION_GAPS = "description_gaps";
+  private static final String ADDRESSED_GAPS = "addressed_gaps";
   private static final String FILE_SUMMARIES = "file_summaries";
   private static final String PATH = "path";
 
@@ -120,7 +121,10 @@ public class ReviewResponseParser {
       foldSummaryFields(root);
     }
     normalizePreviousFindingsStatus(root);
-    normalizeDescriptionGaps(root);
+    normalizeStringList(root, DESCRIPTION_GAPS);
+    // #923: the same shapes turn up in the addressed-gap labels, and a mis-shaped one there would
+    // fail the summary's schema mapping and take the whole summary with it.
+    normalizeStringList(root, ADDRESSED_GAPS);
     normalizeFileSummaries(root);
     if (!root.hasNonNull(FINDINGS)) {
       if (!summaryLane) {
@@ -421,19 +425,19 @@ public class ReviewResponseParser {
   }
 
   /**
-   * Models sometimes emit {@code summary.description_gaps} elements as objects — e.g. {@code
-   * {"claim": …, "code": …}} — instead of the plain strings the schema asks for. Normalize each
-   * element to a string so the shape mismatch does not fail the whole review (and force a full-cost
-   * retry). Elements that are already strings (or null, which the {@code Summary} constructor
-   * drops) pass through unchanged; a bare string or single object in place of the array is wrapped
-   * into a one-element array.
+   * Models sometimes emit {@code summary.description_gaps} (or {@code summary.addressed_gaps})
+   * elements as objects — e.g. {@code {"claim": …, "code": …}} — instead of the plain strings the
+   * schema asks for. Normalize each element to a string so the shape mismatch does not fail the
+   * whole review (and force a full-cost retry). Elements that are already strings (or null, which
+   * the {@code Summary} constructor drops) pass through unchanged; a bare string or single object
+   * in place of the array is wrapped into a one-element array.
    */
-  private void normalizeDescriptionGaps(JsonNode root) {
+  private void normalizeStringList(JsonNode root, String field) {
     if (!(root instanceof ObjectNode rootObject)
         || !(rootObject.get(SUMMARY) instanceof ObjectNode summary)) {
       return;
     }
-    var gaps = summary.get(DESCRIPTION_GAPS);
+    var gaps = summary.get(field);
     if (gaps == null || gaps.isNull()) {
       return;
     }
@@ -448,7 +452,7 @@ public class ReviewResponseParser {
     } else {
       normalized.add(flattenGap(gaps));
     }
-    summary.set(DESCRIPTION_GAPS, normalized);
+    summary.set(field, normalized);
   }
 
   /**

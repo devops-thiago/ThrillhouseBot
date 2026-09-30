@@ -564,13 +564,22 @@ public class PrSummaryGenerator {
    * <p>A PR with an empty body also lands in the omitted state, since the model reports no gaps for
    * a description it never received and the renderer cannot tell the two apart from the response
    * alone. The old clean line was vacuous there; omitting it is the better outcome.
+   *
+   * <p>The gaps rendered here include the ones an earlier round listed and nothing has resolved
+   * since ({@link DescriptionGapCarryover}, #923). Before that carry-over, a round whose summary
+   * call dropped an earlier linked-issue gap and returned only gaps that restated findings reached
+   * the collapsed state, and {@link #GAPS_ALL_REPORTED_AS_FINDINGS} was asserted over a gap no
+   * finding covered. A carried gap is weighed against the findings like any other, so that line now
+   * appears only when every gap on the pull request really collapsed onto a finding.
    */
   private static void appendDescriptionGaps(StringBuilder sb, int reported, List<String> gaps) {
     if (!gaps.isEmpty()) {
       sb.append(GAPS_HEADING).append("\n");
       sb.append(gapsIntro(gaps));
       for (String gap : gaps) {
-        sb.append("- ").append(gap.strip()).append("\n");
+        // One line per gap: a gap's own line break could otherwise end the section early, and the
+        // next round reads these bullets back as the gaps it carries (#923).
+        sb.append("- ").append(MarkdownSafe.oneLine(gap)).append("\n");
       }
       sb.append("\n");
       return;

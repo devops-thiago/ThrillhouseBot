@@ -858,7 +858,7 @@ class ReviewPromptAssemblerTest {
 
     private static final String ISSUES =
         """
-        Issues this pull request is linked to: 1
+        Issues this pull request is linked to: #7
 
         ### Issue #7: Add retries
         Linked by: a closing keyword in the PR body
@@ -878,6 +878,8 @@ class ReviewPromptAssemblerTest {
       assertTrue(summary.contains(TicketContextPrompts.SUMMARY_REQUEST), summary);
       assertTrue(summary.contains("- [ ] retries three times"), summary);
       assertFalse(summary.contains(TicketContextPrompts.REVIEW_REQUEST), summary);
+      // #923: kept apart as well, so the summary's "Linked issue #N" entries can be checked.
+      assertEquals(ISSUES, inputs.linkedIssues());
     }
 
     @Test
@@ -889,6 +891,11 @@ class ReviewPromptAssemblerTest {
       assertFalse(inputs.repoInstructions().contains("Linked Issue"), inputs.repoInstructions());
       assertFalse(
           inputs.summaryInstructions().contains("Linked Issue"), inputs.summaryInstructions());
+      assertEquals("", assemble(null, "", "body").linkedIssues());
+      assertEquals(
+          "",
+          new AiReviewService.PromptInputs("d", "c", "b", "s", "t", "", "", "", null, null)
+              .linkedIssues());
     }
 
     @Test

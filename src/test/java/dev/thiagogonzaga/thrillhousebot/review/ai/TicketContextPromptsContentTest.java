@@ -75,5 +75,13 @@ class TicketContextPromptsContentTest {
     assertContains(
         summary, "never turn a criterion into a finding", "compliance is scope, not a defect");
     assertContains(summary, "At most five entries", "the gap list is bounded");
+    assertContains(
+        summary,
+        "never a count, a position or a list",
+        "#923: a bare count on the section's first line was echoed back as \"Linked issue #1\"");
+    assertContains(
+        summary,
+        "#N is the number in that issue's own \"### Issue #N\" heading",
+        "the number names the issue, as its heading shows it");
   }
 }

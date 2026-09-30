@@ -874,6 +874,15 @@ finding and never changes the verdict. The summary call does not see the diff, s
 only reports a criterion it can show is unaddressed (a file or document it names that
 the change never touches, or a description that defers it). When the section is present
 the bug-fix efficacy check uses it instead of its own copy of the issue text.
+An entry whose `#N` is not one of the linked issues is rewritten to the linked one.
+
+A gap listed under Description vs. Implementation, from the linked issue or the
+description, stays listed on later rounds until the summary call states what now
+shows it resolved (the changed files now touch what it names, or the description no
+longer makes the claim), or until the pull request stops linking its issue. A later
+summary call that simply does not repeat it no longer erases it, and the section says
+every mismatch is reported as a finding only when that is true of every gap on the
+pull request.
 
 ### Per-model AI settings
 

@@ -79,13 +79,63 @@ public record ReviewResponse(
       @JsonProperty("file_summaries") List<FileSummary> fileSummaries,
       // Optional Mermaid source (no ``` fences); null/blank unless the diagram feature is enabled
       // and the change is non-trivial.
-      @JsonProperty("walkthrough_diagram") String walkthroughDiagram) {
+      @JsonProperty("walkthrough_diagram") String walkthroughDiagram,
+      // The already-reported description gaps (#923) the summary call judges resolved, each by its
+      // "G<n>" label; written only when the prompt lists such gaps, and consumed before the
+      // response is persisted.
+      @JsonProperty("addressed_gaps") List<String> addressedGaps) {
     public Summary {
       // The AI may emit null elements inside these arrays; drop them before List.copyOf. copyOf
       // stays inline so SpotBugs sees the defensive copy (EI_EXPOSE_REP).
       descriptionGaps = List.copyOf(withoutNulls(descriptionGaps));
       suggestedLabels = List.copyOf(withoutNulls(suggestedLabels));
       fileSummaries = List.copyOf(withoutNulls(fileSummaries));
+      addressedGaps = List.copyOf(withoutNulls(addressedGaps));
+    }
+
+    /** Convenience constructor for callers (and responses) that predate addressed gaps. */
+    public Summary(
+        int totalFindings,
+        int critical,
+        int high,
+        int medium,
+        int low,
+        String overallAssessment,
+        String prPurpose,
+        List<String> descriptionGaps,
+        List<String> suggestedLabels,
+        List<FileSummary> fileSummaries,
+        String walkthroughDiagram) {
+      this(
+          totalFindings,
+          critical,
+          high,
+          medium,
+          low,
+          overallAssessment,
+          prPurpose,
+          descriptionGaps,
+          suggestedLabels,
+          fileSummaries,
+          walkthroughDiagram,
+          List.of());
+    }
+
+    /** This summary with its description gaps replaced and no addressed gaps left to apply. */
+    public Summary withDescriptionGaps(List<String> gaps) {
+      return new Summary(
+          totalFindings,
+          critical,
+          high,
+          medium,
+          low,
+          overallAssessment,
+          prPurpose,
+          gaps,
+          suggestedLabels,
+          fileSummaries,
+          walkthroughDiagram,
+          List.of());
     }
 
     private static <T> List<T> withoutNulls(List<T> values) {
