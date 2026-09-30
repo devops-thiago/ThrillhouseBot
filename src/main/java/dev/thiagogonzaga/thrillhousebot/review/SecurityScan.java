@@ -76,7 +76,9 @@ import java.util.stream.Stream;
  * a detection in the same file is dropped when it is the same defect by {@link
  * FindingDeduplicator#sameDefect} or its title uses at least two of the rule's own words ({@link
  * SecurityRule#topic}), so the reviewer does not post the same secret twice; the scan's finding is
- * the one kept, because it is the redacted one.
+ * the one kept, because it is the redacted one. On the very line a secret was matched, one rule
+ * word in the model's title is enough (#932): a model's own "API token committed in source" finding
+ * is the same leak in other words, and keeping it posted a second thread at a second severity.
  */
 @ApplicationScoped
 public class SecurityScan {
@@ -102,7 +104,7 @@ public class SecurityScan {
   /** Base64 runs a private key's body is made of, scrubbed out of other findings' text. */
   private static final Pattern PEM_MATERIAL = Pattern.compile("[A-Za-z0-9+/=]{40,}");
 
-  private static final String PEM_MATERIAL_REDACTION = "[redacted private key material]";
+  static final String PEM_MATERIAL_REDACTION = "[redacted private key material]";
 
   private static final String PROVENANCE =
       "_Raised by the deterministic security scan: a pattern match on the added lines, not model"
@@ -514,9 +516,16 @@ public class SecurityScan {
   }
 
   /**
-   * Whether a model finding reports a defect the scan already raised: same file, within the
-   * deduplicator's line tolerance, and either the same defect by its title match or a title using
-   * at least {@link #MIN_TOPIC_WORDS} of the rule's own words.
+   * Whether a model finding reports a defect the scan already raised: same file, and either within
+   * the deduplicator's line tolerance with the same defect by its title match or a title using at
+   * least {@link #MIN_TOPIC_WORDS} of the rule's own words, or — for a secret — on the detection's
+   * very line with a title using one of them (#932). A model's own secret finding names the defect
+   * in its own words ("API token committed in source"), which rarely shares two rule words, and
+   * letting it through posted a second thread on the same line at a different severity; on the line
+   * the scan matched, one topic word is enough, because the line holds nothing else a credential
+   * word could be about. The finding is then collapsed into the scan's, the redacted one. A title
+   * that only names the key ({@code PAYMENT_API_KEY is never read}) is not a topic word, so a
+   * different defect on that line is kept ({@link #words}).
    */
   private static boolean duplicatesDetection(
       ReviewResponse.Finding finding, List<Detection> detections) {
@@ -527,23 +536,59 @@ public class SecurityScan {
     for (var detection : detections) {
       var scanned = detection.finding();
       if (FilePaths.same(finding.file(), scanned.file())
-          && Math.abs(finding.line() - scanned.line()) <= FindingDeduplicator.LINE_TOLERANCE
-          && (FindingDeduplicator.sameDefect(finding, scanned)
-              || titleWords.stream().filter(detection.rule().topic()::contains).count()
-                  >= MIN_TOPIC_WORDS)) {
+          && (nearbySameDefect(finding, scanned, titleWords, detection.rule())
+              || sameLineSecret(finding, scanned, titleWords, detection.rule()))) {
         return true;
       }
     }
     return false;
   }
 
-  private static Set<String> words(String title) {
+  private static boolean nearbySameDefect(
+      ReviewResponse.Finding finding,
+      ReviewResponse.Finding scanned,
+      Set<String> titleWords,
+      SecurityRule rule) {
+    return Math.abs(finding.line() - scanned.line()) <= FindingDeduplicator.LINE_TOLERANCE
+        && (FindingDeduplicator.sameDefect(finding, scanned)
+            || topicWords(titleWords, rule) >= MIN_TOPIC_WORDS);
+  }
+
+  private static boolean sameLineSecret(
+      ReviewResponse.Finding finding,
+      ReviewResponse.Finding scanned,
+      Set<String> titleWords,
+      SecurityRule rule) {
+    return rule.category() == SecurityRule.Category.SECRET
+        && finding.line() == scanned.line()
+        && topicWords(titleWords, rule) >= 1;
+  }
+
+  private static long topicWords(Set<String> titleWords, SecurityRule rule) {
+    return titleWords.stream().filter(rule.topic()::contains).count();
+  }
+
+  /**
+   * The words of a title, lower-cased. A hyphenated word counts both whole and joined, so
+   * "hard-coded" reads as "hardcoded" too. A token with an underscore is an identifier the title
+   * names ({@code PAYMENT_API_KEY}), not words describing the defect, so it contributes no word.
+   */
+  static Set<String> words(String title) {
     if (title == null) {
       return Set.of();
     }
-    return Arrays.stream(title.toLowerCase(Locale.ROOT).split("[^a-z0-9]+"))
-        .filter(word -> !word.isEmpty())
-        .collect(Collectors.toSet());
+    var words = new HashSet<String>();
+    for (var token : title.toLowerCase(Locale.ROOT).split("[^a-z0-9_-]+")) {
+      if (token.indexOf('_') >= 0) {
+        continue;
+      }
+      Arrays.stream(token.split("-")).filter(word -> !word.isEmpty()).forEach(words::add);
+      var joined = token.replace("-", "");
+      if (!joined.isEmpty()) {
+        words.add(joined);
+      }
+    }
+    return words;
   }
 
   private static ReviewResponse.Finding scrub(ReviewResponse.Finding finding, Scrubber scrubber) {

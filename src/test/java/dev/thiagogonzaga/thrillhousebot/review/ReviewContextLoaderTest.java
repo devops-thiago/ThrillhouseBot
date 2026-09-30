@@ -933,6 +933,70 @@ class ReviewContextLoaderTest {
       assertEquals("", ctx.previousFindings());
     }
 
+    // --- #932: whether the round this review reports on reviewed this very head ---
+
+    @Test
+    void aFollowUpOnTheHeadItsPreviousRoundReviewedIsMarkedUnchanged() {
+      stubLoad(List.of(POSTED_ROUND_JSON));
+      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
+          .thenReturn(List.of("HEADSHA1"));
+
+      assertTrue(load().previousRoundHeadUnchanged(), "SHAs compare case-insensitively");
+    }
+
+    @Test
+    void aFollowUpOnANewHeadIsNotMarkedUnchanged() {
+      stubLoad(List.of(POSTED_ROUND_JSON));
+      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
+          .thenReturn(List.of("oldsha1"));
+
+      assertFalse(load().previousRoundHeadUnchanged());
+    }
+
+    @Test
+    void theHeadComparedIsTheOneOfTheRoundThatRaisedTheFindings() {
+      // The newest round found nothing on this head; the round it reports on reviewed an older one,
+      // so its findings may well have left the diff since.
+      stubLoad(List.of("{\"findings\":[],\"previous_findings_status\":[]}", POSTED_ROUND_JSON));
+      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
+          .thenReturn(List.of("headsha1", "oldsha1"));
+
+      assertFalse(load().previousRoundHeadUnchanged());
+    }
+
+    @Test
+    void findingsCarriedFromAnotherHeadAreNeverMarkedUnchanged() {
+      stubLoad(List.of(POSTED_ROUND_JSON));
+      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
+          .thenReturn(List.of("headsha1"));
+      carryover.stash("owner", "repo", 1, "oldsha1", "headsha1", List.of(CARRIED));
+
+      assertFalse(load().previousRoundHeadUnchanged());
+    }
+
+    @Test
+    void aHistoryThatCannotBeAlignedGivesNoPreviousHead() {
+      var none = SupersededFindingsCarryover.Carried.NONE;
+      assertEquals("b", ReviewContextLoader.previousRoundHeadSha(List.of("a", "b"), 2, 1, none));
+      assertNull(ReviewContextLoader.previousRoundHeadSha(List.of("a"), 2, 0, none));
+      assertNull(ReviewContextLoader.previousRoundHeadSha(List.of(), 0, 0, none));
+      assertNull(
+          ReviewContextLoader.previousRoundHeadSha(
+              List.of("a"),
+              1,
+              0,
+              new SupersededFindingsCarryover.Carried("x", "a", List.of(CARRIED))));
+    }
+
+    @Test
+    void anUnknownHeadIsNeverUnchanged() {
+      assertTrue(ReviewContextLoader.headUnchanged("abc", "ABC"));
+      assertFalse(ReviewContextLoader.headUnchanged(null, "abc"));
+      assertFalse(ReviewContextLoader.headUnchanged("abc", null));
+      assertFalse(ReviewContextLoader.headUnchanged("", ""));
+      assertFalse(ReviewContextLoader.headUnchanged("abc", "abd"));
+    }
+
     @Test
     void aReviewWithNothingStashedCarriesNothing() {
       stubLoad(List.of());

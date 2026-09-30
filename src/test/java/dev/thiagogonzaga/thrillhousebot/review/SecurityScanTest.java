@@ -314,6 +314,88 @@ class SecurityScanTest {
   }
 
   @Test
+  void theModelsOwnSecretFindingOnTheMatchedLineCollapsesIntoTheScans() throws Exception {
+    // #932: round 10's model titles each shared one rule word with the scan, so both posted.
+    var value = fake.genericSecret(40);
+    var line = "val apiToken: String = \"" + value + "\"";
+    for (var title :
+        List.of(
+            "CDN API token committed in source and shipped in every build",
+            "Directory API token committed in source",
+            "API token committed in source; the token plumbing it disables is dead")) {
+      var model =
+          new ReviewResponse.Finding(
+              "critical", "high", "Main.kt", 2, title, "It reads `" + line + "`.", line, "x");
+      var merged =
+          merge(scan(true, false), response(model), List.of(added("Main.kt", "package pod", line)));
+      assertEquals(1, merged.findings().size(), title);
+      assertTrue(merged.findings().get(0).title().startsWith(SecurityRule.TITLE_PREFIX), title);
+      assertEquals("high", merged.findings().get(0).risk(), "one thread, at the scan's grade");
+      assertFalse(everySurface(merged).contains(value));
+    }
+  }
+
+  @Test
+  void aHyphenatedRuleWordCountsAsTheWord() {
+    // "hard-coded" reads as "hardcoded": with "credential" that is two rule words, which is enough
+    // within the line tolerance even off the matched line.
+    var value = fake.genericSecret(40);
+    var model =
+        modelFinding(
+            "config.go", 3, "Provider API credential is committed as a hard-coded default", "d");
+    var merged =
+        merge(
+            scan(true, false),
+            response(model),
+            List.of(added("config.go", "package main", "var apiToken string = \"" + value + "\"")));
+    assertEquals(1, merged.findings().size());
+    assertEquals(Set.of("hard", "coded", "hardcoded", "a"), SecurityScan.words("a hard-coded"));
+  }
+
+  @Test
+  void aDifferentDefectThatOnlyNamesTheKeyOnTheMatchedLineIsKept() {
+    var value = fake.genericSecret(40);
+    var named =
+        modelFinding(
+            "config.py",
+            1,
+            "PAYMENT_API_KEY is never read from the environment, so the documented key is dead",
+            "d");
+    var merged =
+        merge(
+            scan(true, false),
+            response(named),
+            List.of(added("config.py", "PAYMENT_API_KEY = \"" + value + "\"")));
+    assertEquals(1, merged.findings().size(), "one rule word in the prose is enough on the line");
+
+    var identifierOnly =
+        modelFinding("config.py", 1, "PAYMENT_API_KEY is never read from the environment", "d");
+    var kept =
+        merge(
+            scan(true, false),
+            response(identifierOnly),
+            List.of(added("config.py", "PAYMENT_API_KEY = \"" + value + "\"")));
+    assertEquals(2, kept.findings().size(), "an identifier the title names is not a rule word");
+  }
+
+  @Test
+  void oneRuleWordOnAnIacLineIsNotEnough() {
+    var sameLine = modelFinding("pod.yaml", 2, "Host network namespace is shared", "d");
+    var merged =
+        merge(
+            scan(false, true),
+            response(modelFinding("pod.yaml", 2, "Pod network is flat", "d")),
+            List.of(added("pod.yaml", "spec:", "  hostNetwork: true")));
+    assertEquals(2, merged.findings().size(), "the same-line rule is for secrets only");
+    var twoWords =
+        merge(
+            scan(false, true),
+            response(sameLine),
+            List.of(added("pod.yaml", "spec:", "  hostNetwork: true")));
+    assertEquals(1, twoWords.findings().size());
+  }
+
+  @Test
   void oneSharedRuleWordDoesNotMakeANearbyModelFindingADuplicate() {
     var nearby = modelFinding("pod.yaml", 2, "Add a network policy for egress", "d");
     var merged =

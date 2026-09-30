@@ -213,6 +213,11 @@ public class VerdictBuilder {
               currentRenameTargets,
               settledIds);
     }
+    // Nothing can have left the diff when the head is the one the findings were raised on: an
+    // anchor that did not match there (a redacted secret quote, a drifted quote) stays open (#932).
+    effectiveStatuses =
+        FollowUpAnalyzer.holdSupersededOnUnchangedHead(
+            effectiveStatuses, ctx.previousRoundHeadUnchanged());
     // A maintainer's decline is a claim, not ground truth: a "justified" whose stated reason the
     // reviewed code plainly contradicts goes back to "unresolved" for one more round (#169). A
     // decline written on the PR conversation — the only place a finding with no thread can be
