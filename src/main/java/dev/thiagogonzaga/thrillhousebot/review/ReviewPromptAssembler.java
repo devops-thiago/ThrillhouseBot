@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -92,6 +93,23 @@ public class ReviewPromptAssembler {
       ReviewContextLoader.ReviewContext ctx,
       ReviewOrchestrator.ReviewRequest req,
       String ciFailures) {
+    return assemble(ctx, req, ciFailures, "");
+  }
+
+  /**
+   * Assembles the prompt inputs with the opt-in linked-issue section (#58) as well: {@code
+   * linkedIssues} is the unfenced text {@link TicketContextResolver} built, or blank when there is
+   * none. It rides both calls' trailing guidance with different requests — the review call reads it
+   * as intent, the summary call checks the acceptance criteria against the change — so the planner
+   * counts it in the review call's shared overhead and the pipeline in the summary call's clamp.
+   * When it is present, the bug-fix efficacy section drops its own copy of the linked issues' text.
+   */
+  AiReviewService.PromptInputs assemble(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewOrchestrator.ReviewRequest req,
+      String ciFailures,
+      String linkedIssues) {
+    var hasLinkedIssues = linkedIssues != null && !linkedIssues.isBlank();
     String fencedDiff = PromptTemplateEscaper.fence(ctx.diff());
     String fencedStack = PromptTemplateEscaper.fence(ctx.projectStack());
     String labelGuidance = PrLabeler.buildLabelGuidance(ctx.repoLabels(), labeler.allowNewLabels());
@@ -110,14 +128,18 @@ public class ReviewPromptAssembler {
             combineSections(
                 combineSections(
                     mockFidelitySection(relatedTests),
-                    bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext())),
+                    bugFixEfficacySection(
+                        req.prDescription(), hasLinkedIssues ? "" : ctx.linkedIssuesContext())),
                 combineSections(
                     configKeyContextSection(ctx.configKeyContext()),
                     combineSections(
                         heuristicFailureModesSection(ctx.diff()),
                         combineSections(
                             patchCoverageSection(ctx.patchCoverage()),
-                            ciFailuresSection(ciFailures))))),
+                            combineSections(
+                                ciFailuresSection(ciFailures),
+                                linkedIssuesSection(
+                                    TicketContextPrompts.REVIEW_REQUEST, linkedIssues)))))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
@@ -132,7 +154,9 @@ public class ReviewPromptAssembler {
             combineSections(
                 labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
                 diagramGuidance),
-            globalInstructions);
+            combineSections(
+                globalInstructions,
+                linkedIssuesSection(TicketContextPrompts.SUMMARY_REQUEST, linkedIssues)));
     return new AiReviewService.PromptInputs(
         fencedDiff,
         PromptTemplateEscaper.fence(PromptSections.prContext(req.prTitle(), req.prDescription())),
@@ -229,6 +253,19 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PrReviewPrompts.CI_FAILURES_REQUEST + "\n\n" + PromptTemplateEscaper.fence(ciFailures);
+  }
+
+  /**
+   * One call's linked-issue request plus the issue text (#58) — empty when no linked issue could be
+   * read or the feature is off. Issue text is written by anyone who can edit the issue, so it is
+   * fenced and framed as data like the PR description, and the request travels with it or not at
+   * all.
+   */
+  static String linkedIssuesSection(String request, String linkedIssues) {
+    if (linkedIssues == null || linkedIssues.isBlank()) {
+      return "";
+    }
+    return request + "\n\n" + PromptTemplateEscaper.fence(linkedIssues);
   }
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */

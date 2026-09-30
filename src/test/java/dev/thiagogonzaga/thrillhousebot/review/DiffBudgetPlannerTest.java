@@ -31,6 +31,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -699,6 +700,39 @@ class DiffBudgetPlannerTest {
     assertTrue(plain.omittedFiles().isEmpty());
     assertFalse(
         withCi.batches().size() == 1 && withCi.omittedFiles().isEmpty(),
+        "the section's tokens came off the diff budget");
+  }
+
+  @Test
+  void theLinkedIssueSectionIsChargedToTheReviewCallsSharedOverhead() {
+    // #58: the fenced linked-issue text rides every review call's trailing guidance, so it must
+    // shrink the diff budget like the other shared sections instead of overflowing the call.
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    budget(overhead + sectionTokens(f1) + sectionTokens(f2) + 30);
+    var without = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var issueSection =
+        ReviewPromptAssembler.linkedIssuesSection(
+            TicketContextPrompts.REVIEW_REQUEST,
+            "### Issue #7: Add retries\n" + "acceptance criterion ".repeat(200));
+    var with = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", issueSection);
+
+    var plain = planner.plan(List.of(f1, f2), without);
+    var withIssue = planner.plan(List.of(f1, f2), with);
+
+    assertEquals(1, plain.batches().size(), "without the section both files fit one call");
+    assertTrue(plain.omittedFiles().isEmpty());
+    assertFalse(
+        withIssue.batches().size() == 1 && withIssue.omittedFiles().isEmpty(),
         "the section's tokens came off the diff budget");
   }
 

@@ -326,6 +326,11 @@ will change per provider:
 | `REVIEW_CI_CONTEXT_ENABLED` | Feed the head commit's failing CI checks into the review context: check name, conclusion, output title and summary, and a page of annotations, fenced as untrusted data (see [CI-failure context](#ci-failure-context)) | `false` |
 | `REVIEW_CI_CONTEXT_INCLUDE_LOGS` | With `REVIEW_CI_CONTEXT_ENABLED`, also read the tail of up to two failing GitHub Actions job logs. Uses the `Actions: Read` permission the app already has | `false` |
 | `REVIEW_CI_CONTEXT_MAX_CHARS` | Character cap on the whole CI-failure section, validated at boot to 500–20000 while the feature is on | `4000` |
+| `REVIEW_TICKET_CONTEXT_ENABLED` | Read the issue(s) the PR links and give their title, acceptance criteria and body to the review, fenced as untrusted data; the summary lists acceptance criteria the change does not address under Description vs. Implementation (see [Linked-issue context](#linked-issue-context)). Read-only, under the `Issues` permission the app already has | `false` |
+| `REVIEW_TICKET_CONTEXT_PROVIDER` | Issue tracker the linked issues are read from. Only `github` (GitHub Issues) exists today; validated at boot while the feature is on | `github` |
+| `REVIEW_TICKET_CONTEXT_MAX_ISSUES` | Linked issues read per review, validated at boot to 1–5 while the feature is on | `3` |
+| `REVIEW_TICKET_CONTEXT_MAX_CHARS` | Character cap on the whole linked-issue section, validated at boot to 1000–20000 while the feature is on | `6000` |
+| `REVIEW_TICKET_CONTEXT_FROM_BRANCH` | Also take the issue number from the head branch name (`issue-57`, `fix/57-short-name`) when neither the PR body nor GitHub's closing references link an issue | `false` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. The full summary is a single comment the bot edits in place each round, so this is the per-round record of what moved; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
@@ -753,6 +758,55 @@ review usually starts before CI finishes, so in practice the section shows up on
 with their count. The CI-hold revisit does not run a new review when CI later fails:
 it re-reads the gate and nothing else, as described under
 [CI gating](#ci-gating). Comment `/review` to get a review that sees the failure.
+
+### Linked-issue context
+
+`REVIEW_TICKET_CONTEXT_ENABLED=true` gives the review the issue the pull request says
+it implements. The issues are read from GitHub Issues through a provider interface,
+so an external tracker can be added later as another provider behind
+`REVIEW_TICKET_CONTEXT_PROVIDER`. Links are taken in this order:
+
+1. Closing keywords in the PR body (`Closes #57`, `fixes owner/repo#57`,
+   `resolves https://github.com/owner/repo/issues/57`), in the order they appear. Code
+   spans, fenced blocks and HTML comments are skipped, so a template's commented-out
+   `Closes #` example is not a link. GitHub records these links itself only when the
+   base is the default branch, so for a PR into a release branch the body is the only
+   source.
+2. GitHub's closing references for the PR (one GraphQL read), which add issues linked
+   from the Development panel.
+3. The head branch name (`issue-57`, `fix/57-short-name`), only with
+   `REVIEW_TICKET_CONTEXT_FROM_BRANCH=true` and only when the first two link nothing.
+   A branch name is a guess, so it never adds to an explicit link.
+
+Only issues of the PR's own repository are read; a reference to another repository is
+ignored. A number that turns out to be a pull request, the PR's own number, and an issue
+that is missing, deleted or not readable are skipped, and the review goes on without
+them. At most `REVIEW_TICKET_CONTEXT_MAX_ISSUES` issues are used. An unreadable candidate
+lets the next one in, so a review makes at most ten issue reads plus the one GraphQL read
+whatever the cap. The issue is never
+modified: no comment, label or state change. Reading issues uses the `Issues`
+permission the manifest already requests, so no new permission is needed.
+
+For each issue the prompt gets its title, its acceptance criteria and its body. The
+criteria are the list items under a heading such as "Acceptance criteria" or
+"Definition of done", or, when there is no such section, the issue's task-list items,
+leaving out an issue form's code-of-conduct checkbox. Issue text is written by anyone
+who can edit the issue, so it gets the same treatment as CI output: control, ANSI and
+bidi characters are stripped, lines are clipped, each issue gets an equal share of
+`REVIEW_TICKET_CONTEXT_MAX_CHARS` with the criteria ahead of the body, and the section
+sits inside the untrusted-data fence.
+
+The section goes to two calls with different requests. The review call reads it as
+intent: a changed line that contradicts a criterion is a finding, which must quote the
+criterion, but work the issue asks for and the diff does not contain is not. The
+summary call checks each criterion against the PR description, the changed-file list
+and the findings, and lists the ones the change shows it does not address under
+**Description vs. Implementation**, each starting with `Linked issue #N:`. A missing
+criterion is a question of scope, not a defect on a line, so it never becomes a
+finding and never changes the verdict. The summary call does not see the diff, so it
+only reports a criterion it can show is unaddressed (a file or document it names that
+the change never touches, or a description that defers it). When the section is present
+the bug-fix efficacy check uses it instead of its own copy of the issue text.
 
 ### Per-model AI settings
 

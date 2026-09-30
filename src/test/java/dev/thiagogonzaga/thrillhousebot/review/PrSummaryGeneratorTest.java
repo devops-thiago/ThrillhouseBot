@@ -337,6 +337,44 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void anUnmetLinkedIssueCriterionIsListedAsAGapNamingTheIssue() {
+    // #58: the summary call lists acceptance criteria the change leaves unaddressed as
+    // description gaps; the intro then names the linked issue, not only the PR description.
+    var aiSummary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "Adds retries.",
+            List.of(
+                "Linked issue #7: document the setting — no README or docs path is in the change"));
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+    var summary = generator.generate(1, 5, 0, List.of(), aiSummary, result);
+
+    assertTrue(summary.contains("### ⚠️ Description vs. Implementation"), summary);
+    assertTrue(
+        summary.contains("The PR description or its linked issue does not fully match the change:"),
+        summary);
+    assertTrue(summary.contains("- Linked issue #7: document the setting"), summary);
+  }
+
+  @Test
+  void theGapIntroNamesTheLinkedIssueOnlyWhenAGapComesFromIt() {
+    assertEquals(
+        "The PR description does not fully match the change:\n",
+        PrSummaryGenerator.gapsIntro(List.of("Description claims tests were added")));
+    assertEquals(
+        "The PR description or its linked issue does not fully match the change:\n",
+        PrSummaryGenerator.gapsIntro(List.of("claims x", "  linked ISSUE #3: y — z")));
+  }
+
+  @Test
   void shouldRenderPrPurposeAndDescriptionGaps() {
     var aiSummary =
         new ReviewResponse.Summary(

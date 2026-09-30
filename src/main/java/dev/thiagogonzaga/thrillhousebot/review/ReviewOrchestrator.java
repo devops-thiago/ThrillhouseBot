@@ -92,6 +92,7 @@ public class ReviewOrchestrator {
 
   private final CiStatusEvaluator ciStatusEvaluator;
   private final CiFailureContextResolver ciFailureContext;
+  private final TicketContextResolver ticketContext;
 
   private final CheckRunManager checkRunManager;
 
@@ -239,13 +240,15 @@ public class ReviewOrchestrator {
       CiHoldRegistry ciHoldRegistry,
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewNotifier notifier,
-      CiFailureContextResolver ciFailureContext) {
+      CiFailureContextResolver ciFailureContext,
+      TicketContextResolver ticketContext) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.ciFailureContext = ciFailureContext;
+    this.ticketContext = ticketContext;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
@@ -324,11 +327,15 @@ public class ReviewOrchestrator {
           ciFuture == null
               ? ""
               : ciFailureContext.resolve(auth, req.owner(), req.repo(), ciFuture.join());
+      // #58: the linked issues' text, read-only and best-effort; "" when the feature is off.
+      var linkedIssues =
+          ticketContext.resolve(auth, req.owner(), req.repo(), req.prNumber(), req.prDescription());
 
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       var promptInputs =
-          budgetPlanner.boundPreviousFindings(promptAssembler.assemble(ctx, req, ciFailures));
+          budgetPlanner.boundPreviousFindings(
+              promptAssembler.assemble(ctx, req, ciFailures, linkedIssues));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {
