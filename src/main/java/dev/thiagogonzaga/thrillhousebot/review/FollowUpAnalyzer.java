@@ -1983,14 +1983,22 @@ public class FollowUpAnalyzer {
    * @param sourceCommentId the thread reply, or the PR-conversation comment, that declined it
    * @param onThread whether {@code sourceCommentId} is a review-thread reply (else a conversation
    *     comment), which decides the link a learning cites
-   * @param author the maintainer's GitHub login
+   * @param author the GitHub login of the maintainer who declined first, recorded as the teacher
+   * @param contributors every login whose words are in {@code reason}, {@code author} first; each
+   *     must hold write access before the reason is stored
    */
   public record SurvivingDecline(
       ReviewResponse.Finding finding,
       String reason,
       long sourceCommentId,
       boolean onThread,
-      String author) {}
+      String author,
+      List<String> contributors) {
+
+    public SurvivingDecline {
+      contributors = List.copyOf(contributors);
+    }
+  }
 
   /** One maintainer comment that declined a finding, and the reason it gave. */
   private record DeclineSource(long commentId, boolean onThread, String author, String reason) {}
@@ -2071,7 +2079,8 @@ public class FollowUpAnalyzer {
         sources.stream().map(DeclineSource::reason).collect(Collectors.joining("\n\n")),
         first.commentId(),
         first.onThread(),
-        first.author());
+        first.author(),
+        sources.stream().map(DeclineSource::author).distinct().toList());
   }
 
   private static boolean isRememberable(String reason) {

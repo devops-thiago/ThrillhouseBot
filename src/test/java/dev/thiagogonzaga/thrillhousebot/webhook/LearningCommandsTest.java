@@ -117,7 +117,11 @@ class LearningCommandsTest {
 
     assertTrue(reply.contains("| 30 | convention"), reply);
     assertFalse(reply.contains("| 31 | convention"), reply);
-    assertTrue(reply.endsWith("2 older learning(s) not shown; the dashboard lists every one."));
+    assertTrue(
+        reply.endsWith(
+            "2 older learning(s) not shown; the dashboard's `/api/dashboard/learnings` lists the"
+                + " newest 200."),
+        reply);
   }
 
   @Test

@@ -290,10 +290,10 @@ public class ReviewLearnings {
   }
 
   /**
-   * Stores this round's surviving declines as learnings; returns how many new ones were stored. The
-   * author's write access is confirmed against the collaborator-permission API, not just the
-   * comment's author association (a {@code MEMBER} of the organization may hold only read access to
-   * the repository), because a learning outlives the pull request it was taught on.
+   * Stores this round's surviving declines as learnings; returns how many new ones were stored.
+   * Every contributing author's write access is confirmed against the collaborator-permission API,
+   * not just the comment's author association (a {@code MEMBER} of the organization may hold only
+   * read access to the repository), because a learning outlives the pull request it was taught on.
    */
   public int captureSurvivingDeclines(DeclineCapture capture) {
     if (!settings.enabled()) {
@@ -318,7 +318,9 @@ public class ReviewLearnings {
     var permissionCache = new HashMap<String, Boolean>();
     var stored = 0;
     for (var decline : surviving) {
-      if (!hasWriteAccess(capture, decline.author(), permissionCache)) {
+      // Every login whose words are stored must hold write access, not only the first.
+      if (!decline.contributors().stream()
+          .allMatch(login -> hasWriteAccess(capture, login, permissionCache))) {
         continue;
       }
       var finding = decline.finding();

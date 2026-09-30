@@ -142,6 +142,7 @@ class FollowUpAnalyzerLearningsTest {
     assertEquals(501L, decline.sourceCommentId());
     assertTrue(decline.onThread());
     assertEquals("maintainer", decline.author());
+    assertEquals(List.of("maintainer"), decline.contributors());
   }
 
   @Test

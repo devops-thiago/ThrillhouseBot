@@ -104,7 +104,10 @@ public class LearningCommands {
     if (active.size() > MAX_LISTED) {
       sb.append("\n")
           .append(active.size() - MAX_LISTED)
-          .append(" older learning(s) not shown; the dashboard lists every one.");
+          .append(" older learning(s) not shown; the dashboard's")
+          .append(" `/api/dashboard/learnings` lists the newest ")
+          .append(ReviewLearningService.MAX_AUDIT_ROWS)
+          .append(".");
     }
     return sb.toString().stripTrailing();
   }

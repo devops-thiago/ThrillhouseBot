@@ -377,6 +377,20 @@ class ReviewLearningsTest {
   }
 
   @Test
+  void aJoinedReasonIsStoredOnlyWhenEveryContributorHoldsWriteAccess() {
+    var comments = new java.util.ArrayList<>(thread(NESTED, 500L, FLAT_THREADS));
+    comments.add(comment(502L, 500L, NESTED_FILE, "See the REST docs.", "member", "MEMBER"));
+    when(installationClient.collaboratorPermission(any(), any(), any(), any(), eq("maintainer")))
+        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("write", null));
+    when(installationClient.collaboratorPermission(any(), any(), any(), any(), eq("member")))
+        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", null));
+
+    assertEquals(
+        0, enabled().captureSurvivingDeclines(capture(NESTED, "justified", comments, PLAIN_DIFF)));
+    verify(store, never()).save(any(), anyInt());
+  }
+
+  @Test
   void anUnreadablePermissionIsTreatedAsNoAccess() {
     when(installationClient.collaboratorPermission(any(), any(), any(), any(), any()))
         .thenThrow(new IllegalStateException("404"));
