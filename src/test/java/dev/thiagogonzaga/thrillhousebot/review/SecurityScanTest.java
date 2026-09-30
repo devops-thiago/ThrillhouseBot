@@ -357,6 +357,69 @@ class SecurityScanTest {
   }
 
   @Test
+  void aModelFindingQuotingTheRoundNineCLinePostsOnlyTheRedactedForm() throws Exception {
+    var value = fake.genericSecret(40);
+    var line = "static const char API_TOKEN[] = \"" + value + "\";";
+    var redacted = "[redacted: " + value.substring(0, 4) + "…, 40 chars]";
+    var quoting =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "src/client.c",
+            2,
+            "Header is included twice",
+            "Line 2 reads `" + line + "` and sits between two includes of the same header.",
+            line,
+            "#include \"client.h\"\n" + line);
+    var merged =
+        merge(
+            scan(true, false),
+            response(quoting),
+            List.of(added("src/client.c", "#include \"client.h\"", line)));
+
+    assertEquals(2, merged.findings().size());
+    var scanFinding = merged.findings().get(1);
+    assertEquals(
+        "Security scan: hardcoded credential in API_TOKEN ("
+            + value.substring(0, 4)
+            + "…, 40 chars)",
+        scanFinding.title());
+    var kept = merged.findings().get(0);
+    assertEquals("static const char API_TOKEN[] = \"" + redacted + "\";", kept.suggestionOld());
+    assertTrue(kept.description().contains(redacted));
+    assertTrue(kept.suggestionNew().endsWith(redacted + "\";"));
+    assertFalse(everySurface(merged).contains(value));
+    assertFalse(everySurface(merged).contains(value.substring(4)));
+  }
+
+  @Test
+  void aValueTheScanMissedIsStillNotEchoedByAModelFinding() throws Exception {
+    var value = fake.genericSecret(40);
+    // A declaration form the scan does not read: no detection, so no matched value to scrub.
+    var line = "pub static API_TOKEN: Lazy<&str> = Lazy::new(|| \"" + value + "\");";
+    var quoting = modelFinding("src/lib.rs", 1, "Hardcoded token", "Remove `" + line + "`.");
+    var status = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "Still `" + line + "`");
+    var files = List.of(added("src/lib.rs", line));
+
+    var merged =
+        scan(true, false)
+            .merge(
+                new ReviewResponse(List.of(quoting), List.of(status), null),
+                scan(true, false).scan(files),
+                List.of(),
+                Set.of());
+    assertEquals(1, merged.findings().size());
+    assertFalse(everySurface(merged).contains(value));
+    assertTrue(merged.previousFindingsStatus().get(0).note().contains("[redacted: "));
+
+    // The IaC half alone does not touch model text.
+    var iacOnly = scan(false, true);
+    var untouched = iacOnly.merge(response(quoting), iacOnly.scan(files), List.of(), Set.of());
+    assertSame(quoting, untouched.findings().get(0));
+    assertNull(SecurityScan.Scrubber.of(List.of(), 3.5).scrub(null));
+  }
+
+  @Test
   void aModelFindingWithNoFileIsKept() {
     var noFile = modelFinding(null, 1, "Hardcoded secret", "General note.");
     var merged =
