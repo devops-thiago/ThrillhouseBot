@@ -92,6 +92,7 @@ class StartupConfigValidatorTest {
     private String reasoningEffort = "low";
     private Optional<String> conciseReasoningEffort = Optional.empty();
     private String blockingStrictness = "balanced";
+    private double secretScanEntropyThreshold = 3.5;
     private String modelName = "deepseek-chat";
     private Optional<Integer> conciseMaxOutputTokens = Optional.of(8192);
     private final Map<String, ThrillhouseConfig.AiPricingConfig.ModelSettings> models =
@@ -200,6 +201,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder secretScanEntropyThreshold(double v) {
+      this.secretScanEntropyThreshold = v;
+      return this;
+    }
+
     ConfigBuilder blockingStrictness(String v) {
       this.blockingStrictness = v;
       return this;
@@ -258,6 +264,9 @@ class StartupConfigValidatorTest {
       lenient().when(learnings.promptMaxItems()).thenReturn(learningsCaps[1]);
       lenient().when(learnings.promptMaxChars()).thenReturn(learningsCaps[2]);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
+      var securityScan = mock(ThrillhouseConfig.SecurityScanConfig.class);
+      lenient().when(review.securityScan()).thenReturn(securityScan);
+      lenient().when(securityScan.entropyThreshold()).thenReturn(secretScanEntropyThreshold);
       lenient().when(ai.models()).thenReturn(models);
       lenient().when(ai.maxConcurrentCalls()).thenReturn(maxConcurrentCalls);
       var notifications = mock(ThrillhouseConfig.NotificationsConfig.class);
@@ -1138,6 +1147,25 @@ class StartupConfigValidatorTest {
         ex.getMessage()
             .contains("REVIEW_BLOCKING_STRICTNESS must be one of lenient, balanced, strict"),
         ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenSecretScanEntropyThresholdIsOutOfRange() {
+    for (double threshold : new double[] {0.0, -1.0, 8.5, Double.NaN, Double.POSITIVE_INFINITY}) {
+      var ex =
+          assertFailsValidation(new ConfigBuilder().secretScanEntropyThreshold(threshold).build());
+      assertTrue(
+          ex.getMessage()
+              .contains("REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD must be in (0, 8] and finite"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void acceptsSecretScanEntropyThresholdsAtTheBounds() {
+    for (double threshold : new double[] {0.1, 3.5, 8.0}) {
+      new ConfigBuilder().secretScanEntropyThreshold(threshold).build().validate();
+    }
   }
 
   @Test

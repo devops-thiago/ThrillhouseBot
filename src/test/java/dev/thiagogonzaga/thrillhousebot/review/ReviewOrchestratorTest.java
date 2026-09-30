@@ -177,7 +177,8 @@ class ReviewOrchestratorTest {
             new TokenCounter(),
             mock(ReviewTokenLedger.class),
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
-            ReviewDimensionRouter.disabled());
+            ReviewDimensionRouter.disabled(),
+            SecurityScan.disabled());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     // The shipped call allowance, so every review ends with its summary call (#664); a test about
@@ -5846,7 +5847,8 @@ class ReviewOrchestratorTest {
               new TokenCounter(),
               mock(ReviewTokenLedger.class),
               new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
-              ReviewDimensionRouter.disabled());
+              ReviewDimensionRouter.disabled(),
+              SecurityScan.disabled());
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);
