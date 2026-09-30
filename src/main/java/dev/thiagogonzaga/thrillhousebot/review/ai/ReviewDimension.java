@@ -23,8 +23,9 @@ import java.util.Set;
  * blocks its files can use. The first three are always on: correctness, security and regressions
  * apply to any change, and no signal is cheap and certain enough to route them out.
  *
- * <p>The number is the one the prompt prints. It is kept when a block is left out, so the rules in
- * the core that cite a dimension by number keep pointing at the same one.
+ * <p>The number is the block's position in prompt order and appears only in logs. The prompt prints
+ * none (#918): the core names a dimension by what it checks, never by number, because a model that
+ * sees numbered headings cites them back in the findings a maintainer reads.
  */
 public enum ReviewDimension {
   FUNCTIONAL_CORRECTNESS(1, "functional-correctness", true),
@@ -51,7 +52,10 @@ public enum ReviewDimension {
     this.alwaysOn = alwaysOn;
   }
 
-  /** The number the prompt prints for this dimension. */
+  /**
+   * The dimension's position in the prompt's order, for logs. The prompt itself prints no number
+   * (#918): a numbered heading is a label the model cites back in posted findings.
+   */
   public int number() {
     return number;
   }

@@ -116,7 +116,9 @@ public class ReviewPublisher {
     }
     var request =
         new GitHubCommentClient.CreateCommentRequest(
-            PrSummaryGenerator.SUMMARY_MARKER + "\n" + result.summaryMarkdown());
+            PrSummaryGenerator.SUMMARY_MARKER
+                + "\n"
+                + PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings()));
     if (result.isFirstReview() || forceSummary) {
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
       return true;
@@ -168,7 +170,8 @@ public class ReviewPublisher {
         owner,
         repo,
         prNumber,
-        new GitHubCommentClient.CreateCommentRequest(body.get()));
+        new GitHubCommentClient.CreateCommentRequest(
+            PromptLabelScrubber.scrubMarkdown(body.get(), result.findings())));
     return true;
   }
 
@@ -392,7 +395,8 @@ public class ReviewPublisher {
     var repo = post.repo();
     var prNumber = post.prNumber();
     var commitSha = post.commitSha();
-    var result = post.result();
+    // #918: no finding is posted naming the prompt's own guidance blocks.
+    var result = PromptLabelScrubber.scrub(post.result());
     var lineResolver = post.lineResolver();
     if (!result.hasIssues()) {
       // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first

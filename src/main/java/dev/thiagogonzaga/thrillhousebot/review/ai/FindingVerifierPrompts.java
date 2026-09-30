@@ -312,7 +312,7 @@ public final class FindingVerifierPrompts {
    */
   public static final String CARVE_OUT_PRODUCER_CONSUMER =
       """
-            A producer→consumer contract finding (dimension 9) — one tracing a value from where it
+            A producer→consumer contract finding — one tracing a value from where it
             is produced to where it is consumed — spans two locations that are in different
             enclosing units by construction: the producer and the consumer are necessarily
             different code. So do NOT reject it under the "belong to different enclosing units"

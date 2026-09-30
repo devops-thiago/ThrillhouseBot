@@ -56,7 +56,7 @@ class ReviewPromptCompositionTest {
       PrReviewPrompts.CORE_IDENTITY
           + PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY
           + PrReviewPrompts.CORE_SELF_CHECK
-          + "Review dimensions:\n"
+          + "What to review:\n"
           + PrReviewPrompts.DIMENSION_FUNCTIONAL_CORRECTNESS
           + PrReviewPrompts.DIMENSION_SECURITY
           + PrReviewPrompts.DIMENSION_REGRESSIONS;
@@ -66,9 +66,9 @@ class ReviewPromptCompositionTest {
     var at = -1;
     for (var dimension : ReviewDimension.values()) {
       var block = PrReviewPrompts.dimensionBlock(dimension);
+      // #918: a number in the heading is a label the model cites back in posted findings.
       assertTrue(
-          block.startsWith(dimension.number() + ". "),
-          "block " + dimension + " must open with its number");
+          block.startsWith("- "), "block " + dimension + " must open as an unnumbered list item");
       var index = PrReviewPrompts.SYSTEM.indexOf(block);
       assertTrue(index > at, dimension + " out of order or missing");
       assertEquals(index, PrReviewPrompts.SYSTEM.lastIndexOf(block), dimension + " twice");
