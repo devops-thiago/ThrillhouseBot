@@ -314,6 +314,18 @@ class SecurityScanTest {
   }
 
   @Test
+  void oneSharedRuleWordDoesNotMakeANearbyModelFindingADuplicate() {
+    var nearby = modelFinding("pod.yaml", 2, "Add a network policy for egress", "d");
+    var merged =
+        merge(
+            scan(false, true),
+            response(nearby),
+            List.of(added("pod.yaml", "spec:", "  hostPID: true")));
+    assertEquals(2, merged.findings().size());
+    assertSame(nearby, merged.findings().get(0));
+  }
+
+  @Test
   void anUnrelatedModelFindingIsKeptButCannotQuoteTheSecret() throws Exception {
     var key = fake.googleApiKey();
     var sameLineOtherDefect =

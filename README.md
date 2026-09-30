@@ -686,8 +686,9 @@ verifier and after severity calibration, so no model re-grades them: the
 verifier would judge the same diff the pattern already read. For the same
 reason they are never marked unverified when the verifier fails open. A model
 finding within three lines of a scan finding in the same file is dropped when it
-reports the same defect (same title by the deduplicator's measure, or a title in
-the rule's own words), so one secret produces one comment, the redacted one. On a
+reports the same defect (same title by the deduplicator's measure, or a title
+using at least two of the rule's own words), so one secret normally produces one
+comment, the redacted one; a duplicate worded differently is still scrubbed. On a
 later push, a scan finding the previous round already raised is not posted
 again: its status is kept `unresolved` while the pattern is still on an added
 line (a maintainer's `justified` stands), and set `resolved` once the line is

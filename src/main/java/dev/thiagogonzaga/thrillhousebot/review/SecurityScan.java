@@ -72,7 +72,7 @@ import java.util.stream.Stream;
  *
  * <p><b>Duplicates.</b> A model finding within {@link FindingDeduplicator#LINE_TOLERANCE} lines of
  * a detection in the same file is dropped when it is the same defect by {@link
- * FindingDeduplicator#sameDefect} or its title uses the rule's own words ({@link
+ * FindingDeduplicator#sameDefect} or its title uses at least two of the rule's own words ({@link
  * SecurityRule#topic}), so the reviewer does not post the same secret twice; the scan's finding is
  * the one kept, because it is the redacted one.
  */
@@ -84,6 +84,15 @@ public class SecurityScan {
 
   /** Exempts a line (or the line below it) from the IaC rules. */
   static final String ALLOW_IAC_MARKER = "thrillhousebot:allow-iac";
+
+  /**
+   * Rule words a model title needs, besides the deduplicator's own title match, to count as the
+   * same defect. One is not enough: the topic sets are ordinary words ("network", "token", "open"),
+   * so a single shared word would drop an unrelated finding that happens to sit nearby. A same
+   * defect worded with only one of them survives as a duplicate, but its text is scrubbed like any
+   * other, so it cannot repeat a secret.
+   */
+  static final int MIN_TOPIC_WORDS = 2;
 
   /** Longest credential key name a title repeats. */
   private static final int MAX_KEY_NAME = 40;
@@ -497,8 +506,8 @@ public class SecurityScan {
 
   /**
    * Whether a model finding reports a defect the scan already raised: same file, within the
-   * deduplicator's line tolerance, and either the same defect by its title match or a title in the
-   * rule's own words.
+   * deduplicator's line tolerance, and either the same defect by its title match or a title using
+   * at least {@link #MIN_TOPIC_WORDS} of the rule's own words.
    */
   private static boolean duplicatesDetection(
       ReviewResponse.Finding finding, List<Detection> detections) {
@@ -511,7 +520,8 @@ public class SecurityScan {
       if (FilePaths.same(finding.file(), scanned.file())
           && Math.abs(finding.line() - scanned.line()) <= FindingDeduplicator.LINE_TOLERANCE
           && (FindingDeduplicator.sameDefect(finding, scanned)
-              || titleWords.stream().anyMatch(detection.rule().topic()::contains))) {
+              || titleWords.stream().filter(detection.rule().topic()::contains).count()
+                  >= MIN_TOPIC_WORDS)) {
         return true;
       }
     }
