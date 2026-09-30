@@ -173,6 +173,31 @@ public interface GitHubCheckRunClient {
   }
 
   /**
+   * One page of a check run's annotations — the file/line-anchored messages a CI tool attached to
+   * it (a failing test's assertion, a compiler error). Read only by the opt-in CI-failure review
+   * context (#59), one page per failing run, so the cost is bounded by the caller.
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}/check-runs/{checkRunId}/annotations")
+  @Produces(MediaType.APPLICATION_JSON)
+  List<Annotation> listAnnotationsOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("checkRunId") long checkRunId,
+      @QueryParam("per_page") int perPage);
+
+  /** One page of a check run's annotations, healing a rejected credential once (#626). */
+  default List<Annotation> listAnnotations(
+      String auth, String accept, String owner, String repo, long checkRunId, int perPage) {
+    return GitHubTokenRefresh.SHARED.retrying(
+        "annotations of check run " + checkRunId + " on " + owner + "/" + repo,
+        auth,
+        credential -> listAnnotationsOnce(credential, accept, owner, repo, checkRunId, perPage));
+  }
+
+  /**
    * All check runs for {@code ref}, paging through {@link #getCheckRuns} (full page → fetch the
    * next, short page → stop) and bounded by {@link #CI_MAX_PAGES}. Throws if a page response body
    * is {@code null} — the "could not read" signal callers need to distinguish from "no checks"
@@ -266,12 +291,37 @@ public interface GitHubCheckRunClient {
       return checkRuns == null ? List.of() : List.copyOf(checkRuns);
     }
 
+    /**
+     * One check run. {@code output} is the run's own report panel — title, summary and how many
+     * annotations it carries — read only by the opt-in CI-failure review context (#59); it is text
+     * the checked code controls, so every consumer treats it as untrusted.
+     */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record CheckRun(long id, String name, String status, String conclusion, App app) {
+    public record CheckRun(
+        long id, String name, String status, String conclusion, App app, CheckRunOutput output) {
+
+      /** A check run with no output panel, as the CI gate reads it. */
+      public CheckRun(long id, String name, String status, String conclusion, App app) {
+        this(id, name, status, conclusion, app, null);
+      }
+
       @JsonInclude(JsonInclude.Include.NON_NULL)
       public record App(@JsonProperty("id") Long id, String slug, String name) {}
+
+      @JsonInclude(JsonInclude.Include.NON_NULL)
+      public record CheckRunOutput(
+          String title, String summary, @JsonProperty("annotations_count") int annotationsCount) {}
     }
   }
+
+  /** One check-run annotation. Every text field is written by the checked code's CI tooling. */
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  record Annotation(
+      String path,
+      @JsonProperty("start_line") Integer startLine,
+      @JsonProperty("annotation_level") String annotationLevel,
+      String title,
+      String message) {}
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
   record CombinedStatus(
