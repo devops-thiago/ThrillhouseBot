@@ -1,0 +1,20 @@
+{
+  "kind": "generator",
+  "sourcePr": 641,
+  "why": "Corpus miss recorded in PR #641 (java #43): a Dockerfile COPY named target/app.jar while the pom in the same diff, with artifactId webhook-relay, version 1.4.0 and no finalName, makes Maven produce target/webhook-relay-1.4.0.jar, so the build fails at that COPY for everyone. The review reported the unpinned base image beside it instead. Dimension 7 (config/IaC) is the block that asks for every path a declarative file names to be checked against the producing build file; with dimension routing on, this case fails if a batch holding a Dockerfile and a pom stops carrying it.",
+  "expectation": "must-find",
+  "targetFile": "Dockerfile",
+  "keywords": [
+    "app.jar",
+    "webhook-relay-1.4.0",
+    "finalname",
+    "never produce",
+    "does not produce",
+    "not produce"
+  ],
+  "prTitle": "build: containerize the relay",
+  "prDescription": "Adds a Maven build and a two-stage Dockerfile that packages the relay and runs it as a non-root user.",
+  "dimensions": [
+    "CONFIG_IAC"
+  ]
+}

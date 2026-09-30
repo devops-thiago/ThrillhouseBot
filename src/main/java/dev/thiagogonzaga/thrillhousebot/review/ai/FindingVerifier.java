@@ -40,12 +40,18 @@ public interface FindingVerifier {
 
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
   // parameter's raw value and silently drops every other @V.
-  @SystemMessage(FindingVerifierPrompts.SYSTEM)
+  //
+  // {{verifierSystemPrompt}} is the whole system prompt, assembled per call from the core and the
+  // carve-outs its candidates can need (#665) — FindingVerifierPrompts.verifierSystemPrompt. A @V
+  // value is inserted verbatim; with routing off it is FindingVerifierPrompts.SYSTEM, which is what
+  // this annotation carried before.
+  @SystemMessage("{{verifierSystemPrompt}}")
   @UserMessage(FindingVerifierPrompts.USER)
   Result<String> verify(
       @V("findings") String findings,
       @V("prContext") String prContext,
       @V("diff") String diff,
       @V("projectStack") String projectStack,
-      @V("previousFindings") String previousFindings);
+      @V("previousFindings") String previousFindings,
+      @V("verifierSystemPrompt") String verifierSystemPrompt);
 }
