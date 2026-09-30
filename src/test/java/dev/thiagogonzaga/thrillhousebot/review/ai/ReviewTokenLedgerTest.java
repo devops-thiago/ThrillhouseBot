@@ -60,15 +60,41 @@ class ReviewTokenLedgerTest {
     var ledger = ledger(0);
     ledger.open(1L);
 
-    assertFalse(ledger.reasoningSteppedDown(1L), "nothing has stepped down yet");
+    assertEquals(ReasoningStepDown.NONE, ledger.reasoningStepDown(1L), "nothing stepped down");
     ledger.recordReasoningStepDown(1L);
-    assertTrue(ledger.reasoningSteppedDown(1L));
+    assertEquals(new ReasoningStepDown(true, false), ledger.reasoningStepDown(1L));
 
     ledger.recordReasoningStepDown(2L);
-    assertFalse(ledger.reasoningSteppedDown(2L), "a session never opened keeps no note");
+    ledger.recordReasoningRepeatStopped(2L);
+    assertEquals(
+        ReasoningStepDown.NONE,
+        ledger.reasoningStepDown(2L),
+        "a session never opened keeps no note");
 
     ledger.clear(1L);
-    assertFalse(ledger.reasoningSteppedDown(1L), "the note goes with the entry");
+    assertEquals(
+        ReasoningStepDown.NONE, ledger.reasoningStepDown(1L), "the note goes with the entry");
+  }
+
+  /**
+   * #893 — a repeat stopped with no answer begun is counted apart from one that ran, so a review
+   * whose only step-down was stopped never claims it ran with reasoning disabled, and one where the
+   * calls went both ways says both.
+   */
+  @Test
+  void tellsAStoppedRepeatFromOneThatRan() {
+    var ledger = ledger(0);
+    ledger.open(1L);
+
+    ledger.recordReasoningStepDown(1L);
+    ledger.recordReasoningRepeatStopped(1L);
+    assertEquals(new ReasoningStepDown(false, true), ledger.reasoningStepDown(1L));
+
+    ledger.recordReasoningStepDown(1L);
+    assertEquals(
+        new ReasoningStepDown(true, true),
+        ledger.reasoningStepDown(1L),
+        "a second call whose repeat ran is stated beside the stopped one");
   }
 
   @Test

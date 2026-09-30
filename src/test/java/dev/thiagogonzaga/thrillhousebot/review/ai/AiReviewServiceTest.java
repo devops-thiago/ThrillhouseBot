@@ -1541,6 +1541,169 @@ class AiReviewServiceTest {
     verify(parser, never()).parse(anyString());
   }
 
+  /** Deliberation prose, the shape #893's repeat wrote into content: no object opens in it. */
+  private static String deliberation(int chars) {
+    var prose = new StringBuilder();
+    while (prose.length() < chars) {
+      prose.append(
+          "Let me look at the diff again. Wait, the guard in `func load()` returns early. ");
+    }
+    return prose.substring(0, chars);
+  }
+
+  /** Stubs the review stream: a no-content cap first, then {@code repeat} for the step-down. */
+  private java.util.concurrent.atomic.AtomicInteger stubStepDownRepeat(TokenStream repeat) {
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(
+            invocation ->
+                calls.incrementAndGet() == 1
+                    ? TruncatedTokenStream.reasoningExhausted(starts)
+                    : repeat);
+    return calls;
+  }
+
+  /**
+   * #893 — the inlined shape: with reasoning disabled the model writes its deliberation into
+   * content, charged to the same allowance. The repeat is stopped once its content runs the guard's
+   * bound with no answer begun, instead of being billed the cap a second time, and the call fails
+   * with the first call's truncation — the one billed at the cap — stating what the repeat showed.
+   */
+  @Test
+  void aRepeatThatWritesItsDeliberationIntoContentIsStoppedInsteadOfBilledTheCapAgain() {
+    ReviewSession session = reviewSession();
+    var calls =
+        stubStepDownRepeat(
+            new FakeTokenStream(
+                deliberation(4 * InlinedDeliberationGuard.BOUND_CHARS) + "{\"findings\":[]}", 400));
+
+    var thrown =
+        assertThrows(
+            AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    assertEquals(2, calls.get(), "one repeat, stopped, and never retried");
+    assertEquals(
+        InlinedDeliberationGuard.BOUND_CHARS,
+        thrown.report().inlinedDeliberationChars(),
+        "stopped at the bound, not at the cap");
+    assertEquals(65_536, thrown.outputTokens(), "the figures are the call billed at the cap");
+    assertEquals(30_000, thrown.inputTokens());
+    assertEquals("", thrown.partialBody(), "nothing of the deliberation is offered for salvage");
+    assertTrue(
+        thrown.getMessage().contains("wrote its deliberation into the response instead, and the"),
+        thrown.getMessage());
+    verify(parser, never()).parse(anyString());
+    verify(tokenLedger).recordReasoningStepDown(42L);
+    verify(tokenLedger).recordReasoningRepeatStopped(42L);
+  }
+
+  /**
+   * #893 — the shape where today's step-down works: reasoning lives in its own channel, so the
+   * repeat's content is the answer from its first characters. An answer longer than the guard's
+   * bound, behind a short lead-in and a code fence, is not mistaken for deliberation.
+   */
+  @Test
+  void aRepeatWhoseContentIsTheAnswerRunsPastTheBoundUntouched() {
+    ReviewSession session = reviewSession();
+    var answer =
+        "Here is the review.\n```json\n{\"findings\": [{\"title\": \""
+            + "x".repeat(2 * InlinedDeliberationGuard.BOUND_CHARS)
+            + "\"}]}\n```";
+    var calls = stubStepDownRepeat(new FakeTokenStream(answer, 400));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(answer)).thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    assertEquals(2, calls.get());
+    verify(tokenLedger).recordReasoningStepDown(42L);
+    verify(tokenLedger, never()).recordReasoningRepeatStopped(anyLong());
+  }
+
+  /**
+   * #893 — the guard leans towards letting the repeat run: deliberation that quotes an object
+   * before the bound is not told apart from an answer, and ends as the repeat always did.
+   */
+  @Test
+  void aRepeatWhoseDeliberationQuotesAnObjectBeforeTheBoundIsLeftToRun() {
+    ReviewSession session = reviewSession();
+    var content =
+        "Let me check package.json: {\"name\": \"app\"} changed its version. "
+            + deliberation(2 * InlinedDeliberationGuard.BOUND_CHARS);
+    var calls = stubStepDownRepeat(new FakeTokenStream(content, 400));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(content)).thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    assertEquals(2, calls.get());
+    verify(tokenLedger, never()).recordReasoningRepeatStopped(anyLong());
+  }
+
+  /**
+   * #893 — only the step-down's repeat is watched: a call at the configured effort that opens with
+   * prose past the bound is parsed (and rejected, if it must be) exactly as before.
+   */
+  @Test
+  void aCallAtTheConfiguredEffortIsNeverStoppedForItsProse() {
+    ReviewSession session = reviewSession();
+    var content = deliberation(2 * InlinedDeliberationGuard.BOUND_CHARS);
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenReturn(new FakeTokenStream(content, 400));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(content)).thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    verify(tokenLedger, never()).recordReasoningStepDown(anyLong());
+    verify(tokenLedger, never()).recordReasoningRepeatStopped(anyLong());
+  }
+
+  /**
+   * #893 — the summary call on the concise lane steps down on the same terms, so its repeat is
+   * watched the same way, and the report names the concise lane's own effort setting.
+   */
+  @Test
+  void aConciseRepeatThatDeliberatesInContentIsStoppedToo() {
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            invocation ->
+                calls.incrementAndGet() == 1
+                    ? TruncatedTokenStream.reasoningExhausted(starts)
+                    : new FakeTokenStream(deliberation(InlinedDeliberationGuard.BOUND_CHARS)));
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
+
+    var thrown =
+        assertThrows(AiResponseTruncatedException.class, () -> service.summarize(session, inputs));
+
+    assertEquals(2, calls.get());
+    assertTrue(thrown.conciseModelImplicated());
+    assertTrue(
+        thrown.report().describe(TruncationReport.PLAIN).contains("AI_REASONING_EFFORT_CONCISE"),
+        thrown.getMessage());
+    verify(parser, never()).parseSummary(anyString());
+    verify(tokenLedger).recordReasoningRepeatStopped(42L);
+  }
+
   /** #839 — a length stop that produced content is the answer outgrowing the cap; no repeat. */
   @Test
   void aLengthStopWithContentIsNotRepeatedWithReasoningDisabled() {

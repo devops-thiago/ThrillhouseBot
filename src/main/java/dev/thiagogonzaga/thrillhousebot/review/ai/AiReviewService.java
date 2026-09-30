@@ -190,6 +190,13 @@ public class AiReviewService {
    * error on the repeat is the same kind of failure it is on any other call and is retried on the
    * same terms.
    *
+   * <p>The premise holds only where the provider keeps reasoning in its own channel. A model that
+   * writes its deliberation into the response once reasoning is disabled makes the repeat the same
+   * call at the same price (#893), so the repeat is watched by an {@link InlinedDeliberationGuard}:
+   * content that runs its bound with no answer begun stops the repeat there, and the call fails
+   * with the first call's truncation, whose report states what the repeat showed. That is noted on
+   * the ledger apart from a repeat that ran, so the posted summary says which one happened.
+   *
    * <p>The repeat's calls are bound as reasoning-disabled on the thread that starts them (see
    * {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads that binding and sends
    * {@code reasoning_effort=none} on those calls alone.
@@ -221,7 +228,42 @@ public class AiReviewService {
       broadcaster.broadcast(
           SessionEventBroadcaster.SessionEvent.retry(
               session, 1, config.review().maxAiRetries(), REASONING_STEP_DOWN_REASON));
+      return repeatWithReasoningDisabled(
+          session, streamFactory, broadcastTokens, lane, timeouts, e);
+    }
+  }
+
+  /**
+   * The step-down's one repeat. A repeat its {@link InlinedDeliberationGuard} stopped fails the
+   * call with {@code firstStop} — the call that was billed at the cap — carrying what the repeat
+   * showed, so every surface that reports the truncation states both (#893). Nothing else about the
+   * repeat's outcome changes: an answer is the call's, and any other failure propagates as before.
+   */
+  private ReviewResponse repeatWithReasoningDisabled(
+      ReviewSession session,
+      Supplier<TokenStream> streamFactory,
+      boolean broadcastTokens,
+      ModelLane lane,
+      TimeoutBudget timeouts,
+      AiResponseTruncatedException firstStop) {
+    try {
       return attemptWithRetries(session, streamFactory, broadcastTokens, lane, true, timeouts);
+    } catch (InlinedDeliberationGuard.Stopped stopped) {
+      tokenLedger.recordReasoningRepeatStopped(ReviewTokenLedger.keyFor(session));
+      var report = firstStop.report().withInlinedDeliberation(stopped.chars());
+      Log.warnf(
+          "AI review for session %d: the repeat with reasoning disabled wrote %d characters of"
+              + " deliberation into its response with no answer begun, so it was stopped instead"
+              + " of billed the cap a second time; this model does not move its reasoning out of"
+              + " the output allowance when reasoning is disabled",
+          session.id, stopped.chars());
+      throw new AiResponseTruncatedException(
+          "Model stopped on a length limit (finish_reason=length) with no content, and the"
+              + " repeat with reasoning disabled wrote its deliberation into the response"
+              + " instead. "
+              + report.describe(TruncationReport.PLAIN),
+          firstStop.partialBody(),
+          report);
     }
   }
 
@@ -284,6 +326,14 @@ public class AiReviewService {
         Log.warnf(
             "AI review attempt %d/%d for session %d hit the response-length cap; not retrying"
                 + " (identical call would truncate identically)",
+            attempt, maxAttempts, session.id);
+        throw e;
+      } catch (InlinedDeliberationGuard.Stopped e) {
+        // Deterministic too (#893): the model writes its deliberation into the response with
+        // reasoning off, so another attempt would bill the same prose again.
+        Log.warnf(
+            "AI review attempt %d/%d for session %d was stopped with no answer begun; not"
+                + " retrying (the identical call would deliberate identically)",
             attempt, maxAttempts, session.id);
         throw e;
       } catch (RuntimeException e) {
@@ -511,6 +561,9 @@ public class AiReviewService {
     var chunkCount = new AtomicInteger();
     var lastFlushNanos = new AtomicLong(System.nanoTime());
     var cancelled = new AtomicBoolean(false);
+    // Only the step-down's repeat is watched for deliberation written into the response (#893);
+    // a call at the configured effort streams exactly as before.
+    var deliberationGuard = reasoningDisabled ? new InlinedDeliberationGuard() : null;
 
     Runnable flushStream =
         broadcastTokens
@@ -529,7 +582,10 @@ public class AiReviewService {
 
       stream
           .onPartialResponse(
-              token -> handlePartialToken(token, buffer, flushStream, cancelled, lastFlushNanos))
+              token -> {
+                handlePartialToken(token, buffer, flushStream, cancelled, lastFlushNanos);
+                stopOnInlinedDeliberation(deliberationGuard, buffer, result, cancelled);
+              })
           .onCompleteResponse(
               response ->
                   handleCompleteResponse(response, result, buffer, flushStream, cancelled, lane))
@@ -546,6 +602,12 @@ public class AiReviewService {
       // one call may spend the deadline, and it needs the wait this one spent to say so (#862).
       throw new AiReviewTimeoutException("AI review timed out after " + deadline, 1, deadline, e);
     } catch (ExecutionException e) {
+      if (e.getCause() instanceof InlinedDeliberationGuard.Stopped) {
+        // The guard ended the attempt, not the provider: close the connection so the model stops
+        // generating billed deliberation, exactly as an abandoned stream is closed on a timeout.
+        cancelStream(stream, session.id, attempt);
+        flushStream.run();
+      }
       throw asAiReviewException(e);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -579,6 +641,30 @@ public class AiReviewService {
     var elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - lastFlushNanos.get());
     if (elapsedMs >= STREAM_FLUSH_INTERVAL_MS) {
       flushStream.run();
+    }
+  }
+
+  /**
+   * Stops the step-down's repeat once its {@link InlinedDeliberationGuard} finds deliberation with
+   * no answer begun (#893). A no-op for every other call ({@code guard} is null) and once the guard
+   * has decided. An attempt that already ended adds nothing to the buffer, and completing its
+   * settled result again changes nothing. The stream itself is cancelled by the waiting thread,
+   * which holds its handle.
+   */
+  private static void stopOnInlinedDeliberation(
+      InlinedDeliberationGuard guard,
+      StreamBuffer buffer,
+      CompletableFuture<ReviewResponse> result,
+      AtomicBoolean cancelled) {
+    // Checked before the buffer is read: the guard decides once, and a snapshot of the whole
+    // buffer on every later token would cost a copy per token for the rest of a long response.
+    if (guard == null || guard.decided()) {
+      return;
+    }
+    var stoppedAt = guard.check(buffer.textOnceAtLeast(InlinedDeliberationGuard.BOUND_CHARS));
+    if (stoppedAt.isPresent()) {
+      cancelled.set(true);
+      result.completeExceptionally(new InlinedDeliberationGuard.Stopped(stoppedAt.getAsInt()));
     }
   }
 
@@ -798,6 +884,11 @@ public class AiReviewService {
       var totalChars = text.length();
       var tail = text.substring(Math.max(0, totalChars - STREAM_TAIL_CHARS));
       return new PendingChunk(chunk, tail, totalChars);
+    }
+
+    /** The accumulated text once it holds at least {@code chars} characters; null before that. */
+    synchronized String textOnceAtLeast(int chars) {
+      return text.length() >= chars ? text.toString() : null;
     }
 
     /** Returns the accumulated text, or the fallback when nothing was streamed. */
