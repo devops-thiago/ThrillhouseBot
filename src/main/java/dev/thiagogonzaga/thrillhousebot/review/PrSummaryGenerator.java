@@ -486,7 +486,7 @@ public class PrSummaryGenerator {
   private static void appendDescriptionGaps(StringBuilder sb, int reported, List<String> gaps) {
     if (!gaps.isEmpty()) {
       sb.append(GAPS_HEADING).append("\n");
-      sb.append("The PR description does not fully match the change:\n");
+      sb.append(gapsIntro(gaps));
       for (String gap : gaps) {
         sb.append("- ").append(gap.strip()).append("\n");
       }
@@ -496,6 +496,23 @@ public class PrSummaryGenerator {
     if (reported > 0) {
       sb.append(GAPS_HEADING).append("\n").append(GAPS_ALL_REPORTED_AS_FINDINGS).append("\n\n");
     }
+  }
+
+  /** The prefix the summary call gives an unmet acceptance criterion of a linked issue (#58). */
+  static final String LINKED_ISSUE_GAP_PREFIX = "linked issue #";
+
+  /**
+   * The line introducing the gap list: it names the linked issue as well as the description when
+   * any gap is an unmet acceptance criterion (#58), so the section does not blame the PR body for
+   * scope the issue asked for.
+   */
+  static String gapsIntro(List<String> gaps) {
+    var fromIssue =
+        gaps.stream()
+            .anyMatch(g -> g.strip().toLowerCase(Locale.ROOT).startsWith(LINKED_ISSUE_GAP_PREFIX));
+    return fromIssue
+        ? "The PR description or its linked issue does not fully match the change:\n"
+        : "The PR description does not fully match the change:\n";
   }
 
   /**

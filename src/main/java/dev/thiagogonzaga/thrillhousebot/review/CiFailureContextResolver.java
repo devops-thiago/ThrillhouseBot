@@ -375,12 +375,20 @@ public class CiFailureContextResolver {
    * appended. The header lines come first, so a cut only ever drops check detail.
    */
   static String cap(String section, int maxChars) {
+    return cap(section, maxChars, TRUNCATION_NOTE);
+  }
+
+  /**
+   * {@code section} within {@code maxChars}, cut at a line boundary with {@code note} appended —
+   * the cap every untrusted context section shares (#59, #58).
+   */
+  static String cap(String section, int maxChars, String note) {
     if (section.length() <= maxChars) {
       return section;
     }
-    var room = Math.max(0, maxChars - TRUNCATION_NOTE.length() - 1);
+    var room = Math.max(0, maxChars - note.length() - 1);
     var cut = section.lastIndexOf('\n', room);
     var kept = cut > 0 ? section.substring(0, cut) : clip(section, room);
-    return kept + "\n" + TRUNCATION_NOTE;
+    return kept + "\n" + note;
   }
 }

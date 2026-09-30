@@ -187,8 +187,30 @@ public interface GitHubCommentClient {
     }
   }
 
-  /** Title and body of a linked issue, fetched to ground the bug-fix efficacy check. */
-  record IssueDetails(int number, String title, String body) {}
+  /**
+   * Title and body of a linked issue, fetched to ground the bug-fix efficacy check and the linked
+   * issue context (#58). {@code pullRequest} is GitHub's marker that the number names a pull
+   * request, not an issue — the issues endpoint serves both — and is {@code null} for an issue.
+   */
+  record IssueDetails(
+      int number,
+      String title,
+      String body,
+      @JsonProperty("pull_request") PullRequestRef pullRequest) {
+
+    /** An issue — not a pull request — with the given title and body. */
+    public IssueDetails(int number, String title, String body) {
+      this(number, title, body, null);
+    }
+
+    /** Whether the number names a pull request rather than an issue. */
+    public boolean isPullRequest() {
+      return pullRequest != null;
+    }
+
+    /** The {@code pull_request} object the issues endpoint adds for a pull request number. */
+    public record PullRequestRef(String url) {}
+  }
 
   record CommentResponse(long id, @JsonProperty("html_url") String htmlUrl) {}
 

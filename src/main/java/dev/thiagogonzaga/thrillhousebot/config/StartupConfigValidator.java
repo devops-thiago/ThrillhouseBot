@@ -119,6 +119,7 @@ public class StartupConfigValidator {
     validateReviewBudget(problems, config.review());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
+    validateTicketContext(problems, config.review().ticketContext());
     validateBlockingStrictness(problems, config.review());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
@@ -599,6 +600,51 @@ public class StartupConfigValidator {
               + " and "
               + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.ci-context.max-chars): "
+              + maxChars);
+    }
+  }
+
+  /**
+   * Rejects an unknown {@code REVIEW_TICKET_CONTEXT_PROVIDER} and an out-of-bounds issue count or
+   * character cap at boot (#58) — only when the feature is on, since a disabled section is never
+   * built — so a typo cannot silently leave the review without the ticket it was configured to
+   * read, or let issue text crowd out the diff.
+   */
+  private static void validateTicketContext(
+      List<String> problems, ThrillhouseConfig.TicketContextConfig ticketContext) {
+    if (!ticketContext.enabled()) {
+      return;
+    }
+    var provider = ticketContext.provider();
+    if (provider == null
+        || !ThrillhouseConfig.TicketContextConfig.ALLOWED_PROVIDERS.contains(
+            provider.strip().toLowerCase(Locale.ROOT))) {
+      problems.add(
+          "REVIEW_TICKET_CONTEXT_PROVIDER must be one of "
+              + ThrillhouseConfig.TicketContextConfig.ALLOWED_PROVIDERS
+              + " (thrillhousebot.review.ticket-context.provider): "
+              + provider);
+    }
+    var maxIssues = ticketContext.maxIssues();
+    if (maxIssues < ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES
+        || maxIssues > ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES) {
+      problems.add(
+          "REVIEW_TICKET_CONTEXT_MAX_ISSUES must be between "
+              + ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES
+              + " and "
+              + ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES
+              + " (thrillhousebot.review.ticket-context.max-issues): "
+              + maxIssues);
+    }
+    var maxChars = ticketContext.maxChars();
+    if (maxChars < ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS
+        || maxChars > ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS) {
+      problems.add(
+          "REVIEW_TICKET_CONTEXT_MAX_CHARS must be between "
+              + ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS
+              + " and "
+              + ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS
+              + " (thrillhousebot.review.ticket-context.max-chars): "
               + maxChars);
     }
   }
