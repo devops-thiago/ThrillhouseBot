@@ -32,8 +32,8 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 /**
  * Read-only slice of the GitHub Actions API used to locate the coverage report a repository's CI
- * uploaded for the commit under review. Needs only the {@code Actions: Read} permission the App
- * already declares.
+ * uploaded for the commit under review, and to read a failing job's log for the opt-in CI-failure
+ * review context. Needs only the {@code Actions: Read} permission the App already declares.
  */
 @RegisterRestClient(configKey = "github-api")
 @RegisterProvider(GitHubErrorLogger.class)
@@ -141,6 +141,44 @@ public interface GitHubActionsClient {
     }
     response.close();
     return downloadArtifactOnce(fresh.get(), accept, owner, repo, artifactId);
+  }
+
+  /**
+   * Starts a job-log download. Like {@link #downloadArtifactOnce} GitHub answers with a {@code 302}
+   * to a short-lived, pre-signed URL, so the raw {@link Response} is returned and the caller
+   * fetches {@code Location} without the installation token. For a GitHub Actions check run the job
+   * id is the check run's id. Read only by the opt-in CI-failure review context when job logs are
+   * enabled (#59).
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}/actions/jobs/{jobId}/logs")
+  Response downloadJobLogsOnce(
+      @HeaderParam("Authorization") String auth,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo,
+      @PathParam("jobId") long jobId);
+
+  /**
+   * Starts a job-log download, asking for a fresh credential once on a 401 the way {@link
+   * #downloadArtifact} does, since the raw {@link Response} carries a rejection as a status.
+   */
+  default Response downloadJobLogs(
+      String auth, String accept, String owner, String repo, long jobId) {
+    var response = downloadJobLogsOnce(auth, accept, owner, repo, jobId);
+    if (response.getStatus() != 401) {
+      return response;
+    }
+    var fresh =
+        GitHubTokenRefresh.SHARED.replacementFor(
+            "job " + jobId + " log download on " + owner + "/" + repo,
+            auth,
+            new WebApplicationException(response));
+    if (fresh.isEmpty()) {
+      return response;
+    }
+    response.close();
+    return downloadJobLogsOnce(fresh.get(), accept, owner, repo, jobId);
   }
 
   @JsonIgnoreProperties(ignoreUnknown = true)

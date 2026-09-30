@@ -717,6 +717,9 @@ class CiStatusEvaluatorTest {
           mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.ReviewConfig.class);
       when(config.review()).thenReturn(review);
       when(review.ciGating()).thenReturn("off");
+      var ciContext =
+          mock(dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.CiContextConfig.class);
+      when(review.ciContext()).thenReturn(ciContext);
 
       var fromConfig = new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), config);
       var result = fromConfig.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
@@ -742,6 +745,133 @@ class CiStatusEvaluatorTest {
       var result = fallback.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
 
       assertEquals(1, result.offendingChecks().size());
+    }
+  }
+
+  /** The CI-failure review context (#59) read off the same CI walk the gate makes. */
+  @Nested
+  class FailureContextCapture {
+
+    private GitHubCheckRunClient.CheckRunsResponse.CheckRun run(
+        long id, String name, String status, String conclusion, String slug, String title) {
+      return new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+          id,
+          name,
+          status,
+          conclusion,
+          slug == null
+              ? null
+              : new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(1L, slug, slug),
+          title == null
+              ? null
+              : new GitHubCheckRunClient.CheckRunsResponse.CheckRun.CheckRunOutput(
+                  title, "summary of " + name, 3));
+    }
+
+    private void stubCi(
+        List<GitHubCheckRunClient.CheckRunsResponse.CheckRun> runs,
+        List<GitHubCheckRunClient.CombinedStatus.StatusDetail> statuses) {
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(runs.size(), runs));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(
+              new GitHubCheckRunClient.CombinedStatus("failure", statuses.size(), statuses));
+    }
+
+    @Test
+    void capturesEveryFailingAndPendingCheckRequiredOrNotWithoutTheBotsOwn() {
+      stubCi(
+          List.of(
+              run(1L, "build", "completed", "failure", "github-actions", "2 tests failed"),
+              run(2L, "lint", "completed", "failure", "github-actions", "style"),
+              run(3L, "e2e", "in_progress", null, "github-actions", null),
+              run(4L, "ThrillhouseBot Review", "completed", "failure", "thrillhousebot", null),
+              run(5L, "docs", "completed", "success", null, null),
+              run(6L, null, "completed", "failure", null, null)),
+          List.of(
+              new GitHubCheckRunClient.CombinedStatus.StatusDetail(
+                  7L, "error", "codecov/patch", "85% (-2%) below target"),
+              new GitHubCheckRunClient.CombinedStatus.StatusDetail(
+                  8L, "pending", "build", "queued again"),
+              new GitHubCheckRunClient.CombinedStatus.StatusDetail(
+                  9L, "failure", "lint", "status copy")));
+
+      var result = evaluator.evaluateCiChecks("auth", "owner", "repo", "sha", List.of("build"));
+
+      assertEquals(
+          List.of("build"),
+          result.offendingChecks().stream().map(ReviewResult.CiCheck::name).toList(),
+          "the gate still only holds on the required check");
+      var failed = result.failures().failed();
+      assertEquals(
+          List.of("build", "lint", "codecov/patch"),
+          failed.stream().map(CiStatusEvaluator.FailedCheck::name).toList(),
+          "optional failures explain defects too; the bot's own check and a nameless run do not");
+      var build = failed.get(0);
+      assertEquals(1L, build.checkRunId());
+      assertEquals("github-actions", build.appSlug());
+      assertEquals("2 tests failed", build.title());
+      assertEquals("summary of build", build.summary());
+      assertEquals(3, build.annotationsCount());
+      assertEquals("style", failed.get(1).title(), "the check-run detail wins over a status copy");
+      var codecov = failed.get(2);
+      assertEquals(0L, codecov.checkRunId(), "a status has no run to fetch annotations from");
+      assertNull(codecov.appSlug());
+      assertEquals("85% (-2%) below target", codecov.summary());
+      assertEquals(1, result.failures().pending(), "a failed name is not also counted pending");
+    }
+
+    @Test
+    void aFailingRunWithNoOutputPanelCarriesNoDetail() {
+      stubCi(List.of(run(1L, "build", "completed", "timed_out", null, null)), List.of());
+
+      var failed = evaluator.evaluateCiChecks("a", "o", "r", "sha", null).failures().failed();
+
+      assertEquals(1, failed.size());
+      assertNull(failed.get(0).title());
+      assertNull(failed.get(0).summary());
+      assertEquals(0, failed.get(0).annotationsCount());
+      assertEquals("timed_out", failed.get(0).conclusion());
+    }
+
+    @Test
+    void withTheGateOffItReadsCiForTheContextButNeverHoldsApproval() {
+      var contextOnly =
+          new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), CiGatingMode.OFF, true);
+      stubCi(
+          List.of(run(1L, "build", "completed", "failure", "github-actions", "boom")), List.of());
+
+      var result = contextOnly.evaluate("auth", "owner", "repo", "sha", "main");
+
+      assertTrue(result.offendingChecks().isEmpty());
+      assertFalse(result.unreadable());
+      assertEquals("build", result.failures().failed().get(0).name());
+      verify(checkRunClient, never()).getBranchRules(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void withTheGateOffAnUnreadableSourceStillDoesNotHoldApproval() {
+      var contextOnly =
+          new CiStatusEvaluator(checkRunClient, new BotIdentity(Set.of()), CiGatingMode.OFF, true);
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenThrow(new RuntimeException("503"));
+      when(checkRunClient.getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenThrow(new RuntimeException("503"));
+
+      var result = contextOnly.evaluate("auth", "owner", "repo", "sha", "main");
+
+      assertFalse(result.unreadable());
+      assertTrue(result.failures().failed().isEmpty());
+    }
+
+    @Test
+    void anEvaluationBuiltWithoutDetailCarriesNone() {
+      var evaluation = new CiStatusEvaluator.CiEvaluation(List.of(), false, true, null);
+
+      assertSame(CiStatusEvaluator.CiFailures.NONE, evaluation.failures());
+      assertSame(
+          CiStatusEvaluator.CiFailures.NONE,
+          new CiStatusEvaluator.CiEvaluation(List.of(), false).failures());
     }
   }
 }

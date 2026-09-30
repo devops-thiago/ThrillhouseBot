@@ -91,6 +91,7 @@ public class ReviewOrchestrator {
   private final ReviewSessionPersistence sessionPersistence;
 
   private final CiStatusEvaluator ciStatusEvaluator;
+  private final CiFailureContextResolver ciFailureContext;
 
   private final CheckRunManager checkRunManager;
 
@@ -237,12 +238,14 @@ public class ReviewOrchestrator {
       SupersededFindingsCarryover carryover,
       CiHoldRegistry ciHoldRegistry,
       @ReviewExecutor ExecutorService reviewExecutor,
-      ReviewNotifier notifier) {
+      ReviewNotifier notifier,
+      CiFailureContextResolver ciFailureContext) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
     this.ciStatusEvaluator = ciStatusEvaluator;
+    this.ciFailureContext = ciFailureContext;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
@@ -306,20 +309,31 @@ public class ReviewOrchestrator {
       checkRunId =
           checkRunManager.createCheckRun(
               auth, req.owner(), req.repo(), req.commitSha(), sessionUrl(session));
+      final var ciReq = req;
+      // With the CI-failure context on (#59) the early CI reading feeds the prompt, so it starts
+      // alongside the context load and is joined before the prompt is assembled; its failing
+      // checks are the ones the gate reads, not a second fetch. Off, the reading keeps its place
+      // beside the model call, so the gate reads CI as late as it did before.
+      var ciFuture = ciFailureContext.enabled() ? startCiEvaluation(auth, ciReq) : null;
       var ctx = contextLoader.load(auth, req, session, repository);
       var priorReviews = ctx.priorReviews();
       var previousFindings = ctx.previousFindingsList();
       var inlineComments = ctx.inlineComments();
       var lineResolver = ctx.lineResolver();
+      var ciFailures =
+          ciFuture == null
+              ? ""
+              : ciFailureContext.resolve(auth, req.owner(), req.repo(), ciFuture.join());
 
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
-      var promptInputs = budgetPlanner.boundPreviousFindings(promptAssembler.assemble(ctx, req));
+      var promptInputs =
+          budgetPlanner.boundPreviousFindings(promptAssembler.assemble(ctx, req, ciFailures));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
-      final var ciReq = req;
-      var ciFuture =
-          CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, ciReq), reviewExecutor);
+      if (ciFuture == null) {
+        ciFuture = startCiEvaluation(auth, ciReq);
+      }
 
       // #650/#475: one evidence round for the whole review, so the batches share its fetch budget,
       // its file cache, and the single character budget every attached note is charged to. Only
@@ -630,6 +644,11 @@ public class ReviewOrchestrator {
    * carried on the request, not the model response — and again after the call when that early
    * reading held approval ({@link #rereadCiIfHeld}).
    */
+  private CompletableFuture<CiStatusEvaluator.CiEvaluation> startCiEvaluation(
+      String auth, ReviewRequest req) {
+    return CompletableFuture.supplyAsync(() -> resolveCiEvaluation(auth, req), reviewExecutor);
+  }
+
   private CiStatusEvaluator.CiEvaluation resolveCiEvaluation(String auth, ReviewRequest req) {
     return ciStatusEvaluator.evaluate(
         auth, req.owner(), req.repo(), req.commitSha(), req.baseRef());
