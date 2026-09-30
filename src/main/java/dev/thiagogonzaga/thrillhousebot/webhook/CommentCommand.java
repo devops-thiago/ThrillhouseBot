@@ -44,5 +44,11 @@ public enum CommentCommand {
   /** Silence the bot on the PR until {@link #RESUME}. */
   PAUSE,
   /** Re-enable the bot on a paused PR. */
-  RESUME
+  RESUME,
+  /** List the repository's active review learnings (#38). */
+  LEARNINGS,
+  /** Retract one review learning by id (#38). */
+  FORGET,
+  /** Store an explicit repository convention as a review learning (#38). */
+  REMEMBER
 }

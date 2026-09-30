@@ -57,6 +57,7 @@ same diff.
 | Top-level run: check run, context, plan, pipeline, verdict, publish, head-moved abort | `review/ReviewOrchestrator` |
 | Load diff, prior reviews/findings, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`) |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
+| Opt-in review learnings: recall before the call (ranked, capped section) | `review/ReviewLearnings.promptSection` (reads `ReviewLearningService.listActive`) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
@@ -68,6 +69,8 @@ same diff.
 | Post review, inline comments, thread resolution | `review/ReviewPublisher`, `review/CheckRunManager` |
 | Summary comment | `review/PrSummaryGenerator` |
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
+| Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
+| `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
 | Maintainer replies and mentions | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
 
@@ -146,13 +149,17 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
 1. **Trailing-guidance slot (the default).** Review-only guidance and data ride
    `PromptInputs.repoInstructions`, which `ReviewPromptAssembler.assemble` builds with
    `combineSections` (mock fidelity, bug-fix efficacy with linked issue text, config-key context,
-   heuristic failure modes, patch coverage, CI failures, linked issues, then repo instructions).
-   Add a static `…Section` method that returns `""` when there is no data and emits the guidance
-   constant only together with its fenced data (see `patchCoverageSection`, `ciFailuresSection`).
-   Every batch carries the slot, and `DiffBudgetPlanner.plan` already counts it as shared
-   overhead. No new `@V`, record component or planner change is needed. Guidance for the summary
-   call goes in `summaryInstructions` instead, which `FindingPipeline` counts when it clamps the
-   summary input.
+   heuristic failure modes, patch coverage, then CI failures, linked issues and learnings in that
+   fixed order, then repo instructions). The three opt-in sections arrive together as one
+   `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a component
+   there rather than another overload. Add a static `…Section` method that returns `""` when there
+   is no data and emits the guidance constant only together with its fenced data (see
+   `patchCoverageSection`, `ciFailuresSection`, `learningsSection`). Every batch carries the slot,
+   and `DiffBudgetPlanner.plan` already counts it as shared overhead
+   (`DiffBudgetPlannerTest.ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead`).
+   No new `@V`, record component of `PromptInputs` or planner change is needed. Guidance for the
+   summary call goes in `summaryInstructions` instead, which `FindingPipeline` counts when it clamps
+   the summary input.
    A section can ride both slots with a different request in each: the linked-issue section
    (`linkedIssuesSection`) gives the review call `TicketContextPrompts.REVIEW_REQUEST` and the
    summary call `TicketContextPrompts.SUMMARY_REQUEST`, each with its own fence.
@@ -234,6 +241,22 @@ live `fence(...)` (#604).
   splices one in, directly or through a same-file local. It cannot follow a value across a method
   boundary, so wrap early. `%d` numbers are exempt.
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
+- **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
+  credential-shaped text (`LearningText.containsCredential`) and flattens the rest
+  (`LearningText.normalize`); `ReviewLearnings.select` screens again before replay, and
+  `ReviewPromptAssembler.learningsSection` fences the list under `PrReviewPrompts.LEARNINGS_REQUEST`.
+  `LearningCommands` echoes learnings back only inside inline code spans.
+- **Only a decline that survived the re-check becomes a learning.** Capture reads the round's
+  final statuses (after `FollowUpAnalyzer.recheckDeclines`), and
+  `FollowUpAnalyzer.survivingDeclines` also refuses any reason that
+  `RebuttalContradiction.assertsRefutablePremise` flags, a decline that stood only by the
+  second-reply escape hatch, a decline without a reason, and every decline while
+  `REVIEW_DECLINE_RECHECK_ENABLED` is off (`StartupConfigValidator` refuses that combination).
+  Never widen capture to 👍/👎 or bare replies: a wrong learning suppresses a valid finding on
+  every later pull request (PR #160).
+- **Learnings are scoped per installation and repository.** Every `ReviewLearningService` read
+  and write filters on both (`listForAudit` is the dashboard's repo-access-checked exception), and
+  `retract` treats an id from another repository as not found.
 - **A detected secret is never echoed.** Only `SecretScanner.redact` output (first characters and
   length) goes into a scan finding's title and description, and a secret finding has no
   `suggestion_old`, because the anchor is persisted with the session and shown on the dashboard.
@@ -273,6 +296,11 @@ live `fence(...)` (#604).
 No migration tool. Prod runs Hibernate `schema-management.strategy=update`, and dev runs
 `drop-and-create` (`application.properties`). Adding an entity column is picked up
 automatically. A rename or drop is not, so it needs a deliberate plan.
+
+Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (review, 👍/👎
+signals) and `ReviewLearning` (review, table `review_learning`, #38). A learning is never deleted
+by the bot: `ReviewLearningService.retract` clears `active` and records who and when, and
+`dedupKey` makes a re-reported decline or a redelivered `/remember` idempotent.
 
 ## Why-nots
 

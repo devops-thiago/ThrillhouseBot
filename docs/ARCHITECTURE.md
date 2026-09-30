@@ -207,7 +207,7 @@ sequenceDiagram
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, re-reads CI for a verdict held on pending CI when a `check_suite` or `status` event reports on its head, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
-| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, optionally scans the added lines for leaked secrets and risky IaC without a model call, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `SecurityScan`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverageResolver`, `CiFailureContextResolver`, `TicketContextResolver`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
+| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, optionally scans the added lines for leaked secrets and risky IaC without a model call, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, persists maintainer finding feedback (👍/👎 / reply heuristics), and remembers declines that survive the re-check as opt-in review learnings | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `SecurityScan`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverageResolver`, `CiFailureContextResolver`, `TicketContextResolver`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `ReviewLearnings`, `ReviewLearningService`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
 | `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
 | `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
@@ -316,6 +316,25 @@ it into the review call's trailing guidance, so every batch carries it and
 `DiffBudgetPlanner` counts it as shared overhead. The summary and verifier calls
 do not get it. Pending checks only contribute a count, and the CI-hold revisit
 does not start a new review when CI later fails.
+
+**Review learnings** — with `REVIEW_LEARNINGS_ENABLED`, a maintainer's decisions
+outlive the pull request they were made on (#38). After a review is posted, a
+post-result step hands the round's final previous-finding statuses to
+`ReviewLearnings`. `FollowUpAnalyzer.survivingDeclines` keeps only the `justified`
+findings whose decline the #169 re-check actually ran against and whose every
+maintainer reason rests on no premise the code could refute
+(`RebuttalContradiction.assertsRefutablePremise`), so PR #160's "cannot race"
+decline is never stored. The author's write access is confirmed through the
+collaborator-permission API before `ReviewLearningService` writes a
+`review_learning` row, scoped to the installation and repository, after
+`LearningText` refuses credential-shaped text and flattens the rest. Before the
+next review call, the active rows are ranked by how close their file is to the
+changed files and the best ones, capped in count and characters, are fenced into
+the review call's trailing guidance after the CI-failure and linked-issue sections, so
+`DiffBudgetPlanner` counts them as shared overhead. The summary and verifier calls
+do not get them. `/learnings`, `/remember` and `/forget` (`LearningCommands`)
+list, add and retract rows; retraction only clears `active`, so the dashboard's
+`/api/dashboard/learnings` audit view keeps the history.
 
 **Linked issues as review context** — with `REVIEW_TICKET_CONTEXT_ENABLED`,
 `TicketContextResolver` asks the configured `IssueTrackerProvider` for the issues

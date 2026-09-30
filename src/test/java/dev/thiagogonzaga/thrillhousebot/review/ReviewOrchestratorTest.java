@@ -285,8 +285,12 @@ class ReviewOrchestratorTest {
         reviewExecutor,
         notifier,
         ciFailureContext,
-        ticketContext);
+        ticketContext,
+        learnings);
   }
+
+  /** The learnings store the orchestrator is built with; a mock that reports off by default. */
+  private ReviewLearnings learnings = mock(ReviewLearnings.class);
 
   /** The CI-failure context the orchestrator is built with; off unless a test switches it on. */
   private CiFailureContextResolver ciFailureContext =
@@ -8231,6 +8235,112 @@ class ReviewOrchestratorTest {
               ctx, new ReviewResponse(List.of(own), List.of(), null), result);
 
       assertEquals(List.of(carriedA, own), carry);
+    }
+  }
+
+  /** #38: learnings reach the review prompt before the call and are captured after the post. */
+  @Nested
+  class LearningsThroughReview {
+
+    private void runReview(GitHubPullRequestClient.FileDiff... files) {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(files));
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+      }
+    }
+
+    private static GitHubPullRequestClient.FileDiff javaFile() {
+      return new GitHubPullRequestClient.FileDiff(
+          "src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+int a = 1;");
+    }
+
+    @Test
+    void theRelevantLearningsRideTheReviewPromptFenced() {
+      when(learnings.enabled()).thenReturn(true);
+      when(learnings.promptSection(eq(123L), eq("owner"), eq("repo"), any()))
+          .thenReturn(
+              "- [L1] Convention on the whole repository — @m, PR #1:\n  Threads are flat.");
+
+      runReview(javaFile());
+
+      verify(learnings).promptSection(123L, "owner", "repo", List.of("src/main/java/A.java"));
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      var guidance = inputs.getValue().repoInstructions();
+      assertTrue(guidance.contains(PrReviewPrompts.LEARNINGS_REQUEST), guidance);
+      assertTrue(
+          guidance.indexOf(PromptTemplateEscaper.fencePrefix()) < guidance.indexOf("[L1]"),
+          "the learnings sit inside the untrusted-data fence");
+    }
+
+    @Test
+    void aPostedReviewHandsItsFinalStatusesToTheLearningsCapture() {
+      when(learnings.enabled()).thenReturn(true);
+      when(learnings.promptSection(anyLong(), anyString(), anyString(), any())).thenReturn("");
+
+      runReview(javaFile());
+
+      var capture = ArgumentCaptor.forClass(ReviewLearnings.DeclineCapture.class);
+      verify(learnings).captureSurvivingDeclines(capture.capture());
+      var decline = capture.getValue();
+      assertEquals(123L, decline.installationId());
+      assertEquals("owner", decline.owner());
+      assertEquals("repo", decline.repo());
+      assertEquals(42, decline.prNumber());
+      assertEquals("Bearer test", decline.auth());
+      assertNotNull(decline.statuses());
+      assertTrue(
+          decline.reviewedCode().get().contains("int a = 1;"),
+          "the capture re-checks against the code the review saw");
+    }
+
+    @Test
+    void withTheStoreOffNothingIsCaptured() {
+      when(learnings.promptSection(anyLong(), anyString(), anyString(), any())).thenReturn("");
+
+      runReview(javaFile());
+
+      verify(learnings, never()).captureSurvivingDeclines(any());
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      assertFalse(inputs.getValue().repoInstructions().contains("Prior Maintainer Decisions"));
     }
   }
 }

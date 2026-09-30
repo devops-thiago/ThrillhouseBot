@@ -84,6 +84,9 @@ class StartupConfigValidatorTest {
     private String ciGating = "strict";
     private boolean ciContextEnabled = false;
     private int ciContextMaxChars = 4000;
+    private boolean learningsEnabled = false;
+    private boolean declineRecheckEnabled = true;
+    private int[] learningsCaps = {100, 10, 3000};
     private boolean ticketContextEnabled = false;
     private String ticketContextProvider = "github";
     private int ticketContextMaxIssues = 3;
@@ -181,6 +184,15 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder learnings(boolean enabled, boolean declineRecheck, int... caps) {
+      this.learningsEnabled = enabled;
+      this.declineRecheckEnabled = declineRecheck;
+      if (caps.length == 3) {
+        this.learningsCaps = caps;
+      }
+      return this;
+    }
+
     ConfigBuilder maxConcurrentCalls(int v) {
       this.maxConcurrentCalls = v;
       return this;
@@ -256,6 +268,13 @@ class StartupConfigValidatorTest {
       lenient().when(review.ciContext()).thenReturn(ciContext);
       lenient().when(ciContext.enabled()).thenReturn(ciContextEnabled);
       lenient().when(ciContext.maxChars()).thenReturn(ciContextMaxChars);
+      var learnings = mock(ThrillhouseConfig.LearningsConfig.class);
+      lenient().when(review.learnings()).thenReturn(learnings);
+      lenient().when(review.declineRecheckEnabled()).thenReturn(declineRecheckEnabled);
+      lenient().when(learnings.enabled()).thenReturn(learningsEnabled);
+      lenient().when(learnings.maxPerRepo()).thenReturn(learningsCaps[0]);
+      lenient().when(learnings.promptMaxItems()).thenReturn(learningsCaps[1]);
+      lenient().when(learnings.promptMaxChars()).thenReturn(learningsCaps[2]);
       var ticketContext = mock(ThrillhouseConfig.TicketContextConfig.class);
       lenient().when(review.ticketContext()).thenReturn(ticketContext);
       lenient().when(ticketContext.enabled()).thenReturn(ticketContextEnabled);
@@ -1103,6 +1122,39 @@ class StartupConfigValidatorTest {
     new ConfigBuilder().ciContext(true, 500).build().validate();
     new ConfigBuilder().ciContext(true, 20_000).build().validate();
     new ConfigBuilder().ciContext(false, -1).build().validate();
+  }
+
+  @Test
+  void failsFastWhenLearningsAreOnWithoutTheDeclineRecheck() {
+    var ex = assertFailsValidation(new ConfigBuilder().learnings(true, false).build());
+    assertTrue(
+        ex.getMessage()
+            .contains("REVIEW_LEARNINGS_ENABLED=true requires REVIEW_DECLINE_RECHECK_ENABLED=true"),
+        ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenAnEnabledLearningsCapIsOutOfBounds() {
+    var ex = assertFailsValidation(new ConfigBuilder().learnings(true, true, 0, 51, 499).build());
+    assertTrue(ex.getMessage().contains("REVIEW_LEARNINGS_MAX_PER_REPO"), "max per repo: " + ex);
+    assertTrue(ex.getMessage().contains("REVIEW_LEARNINGS_PROMPT_MAX_ITEMS"), "max items: " + ex);
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "REVIEW_LEARNINGS_PROMPT_MAX_CHARS must be between 500 and 20000"
+                    + " (thrillhousebot.review.learnings.prompt-max-chars): 499"),
+        ex.getMessage());
+    var high =
+        assertFailsValidation(new ConfigBuilder().learnings(true, true, 1001, 1, 20_001).build());
+    assertTrue(high.getMessage().contains("REVIEW_LEARNINGS_MAX_PER_REPO"), high.getMessage());
+    assertTrue(high.getMessage().contains("REVIEW_LEARNINGS_PROMPT_MAX_CHARS"), high.getMessage());
+  }
+
+  @Test
+  void acceptsLearningsCapsAtTheBoundsAndIgnoresEverythingWhileDisabled() {
+    new ConfigBuilder().learnings(true, true, 1, 1, 500).build().validate();
+    new ConfigBuilder().learnings(true, true, 1000, 50, 20_000).build().validate();
+    new ConfigBuilder().learnings(false, false, -1, -1, -1).build().validate();
   }
 
   @Test

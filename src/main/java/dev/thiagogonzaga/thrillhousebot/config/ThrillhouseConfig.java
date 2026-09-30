@@ -442,6 +442,8 @@ public interface ThrillhouseConfig {
     @WithName("ticket-context")
     TicketContextConfig ticketContext();
 
+    LearningsConfig learnings();
+
     @WithName("follow-up-summary")
     FollowUpSummaryConfig followUpSummary();
 
@@ -644,6 +646,59 @@ public interface ThrillhouseConfig {
     @WithName("from-branch")
     @WithDefault("false")
     boolean fromBranch();
+  }
+
+  /**
+   * Opt-in cross-review learnings (#38). When {@link #enabled()}, a maintainer's decline that
+   * survives the decline re-check ({@code decline-recheck-enabled}, #169) is stored per repository
+   * with its reason, as is an explicit {@code /remember} convention, and the learnings relevant to
+   * the files a review touches ride that review's prompt as fenced, untrusted data. Maintainers
+   * list them with {@code /learnings} and retract one with {@code /forget <id>}. Off by default: a
+   * stored learning changes what every later review of the repository says.
+   */
+  interface LearningsConfig {
+    /** Lower bound accepted for {@link #maxPerRepo()}. */
+    int MIN_MAX_PER_REPO = 1;
+
+    /** Upper bound accepted for {@link #maxPerRepo()}. */
+    int MAX_MAX_PER_REPO = 1000;
+
+    /** Lower bound accepted for {@link #promptMaxItems()}. */
+    int MIN_PROMPT_MAX_ITEMS = 1;
+
+    /** Upper bound accepted for {@link #promptMaxItems()}. */
+    int MAX_PROMPT_MAX_ITEMS = 50;
+
+    /** Lower bound accepted for {@link #promptMaxChars()}: room for one full learning. */
+    int MIN_PROMPT_MAX_CHARS = 500;
+
+    /** Upper bound accepted for {@link #promptMaxChars()}, so learnings never rival the diff. */
+    int MAX_PROMPT_MAX_CHARS = 20_000;
+
+    /** Master switch — nothing is captured, injected or answered unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Active learnings a repository may hold. At the cap a new learning is refused (and logged)
+     * rather than evicting an old one; a maintainer frees room with {@code /forget}.
+     */
+    @WithName("max-per-repo")
+    @WithDefault("100")
+    int maxPerRepo();
+
+    /** Most learnings one review prompt carries. */
+    @WithName("prompt-max-items")
+    @WithDefault("10")
+    int promptMaxItems();
+
+    /**
+     * Character cap on the learnings section of one review prompt, before fencing. Counted in the
+     * planner's shared prompt overhead like every other non-diff section.
+     */
+    @WithName("prompt-max-chars")
+    @WithDefault("3000")
+    int promptMaxChars();
   }
 
   /**

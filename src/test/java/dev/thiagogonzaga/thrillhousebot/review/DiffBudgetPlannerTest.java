@@ -737,6 +737,91 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void theLearningsSectionIsChargedToTheReviewCallsSharedOverhead() {
+    // #38: the fenced learnings list rides every review call's trailing guidance, so it must
+    // shrink the diff budget exactly like the other shared sections.
+    assertSectionComesOffTheDiffBudget(
+        ReviewPromptAssembler.learningsSection(
+            "- [L1] Convention on the whole repository — @m, PR #1:\n  "
+                + "threads are flat ".repeat(200)));
+  }
+
+  @Test
+  void ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead() {
+    // #59, #58 and #38 ride one trailing-guidance slot; each is small enough to fit alone here,
+    // so only the sum of all three pushes a file out of the single call.
+    var ci = ReviewPromptAssembler.ciFailuresSection("### unit-tests\n" + "fail ".repeat(60));
+    var issues =
+        ReviewPromptAssembler.linkedIssuesSection(
+            TicketContextPrompts.REVIEW_REQUEST, "### Issue #7\n" + "criterion ".repeat(40));
+    var learned =
+        ReviewPromptAssembler.learningsSection("- [L1] Convention:\n  " + "flat ".repeat(60));
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    var eachAlone =
+        Math.max(
+            tokenCounter.estimateTokens(ci),
+            Math.max(tokenCounter.estimateTokens(issues), tokenCounter.estimateTokens(learned)));
+    budget(overhead + sectionTokens(f1) + sectionTokens(f2) + eachAlone + 30);
+    var all =
+        ReviewPromptAssembler.combineSections(
+            ci, ReviewPromptAssembler.combineSections(issues, learned));
+
+    for (var section : List.of(ci, issues, learned)) {
+      var alone =
+          planner.plan(
+              List.of(f1, f2),
+              new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", section));
+      assertEquals(1, alone.batches().size(), "one section alone still fits one call");
+      assertTrue(alone.omittedFiles().isEmpty());
+    }
+    var together =
+        planner.plan(
+            List.of(f1, f2),
+            new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", all));
+    assertFalse(
+        together.batches().size() == 1 && together.omittedFiles().isEmpty(),
+        "all three sections' tokens came off the diff budget");
+  }
+
+  private void assertSectionComesOffTheDiffBudget(String section) {
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    budget(overhead + sectionTokens(f1) + sectionTokens(f2) + 30);
+    var plain =
+        planner.plan(
+            List.of(f1, f2),
+            new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", ""));
+    var with =
+        planner.plan(
+            List.of(f1, f2),
+            new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", section));
+
+    assertEquals(1, plain.batches().size(), "without the section both files fit one call");
+    assertFalse(
+        with.batches().size() == 1 && with.omittedFiles().isEmpty(),
+        "the section's tokens came off the diff budget");
+  }
+
+  @Test
   void aCallAllowanceOfOneLeavesNoCallForTheSummary() {
     // #664: every review ends with the summary call, so both lanes reserve it; only the allowance
     // of one — the smallest the validator accepts — cannot hold the review call and the summary.

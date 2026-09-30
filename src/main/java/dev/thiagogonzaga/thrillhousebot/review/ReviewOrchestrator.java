@@ -93,6 +93,7 @@ public class ReviewOrchestrator {
   private final CiStatusEvaluator ciStatusEvaluator;
   private final CiFailureContextResolver ciFailureContext;
   private final TicketContextResolver ticketContext;
+  private final ReviewLearnings learnings;
 
   private final CheckRunManager checkRunManager;
 
@@ -241,7 +242,8 @@ public class ReviewOrchestrator {
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewNotifier notifier,
       CiFailureContextResolver ciFailureContext,
-      TicketContextResolver ticketContext) {
+      TicketContextResolver ticketContext,
+      ReviewLearnings learnings) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
@@ -249,6 +251,7 @@ public class ReviewOrchestrator {
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.ciFailureContext = ciFailureContext;
     this.ticketContext = ticketContext;
+    this.learnings = learnings;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
@@ -331,11 +334,24 @@ public class ReviewOrchestrator {
       var linkedIssues =
           ticketContext.resolve(auth, req.owner(), req.repo(), req.prNumber(), req.prDescription());
 
+      // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
+      // the files this one changes; blank when the feature is off.
+      var learned =
+          learnings.promptSection(
+              req.installationId(),
+              req.owner(),
+              req.repo(),
+              ctx.reviewableFiles().stream()
+                  .map(GitHubPullRequestClient.FileDiff::filename)
+                  .toList());
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       var promptInputs =
           budgetPlanner.boundPreviousFindings(
-              promptAssembler.assemble(ctx, req, ciFailures, linkedIssues));
+              promptAssembler.assemble(
+                  ctx,
+                  req,
+                  new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learned)));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {
@@ -427,6 +443,24 @@ public class ReviewOrchestrator {
           () ->
               findingFeedbackCapture.captureOnPriorFindings(
                   auth, doneReq.owner(), doneReq.repo(), doneReq.prNumber(), inlineComments));
+      if (learnings.enabled()) {
+        runPostResultStep(
+            doneReq,
+            "capture review learnings",
+            () ->
+                learnings.captureSurvivingDeclines(
+                    new ReviewLearnings.DeclineCapture(
+                        auth,
+                        doneReq.installationId(),
+                        doneReq.owner(),
+                        doneReq.repo(),
+                        doneReq.prNumber(),
+                        previousFindings,
+                        result.previousStatuses(),
+                        inlineComments,
+                        ctx.conversationComments(),
+                        () -> VerdictBuilder.reviewedCode(ctx, plan))));
+      }
       runPostResultStep(
           doneReq,
           "apply labels",

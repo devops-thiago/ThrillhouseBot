@@ -48,12 +48,12 @@ public class TriggerDetector {
 
   /**
    * Command word → its matching patterns, in detection precedence order. A comment carrying more
-   * than one command resolves to the first entry that matches, so {@code review} stays first to
-   * preserve the original trigger behavior. Each command accepts both the {@code /word} slash form
-   * and the {@code @<bot> word} mention form, where the mention alternative is built from {@link
-   * BotIdentity#mentionNames()} — not a hardcoded slug — so mention-form commands work on
-   * custom-login installs exactly like the conversational-mention gate (#679, #698). Compiled once
-   * per identity, not per comment.
+   * than one command resolves to the first entry that matches, so {@code review} comes before every
+   * command but {@code remember}, whose argument is free text that may name another command. Each
+   * command accepts both the {@code /word} slash form and the {@code @<bot> word} mention form,
+   * where the mention alternative is built from {@link BotIdentity#mentionNames()} — not a
+   * hardcoded slug — so mention-form commands work on custom-login installs exactly like the
+   * conversational-mention gate (#679, #698). Compiled once per identity, not per comment.
    */
   private final Map<CommentCommand, List<Pattern>> commandPatterns;
 
@@ -79,6 +79,10 @@ public class TriggerDetector {
 
   private static Map<CommentCommand, List<Pattern>> buildPatterns(String mentionAlternation) {
     var patterns = new LinkedHashMap<CommentCommand, List<Pattern>>();
+    // /remember comes first: everything after it is free text the maintainer wants remembered
+    // (#38), and a convention that names another command ("never /pause from a test") must be
+    // stored, not executed.
+    patterns.put(CommentCommand.REMEMBER, patternsFor("remember", mentionAlternation));
     patterns.put(CommentCommand.REVIEW, patternsFor("review", mentionAlternation));
     patterns.put(CommentCommand.HELP, patternsFor("help", mentionAlternation));
     patterns.put(CommentCommand.SUMMARY, patternsFor("summary", mentionAlternation));
@@ -90,6 +94,8 @@ public class TriggerDetector {
     patterns.put(CommentCommand.RESOLVE, patternsFor("resolve", mentionAlternation));
     patterns.put(CommentCommand.PAUSE, patternsFor("pause", mentionAlternation));
     patterns.put(CommentCommand.RESUME, patternsFor("resume", mentionAlternation));
+    patterns.put(CommentCommand.LEARNINGS, patternsFor("learnings", mentionAlternation));
+    patterns.put(CommentCommand.FORGET, patternsFor("forget", mentionAlternation));
     return patterns;
   }
 
@@ -117,6 +123,32 @@ public class TriggerDetector {
     var withoutFenced = FENCED_CODE.matcher(body).replaceAll(" ");
     var withoutQuotes = BLOCKQUOTE_LINE.matcher(withoutFenced).replaceAll(" ");
     return INLINE_CODE.matcher(withoutQuotes).replaceAll(" ");
+  }
+
+  /**
+   * {@code body} with the same quoted context {@link #stripQuotedContext} removes blanked to spaces
+   * in place, line feeds kept, so an offset into the result is an offset into the body. A command
+   * whose argument is read from the body ({@code /remember}) locates its word here and reads the
+   * argument from the body itself, so a command quoted or documented in the comment never supplies
+   * it.
+   */
+  static String maskQuotedContext(String body) {
+    var masked = blank(FENCED_CODE, body);
+    masked = blank(BLOCKQUOTE_LINE, masked);
+    return blank(INLINE_CODE, masked);
+  }
+
+  private static String blank(Pattern pattern, String text) {
+    var sb = new StringBuilder(text);
+    var matcher = pattern.matcher(text);
+    while (matcher.find()) {
+      for (var i = matcher.start(); i < matcher.end(); i++) {
+        if (sb.charAt(i) != '\n') {
+          sb.setCharAt(i, ' ');
+        }
+      }
+    }
+    return sb.toString();
   }
 
   /**

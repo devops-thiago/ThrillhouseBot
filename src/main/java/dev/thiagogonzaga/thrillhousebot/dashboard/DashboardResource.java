@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackService;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import io.quarkus.panache.common.Sort;
@@ -99,17 +100,20 @@ public class DashboardResource {
   private final ReviewSessionRepository reviewSessionRepository;
   private final ReviewSkipEmitter reviewSkipEmitter;
   private final FindingFeedbackService findingFeedbackService;
+  private final ReviewLearningService reviewLearningService;
 
   @Inject
   public DashboardResource(
       DashboardSessionValidator sessionValidator,
       ReviewSessionRepository reviewSessionRepository,
       ReviewSkipEmitter reviewSkipEmitter,
-      FindingFeedbackService findingFeedbackService) {
+      FindingFeedbackService findingFeedbackService,
+      ReviewLearningService reviewLearningService) {
     this.sessionValidator = sessionValidator;
     this.reviewSessionRepository = reviewSessionRepository;
     this.reviewSkipEmitter = reviewSkipEmitter;
     this.findingFeedbackService = findingFeedbackService;
+    this.reviewLearningService = reviewLearningService;
   }
 
   boolean isValidSession(String sessionToken) {
@@ -328,6 +332,42 @@ public class DashboardResource {
                         s.totalEvents()))
             .toList();
     return Response.ok(Map.of("repositories", rows)).build();
+  }
+
+  /**
+   * The newest review learnings of one repository (#38, at most {@link
+   * ReviewLearningService#MAX_AUDIT_ROWS}), retracted ones included, newest first — the audit view:
+   * what is remembered, the comment that taught it, and who retracted it. {@code repository} is
+   * required and access-checked like {@link #getFeedback}; retraction stays with the {@code
+   * /forget} command, which re-checks write access on the repository itself.
+   */
+  @GET
+  @Path("/learnings")
+  public Response getLearnings(
+      @QueryParam("repository") String repository,
+      @CookieParam(COOKIE_SESSION) String sessionToken) {
+    if (!isValidSession(sessionToken)) {
+      return unauthorizedResponse();
+    }
+    if (repository == null || repository.isBlank()) {
+      return Response.status(Response.Status.BAD_REQUEST)
+          .entity(Map.of(KEY_ERROR, "repository is required"))
+          .build();
+    }
+    var normalizedRepository = repository.strip();
+    if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
+      return Response.status(Response.Status.FORBIDDEN)
+          .entity(Map.of(KEY_ERROR, "Repository access denied"))
+          .build();
+    }
+    return Response.ok(
+            Map.of(
+                FIELD_REPOSITORY,
+                normalizedRepository,
+                "learnings",
+                reviewLearningService.listForAudit(
+                    normalizedRepository, ReviewLearningService.MAX_AUDIT_ROWS)))
+        .build();
   }
 
   @GET
