@@ -260,6 +260,27 @@ class TicketContextResolverTest {
     }
 
     @Test
+    void longCriteriaListsStayWithinTheIssuesShare() {
+      var body = new StringBuilder();
+      for (var i = 0; i < 15; i++) {
+        body.append("- [ ] criterion ").append(i).append(' ').append("z".repeat(250)).append('\n');
+      }
+      var section =
+          resolver(
+                  new FixedProvider(
+                      "github",
+                      List.of(ticket(1, "first", body.toString()), ticket(2, "second", "- [ ] b"))),
+                  2000)
+              .resolve("a", "o", "r", 1, "");
+
+      assertTrue(section.contains("### Issue #2: second"), section);
+      assertTrue(section.contains("- [ ] b\n"), section);
+      assertTrue(section.contains(" more not shown)\n"), section);
+      assertFalse(section.contains(TicketContextResolver.TRUNCATION_NOTE), section);
+      assertTrue(section.length() <= 2000, "length " + section.length());
+    }
+
+    @Test
     void aShareTooSmallForTheBodyKeepsTheHeaderAndCriteria() {
       var rendered =
           TicketContextResolver.renderTicket(ticket(1, "t", "- [ ] one\nsome prose"), 10);
@@ -270,17 +291,20 @@ class TicketContextResolverTest {
 
     @Test
     void theWholeSectionIsCappedAtALineBoundary() {
-      var body = new StringBuilder();
-      for (var i = 0; i < 20; i++) {
-        body.append("- [ ] criterion ").append(i).append(' ').append("y".repeat(250)).append('\n');
+      // Five issues in 1000 characters: each share is too small for a long title and the first
+      // criterion, which are always kept, so only the section cap bounds the whole.
+      var tickets = new ArrayList<IssueTrackerProvider.LinkedTicket>();
+      for (var i = 1; i <= 5; i++) {
+        tickets.add(ticket(i, "t".repeat(250), "- [ ] criterion " + "y".repeat(280)));
       }
       var section =
-          resolver(new FixedProvider("github", List.of(ticket(1, "t", body.toString()))), 1000)
+          new TicketContextResolver(
+                  List.of(new FixedProvider("github", tickets)), true, "github", 5, 1000, false)
               .resolve("a", "o", "r", 1, "");
 
       assertTrue(section.length() <= 1000, "length " + section.length());
       assertTrue(section.endsWith("\n" + TicketContextResolver.TRUNCATION_NOTE), section);
-      assertTrue(section.contains("- [ ] criterion 0 "), "criteria come before anything is cut");
+      assertTrue(section.contains("- [ ] criterion "), "criteria come before anything is cut");
     }
   }
 

@@ -45,6 +45,9 @@ public class TicketContextResolver {
   /** Acceptance criteria rendered per issue; the rest are counted. */
   static final int MAX_CRITERIA = 20;
 
+  /** Room kept in an issue's share for the "(N more not shown)" line. */
+  static final int MORE_RESERVE = 32;
+
   /** Characters of any single line — a title or a criterion. */
   static final int MAX_LINE_CHARS = 300;
 
@@ -160,7 +163,11 @@ public class TicketContextResolver {
     return sb.toString();
   }
 
-  /** One issue within {@code share} characters: header and criteria first, then the body. */
+  /**
+   * One issue within {@code share} characters: header and criteria first, then the body. Only the
+   * header and the first criterion can run past a share too small to hold them; the section cap
+   * still bounds the whole.
+   */
   static String renderTicket(IssueTrackerProvider.LinkedTicket ticket, int share) {
     var sb = new StringBuilder("### Issue ").append(CiFailureContextResolver.oneLine(ticket.key()));
     var title = CiFailureContextResolver.oneLine(ticket.title());
@@ -174,9 +181,15 @@ public class TicketContextResolver {
       sb.append(NO_CRITERIA).append('\n');
     } else {
       sb.append("Acceptance criteria (from the issue):\n");
-      var shown = Math.min(criteria.size(), MAX_CRITERIA);
-      for (var criterion : criteria.subList(0, shown)) {
-        sb.append("- ").append(criterion).append('\n');
+      // Criteria stay within the issue's share too, so one issue's long list cannot push the
+      // issues after it past the section cap. The first criterion is always shown.
+      var limit = Math.min(criteria.size(), MAX_CRITERIA);
+      var shown = 0;
+      while (shown < limit
+          && (shown == 0
+              || sb.length() + criteria.get(shown).length() + 3 <= share - MORE_RESERVE)) {
+        sb.append("- ").append(criteria.get(shown)).append('\n');
+        shown++;
       }
       if (criteria.size() > shown) {
         sb.append("- (").append(criteria.size() - shown).append(" more not shown)\n");
