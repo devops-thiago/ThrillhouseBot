@@ -130,13 +130,24 @@ class GitHubIssuesProviderTest {
           List.of(),
           GitHubIssuesProvider.bodyReferences("Related to #1, see #2, prefix#3", "o", "r"));
       assertEquals(List.of(), GitHubIssuesProvider.bodyReferences("prefixes #4", "o", "r"));
+      assertEquals(
+          List.of(),
+          GitHubIssuesProvider.bodyReferences("This fixes the bug and closes a gap", "o", "r"));
+      assertEquals(List.of(), GitHubIssuesProvider.bodyReferences("Fixes #12345678901", "o", "r"));
     }
 
     @Test
     void skipsCommentsFencedBlocksAndCodeSpans() {
       var body =
-          "<!-- Closes #1 -->\n```\nFixes #2\n```\n~~~\nfixes #5\n~~~\nUse `closes #3` to link."
-              + " Resolves #4";
+          """
+          <!-- Closes #1 -->
+          ```
+          Fixes #2
+          ```
+          ~~~
+          fixes #5
+          ~~~
+          Use `closes #3` to link. Resolves #4""";
       assertEquals(List.of(4), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
     }
 

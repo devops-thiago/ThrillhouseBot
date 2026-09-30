@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -84,16 +85,21 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       }""";
 
   /**
-   * GitHub's closing keywords ({@code close/fix/resolve} and inflections, optional colon) followed
-   * by one issue reference: {@code #n}, {@code owner/repo#n} or an issue URL on github.com.
+   * GitHub's closing keywords ({@code close/fix/resolve} and inflections, optional colon), then the
+   * reference that follows, which {@link #ISSUE_REFERENCE} reads.
    */
-  private static final Pattern CLOSING_REFERENCE =
+  private static final Pattern CLOSING_KEYWORD =
+      Pattern.compile("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\b:?\\s+(\\S+)");
+
+  /**
+   * One issue reference at the start of a token: {@code #n}, {@code owner/repo#n} or an issue URL
+   * on github.com. Group 1 is the qualified repository, group 2 the URL's repository, group 3 the
+   * number.
+   */
+  private static final Pattern ISSUE_REFERENCE =
       Pattern.compile(
-          "(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\b:?\\s+"
-              + "(?:(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#"
-              + "|https?://github\\.com/(?<urlrepo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/"
-              + "|#)"
-              + "(?<num>\\d{1,9})\\b");
+          "(?:([\\w.-]+/[\\w.-]+)#|https?://github\\.com/([\\w.-]+/[\\w.-]+)/issues/|#)"
+              + "(\\d{1,9})(?!\\d)");
 
   // Markdown regions whose text GitHub does not treat as a link: HTML comments, fenced blocks and
   // inline code spans. Removed before the body is scanned.
@@ -101,12 +107,17 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       Pattern.compile("(?s)<!--.*?-->|```.*?(?:```|$)|~~~.*?(?:~~~|$)|`[^`\\n]*`");
 
   /**
-   * An issue number in the last segment of a branch name: {@code 57}, {@code 57-short-name}, or one
-   * of a few conventional prefixes before it ({@code issue-57}, {@code gh-57}, {@code fix-57}).
+   * An issue number in the last segment of a branch name: {@code 57}, {@code 57-short-name}, or a
+   * word before it ({@code issue-57}, {@code gh-57}) that must be one of {@link #BRANCH_PREFIXES}.
    */
   private static final Pattern BRANCH_ISSUE =
-      Pattern.compile(
-          "(?i)^(?:(?:issues?|gh|bug|fix|feat|feature|task)[-_]?)?#?(\\d{1,9})(?:[-_].*)?$");
+      Pattern.compile("^([A-Za-z]*)[-_]?#?(\\d{1,9})(?:[-_].*)?$");
+
+  /** The words a branch name may put before its issue number. */
+  private static final Set<String> BRANCH_PREFIXES =
+      Set.of("", "issue", "issues", "gh", "bug", "fix", "feat", "feature", "task");
+
+  private static final String NUMBER = "number";
 
   private final GitHubCommentClient commentClient;
   private final GitHubGraphQLClient graphQLClient;
@@ -163,11 +174,8 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
 
   private static void addCandidate(
       Map<Integer, String> candidates, TicketLookup lookup, int number, String via) {
-    if (number > 0
-        && number != lookup.prNumber()
-        && candidates.size() < MAX_CANDIDATES
-        && !candidates.containsKey(number)) {
-      candidates.put(number, via);
+    if (number > 0 && number != lookup.prNumber() && candidates.size() < MAX_CANDIDATES) {
+      candidates.putIfAbsent(number, via);
     }
   }
 
@@ -182,15 +190,15 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     }
     var visible = NON_LINK_REGIONS.matcher(prBody).replaceAll(" ");
     var numbers = new ArrayList<Integer>();
-    var matcher = CLOSING_REFERENCE.matcher(visible);
-    while (matcher.find()) {
-      var named = matcher.group("repo") != null ? matcher.group("repo") : matcher.group("urlrepo");
-      if (named != null && !sameRepository(named, owner, repo)) {
-        continue;
-      }
-      var number = Integer.parseInt(matcher.group("num"));
-      if (!numbers.contains(number)) {
-        numbers.add(number);
+    var keywords = CLOSING_KEYWORD.matcher(visible);
+    while (keywords.find()) {
+      var reference = ISSUE_REFERENCE.matcher(keywords.group(1));
+      if (reference.lookingAt()) {
+        var named = reference.group(reference.group(1) != null ? 1 : 2);
+        var number = Integer.parseInt(reference.group(3));
+        if ((named == null || sameRepository(named, owner, repo)) && !numbers.contains(number)) {
+          numbers.add(number);
+        }
       }
     }
     return numbers;
@@ -202,7 +210,7 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       var variables = new LinkedHashMap<String, Object>();
       variables.put("owner", lookup.owner());
       variables.put("name", lookup.repo());
-      variables.put("number", lookup.prNumber());
+      variables.put(NUMBER, lookup.prNumber());
       var response =
           graphQLClient.execute(
               lookup.auth(), new GitHubGraphQLClient.GraphQLRequest(LINKS_QUERY, variables));
@@ -232,8 +240,8 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     var numbers = new ArrayList<Integer>();
     for (var node : pullRequest.path("closingIssuesReferences").path("nodes")) {
       var nameWithOwner = node.path("repository").path("nameWithOwner").asText("");
-      if (node.path("number").isInt() && sameRepository(nameWithOwner, owner, repo)) {
-        numbers.add(node.path("number").asInt());
+      if (node.path(NUMBER).isInt() && sameRepository(nameWithOwner, owner, repo)) {
+        numbers.add(node.path(NUMBER).asInt());
       }
     }
     return numbers;
@@ -246,7 +254,11 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     }
     var lastSegment = branch.substring(branch.lastIndexOf('/') + 1);
     var matcher = BRANCH_ISSUE.matcher(lastSegment);
-    return matcher.matches() ? Integer.parseInt(matcher.group(1)) : 0;
+    if (!matcher.matches()
+        || !BRANCH_PREFIXES.contains(matcher.group(1).toLowerCase(Locale.ROOT))) {
+      return 0;
+    }
+    return Integer.parseInt(matcher.group(2));
   }
 
   private static boolean sameRepository(String nameWithOwner, String owner, String repo) {

@@ -21,6 +21,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -58,11 +59,6 @@ public class TicketContextResolver {
       "Acceptance criteria: none marked in the issue (no task list and no \"Acceptance criteria\""
           + " section); its requirements, if any, are in the body.";
 
-  // A Markdown ATX heading, or a line that is only bold text (how many issue templates head a
-  // section). Group 1 is the ATX level marker, absent for a bold line; group 2 is the text.
-  private static final Pattern HEADING =
-      Pattern.compile("^\\s{0,3}(?:(#{1,6})\\s+(.*?)[\\s#]*|\\*\\*(.+?)\\*\\*:?\\s*)$");
-
   private static final Pattern ACCEPTANCE_HEADING =
       Pattern.compile("(?i)\\bacceptance\\b|\\bdefinition\\s+of\\s+done\\b");
 
@@ -70,9 +66,11 @@ public class TicketContextResolver {
   private static final Pattern IGNORED_HEADING =
       Pattern.compile("(?i)\\bcode\\s+of\\s+conduct\\b|\\bcontributing\\b");
 
-  private static final Pattern TASK_ITEM = Pattern.compile("^\\s*[-*+]\\s+\\[([ xX])]\\s+(.+)$");
+  // Both item patterns run on a stripped line, and each whitespace run is followed by a
+  // non-space, so no two quantifiers compete for the same characters.
+  private static final Pattern TASK_ITEM = Pattern.compile("^[-*+]\\s+\\[([ xX])]\\s+(\\S.*)$");
 
-  private static final Pattern LIST_ITEM = Pattern.compile("^\\s*(?:[-*+]|\\d{1,3}[.)])\\s+(.+)$");
+  private static final Pattern LIST_ITEM = Pattern.compile("^(?:[-*+]|\\d{1,3}[.)])\\s+(\\S.*)$");
 
   private static final Pattern FENCE = Pattern.compile("^\\s{0,3}(?:```|~~~)");
 
@@ -220,14 +218,14 @@ public class TicketContextResolver {
     var chosen = sectioned.criteria().isEmpty() ? collect(lines, false) : sectioned;
     var rest = new StringBuilder();
     for (var i = 0; i < lines.length; i++) {
-      if (!chosen.used()[i]) {
+      if (!chosen.used().get(i)) {
         rest.append(lines[i]).append('\n');
       }
     }
     return new Extracted(chosen.criteria(), rest.toString().replaceAll("\n{3,}", "\n\n"));
   }
 
-  private record Collected(List<String> criteria, boolean[] used) {}
+  private record Collected(List<String> criteria, BitSet used) {}
 
   /**
    * One pass over the body: with {@code sectioned}, the list items under an acceptance heading;
@@ -235,38 +233,90 @@ public class TicketContextResolver {
    */
   private static Collected collect(String[] lines, boolean sectioned) {
     var criteria = new ArrayList<String>();
-    var used = new boolean[lines.length];
-    var inFence = false;
-    var sectionLevel = 0; // level of the heading that opened the current section; 7 for bold
-    var inAcceptance = false;
-    var inIgnored = false;
+    var used = new BitSet(lines.length);
+    var sections = new SectionTracker();
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (FENCE.matcher(line).find()) {
-        inFence = !inFence;
-        continue;
-      }
-      if (inFence) {
-        continue;
-      }
-      var heading = HEADING.matcher(line);
-      if (heading.matches()) {
-        var level = heading.group(1) == null ? 7 : heading.group(1).length();
-        var text = heading.group(2) == null ? heading.group(3) : heading.group(2);
-        if (!inAcceptance || level <= sectionLevel) {
-          inAcceptance = ACCEPTANCE_HEADING.matcher(text).find();
-          inIgnored = IGNORED_HEADING.matcher(text).find();
-          sectionLevel = level;
+      if (sections.isContent(lines[i])) {
+        var criterion = criterion(lines[i], sections.inScope(sectioned), sectioned);
+        if (criterion != null) {
+          criteria.add(criterion);
+          used.set(i);
         }
-        continue;
-      }
-      var criterion = criterion(line, sectioned ? inAcceptance : !inIgnored, sectioned);
-      if (criterion != null) {
-        criteria.add(criterion);
-        used[i] = true;
       }
     }
     return new Collected(criteria, used);
+  }
+
+  /** Where a line sits in the body: inside a fenced block, and under which heading. */
+  private static final class SectionTracker {
+    private boolean inFence;
+    private boolean inAcceptance;
+    private boolean inIgnored;
+    private int sectionLevel; // level of the heading that opened the section; 7 for a bold line
+
+    /** Consumes {@code line}; {@code true} when it is body text rather than a fence or heading. */
+    boolean isContent(String line) {
+      if (FENCE.matcher(line).find()) {
+        inFence = !inFence;
+        return false;
+      }
+      if (inFence) {
+        return false;
+      }
+      var heading = Heading.parse(line);
+      if (heading == null) {
+        return true;
+      }
+      // A sub-heading inside an acceptance section stays part of it; any other heading starts a
+      // new section.
+      if (!inAcceptance || heading.level() <= sectionLevel) {
+        inAcceptance = ACCEPTANCE_HEADING.matcher(heading.text()).find();
+        inIgnored = IGNORED_HEADING.matcher(heading.text()).find();
+        sectionLevel = heading.level();
+      }
+      return false;
+    }
+
+    /** Whether a list item here can be a criterion in the given extraction mode. */
+    boolean inScope(boolean sectioned) {
+      return sectioned ? inAcceptance : !inIgnored;
+    }
+  }
+
+  /**
+   * A Markdown ATX heading ({@code ## Text}, level 1-6) or a line that is only bold text ({@code
+   * **Text**}, how many issue templates head a section; level 7).
+   */
+  record Heading(int level, String text) {
+
+    /** The heading {@code line} is, or {@code null} when it is not one. */
+    static Heading parse(String line) {
+      var t = line.strip();
+      if (line.length() - line.stripLeading().length() > 3) {
+        return null; // indented code, not a heading
+      }
+      if (t.startsWith("#")) {
+        var level = 0;
+        while (level < t.length() && t.charAt(level) == '#') {
+          level++;
+        }
+        var rest = t.substring(level);
+        if (level > 6 || !(rest.isEmpty() || Character.isWhitespace(rest.charAt(0)))) {
+          return null;
+        }
+        var end = rest.length();
+        while (end > 0
+            && (rest.charAt(end - 1) == '#' || Character.isWhitespace(rest.charAt(end - 1)))) {
+          end--;
+        }
+        return new Heading(level, rest.substring(0, end).strip());
+      }
+      var bold = t.endsWith(":") ? t.substring(0, t.length() - 1) : t;
+      if (bold.length() > 4 && bold.startsWith("**") && bold.endsWith("**")) {
+        return new Heading(7, bold.substring(2, bold.length() - 2));
+      }
+      return null;
+    }
   }
 
   /** The criterion {@code line} states, or {@code null} when it is not one. */
@@ -274,16 +324,14 @@ public class TicketContextResolver {
     if (!inScope) {
       return null;
     }
-    var task = TASK_ITEM.matcher(line);
+    var stripped = line.strip();
+    var task = TASK_ITEM.matcher(stripped);
     if (task.matches()) {
       var mark = task.group(1).isBlank() ? "[ ] " : "[x] ";
       return mark + CiFailureContextResolver.clip(task.group(2).strip(), MAX_LINE_CHARS);
     }
-    if (!anyListItem) {
-      return null;
-    }
-    var item = LIST_ITEM.matcher(line);
-    return item.matches()
+    var item = anyListItem ? LIST_ITEM.matcher(stripped) : null;
+    return item != null && item.matches()
         ? CiFailureContextResolver.clip(item.group(1).strip(), MAX_LINE_CHARS)
         : null;
   }

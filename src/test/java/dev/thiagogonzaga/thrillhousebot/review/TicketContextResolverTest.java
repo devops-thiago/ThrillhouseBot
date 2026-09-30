@@ -183,10 +183,12 @@ class TicketContextResolverTest {
       assertTrue(section.contains("Linked by: a closing keyword in the PR body\n"), section);
       assertTrue(
           section.contains(
-              "Acceptance criteria (from the issue):\n"
-                  + "- [ ] resolve the linked issue\n"
-                  + "- [x] fence the issue text\n"
-                  + "- document the setting\n"),
+              """
+              Acceptance criteria (from the issue):
+              - [ ] resolve the linked issue
+              - [x] fence the issue text
+              - document the setting
+              """),
           section);
       assertTrue(section.contains("Issue body:\n### Problem Statement"), section);
       assertTrue(section.contains("- not a criterion"), section);
@@ -210,8 +212,8 @@ class TicketContextResolverTest {
 
     @Test
     void controlAnsiAndBidiCharactersAreStripped() {
-      var title = "Add‮ retries\u0007 \u001B[31mnow\u001B[0m";
-      var body = "- [ ] keep​ going\r\nline⁦ two";
+      var title = "Add\u202E retries\u0007 \u001B[31mnow\u001B[0m";
+      var body = "- [ ] keep\u200B going\r\nline\u2066 two";
       var section =
           resolver(new FixedProvider("github", List.of(ticket(1, title, body))), 6000)
               .resolve("a", "o", "r", 1, "");
@@ -219,7 +221,7 @@ class TicketContextResolverTest {
       assertTrue(section.contains("### Issue #1: Add retries now\n"), section);
       assertTrue(section.contains("- [ ] keep going\n"), section);
       assertTrue(section.contains("line two"), section);
-      for (var forbidden : List.of("‮", "\u0007", "\u001B", "​", "\r", "⁦")) {
+      for (var forbidden : List.of("\u202E", "\u0007", "\u001B", "\u200B", "\r", "\u2066")) {
         assertFalse(section.contains(forbidden), "stripped: " + forbidden.codePointAt(0));
       }
     }
@@ -364,6 +366,24 @@ class TicketContextResolverTest {
               "## Acceptance criteria\n```\n- [ ] in code\n## Not a heading\n```\n- real\n");
 
       assertEquals(List.of("real"), extracted.criteria());
+    }
+
+    @Test
+    void headingsAreRecognizedTheWayMarkdownDrawsThem() {
+      assertEquals(
+          new TicketContextResolver.Heading(2, "Acceptance"),
+          TicketContextResolver.Heading.parse("  ## Acceptance ##  "));
+      assertEquals(
+          new TicketContextResolver.Heading(1, ""), TicketContextResolver.Heading.parse("#"));
+      assertEquals(
+          new TicketContextResolver.Heading(7, "Done when"),
+          TicketContextResolver.Heading.parse("**Done when**:"));
+      assertEquals(null, TicketContextResolver.Heading.parse("####### seven"));
+      assertEquals(null, TicketContextResolver.Heading.parse("#hashtag"));
+      assertEquals(null, TicketContextResolver.Heading.parse("    ## indented code"));
+      assertEquals(null, TicketContextResolver.Heading.parse("****"));
+      assertEquals(null, TicketContextResolver.Heading.parse("**bold** and more"));
+      assertEquals(null, TicketContextResolver.Heading.parse("plain"));
     }
 
     @Test

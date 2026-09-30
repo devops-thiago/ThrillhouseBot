@@ -625,27 +625,27 @@ public class StartupConfigValidator {
               + " (thrillhousebot.review.ticket-context.provider): "
               + provider);
     }
-    var maxIssues = ticketContext.maxIssues();
-    if (maxIssues < ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES
-        || maxIssues > ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES) {
-      problems.add(
-          "REVIEW_TICKET_CONTEXT_MAX_ISSUES must be between "
-              + ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES
-              + " and "
-              + ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES
-              + " (thrillhousebot.review.ticket-context.max-issues): "
-              + maxIssues);
-    }
-    var maxChars = ticketContext.maxChars();
-    if (maxChars < ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS
-        || maxChars > ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS) {
-      problems.add(
-          "REVIEW_TICKET_CONTEXT_MAX_CHARS must be between "
-              + ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS
-              + " and "
-              + ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS
-              + " (thrillhousebot.review.ticket-context.max-chars): "
-              + maxChars);
+    requireWithin(
+        problems,
+        ticketContext.maxIssues(),
+        ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES,
+        ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES,
+        "REVIEW_TICKET_CONTEXT_MAX_ISSUES",
+        "thrillhousebot.review.ticket-context.max-issues");
+    requireWithin(
+        problems,
+        ticketContext.maxChars(),
+        ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS,
+        ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS,
+        "REVIEW_TICKET_CONTEXT_MAX_CHARS",
+        "thrillhousebot.review.ticket-context.max-chars");
+  }
+
+  /** Adds a problem naming {@code env} and {@code key} when {@code value} is outside min..max. */
+  private static void requireWithin(
+      List<String> problems, int value, int min, int max, String env, String key) {
+    if (value < min || value > max) {
+      problems.add(env + " must be between " + min + " and " + max + " (" + key + "): " + value);
     }
   }
 
