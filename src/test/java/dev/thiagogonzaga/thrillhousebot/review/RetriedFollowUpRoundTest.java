@@ -337,6 +337,60 @@ class RetriedFollowUpRoundTest {
     }
   }
 
+  @Test
+  void theModelLessLaneGuardsTheScansFindingsToo() throws Exception {
+    // A budgeted plan with nothing sendable makes no review call; only the scan raises findings.
+    // Round one's root-user finding was stored without its anchor, so the scan's own exact key
+    // (file, title, anchor) does not recognise the detection; the open-thread guard still does.
+    var scanned =
+        scan.merge(
+            new ReviewResponse(List.of(), List.of(), null), scan.scan(files), List.of(), Set.of());
+    var anchorless = new ArrayList<ReviewResponse.Finding>();
+    for (var f : scanned.findings()) {
+      anchorless.add(
+          new ReviewResponse.Finding(
+              f.risk(),
+              f.confidence(),
+              f.file(),
+              f.line(),
+              f.title(),
+              f.description(),
+              null,
+              null));
+    }
+    var roundOne = persisted(new ReviewResponse(anchorless, List.of(), null));
+    var roundTwo = persisted(new ReviewResponse(List.of(artifact), List.of(), null));
+    var threads = new ArrayList<GitHubReviewClient.PullRequestComment>();
+    postedThreads(threads, roundOne, 100);
+    postedThreads(threads, roundTwo, 200);
+    var ctx = context(List.of(roundTwo, roundOne), threads);
+    var session = ReviewSession.create("owner/repo", 146, "Cold chain", "1d16c26");
+    session.id = 5429L;
+
+    var response =
+        pipeline.run(
+            session,
+            new AiReviewService.PromptInputs("diff", "ctx", "", "", "", "", ""),
+            ctx,
+            new DiffBudgetPlanner.BudgetPlan(
+                List.of(), List.of("rust/src/huge.rs"), List.of(), true, null, null, null, null),
+            ctx.lineResolver(),
+            ReviewEvidence.NONE);
+
+    assertEquals(
+        List.of(), titles(response.findings()), "no second thread for the scan's findings");
+    verify(prReviewer, times(0))
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString());
+  }
+
   private static DiffBudgetPlanner.BudgetPlan plan() {
     return new DiffBudgetPlanner.BudgetPlan(
         List.of(), List.of(), List.of(), false, null, null, null, null);

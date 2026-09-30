@@ -542,12 +542,12 @@ public class FindingPipeline {
   }
 
   /**
-   * The last two steps before a review's findings are summarized, persisted and published, on both
-   * lanes: the deterministic scan's merge (#60), then the guard that drops a finding restating one
-   * still open on its own thread from any earlier round (#939). The guard runs here, on the one
-   * response every path converges on — a retried call, a salvaged cut, the batches, the scan — so
-   * no way of producing the findings can post a second thread for an open one, and the summary
-   * counts and the persisted round agree with what is posted.
+   * The last two steps before a review's findings are summarized, persisted and published, on every
+   * lane (the model-less one too): the deterministic scan's merge (#60), then the guard that drops
+   * a finding restating one still open on its own thread from any earlier round (#939). The guard
+   * runs here, on the one response every path converges on — a retried call, a salvaged cut, the
+   * batches, the scan — so no way of producing the findings can post a second thread for an open
+   * one, and the summary counts and the persisted round agree with what is posted.
    */
   private ReviewResponse finish(
       ReviewResponse refined,
@@ -1018,10 +1018,11 @@ public class FindingPipeline {
     // The same summary step every review ends with, so its degradations apply unchanged: this
     // lane's only AI call is the summary, and whatever becomes of it the review still posts with
     // its omission disclosures. It is the one call made here, so max-ai-calls=1 still affords it.
-    // #60: the deterministic scan reads patches, not the budgeted batches, so it still runs.
+    // #60: the deterministic scan reads patches, not the budgeted batches, so it still runs, and
+    // #939: its findings face the same open-thread guard as the other lanes.
     return withSummary(
         session,
-        securityScan.merge(new ReviewResponse(List.of(), List.of(), null), ctx, botIdentity),
+        finish(new ReviewResponse(List.of(), List.of(), null), ctx, ctx.lineResolver()),
         promptInputs,
         ctx,
         plan);

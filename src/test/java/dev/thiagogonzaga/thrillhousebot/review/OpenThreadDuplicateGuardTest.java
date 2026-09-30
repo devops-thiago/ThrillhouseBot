@@ -203,6 +203,31 @@ class OpenThreadDuplicateGuardTest {
     assertFalse(FollowUpAnalyzer.duplicatesOpenThread(escalated, offByOne));
     assertTrue(FollowUpAnalyzer.duplicatesOpenThread(lower, offByOne));
     assertFalse(FollowUpAnalyzer.duplicatesOpenThread(nan, offByOne));
+    // RiskLevel's declaration order is severity order, so the bound holds for every pair.
+    assertFalse(
+        FollowUpAnalyzer.duplicatesOpenThread(
+            withRisk(offByOneAgain, "medium"), withRisk(offByOne, "low")));
+    assertTrue(
+        FollowUpAnalyzer.duplicatesOpenThread(
+            withRisk(offByOneAgain, "low"), withRisk(offByOne, "medium")));
+    assertFalse(
+        FollowUpAnalyzer.duplicatesOpenThread(
+            withRisk(offByOneAgain, "high"), withRisk(offByOne, "medium")));
+    assertTrue(
+        FollowUpAnalyzer.duplicatesOpenThread(
+            withRisk(offByOneAgain, "medium"), withRisk(offByOne, "high")));
+  }
+
+  private static ReviewResponse.Finding withRisk(ReviewResponse.Finding f, String risk) {
+    return new ReviewResponse.Finding(
+        risk,
+        f.confidence(),
+        f.file(),
+        f.line(),
+        f.title(),
+        f.description(),
+        f.suggestionOld(),
+        null);
   }
 
   @Test
