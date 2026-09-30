@@ -30,8 +30,11 @@ import java.util.regex.Pattern;
  * @param lastHunkReachesEndOfFile whether the patch's last hunk runs to the end of the new file,
  *     read from its trailing context: a unified diff carries three lines of context after the last
  *     change unless the file ends first, so fewer than three means the file ended
+ * @param lastHunk the 0-based index of the patch's last hunk, or {@code -1} for an empty patch. It
+ *     is counted from the hunk headers, not from {@link #lines}: a last hunk that only removes
+ *     lines contributes no new-side line, and must still count as the last one
  */
-record PatchLines(List<Line> lines, boolean lastHunkReachesEndOfFile) {
+record PatchLines(List<Line> lines, boolean lastHunkReachesEndOfFile, int lastHunk) {
 
   /** Context lines a unified diff carries after a change when the file does not end first. */
   private static final int DIFF_CONTEXT_LINES = 3;
@@ -56,7 +59,7 @@ record PatchLines(List<Line> lines, boolean lastHunkReachesEndOfFile) {
   static PatchLines parse(String patch) {
     var lines = new ArrayList<Line>();
     if (patch == null || patch.isBlank()) {
-      return new PatchLines(lines, false);
+      return new PatchLines(lines, false, -1);
     }
     int next = 0;
     int hunk = -1;
@@ -81,11 +84,6 @@ record PatchLines(List<Line> lines, boolean lastHunkReachesEndOfFile) {
         // "\ No newline at end of file" and anything else carries no new-side line.
       }
     }
-    return new PatchLines(lines, hunk >= 0 && trailingContext < DIFF_CONTEXT_LINES);
-  }
-
-  /** The index of the last hunk, or {@code -1} for an empty patch. */
-  int lastHunk() {
-    return lines.isEmpty() ? -1 : lines.get(lines.size() - 1).hunk();
+    return new PatchLines(lines, hunk >= 0 && trailingContext < DIFF_CONTEXT_LINES, hunk);
   }
 }

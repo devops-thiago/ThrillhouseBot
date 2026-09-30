@@ -48,6 +48,8 @@ class PatchLinesTest {
     assertFalse(patch.lastHunkReachesEndOfFile());
     var removalLast = PatchLines.parse("@@ -1,4 +1,3 @@\n a\n b\n c\n-d\n");
     assertTrue(removalLast.lastHunkReachesEndOfFile());
+    var removalOnlyHunk = PatchLines.parse("@@ -1,1 +1,1 @@\n-a\n+b\n@@ -9,1 +9,0 @@\n-z\n");
+    assertEquals(1, removalOnlyHunk.lastHunk());
   }
 
   @Test

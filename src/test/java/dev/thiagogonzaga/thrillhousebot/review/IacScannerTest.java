@@ -437,6 +437,22 @@ class IacScannerTest {
     assertEquals(List.of(SecurityRule.IAM_WILDCARD), rules(hits));
     assertEquals(3, hits.get(0).line());
     assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "policy.json",
+                "{\"Statement\": [{\"Effect\": \"Allow\", \"Action\": \"*\","
+                    + " \"Resource\": \"*\"}]}")));
+    assertEquals(
+        1,
+        scanNew(
+                "p.json",
+                "{",
+                "  \"Action\": [\"*\", \"s3:GetObject\"],",
+                "  \"Resource\": \"*\"",
+                "}")
+            .size());
+    assertEquals(
         1,
         scanNew("iam.tf", "statement {", "  actions   = [\"*\"]", "  resources = [\"*\"]", "}")
             .size());
@@ -516,6 +532,11 @@ class IacScannerTest {
         PatchLines.parse(
             "@@ -2,2 +2,3 @@\n FROM x\n+USER root\n RUN a\n@@ -20,1 +21,1 @@\n-CMD a\n+CMD b\n");
     assertTrue(IacScanner.scan("Dockerfile", earlierHunk, false).isEmpty());
+
+    // A last hunk that only removes lines is still the last hunk.
+    var removalOnlyLast =
+        patch("@@ -10,2 +10,3 @@", " FROM x", "+USER root", "@@ -50,1 +50,0 @@", "-CMD a");
+    assertTrue(IacScanner.scan("Dockerfile", removalOnlyLast, false).isEmpty());
   }
 
   // --- Terraform encryption ---

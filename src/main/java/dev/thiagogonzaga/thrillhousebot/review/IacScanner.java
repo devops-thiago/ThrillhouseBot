@@ -89,10 +89,12 @@ final class IacScanner {
                   + "\"?\\s*:\\s*[\"']?false\\b"));
 
   private static final Pattern WILDCARD_ACTION =
-      Pattern.compile("(?i)(?<![a-z])\"?actions?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']]?,?$");
+      Pattern.compile(
+          "(?i)(?<![a-z])\"?actions?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']\\s*+]?\\s*+(?:[,}\\]]|$)");
 
   private static final Pattern WILDCARD_RESOURCE =
-      Pattern.compile("(?i)(?<![a-z])\"?resources?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']]?,?$");
+      Pattern.compile(
+          "(?i)(?<![a-z])\"?resources?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']\\s*+]?\\s*+(?:[,}\\]]|$)");
 
   private static final Pattern DENY_EFFECT =
       Pattern.compile("(?i)\"?effect\"?\\s*[=:]\\s*[\"']?deny");
