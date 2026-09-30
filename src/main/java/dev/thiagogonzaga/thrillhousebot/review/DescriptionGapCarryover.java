@@ -263,9 +263,13 @@ final class DescriptionGapCarryover {
       return new GapKey(Set.of(), normalize(gap));
     }
     var issues = issuesNamed(linked.group(1));
-    var rest = linked.group(2);
+    return new GapKey(issues, normalize(criterionOf(linked.group(2))));
+  }
+
+  /** The criterion half of a linked-issue gap's text after the colon: up to the dash, if any. */
+  private static String criterionOf(String rest) {
     var end = CRITERION_END.matcher(rest);
-    return new GapKey(issues, normalize(end.find() ? rest.substring(0, end.start()) : rest));
+    return end.find() ? rest.substring(0, end.start()) : rest;
   }
 
   /** The issue keys ({@code "#114"}) a linked-issue gap's number group names, in order. */
@@ -360,7 +364,9 @@ final class DescriptionGapCarryover {
       return gap;
     }
     var key =
-        keys.size() == 1 ? keys.getFirst() : closestIssue(linked.group(2), keys, linkedIssues);
+        keys.size() == 1
+            ? keys.getFirst()
+            : closestIssue(criterionOf(linked.group(2)), keys, linkedIssues);
     return "Linked issue " + key + ":" + linked.group(2);
   }
 

@@ -292,6 +292,18 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void onlyTheCriterionPicksTheIssueNotTheEvidence() {
+      // The evidence after the dash reads like #120's criterion; the criterion is #122's.
+      var gap =
+          "Linked issue #9: refuse archives larger than 64 MiB — the upload handler rejects"
+              + " request bodies over the limit with 413 instead";
+
+      assertEquals(
+          List.of(gap.replace("#9", "#122")),
+          DescriptionGapCarryover.withLinkedIssueNumbers(List.of(gap), LINKED_TWO));
+    }
+
+    @Test
     void theFirstLinkedIssueCanWinOutright() {
       var gap = "Linked issue #3: reject request bodies over the limit with 413 — no check.";
 
