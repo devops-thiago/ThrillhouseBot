@@ -16,7 +16,11 @@
 package dev.thiagogonzaga.thrillhousebot.review.eval;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * One labeled regression case from the prompt eval corpus: a real dogfood outcome pinned as {@code
@@ -46,7 +50,8 @@ public record EvalCase(String name, String diff, Spec spec) {
       List<String> keywords,
       String patchCoverage,
       String prTitle,
-      String prDescription) {}
+      String prDescription,
+      List<String> dimensions) {}
 
   /** The candidate finding a verifier case feeds to the second-pass audit. */
   public record CandidateFinding(
@@ -58,6 +63,45 @@ public record EvalCase(String name, String diff, Spec spec) {
       String description,
       @JsonProperty("suggestion_old") String suggestionOld,
       @JsonProperty("suggestion_new") String suggestionNew) {}
+
+  /**
+   * The review dimensions this case depends on ({@link ReviewDimension} names, #665): the blocks
+   * the routed prompt must carry for the case to be answerable at all. Empty when the case declares
+   * none.
+   */
+  List<ReviewDimension> dimensions() {
+    return spec.dimensions() == null
+        ? List.of()
+        : spec.dimensions().stream().map(ReviewDimension::valueOf).toList();
+  }
+
+  /**
+   * The diff parsed back into the per-file patches the router reads: one entry per {@code ### path
+   * (status, ...)} section, its fenced {@code diff} block as the patch.
+   */
+  List<GitHubPullRequestClient.FileDiff> files() {
+    var files = new ArrayList<GitHubPullRequestClient.FileDiff>();
+    var lines = diff.split("\n", -1);
+    for (int i = 0; i + 1 < lines.length; i++) {
+      var header = SECTION_HEADER.matcher(lines[i]);
+      if (!header.matches() || !"```diff".equals(lines[i + 1])) {
+        continue;
+      }
+      var patch = new ArrayList<String>();
+      int j = i + 2;
+      while (j < lines.length && !"```".equals(lines[j])) {
+        patch.add(lines[j++]);
+      }
+      files.add(
+          new GitHubPullRequestClient.FileDiff(
+              header.group(1), header.group(2), 0, 0, 0, String.join("\n", patch)));
+      i = j;
+    }
+    return List.copyOf(files);
+  }
+
+  /** A section header, {@code ### path (status, +A -D)}. */
+  private static final Pattern SECTION_HEADER = Pattern.compile("### (\\S+) \\((\\w+),[^)]*\\)");
 
   boolean isVerifierCase() {
     return KIND_VERIFIER.equals(spec.kind());

@@ -262,6 +262,17 @@ public interface ThrillhouseConfig {
     boolean verifierEnabled();
 
     /**
+     * Per-call review dimension routing (#665): each review call's system prompt carries the core
+     * plus only the dimension blocks its files can use, instead of all ten, and the verifier's
+     * dimension carve-outs follow the files its candidates are anchored in. Off by default while it
+     * bakes in: off, every call carries the monolithic prompt, byte for byte the one before the
+     * split.
+     */
+    @WithDefault("false")
+    @WithName("dimension-routing-enabled")
+    boolean dimensionRoutingEnabled();
+
+    /**
      * Whether a maintainer's decline is re-checked against the reviewed code before a prior finding
      * is recorded "justified". When the reviewed code plainly contradicts the rebuttal's premise
      * the finding stays open for one more round; every other decline is respected, and a second

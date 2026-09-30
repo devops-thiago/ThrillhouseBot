@@ -165,7 +165,8 @@ public class AiReviewService {
         inputs.projectStack(),
         inputs.relatedTests(),
         inputs.previousFindings(),
-        inputs.repoInstructions());
+        inputs.repoInstructions(),
+        inputs.reviewSystemPrompt());
   }
 
   /**
@@ -439,6 +440,12 @@ public class AiReviewService {
    * is the summary call's (#664) — the label and diagram requests, which gate summary fields the
    * review call no longer writes, plus the repository's own instructions. The two are assembled
    * together so each call carries only the guidance its response acts on.
+   *
+   * <p>{@code reviewSystemPrompt} is the system prompt the review call sends (#665): {@link
+   * PrReviewPrompts#SYSTEM} with dimension routing off, otherwise the routed prompt for the call's
+   * files. The assembler sets the whole pull request's, which is the largest any batch of it can
+   * get and what the budget planner sizes the shared overhead from; the pipeline swaps in each
+   * batch's own. {@code null} reads as {@link PrReviewPrompts#SYSTEM}.
    */
   public record PromptInputs(
       String diff,
@@ -448,7 +455,34 @@ public class AiReviewService {
       String relatedTests,
       String previousFindings,
       String repoInstructions,
-      String summaryInstructions) {
+      String summaryInstructions,
+      String reviewSystemPrompt) {
+
+    public PromptInputs {
+      reviewSystemPrompt = reviewSystemPrompt == null ? PrReviewPrompts.SYSTEM : reviewSystemPrompt;
+    }
+
+    /** Inputs whose review call carries the monolithic system prompt, every dimension included. */
+    public PromptInputs(
+        String diff,
+        String prContext,
+        String baseComparison,
+        String projectStack,
+        String relatedTests,
+        String previousFindings,
+        String repoInstructions,
+        String summaryInstructions) {
+      this(
+          diff,
+          prContext,
+          baseComparison,
+          projectStack,
+          relatedTests,
+          previousFindings,
+          repoInstructions,
+          summaryInstructions,
+          PrReviewPrompts.SYSTEM);
+    }
 
     /**
      * Inputs with no summary-call guidance of their own: no label section, no diagram request, no

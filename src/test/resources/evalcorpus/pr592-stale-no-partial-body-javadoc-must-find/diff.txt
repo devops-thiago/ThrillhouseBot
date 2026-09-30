@@ -1,0 +1,21 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/ai/AiResponses.java (modified, +3 -1)
+```diff
+@@ -60,14 +60,16 @@ final class AiResponses {
+   /**
+    * Unwraps a blocking call's text, throwing {@link AiResponseTruncatedException} when the
+    * provider stopped at the response-length cap. The exception carries no partial body: the
+    * blocking lanes do not buffer one, so there is nothing to salvage from a cut response here.
+    */
+   static String textOrThrowOnTruncation(Result<String> result, String call, int cap) {
+     if (result == null) {
+       return null;
+     }
+     if (result.finishReason() == FinishReason.LENGTH) {
+-      throw new AiResponseTruncatedException(call + " hit the response-length cap of " + cap);
++      // The cut body is well-formed up to the cut; hand it on so the caller can salvage it.
++      throw new AiResponseTruncatedException(
++          call + " hit the response-length cap of " + cap, result.content());
+     }
+     return result.content();
+   }
+```

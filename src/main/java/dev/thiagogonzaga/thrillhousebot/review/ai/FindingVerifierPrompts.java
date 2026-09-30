@@ -15,10 +15,16 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import java.util.Set;
+
 /** Prompt text for the second-pass verifier that audits candidate findings before posting. */
 public final class FindingVerifierPrompts {
 
-  public static final String SYSTEM =
+  /**
+   * Opening of the verifier's system prompt, identical in every verification call: role, verdict
+   * definitions, the general rejection grounds and the bug-fix efficacy carve-out.
+   */
+  public static final String CORE_HEAD =
       """
             You are a skeptical senior engineer auditing the findings of an automated code review
             before they are posted. Your job is to eliminate false positives. Respond ONLY with
@@ -167,6 +173,11 @@ public final class FindingVerifierPrompts {
             a verification request naming what to check is legitimately confidence "low" or
             "medium" — downgrade it at most; do not reject it as unverifiable.
 
+            """;
+
+  /** Carve-out for a mock-fidelity finding, routed with {@link ReviewDimension#MOCK_FIDELITY}. */
+  public static final String CARVE_OUT_MOCK_FIDELITY =
+      """
             A mock-fidelity finding — one claiming a test stub/mock contradicts the real
             collaborator's behavior — is judged on whether the provided material shows both the
             stub and the contradicting real-method contract: never reject it merely because the
@@ -179,6 +190,14 @@ public final class FindingVerifierPrompts {
             line and contradicting real-method line named is the expected shape — downgrade
             inflated severity at most; do not reject as unverifiable when both sides are shown.
 
+            """;
+
+  /**
+   * Carve-out for a heuristic-limitation finding. Always carried: the heuristic failure-mode
+   * section is decided per batch from the diff, not from a file kind the router can see.
+   */
+  public static final String CORE_HEURISTIC_LIMITATION =
+      """
             A heuristic-limitation finding — one claiming a newly-added regex, parser, tokenizer,
             normalizer, validator, or scope/threshold rule mishandles an input — is judged on the
             rule's mechanics, NOT on whether the input appears in the diff. The triggering input
@@ -200,6 +219,14 @@ public final class FindingVerifierPrompts {
             confidence "low" or "medium" with the rule line quoted and the probing input named is
             the expected shape.
 
+            """;
+
+  /**
+   * Carve-out for a config-key documentation-completeness finding, routed with {@link
+   * ReviewDimension#CONFIG_KEY_DOCUMENTATION}; the PR #104 miss it exists for is pinned in it.
+   */
+  public static final String CARVE_OUT_CONFIG_KEY_DOCUMENTATION =
+      """
             A config-key documentation-completeness finding — one claiming documentation for an
             environment variable or property omits a format-critical fact (value type,
             list/separator semantics, units, allowed values, default) — is judged against that
@@ -219,6 +246,14 @@ public final class FindingVerifierPrompts {
             provided material, downgrade it to confidence "low" phrased as a verification request
             naming the definition to check — do not reject it as unverifiable framework behavior.
 
+            """;
+
+  /**
+   * Carve-out for an injection-sink finding. Always carried, like the security dimension it
+   * mirrors.
+   */
+  public static final String CORE_INJECTION_SINK =
+      """
             An injection-sink finding — one naming a sink the provided material shows (a
             framework's HTML-injection escape hatch such as dangerouslySetInnerHTML,
             bypassSecurityTrustHtml, v-html or innerHTML; a string-built SQL statement or shell
@@ -238,6 +273,14 @@ public final class FindingVerifierPrompts {
             validating allow-list), when the value reaching the sink is a literal or is otherwise
             not attacker-influenced, or when the sink it names is not in the diff at all.
 
+            """;
+
+  /**
+   * Carve-out for an artifact-reference finding, routed with {@link ReviewDimension#CONFIG_IAC}:
+   * the instruction it quotes lives in a Dockerfile, workflow, script or build file.
+   */
+  public static final String CARVE_OUT_ARTIFACT_REFERENCE =
+      """
             An artifact-reference finding — one naming a build or run instruction (a Dockerfile
             COPY or ENTRYPOINT, a workflow step, a script line) whose path, filename or artifact
             nothing in the provided material produces — asserts a NON-EXISTENCE, so no quoted line
@@ -261,6 +304,14 @@ public final class FindingVerifierPrompts {
             class is not free: both times it happened, the deliberate near-miss beside it (an
             unpinned base image) was left standing alone as the only issue reported on that file.
 
+            """;
+
+  /**
+   * Carve-out for a producer→consumer contract finding, routed with {@link
+   * ReviewDimension#PRODUCER_CONSUMER}.
+   */
+  public static final String CARVE_OUT_PRODUCER_CONSUMER =
+      """
             A producer→consumer contract finding (dimension 9) — one tracing a value from where it
             is produced to where it is consumed — spans two locations that are in different
             enclosing units by construction: the producer and the consumer are necessarily
@@ -271,6 +322,14 @@ public final class FindingVerifierPrompts {
             branches on it — and a concrete case on which they disagree. Reject it only when one
             end is outside the provided material or no such case is named.
 
+            """;
+
+  /**
+   * The rest of the verifier's core, identical in every call: the cited-location and
+   * context-evidence fields, severity calibration and the suggestion audit. Ends on a blank line.
+   */
+  public static final String CORE_TAIL =
+      """
             A candidate may carry a "cited_location" field. It is not model output and not part of
             the finding: it is the repository's own content at the pull request's head commit, read
             deterministically for that finding's cited path and line, and it is established
@@ -362,6 +421,15 @@ public final class FindingVerifierPrompts {
             "downgraded" with confidence "low" and state in the reason that the suggestion is
             unreliable.
 
+            """;
+
+  /**
+   * The response schema that closes the verifier's system prompt. Held apart from {@link
+   * #CORE_TAIL} so a routed prompt can put its carve-outs between the two and keep the whole core a
+   * shared prefix (#665).
+   */
+  public static final String RESPONSE_SCHEMA =
+      """
             Response schema:
             {"verdicts": [{"id": <finding id>, "verdict": "confirmed" | "downgraded" | "rejected",
             "risk": "critical" | "high" | "medium" | "low",
@@ -370,6 +438,59 @@ public final class FindingVerifierPrompts {
             Include exactly one verdict per candidate finding, keyed by its "id". For
             "confirmed", repeat the original risk and confidence.
             """;
+
+  /**
+   * The monolithic verifier system prompt: the core with every carve-out, each carve-out beside the
+   * core rule it relaxes. Every verification call carries it, byte for byte the prompt before the
+   * split, while dimension routing is off; with routing on, calls carry {@link
+   * #verifierSystemPrompt} instead (#665).
+   *
+   * <p>Joined rather than concatenated so the value is not a compile-time constant: it is read from
+   * method bodies in other classes, and a folded constant this large would be copied into each of
+   * them (SpotBugs HSC_HUGE_SHARED_STRING_CONSTANT).
+   */
+  public static final String SYSTEM =
+      String.join(
+          "",
+          CORE_HEAD,
+          CARVE_OUT_MOCK_FIDELITY,
+          CORE_HEURISTIC_LIMITATION,
+          CARVE_OUT_CONFIG_KEY_DOCUMENTATION,
+          CORE_INJECTION_SINK,
+          CARVE_OUT_ARTIFACT_REFERENCE,
+          CARVE_OUT_PRODUCER_CONSUMER,
+          CORE_TAIL,
+          RESPONSE_SCHEMA);
+
+  /**
+   * The verifier system prompt of a routed call whose candidates need the carve-outs of {@code
+   * dimensions} (#665): the whole core first, then each routed carve-out whose dimension is in the
+   * set, in prompt order, then the response schema. The generator's routing decides which finding
+   * classes a call can raise; this decides which of their carve-outs the audit carries, so the two
+   * prompts shrink together. Core first for the same reason as {@link
+   * PrReviewPrompts#reviewSystemPrompt}: it is the prefix a provider's cache matches across calls.
+   */
+  public static String verifierSystemPrompt(Set<ReviewDimension> dimensions) {
+    var prompt =
+        new StringBuilder(SYSTEM.length())
+            .append(CORE_HEAD)
+            .append(CORE_HEURISTIC_LIMITATION)
+            .append(CORE_INJECTION_SINK)
+            .append(CORE_TAIL);
+    if (dimensions.contains(ReviewDimension.MOCK_FIDELITY)) {
+      prompt.append(CARVE_OUT_MOCK_FIDELITY);
+    }
+    if (dimensions.contains(ReviewDimension.CONFIG_KEY_DOCUMENTATION)) {
+      prompt.append(CARVE_OUT_CONFIG_KEY_DOCUMENTATION);
+    }
+    if (dimensions.contains(ReviewDimension.CONFIG_IAC)) {
+      prompt.append(CARVE_OUT_ARTIFACT_REFERENCE);
+    }
+    if (dimensions.contains(ReviewDimension.PRODUCER_CONSUMER)) {
+      prompt.append(CARVE_OUT_PRODUCER_CONSUMER);
+    }
+    return prompt.append(RESPONSE_SCHEMA).toString();
+  }
 
   public static final String USER =
       """

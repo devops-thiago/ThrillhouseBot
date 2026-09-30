@@ -366,7 +366,8 @@ class ModelSuppliedTextInLogLinesTest {
             mock(DiffBudgetPlanner.class),
             new TokenCounter(),
             mock(ReviewTokenLedger.class),
-            new TruncatedResponseSalvager(new ObjectMapper()));
+            new TruncatedResponseSalvager(new ObjectMapper()),
+            ReviewDimensionRouter.disabled());
     var response = response(finding(FORGED_PATH, 1, FORGED_TITLE, null));
     var resolver = new DiffLineResolver(Map.of(FORGED_PATH, "@@ -0,0 +1,1 @@\n+var a = 1;\n"));
 
@@ -487,7 +488,8 @@ class ModelSuppliedTextInLogLinesTest {
     var reviewConfig = mock(ThrillhouseConfig.ReviewConfig.class);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.verifierEnabled()).thenReturn(true);
-    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
             aiOk("{\"verdicts\": [{\"id\": 1, \"verdict\": \"rejected\", \"reason\": \"fp\"}]}"));
     var service =
