@@ -352,6 +352,28 @@ class ReviewResultTest {
         "a body written by the previously deployed release is still the bot's own prose");
   }
 
+  /**
+   * #918 — the sentence released since #548 carried a Java-shaped example locator, which read as a
+   * real file on C and Rust pull requests. Bodies it wrote are still on those pull requests, so the
+   * recognizer keeps accepting that wording while the producer no longer emits it.
+   */
+  @Test
+  void unresolvedPreviousMessageNamesNoLanguageShapedExamplePathButRecognizesTheOneItUsedTo() {
+    var message = ReviewResult.unresolvedPreviousMessage(15);
+    assertFalse(message.contains("path/to/File.java"), message);
+    assertFalse(message.contains(".java"), message);
+    assertTrue(message.contains("`@thrillhousebot resolved <path>:<line> — "), message);
+
+    var released =
+        "No new issues in this revision, but 15 previous finding(s) remain unresolved — fix them,"
+            + " or reply on their review thread with why they are deferred. A finding listed only"
+            + " under \"Things to double-check\" has no thread: clear it by commenting"
+            + " `@thrillhousebot resolved path/to/File.java:42 — <the finding's title>` on this PR.";
+    assertTrue(
+        ReviewResult.isUnresolvedPreviousMessage(released),
+        "a body an earlier release wrote is still the bot's own prose");
+  }
+
   @Test
   void truncationDetailToleratesANullPatchlessList() {
     var detail =
