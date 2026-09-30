@@ -945,10 +945,12 @@ public class ReviewPublisher {
         return Delivery.THREADED;
       }
       // Both reasons, when they differ. The two attempts fail for different causes often enough to
-      // matter: a suggestion block GitHub will not take is a 422 about the payload, while a
-      // content-creation block is a 403 about the moment. Reporting only the second would name the
-      // throttle for a finding whose payload was refused first, or the other way round, which is
-      // the class of wrong diagnosis #722 exists to stop.
+      // matter: a suggestion block GitHub will not take is a refusal of the payload, while a
+      // content-creation limit is a refusal of the moment — a 403, a 429, or a 422 saying "was
+      // submitted too quickly" (#919). The status alone does not tell them apart; only the
+      // throttle classification does. Reporting only the second would name the throttle for a
+      // finding whose payload was refused first, or the other way round, which is the class of
+      // wrong diagnosis #722 exists to stop.
       var second = withoutSuggestion.get();
       reason =
           reason.equals(second.diagnostics())

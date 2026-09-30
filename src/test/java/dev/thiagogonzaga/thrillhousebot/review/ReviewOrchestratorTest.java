@@ -4664,11 +4664,13 @@ class ReviewOrchestratorTest {
 
     /**
      * #722. The two attempts fail for different causes often enough to matter: a suggestion block
-     * GitHub will not take is a 422 about the payload, a content-creation block is a 403 about the
-     * moment. Reporting only the second names the throttle for a finding whose payload was refused
-     * first, which is the class of wrong diagnosis #722 exists to stop. Since #919 a throttle on
-     * the first attempt ends the routes, so the payload refusal comes first here, and the throttle
-     * that follows it still keeps the finding off the file-level route.
+     * GitHub will not take is a refusal of the payload, a content-creation limit a refusal of the
+     * moment — a 403 here, though since #919 it can also be a 422 saying "was submitted too
+     * quickly", so the status alone does not separate the two. Reporting only the second names the
+     * throttle for a finding whose payload was refused first, which is the class of wrong diagnosis
+     * #722 exists to stop. Since #919 a throttle on the first attempt ends the routes, so the
+     * payload refusal comes first here, and the throttle that follows it still keeps the finding
+     * off the file-level route.
      */
     @Test
     void shouldLogBothReasonsWhenTheSuggestionRetryFailsDifferently() {
