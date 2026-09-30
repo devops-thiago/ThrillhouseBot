@@ -25,6 +25,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -100,11 +101,6 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       Pattern.compile(
           "(?:([\\w.-]+/[\\w.-]+)#|https?://github\\.com/([\\w.-]+/[\\w.-]+)/issues/|#)"
               + "(\\d{1,9})(?!\\d)");
-
-  // Markdown regions whose text GitHub does not treat as a link: HTML comments, fenced blocks and
-  // inline code spans. Removed before the body is scanned.
-  private static final Pattern NON_LINK_REGIONS =
-      Pattern.compile("(?s)<!--.*?-->|```.*?(?:```|$)|~~~.*?(?:~~~|$)|`[^`\\n]*`");
 
   /**
    * An issue number in the last segment of a branch name: {@code 57}, {@code 57-short-name}, or a
@@ -188,20 +184,125 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     if (prBody == null || prBody.isBlank()) {
       return List.of();
     }
-    var visible = NON_LINK_REGIONS.matcher(prBody).replaceAll(" ");
-    var numbers = new ArrayList<Integer>();
+    var visible = withoutNonLinkRegions(prBody);
+    var numbers = new LinkedHashSet<Integer>();
     var keywords = CLOSING_KEYWORD.matcher(visible);
     while (keywords.find()) {
       var reference = ISSUE_REFERENCE.matcher(keywords.group(1));
       if (reference.lookingAt()) {
         var named = reference.group(reference.group(1) != null ? 1 : 2);
         var number = Integer.parseInt(reference.group(3));
-        if ((named == null || sameRepository(named, owner, repo)) && !numbers.contains(number)) {
+        if (named == null || sameRepository(named, owner, repo)) {
           numbers.add(number);
         }
       }
     }
-    return numbers;
+    return List.copyOf(numbers);
+  }
+
+  /**
+   * {@code body} with the Markdown regions GitHub does not read links from replaced by a space:
+   * HTML comments (an unclosed one runs to the end, as in HTML), fenced blocks of three or more
+   * backticks or tildes (an unclosed one runs to the end), and code spans of any backtick count,
+   * which may wrap a line but not cross a blank one. A backtick run with no matching closer is
+   * literal text. Linear in the body's length for any input a PR body can hold.
+   */
+  static String withoutNonLinkRegions(String body) {
+    return new NonLinkStripper(body).strip();
+  }
+
+  /**
+   * One pass over a PR body for {@link #withoutNonLinkRegions}. It caches the next blank line, and
+   * a closer search that fails leaves no run of that width in the paragraph to open another, so the
+   * whole body is scanned a bounded number of times.
+   */
+  private static final class NonLinkStripper {
+    private final String body;
+    private int literalEnd; // end of a marker run that opened no region
+    private int nextBlank =
+        -2; // position of the next "\n\n" at or after the last query; -2 unknown
+
+    NonLinkStripper(String body) {
+      this.body = body;
+    }
+
+    String strip() {
+      var out = new StringBuilder(body.length());
+      var i = 0;
+      while (i < body.length()) {
+        var end = regionEnd(i);
+        if (end > i) {
+          out.append(' ');
+          i = end;
+        } else {
+          // Not a region: copy the character, or the whole marker run that opened nothing, so a
+          // run's tail is never read as a narrower marker of its own.
+          var next = Math.max(i + 1, literalEnd);
+          out.append(body, i, next);
+          i = next;
+        }
+      }
+      return out.toString();
+    }
+
+    /**
+     * The end of the non-link region starting at {@code i}, or {@code i} when none starts there.
+     */
+    private int regionEnd(int i) {
+      if (body.startsWith("<!--", i)) {
+        var close = body.indexOf("-->", i + 4);
+        return close < 0 ? body.length() : close + 3;
+      }
+      var c = body.charAt(i);
+      if (c != '`' && c != '~') {
+        return i;
+      }
+      var run = i;
+      while (run < body.length() && body.charAt(run) == c) {
+        run++;
+      }
+      var width = run - i;
+      if (width >= 3) {
+        var close = body.indexOf(body.substring(i, run), run);
+        return close < 0 ? body.length() : close + width;
+      }
+      var close = c == '~' ? -1 : closingRun(run, width); // one or two tildes are text
+      if (close < 0) {
+        literalEnd = run;
+        return i;
+      }
+      return close + width;
+    }
+
+    /**
+     * Where the run of exactly {@code width} backticks closing a code span starts, from {@code
+     * from}, or {@code -1} when a blank line or the end of the body comes first.
+     */
+    private int closingRun(int from, int width) {
+      var limit = paragraphEnd(from);
+      var j = from;
+      while (j < limit) {
+        var start = body.indexOf('`', j);
+        if (start < 0 || start >= limit) {
+          break;
+        }
+        j = start;
+        while (j < body.length() && body.charAt(j) == '`') {
+          j++;
+        }
+        if (j - start == width) {
+          return start;
+        }
+      }
+      return -1;
+    }
+
+    private int paragraphEnd(int from) {
+      if (nextBlank == -2 || (nextBlank >= 0 && nextBlank < from)) {
+        nextBlank = body.indexOf("\n\n", from);
+      }
+      return nextBlank < 0 ? body.length() : nextBlank;
+    }
   }
 
   /** The pull request node of the links query, or a missing node when it could not be read. */

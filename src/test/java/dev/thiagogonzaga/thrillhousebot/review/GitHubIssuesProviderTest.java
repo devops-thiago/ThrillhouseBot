@@ -152,6 +152,40 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void skipsCodeSpansOfAnyWidthAndSpansThatWrapALine() {
+      assertEquals(
+          List.of(4),
+          GitHubIssuesProvider.bodyReferences(
+              "``Closes #1`` and ``a ` Fixes #2`` and `cmd closes #3\nflag` Resolves #4",
+              "o",
+              "r"));
+    }
+
+    @Test
+    void anUnclosedCommentHidesTheRestOfTheBodyLikeHtml() {
+      assertEquals(
+          List.of(1),
+          GitHubIssuesProvider.bodyReferences("Closes #1\n<!-- Closes #2\nFixes #3", "o", "r"));
+    }
+
+    @Test
+    void aBacktickWithoutACloserInItsParagraphIsText() {
+      // The span would have to cross a blank line, so neither backtick opens one.
+      assertEquals(
+          List.of(1, 2, 3),
+          GitHubIssuesProvider.bodyReferences(
+              "a ` Closes #1\n\nFixes #2 ` b ` c ``\n\n~ Resolves #3 ~~", "o", "r"));
+    }
+
+    @Test
+    void stripsLongRunsOfSpansInOnePass() {
+      var body = "` ".repeat(50_000) + "Closes #7";
+      assertEquals(List.of(7), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
+      assertEquals("  x  ", GitHubIssuesProvider.withoutNonLinkRegions("`a` x ``b``"));
+      assertEquals("x ` y", GitHubIssuesProvider.withoutNonLinkRegions("x ` y"));
+    }
+
+    @Test
     void anUnclosedFenceHidesTheRestOfTheBody() {
       assertEquals(
           List.of(1), GitHubIssuesProvider.bodyReferences("Closes #1\n```\nFixes #2", "o", "r"));

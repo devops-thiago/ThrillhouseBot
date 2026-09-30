@@ -425,6 +425,33 @@ class TicketContextResolverTest {
     }
 
     @Test
+    void aSubHeadingNamingANonCriteriaSectionClosesTheAcceptanceSection() {
+      var extracted =
+          TicketContextResolver.extract(
+              """
+              ## Acceptance criteria
+              **Backend**
+              - a
+              **Non-goals:**
+              - b
+              ### Out of scope
+              - c
+              """);
+
+      assertEquals(List.of("a"), extracted.criteria());
+      assertTrue(extracted.rest().contains("- b"), extracted.rest());
+    }
+
+    @Test
+    void nonCriteriaSectionNamesMatchWholeWordStarts() {
+      assertTrue(TicketContextResolver.namesNonCriteriaSection("Non-goals:"));
+      assertTrue(TicketContextResolver.namesNonCriteriaSection("Notes"));
+      assertTrue(TicketContextResolver.namesNonCriteriaSection("Open questions"));
+      assertFalse(TicketContextResolver.namesNonCriteriaSection("Backend"));
+      assertFalse(TicketContextResolver.namesNonCriteriaSection("Denotes x"));
+    }
+
+    @Test
     void anEmptyBodyHasNoCriteria() {
       var extracted = TicketContextResolver.extract("  ");
       assertEquals(List.of(), extracted.criteria());

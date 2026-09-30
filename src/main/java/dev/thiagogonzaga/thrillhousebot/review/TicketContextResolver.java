@@ -72,6 +72,25 @@ public class TicketContextResolver {
 
   private static final Pattern LIST_ITEM = Pattern.compile("^(?:[-*+]|\\d{1,3}[.)])\\s+(\\S.*)$");
 
+  /** Section names that hold no criteria even when they sit under an acceptance heading. */
+  private static final List<String> NON_CRITERIA_SECTIONS =
+      List.of(
+          "non goal",
+          "out of scope",
+          "note",
+          "alternative",
+          "background",
+          "context",
+          "open question",
+          "reference",
+          "related");
+
+  /** Whether a heading's text names a section of {@link #NON_CRITERIA_SECTIONS}. */
+  static boolean namesNonCriteriaSection(String headingText) {
+    var words = " " + headingText.toLowerCase(Locale.ROOT).replaceAll("[^a-z]+", " ").strip() + " ";
+    return NON_CRITERIA_SECTIONS.stream().anyMatch(name -> words.contains(" " + name));
+  }
+
   /** Leading spaces that make a line after a blank one, outside a list, indented code. */
   private static final int INDENTED_CODE = 4;
 
@@ -277,9 +296,12 @@ public class TicketContextResolver {
         return true;
       }
       inList = false;
-      // A sub-heading inside an acceptance section stays part of it; any other heading starts a
-      // new section.
-      if (!inAcceptance || heading.level() <= sectionLevel) {
+      // A sub-heading inside an acceptance section stays part of it (a bold "**Backend**" label
+      // groups criteria), unless it names a section that holds none ("**Non-goals:**"); any other
+      // heading starts a new section.
+      if (!inAcceptance
+          || heading.level() <= sectionLevel
+          || namesNonCriteriaSection(heading.text())) {
         inAcceptance = ACCEPTANCE_HEADING.matcher(heading.text()).find();
         inIgnored = IGNORED_HEADING.matcher(heading.text()).find();
         sectionLevel = heading.level();
