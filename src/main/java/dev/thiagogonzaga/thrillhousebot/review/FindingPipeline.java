@@ -617,7 +617,9 @@ public class FindingPipeline {
       // for, so the review keeps their findings under the counts-only summary instead of failing.
       return failedSummary(session, refined, plan, e, carry);
     }
-    return persistWithSummary(session, refined, summaryResponse.summary(), carry);
+    // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
+    return persistWithSummary(
+        session, refined, PriorOverviewCarryover.fill(summaryResponse.summary(), ctx), carry);
   }
 
   /** The inputs with the carried gaps' request appended to the summary call's guidance. */

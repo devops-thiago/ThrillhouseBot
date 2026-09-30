@@ -3653,4 +3653,99 @@ class FindingPipelineTest {
     assertEquals(List.of(CARRIED_GAP), result.summary().descriptionGaps());
     assertNull(result.summary().prPurpose());
   }
+
+  /** #944: a prior round on the same head whose summary had an overview and a file summary. */
+  private static ReviewContextLoader.ReviewContext contextAfterAnOverviewOnTheSameHead() {
+    var prior =
+        new ReviewResponse(
+            List.of(finding("a.java", "A")),
+            List.of(),
+            new ReviewResponse.Summary(
+                1,
+                0,
+                0,
+                1,
+                0,
+                null,
+                "Adds a cache layer.",
+                List.of(),
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("a.java", "adds the cache")),
+                null,
+                List.of()));
+    return new ReviewContextLoader.ReviewContext(
+        List.of(),
+        "raw legacy diff",
+        "",
+        0,
+        List.of(),
+        List.of(),
+        List.of(prior),
+        false,
+        true,
+        null,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        List.of(new FileDiff("a.java", "modified", 3, 0, 3, "")),
+        () -> new DiffLineResolver(Map.of()),
+        null,
+        List.of(),
+        List.of(),
+        SupersededFindingsCarryover.Carried.NONE,
+        "",
+        true);
+  }
+
+  @Test
+  void aFollowUpWhoseSummaryCameBackEmptyKeepsThePreviousOverviewOnTheSameHead() {
+    // #944: the summary node was dropped by the parser's salvage, and the in-place edit replaced
+    // round 1's overview with "Not summarized" rows on a head nothing had changed.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    var result =
+        pipeline.run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            contextAfterAnOverviewOnTheSameHead(),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals("Adds a cache layer.", result.summary().prPurpose());
+    assertEquals(
+        List.of(new ReviewResponse.FileSummary("a.java", "adds the cache")),
+        result.summary().fileSummaries());
+    assertTrue(session.getAiResponseJson().contains("Adds a cache layer."));
+  }
+
+  @Test
+  void aFailedSummaryCallKeepsTheCountsOnlyShapeItsBannerDescribes() {
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiReviewException("transient", 1, null));
+
+    var result =
+        pipeline.run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            contextAfterAnOverviewOnTheSameHead(),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertNull(result.summary());
+  }
 }
