@@ -427,9 +427,10 @@ class ReviewResponseParserTest {
             {"findings": [{"risk": "high", "confidence": "high", "file": "f", "line": 2,
               "title": "t", "description": "d"}],
              "previous_findings_status": [{"id": 4, "status": "unresolved", "note": "n"}],
-             "summary": {"total_findings": {"oops": "an object"}}}
+             "summary": {"overall_assessment": {"oops": "an object"}}}
             """);
 
+    // A mis-shaped count no longer reaches this salvage (#944); a mis-shaped text field still does.
     assertEquals(1, response.findings().size());
     assertEquals("high", response.findings().get(0).risk());
     assertEquals(1, response.previousFindingsStatus().size());
@@ -1300,5 +1301,56 @@ class ReviewResponseParserTest {
     assertEquals(-1, search.start());
     assertTrue(search.charsParsed() < 100, "parsed " + search.charsParsed() + " characters");
     assertTrue(ReviewResponseParser.extractJson(raw, KEYS).startsWith("{\"findings\": []} {bad}"));
+  }
+
+  @Test
+  void anArrayValuedCountKeepsTheOverviewAndFileSummaries() {
+    // #944: the model sent an array for "high"; the whole summary used to be dropped with it.
+    var response =
+        parser.parseSummary(
+            "{\"summary\":{\"total_findings\":2,\"critical\":0,\"high\":[1,2],"
+                + "\"medium\":1,\"low\":0,\"pr_purpose\":\"Adds a cache layer\","
+                + "\"file_summaries\":[{\"path\":\"src/lib.rs\",\"summary\":\"adds cache\"}]}}");
+
+    var summary = response.summary();
+    assertNotNull(summary);
+    assertEquals("Adds a cache layer", summary.prPurpose());
+    assertEquals(
+        java.util.List.of(new ReviewResponse.FileSummary("src/lib.rs", "adds cache")),
+        summary.fileSummaries());
+    assertEquals(0, summary.high());
+    assertEquals(2, summary.totalFindings());
+    assertEquals(1, summary.medium());
+  }
+
+  @Test
+  void nonIntegralCountsAreDroppedAndNumericStringsCoerced() {
+    var response =
+        parser.parse(
+            "{\"findings\":[],\"summary\":{\"total_findings\":\" 3 \",\"critical\":{\"n\":1},"
+                + "\"high\":\"many\",\"medium\":1.5,\"low\":99999999999,"
+                + "\"pr_purpose\":\"Refactors parsing\"}}");
+
+    var summary = response.summary();
+    assertNotNull(summary);
+    assertEquals("Refactors parsing", summary.prPurpose());
+    assertEquals(3, summary.totalFindings());
+    assertEquals(0, summary.critical());
+    assertEquals(0, summary.high());
+    assertEquals(0, summary.medium());
+    assertEquals(0, summary.low());
+  }
+
+  @Test
+  void wellFormedAndNullCountsAreLeftAlone() {
+    var response =
+        parser.parse(
+            "{\"findings\":[],\"summary\":{\"total_findings\":4,\"critical\":null,"
+                + "\"high\":2,\"pr_purpose\":\"Fixes a bug\"}}");
+
+    var summary = response.summary();
+    assertEquals(4, summary.totalFindings());
+    assertEquals(0, summary.critical());
+    assertEquals(2, summary.high());
   }
 }
