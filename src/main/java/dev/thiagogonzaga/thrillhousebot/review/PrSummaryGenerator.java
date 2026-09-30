@@ -20,9 +20,15 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -168,7 +174,11 @@ public class PrSummaryGenerator {
       int deletions,
       List<ChangedFile> changedFiles,
       ReviewResponse.Summary aiSummary,
-      ReviewResult result) {
+      ReviewResult round) {
+    // The nudge keys off this round's findings alone (see LargePrNudge); every other section
+    // describes the pull request as it stands, earlier rounds' open findings included (#917).
+    var result = currentState(round);
+    var carried = identitySet(round.openPreviousFindings());
     var sb = new StringBuilder();
     sb.append(SUMMARY_HEADING).append("\n\n");
 
@@ -198,19 +208,82 @@ public class PrSummaryGenerator {
     sb.append("| 🟠 High | ").append(result.highCount()).append(" |\n");
     sb.append("| 🟡 Medium | ").append(result.mediumCount()).append(" |\n");
     sb.append("| 🔵 Low | ").append(result.lowCount()).append(" |\n\n");
+    if (!carried.isEmpty()) {
+      sb.append(carriedCountNote(carried.size()));
+    }
 
     appendPreviousFindings(sb, result);
-    appendFindingsOrCelebration(sb, result);
-    appendDoubleCheckFindings(sb, result);
+    appendFindingsOrCelebration(sb, result, carried);
+    appendDoubleCheckFindings(sb, result, carried);
     // After the findings sections so the note can refer back to them, and so a reader meets the
     // celebration (or the double-check list) before the caveat about how much to trust it.
-    largePrNudge.render(filesChanged, additions, deletions, result).ifPresent(sb::append);
+    largePrNudge.render(filesChanged, additions, deletions, round).ifPresent(sb::append);
     appendCiChecks(sb, result);
 
     sb.append("---\n");
     sb.append("*Automated review by ThrillhouseBot. Reply with `/review` to re-run.*\n");
 
     return sb.toString();
+  }
+
+  /**
+   * The result the summary renders: this round's findings followed by the earlier rounds' findings
+   * still open, with the risk counts taken over both. The summary comment is edited in place every
+   * round (#868) and nothing from the earlier render survives the edit, so a render of this round
+   * alone read "Critical 0" over a pull request with a critical finding still open, while the same
+   * comment's status table counted it as still present (#917). The counts and lists are merged
+   * here, deterministically, rather than asked of the summary call, so its input stays this round's
+   * findings. {@code round} is returned as-is when nothing earlier is open.
+   */
+  static ReviewResult currentState(ReviewResult round) {
+    var open = round.openPreviousFindings();
+    if (open.isEmpty()) {
+      return round;
+    }
+    var findings = new ArrayList<Finding>(round.findings().size() + open.size());
+    findings.addAll(round.findings());
+    findings.addAll(open);
+    var counts = new EnumMap<RiskLevel, Integer>(RiskLevel.class);
+    for (Finding f : findings) {
+      counts.merge(f.risk(), 1, Integer::sum);
+    }
+    var highest = findings.stream().map(Finding::risk).min(Comparator.naturalOrder()).orElse(null);
+    return new ReviewResult(
+        findings,
+        counts.getOrDefault(RiskLevel.CRITICAL, 0),
+        counts.getOrDefault(RiskLevel.HIGH, 0),
+        counts.getOrDefault(RiskLevel.MEDIUM, 0),
+        counts.getOrDefault(RiskLevel.LOW, 0),
+        highest,
+        round.reviewState(),
+        round.isFirstReview(),
+        round.summaryMarkdown(),
+        round.previousStatuses(),
+        round.offendingCiChecks(),
+        round.omittedFiles(),
+        round.ciUnreadable(),
+        round.requiredContextsKnown(),
+        round.truncation(),
+        round.blockingWithheldByConfidence(),
+        open);
+  }
+
+  /** The findings by identity, so a carried finding is told apart from an equal new one. */
+  private static Set<Finding> identitySet(List<Finding> findings) {
+    Set<Finding> set = Collections.newSetFromMap(new IdentityHashMap<>());
+    set.addAll(findings);
+    return set;
+  }
+
+  /** Suffix on a Key Findings or double-check bullet for a finding raised by an earlier review. */
+  static final String CARRIED_NOTE = "_(open since an earlier review)_";
+
+  /** The line under the Risk Assessment table saying how many of its findings are carried. */
+  static String carriedCountNote(int carried) {
+    return "_Counts every finding still open on this pull request, including "
+        + carried
+        + (carried == 1 ? " finding" : " findings")
+        + " raised by an earlier review._\n\n";
   }
 
   private static void appendPreviousFindings(StringBuilder sb, ReviewResult result) {
@@ -248,7 +321,8 @@ public class PrSummaryGenerator {
     sb.append("\n");
   }
 
-  private static void appendFindingsOrCelebration(StringBuilder sb, ReviewResult result) {
+  private static void appendFindingsOrCelebration(
+      StringBuilder sb, ReviewResult result, Set<Finding> carried) {
     if (result.hasIssues()) {
       var keyFindings = result.keyFindings();
       if (!keyFindings.isEmpty()) {
@@ -265,7 +339,11 @@ public class PrSummaryGenerator {
               .append(MarkdownSafe.inlineCode(f.file()))
               .append(":")
               .append(f.line())
-              .append("`)\n");
+              .append("`)");
+          if (carried.contains(f)) {
+            sb.append(" ").append(CARRIED_NOTE);
+          }
+          sb.append("\n");
         }
         sb.append("\n");
       }
@@ -294,7 +372,8 @@ public class PrSummaryGenerator {
    * the finding's only rendered surface: it is the one place the {@code path:line} a maintainer
    * needs to clear it from the PR conversation is printed (#548).
    */
-  private static void appendDoubleCheckFindings(StringBuilder sb, ReviewResult result) {
+  private static void appendDoubleCheckFindings(
+      StringBuilder sb, ReviewResult result, Set<Finding> carried) {
     var findings = result.doubleCheckFindings();
     if (findings.isEmpty()) {
       return;
@@ -321,6 +400,9 @@ public class PrSummaryGenerator {
           .append(f.line())
           .append("`) ")
           .append(SuggestionFormatter.confidenceDisclaimer(Confidence.LOW));
+      if (carried.contains(f)) {
+        sb.append(" ").append(CARRIED_NOTE);
+      }
       SummarySurfaceDeduplicator.restatedBy(f, inline)
           .ifPresent(published -> sb.append(" ").append(sameIssueNote(published)));
       sb.append("\n");

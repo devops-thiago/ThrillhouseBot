@@ -1872,4 +1872,72 @@ class PrSummaryGeneratorTest {
         summary);
     assertTrue(summary.contains("| `src/banlist.h` | Added | Declares banlist API |"), summary);
   }
+
+  @Test
+  void aCarriedFindingIsCountedListedAndMarkedWhileTheRoundsOwnIsNot() {
+    var carriedLow =
+        new Finding(RiskLevel.LOW, "src/Old.java", 7, "Stale comment", "d", null, null);
+    var carriedDoubleCheck =
+        new Finding(
+            RiskLevel.MEDIUM, Confidence.LOW, "src/Old.java", 9, "Maybe racy", "d", null, null);
+    var fresh = new Finding(RiskLevel.HIGH, "src/New.java", 3, "Unchecked cast", "d", null, null);
+    var round =
+        new ReviewResult(
+            List.of(fresh),
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            false,
+            "",
+            List.of(
+                new ReviewResult.PreviousFindingStatus(1, "unresolved", "still there"),
+                new ReviewResult.PreviousFindingStatus(2, "unresolved", "still there")),
+            List.of(),
+            0,
+            false,
+            true,
+            ReviewResult.TruncationDetail.EMPTY,
+            0,
+            List.of(carriedLow, carriedDoubleCheck));
+
+    var summary = new PrSummaryGenerator(false).generate(2, 3, 1, List.of(), null, round);
+
+    assertTrue(summary.contains("| 🟠 High | 1 |"), summary);
+    assertTrue(summary.contains("| 🟡 Medium | 1 |"), summary);
+    assertTrue(summary.contains("| 🔵 Low | 1 |"), summary);
+    assertTrue(summary.contains(PrSummaryGenerator.carriedCountNote(2)), summary);
+    assertTrue(
+        summary.contains("- **HIGH:** Unchecked cast (`src/New.java:3`)\n"),
+        "the round's own finding carries no marker: " + summary);
+    assertTrue(
+        summary.contains(
+            "- **LOW:** Stale comment (`src/Old.java:7`) " + PrSummaryGenerator.CARRIED_NOTE),
+        summary);
+    assertTrue(
+        summary.contains("Maybe racy (`src/Old.java:9`) ")
+            && summary.contains(PrSummaryGenerator.CARRIED_NOTE + "\n\n</details>"),
+        summary);
+  }
+
+  @Test
+  void theCarriedCountNoteIsSingularForOneFinding() {
+    assertEquals(
+        """
+        _Counts every finding still open on this pull request, including 1 finding raised by an \
+        earlier review._
+
+        """,
+        PrSummaryGenerator.carriedCountNote(1));
+  }
+
+  @Test
+  void currentStateIsTheRoundItselfWhenNothingEarlierIsOpen() {
+    var round =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
+    assertSame(round, PrSummaryGenerator.currentState(round));
+  }
 }

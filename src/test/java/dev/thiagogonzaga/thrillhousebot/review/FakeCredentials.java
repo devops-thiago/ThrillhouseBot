@@ -56,6 +56,14 @@ final class FakeCredentials {
     return random(ALNUM, length);
   }
 
+  /**
+   * A generic credential of {@code length} characters: letters and digits, the last one a digit, so
+   * it always carries the non-letter the generic assignment rule asks for.
+   */
+  String genericSecret(int length) {
+    return alnum(length - 1) + random(DIGITS, 1);
+  }
+
   String awsAccessKey() {
     return "AK" + "IA" + random(UPPER_DIGITS, 16);
   }

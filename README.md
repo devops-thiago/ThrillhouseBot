@@ -47,7 +47,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Every finding can be closed by a maintainer: reply on its review thread, or — for one raised below the inline-posting bar, which has no thread — comment `@thrillhousebot resolved <path>:<line> — <title>` on the PR
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
-- One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head (inline findings and the follow-up delta comment stay per round)
+- One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head. Its risk counts, Key Findings and "Things to double-check" cover every finding still open, the round's new ones plus those carried from earlier rounds (marked "open since an earlier review"); a finding leaves it once it is resolved, declined or cleared (inline findings and the follow-up delta comment stay per round)
 - A Description vs. Implementation section in the summary when the PR description and the change disagree. It is omitted when they match. The check is part of the model summary, so a summary that carries model prose ("What this PR does", per-file walkthrough summaries) and no such section means the check ran and found no mismatch; a counts-only summary means it did not run, and a degraded one says why
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, and (with learnings on) `/learnings`, `/remember`, `/forget`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
@@ -462,9 +462,9 @@ thread** below), and the reason given there goes through this same re-check.
 Replying on a finding's review thread is the usual way to close it — but a
 **LOW**-confidence finding at **MEDIUM** or **LOW** risk never opens one. It is
 listed under **Things to double-check** in the summary instead, so there is no
-thread to reply on, while follow-up reviews keep reporting it unresolved and
-holding approval (`APPROVE` → `COMMENT`). To close one, comment on the PR
-conversation:
+thread to reply on, while follow-up reviews keep reporting it unresolved,
+keep it in that list, and hold approval (`APPROVE` → `COMMENT`). To close one,
+comment on the PR conversation:
 
 ```
 @thrillhousebot resolved src/main/java/com/example/Widget.java:42 — Missing null check
@@ -650,7 +650,7 @@ Secret rules (each finding is graded as listed, at high confidence):
 | Stripe live key | `sk_live_` / `rk_live_` keys (test keys are ignored) | critical |
 | Private key | a PEM `BEGIN … PRIVATE KEY` header followed by a key body (a header alone is code that parses keys) | critical |
 | JSON Web Token | three base64url segments whose first two start `eyJ` | high |
-| Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret`, when the literal has at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and is not a URL, a path or an identifier such as `DB_PASSWORD` | high |
+| Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret` (with `=`, `:`, `:=` or `=>`, and also through a typed or array declaration: C `char API_TOKEN[] =`, Rust `const API_TOKEN: &str =`, TypeScript, Kotlin, Scala, Swift and Python `apiToken: String =`, Go `var apiToken string =`), when the literal has at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and is not a URL, a path or an identifier such as `DB_PASSWORD` | high |
 
 IaC rules (high confidence unless noted):
 
@@ -690,8 +690,16 @@ check run, the notification, the stored session or the dashboard holds the
 value, and nothing is logged but counts. When the scan matches a value, every
 verbatim occurrence of it is also replaced with its redacted form in the model
 findings, status notes and summary of the same review, so a model finding that
-quoted the line cannot post it either. A fragment or an altered copy of the
-value is not recognized.
+quoted the line cannot post it either. The same texts also have any
+secret-looking quoted literal redacted when its line assigns it to a
+credential-named key through the first `=` or `:` after the name, whatever sits
+between the name, the operator and the quote
+(`static API_TOKEN: Lazy<&str> = Lazy::new(|| "…")`), so such an assignment in a
+form the scan does not match still cannot be echoed by a model finding; the
+literal must pass the same placeholder, identifier and entropy checks as a scan
+match. A declaration with no `=` or `:` before the literal (Kotlin
+`val apiToken by lazy { "…" }`) is not covered, nor is a fragment or an altered
+copy of the value.
 Treat a reported credential as leaked whatever happens to the pull request:
 removing it from the branch does not remove it from the git history.
 

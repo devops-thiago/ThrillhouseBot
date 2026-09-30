@@ -88,8 +88,10 @@ public class ReviewPublisher {
    * <p>The edit replaces the whole body, so nothing from an earlier round survives it: the
    * disclosures (coverage and scope note, degradation and truncation banners, confidence hold,
    * walkthrough) are the ones this round's render produced, and a banner the current round no
-   * longer earns is gone rather than left stale. The comment keeps no history of its own: the
-   * round-to-round story lives in the per-round surfaces, which stay append-only — each round's
+   * longer earns is gone rather than left stale. That is why the render itself carries the earlier
+   * rounds' findings still open, not only the round's own (#917): a render of the round alone would
+   * erase every open finding from the counts and lists. The comment keeps no history of its own:
+   * the round-to-round story lives in the per-round surfaces, which stay append-only — each round's
    * review with its inline findings, and the opt-in delta comment — and GitHub keeps the edit
    * history of the comment itself. Keeping none also keeps the comment inside the same size budget
    * the summary was always bounded by.
